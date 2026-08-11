@@ -21,7 +21,7 @@ export function Header() {
         <div className="flex items-center gap-2">
           <button
             aria-label={hasUnresolvedReview ? "Notifications: updates available" : "Notifications"}
-            className="relative flex h-10 w-10 items-center justify-center rounded-full text-neutral hover:bg-white/5 hover:text-off-white"
+            className="relative flex h-10 w-10 items-center justify-center rounded-full text-neutral hover:bg-off-white/5 hover:text-off-white"
           >
             <Bell size={19} />
             {hasUnresolvedReview ? (
@@ -31,7 +31,7 @@ export function Header() {
           <button
             aria-label="Prototype settings"
             onClick={() => setSettingsOpen(true)}
-            className="flex h-10 w-10 items-center justify-center rounded-full text-neutral hover:bg-white/5 hover:text-off-white"
+            className="flex h-10 w-10 items-center justify-center rounded-full text-neutral hover:bg-off-white/5 hover:text-off-white"
           >
             <Settings size={19} />
           </button>

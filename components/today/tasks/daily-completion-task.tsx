@@ -60,7 +60,7 @@ export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
         </li>
       </ul>
 
-      <div className="mt-4 rounded-[var(--radius-sm)] bg-white/[0.04] p-3">
+      <div className="mt-4 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
         <p className="text-xs font-medium uppercase tracking-wide text-neutral">Prepare for tomorrow</p>
         <p className="mt-1 text-sm text-off-white">
           Set out tomorrow&apos;s training clothes and make sure breakfast ingredients are ready.

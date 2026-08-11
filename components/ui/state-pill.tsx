@@ -3,13 +3,13 @@ import type { DailyTaskState } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
 const STATE_CLASSNAMES: Record<DailyTaskState, string> = {
-  locked: "bg-white/[0.06] text-neutral",
-  upcoming: "bg-white/[0.06] text-neutral",
+  locked: "bg-off-white/[0.06] text-neutral",
+  upcoming: "bg-off-white/[0.06] text-neutral",
   "recommended-now": "bg-accent-soft text-accent-strong",
   "in-progress": "bg-accent-soft text-accent-strong",
   completed: "bg-success-soft text-success",
   "partially-completed": "bg-warning-soft text-warning",
-  skipped: "bg-white/[0.06] text-neutral",
+  skipped: "bg-off-white/[0.06] text-neutral",
   missed: "bg-error-soft text-error",
   "needs-attention": "bg-warning-soft text-warning",
   "awaiting-review": "bg-warning-soft text-warning",

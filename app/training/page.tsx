@@ -51,7 +51,7 @@ export default function TrainingPage() {
                 status === "today"
                   ? "border-accent/50 bg-accent-soft"
                   : status === "completed"
-                    ? "border-border bg-white/[0.03]"
+                    ? "border-border bg-off-white/[0.03]"
                     : "border-border"
               )}
             >
@@ -64,8 +64,8 @@ export default function TrainingPage() {
                     : status === "today"
                       ? "bg-accent"
                       : day.type === "rest"
-                        ? "bg-white/20"
-                        : "bg-white/10"
+                        ? "bg-off-white/20"
+                        : "bg-off-white/10"
                 )}
               />
             </div>

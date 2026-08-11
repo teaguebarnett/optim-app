@@ -43,7 +43,7 @@ export function SetRow({
 
   if (loggedSet?.status === "skipped" && !editing) {
     return (
-      <div className="flex items-center justify-between rounded-[var(--radius-sm)] bg-white/[0.03] px-3 py-3">
+      <div className="flex items-center justify-between rounded-[var(--radius-sm)] bg-off-white/[0.03] px-3 py-3">
         <div>
           <p className="text-sm font-medium text-off-white/70">
             {label} {setNumber}
@@ -56,7 +56,7 @@ export function SetRow({
 
   if (loggedSet?.status === "completed" && !editing) {
     return (
-      <div className="flex items-center justify-between rounded-[var(--radius-sm)] border border-border-strong bg-white/[0.02] px-3 py-3">
+      <div className="flex items-center justify-between rounded-[var(--radius-sm)] border border-border-strong bg-off-white/[0.02] px-3 py-3">
         <div className="flex items-center gap-2.5">
           <span className="flex h-7 w-7 items-center justify-center rounded-full bg-success-soft text-success">
             <Check size={14} />
@@ -74,7 +74,7 @@ export function SetRow({
         <button
           onClick={() => setEditing(true)}
           aria-label={`Edit ${label.toLowerCase()} ${setNumber}`}
-          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-white/5 hover:text-off-white"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-off-white/5 hover:text-off-white"
         >
           <Pencil size={15} />
         </button>
@@ -112,7 +112,7 @@ export function SetRow({
             <button
               onClick={() => setEditing(false)}
               aria-label="Cancel edit"
-              className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-white/5"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-off-white/5"
             >
               <X size={14} />
             </button>
@@ -120,7 +120,7 @@ export function SetRow({
             <button
               onClick={onRemoveExtra}
               aria-label="Remove this set"
-              className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-white/5"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-off-white/5"
             >
               <X size={14} />
             </button>

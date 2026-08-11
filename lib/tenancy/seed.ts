@@ -48,8 +48,8 @@ export const WORKSPACE_OPTIM: Workspace = {
   branding: {
     businessName: "OPTIM",
     logoUrl: null,
-    primaryColor: "#d96832",
-    accentColor: "#e8804f",
+    primaryColor: "#16294a",
+    accentColor: "#21396a",
     assistantDisplayName: "OPTIM Assistant",
     // This is OPTIM's own first-party workspace, not a customer running
     // white-label — no "Powered by OPTIM" attribution needed here.

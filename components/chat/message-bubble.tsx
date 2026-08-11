@@ -14,7 +14,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   if (message.sender === "system") {
     return (
       <div className="flex justify-center py-1">
-        <span className="rounded-full bg-white/[0.05] px-3 py-1 text-xs text-neutral">{message.text}</span>
+        <span className="rounded-full bg-off-white/[0.05] px-3 py-1 text-xs text-neutral">{message.text}</span>
       </div>
     );
   }
@@ -23,7 +23,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
     return (
       <div className="flex items-end justify-end gap-2 py-1">
         <div className="max-w-[78%] rounded-[var(--radius-md)] rounded-br-sm bg-accent px-3.5 py-2.5">
-          <p className="text-[15px] leading-relaxed text-off-white">{message.text}</p>
+          <p className="text-[15px] leading-relaxed text-on-accent">{message.text}</p>
         </div>
         <Avatar initials={activeContext.clientProfile?.avatarInitials ?? "?"} size="sm" />
       </div>
@@ -52,7 +52,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   // never rendered as if it came from the coach.
   return (
     <div className="flex items-start gap-2 py-1">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-neutral">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-off-white/[0.06] text-neutral">
         <Sparkles size={14} />
       </span>
       <div className="max-w-[78%]">

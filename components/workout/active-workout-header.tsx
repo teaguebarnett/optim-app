@@ -48,7 +48,7 @@ export function ActiveWorkoutHeader({
         <button
           onClick={() => router.push("/today")}
           aria-label="Exit workout"
-          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-white/5 hover:text-off-white"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-off-white/5 hover:text-off-white"
         >
           <X size={18} />
         </button>
@@ -59,7 +59,7 @@ export function ActiveWorkoutHeader({
         <button
           onClick={onOpenOverview}
           aria-label="View workout overview"
-          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-white/5 hover:text-off-white"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-off-white/5 hover:text-off-white"
         >
           <Info size={18} />
         </button>

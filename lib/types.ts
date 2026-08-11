@@ -211,7 +211,6 @@ export interface WorkoutSummary {
 export type DailyTaskId =
   | "morning-weight"
   | "breakfast"
-  | "workout-window"
   | "workout"
   | "post-workout-meal"
   | "lunch"
@@ -252,20 +251,6 @@ export interface CardioTarget {
   durationMin: number;
   heartRateRangeLow: number;
   heartRateRangeHigh: number;
-}
-
-export type ScheduleChangeChoice =
-  | "earlier-than-planned"
-  | "later-than-planned"
-  | "cannot-train-today"
-  | "not-sure-yet";
-
-export interface WorkoutWindowState {
-  status: "pending" | "activated" | "rescheduled" | "declined";
-  windowStartIso?: string;
-  windowEndIso?: string;
-  chosenTimeLabel?: string;
-  scheduleChangeChoice?: ScheduleChangeChoice;
 }
 
 // ---------------------------------------------------------------------------

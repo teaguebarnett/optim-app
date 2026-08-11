@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "verify:tenancy": "node --experimental-strip-types lib/tenancy/verify-isolation.mts"
+    "verify:tenancy": "node --experimental-strip-types lib/tenancy/verify-isolation.mts",
+    "verify:planner": "node --experimental-strip-types lib/planning/verify-planner.mts"
   },
   "dependencies": {
     "lucide-react": "^1.27.0",

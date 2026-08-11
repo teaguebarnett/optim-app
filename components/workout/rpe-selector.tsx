@@ -29,7 +29,7 @@ export function RpeSelector({ value, onChange, id }: RpeSelectorProps) {
               className={cn(
                 "flex h-11 flex-1 items-center justify-center rounded-[var(--radius-sm)] border text-[15px] font-semibold transition-colors",
                 selected
-                  ? "border-accent bg-accent text-off-white"
+                  ? "border-accent bg-accent text-on-accent"
                   : "border-border-strong text-off-white hover:border-accent/40"
               )}
             >

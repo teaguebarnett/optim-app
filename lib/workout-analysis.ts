@@ -1,5 +1,5 @@
-import { PUSH_WORKOUT } from "./mock-data";
-import { ALL_CLIENT_PROFILES, ALL_COACH_PROFILES, ALL_WORKSPACES } from "./tenancy/seed";
+import { PUSH_WORKOUT } from "./mock-data.ts";
+import { ALL_CLIENT_PROFILES, ALL_COACH_PROFILES, ALL_WORKSPACES } from "./tenancy/seed.ts";
 import type { Exercise, ExerciseLog, WorkoutSession, WorkoutSummary } from "./types";
 
 /** Resolves the business/coach display names for the session's workspace and

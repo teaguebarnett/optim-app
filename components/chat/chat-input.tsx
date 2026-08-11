@@ -37,7 +37,7 @@ export function ChatInput({ onSend, coachName }: { onSend: (text: string) => voi
         type="submit"
         disabled={!value.trim()}
         aria-label="Send message"
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-off-white disabled:opacity-40"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent disabled:opacity-40"
       >
         <ArrowUp size={18} />
       </button>

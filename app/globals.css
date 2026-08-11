@@ -1,24 +1,51 @@
 @import "tailwindcss";
 
 :root {
-  /* Core palette */
-  --pc-near-black: #111111;
-  --pc-charcoal: #1b1b1b;
-  --pc-surface: #242424;
-  --pc-surface-raised: #2a2a2a;
-  --pc-off-white: #f5f1e8;
-  --pc-neutral: #a7a39a;
-  --pc-border: rgba(255, 255, 255, 0.08);
-  --pc-border-strong: rgba(255, 255, 255, 0.14);
-  --pc-accent: #d96832;
-  --pc-accent-soft: rgba(217, 104, 50, 0.14);
-  --pc-accent-strong: #e8804f;
-  --pc-success: #7a9a7e;
-  --pc-success-soft: rgba(122, 154, 126, 0.14);
-  --pc-warning: #c99a52;
-  --pc-warning-soft: rgba(201, 154, 82, 0.14);
-  --pc-error: #b96a5e;
-  --pc-error-soft: rgba(185, 106, 94, 0.14);
+  /* ---------------------------------------------------------------------
+   * Core design tokens — premium light client theme.
+   *
+   * These are the ONLY place raw color values should ever appear. Every
+   * component consumes them through the Tailwind utility classes mapped
+   * below (bg-accent, text-off-white, border-border, etc.) — never a raw
+   * hex/rgba value in a component file. A workspace's configured branding
+   * (see components/app-shell/workspace-theme.tsx) overrides --pc-accent /
+   * --pc-accent-strong / --pc-accent-soft at runtime from Phase 2's
+   * centralized branding config, so a different coaching business's primary
+   * color replaces OPTIM's navy without editing any component.
+   * ------------------------------------------------------------------- */
+
+  /* Backgrounds & surfaces */
+  --pc-near-black: #f7f5f0; /* app background — warm near-white */
+  --pc-charcoal: #ffffff; /* primary card/elevated surface — white */
+  --pc-surface: #ffffff;
+  --pc-surface-raised: #fbfaf6; /* subtle secondary elevation, e.g. inner blocks */
+
+  /* Typography */
+  --pc-off-white: #101a2c; /* primary text — dark blue-black */
+  --pc-neutral: #5b6577; /* secondary text — softer gray-blue */
+  --pc-on-accent: #ffffff; /* text placed on a solid accent/navy surface */
+
+  /* Borders */
+  --pc-border: rgba(16, 25, 44, 0.1);
+  --pc-border-strong: rgba(16, 25, 44, 0.18);
+
+  /* Primary interactive color — deep smooth navy (OPTIM demo workspace
+   * default; overridden per-workspace at runtime). */
+  --pc-accent: #16294a;
+  --pc-accent-strong: #21396a;
+  --pc-accent-soft: rgba(22, 41, 74, 0.09);
+
+  /* Status colors — used only for their specific meaning */
+  --pc-success: #5c7a52; /* muted mineral/olive green — completion, improvement */
+  --pc-success-soft: rgba(92, 122, 82, 0.13);
+  --pc-warning: #b8863a; /* amber — genuine attention states only */
+  --pc-warning-soft: rgba(184, 134, 58, 0.13);
+  --pc-error: #b23b3b; /* red — genuine warnings only */
+  --pc-error-soft: rgba(178, 59, 59, 0.13);
+
+  /* Empty/track fill for rings and bars (SVG can't use Tailwind opacity
+   * modifiers, so this gets its own token). */
+  --pc-track-empty: rgba(16, 25, 44, 0.08);
 
   /* Semantic roles */
   --background: var(--pc-near-black);
@@ -30,7 +57,7 @@
   --radius-lg: 22px;
   --radius-full: 999px;
 
-  --shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  --shadow-subtle: 0 1px 2px rgba(16, 25, 44, 0.05), 0 8px 24px -14px rgba(16, 25, 44, 0.16);
 }
 
 @theme inline {
@@ -43,6 +70,7 @@
   --color-surface-raised: var(--pc-surface-raised);
   --color-off-white: var(--pc-off-white);
   --color-neutral: var(--pc-neutral);
+  --color-on-accent: var(--pc-on-accent);
   --color-border: var(--pc-border);
   --color-border-strong: var(--pc-border-strong);
   --color-accent: var(--pc-accent);
@@ -68,7 +96,7 @@
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
@@ -81,7 +109,7 @@ body {
 
 ::selection {
   background: var(--pc-accent);
-  color: var(--pc-off-white);
+  color: var(--pc-on-accent);
 }
 
 :focus-visible {
@@ -120,10 +148,10 @@ input[type="number"] {
     box-shadow: 0 0 0 0 var(--pc-accent-soft);
   }
   70% {
-    box-shadow: 0 0 0 10px rgba(217, 104, 50, 0);
+    box-shadow: 0 0 0 10px rgba(22, 41, 74, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(217, 104, 50, 0);
+    box-shadow: 0 0 0 0 rgba(22, 41, 74, 0);
   }
 }
 

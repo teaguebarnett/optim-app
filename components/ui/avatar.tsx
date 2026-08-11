@@ -19,7 +19,7 @@ export function Avatar({ initials, className, variant = "neutral", size = "md" }
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full font-semibold",
         sizeClasses[size],
-        variant === "accent" ? "bg-accent text-off-white" : "bg-surface-raised text-off-white border border-border-strong",
+        variant === "accent" ? "bg-accent text-on-accent" : "bg-surface-raised text-off-white border border-border-strong",
         className
       )}
       aria-hidden="true"

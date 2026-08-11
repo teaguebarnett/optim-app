@@ -10,7 +10,13 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { PUSH_WORKOUT } from "@/lib/mock-data";
 import type { DailyTaskState } from "@/lib/types";
 
-export function WorkoutTask({ state }: { state: DailyTaskState }) {
+export function WorkoutTask({
+  state,
+  emphasisOverride,
+}: {
+  state: DailyTaskState;
+  emphasisOverride?: "primary" | "secondary";
+}) {
   const { state: appState, dispatch, activeContext } = usePrototypeState();
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -28,13 +34,20 @@ export function WorkoutTask({ state }: { state: DailyTaskState }) {
   }
 
   if (state === "completed" || state === "skipped") {
-    return <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} />;
+    return (
+      <TaskShell
+        title={PUSH_WORKOUT.name}
+        icon={<Dumbbell size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+      />
+    );
   }
 
   if (state === "partially-completed") {
     const summary = appState.workoutSession.summary;
     return (
-      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state}>
+      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
         <p className="text-sm text-off-white">Submitted with skipped work.</p>
         {summary ? <p className="mt-1 text-sm text-neutral">{summary.detail}</p> : null}
       </TaskShell>
@@ -44,7 +57,7 @@ export function WorkoutTask({ state }: { state: DailyTaskState }) {
   if (state === "awaiting-review") {
     const summary = appState.workoutSession.summary;
     return (
-      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state}>
+      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
         {summary ? (
           <div>
             <p className="text-sm text-off-white">{summary.headline}</p>
@@ -69,7 +82,7 @@ export function WorkoutTask({ state }: { state: DailyTaskState }) {
 
   return (
     <>
-      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state}>
+      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-neutral">
           <span>{PUSH_WORKOUT.estimatedDurationMin} min</span>
           <span aria-hidden="true">·</span>
@@ -79,7 +92,7 @@ export function WorkoutTask({ state }: { state: DailyTaskState }) {
         </div>
 
         {!isInProgress && (
-          <div className="mt-3 rounded-[var(--radius-sm)] bg-white/[0.04] p-3">
+          <div className="mt-3 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
             <p className="text-xs font-medium uppercase tracking-wide text-neutral">Note from {coachName}</p>
             <p className="mt-1 text-sm text-off-white">{PUSH_WORKOUT.coachNote}</p>
           </div>

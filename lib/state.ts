@@ -1,7 +1,9 @@
-import { MEAL_OPTIONS, PUSH_WORKOUT } from "./mock-data";
-import { buildWorkoutSummary, canCompleteExercise } from "./workout-analysis";
-import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "./tenancy/seed";
+import { MEAL_OPTIONS, PUSH_WORKOUT } from "./mock-data.ts";
+import { buildWorkoutSummary, canCompleteExercise } from "./workout-analysis.ts";
+import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "./tenancy/seed.ts";
 import type { ClientProfileId, WorkspaceId } from "./tenancy/types";
+import { resolveLocalDateIso, setTrainingStatus, setTrainingTime } from "./planning/training-plan.ts";
+import type { DailyTrainingPlan } from "./planning/types";
 import type {
   CardioLog,
   ChatMessage,
@@ -13,11 +15,9 @@ import type {
   PainReport,
   ReviewRequest,
   RpeValue,
-  ScheduleChangeChoice,
   SkipReason,
   WorkoutSession,
   WorkoutSummary,
-  WorkoutWindowState,
 } from "./types";
 
 // The demo app only ever runs as this one client, in this one workspace —
@@ -29,14 +29,17 @@ const DEMO_WORKSPACE_ID: WorkspaceId = WORKSPACE_OPTIM_ID;
 const DEMO_CLIENT_ID: ClientProfileId = CLIENT_PROFILE_DEMO.id;
 
 export interface AppState {
-  version: 2;
+  version: 3;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   dateIso: string;
   morningWeight: MorningWeightLog;
   meals: Partial<Record<MealPeriod, MealSelection>>;
   cardio: CardioLog;
-  workoutWindow: WorkoutWindowState;
+  /** The client's own training-time decision for today — null means no
+   * decision has been made yet. Replaces Phase 1/2's countdown-driven
+   * workoutWindow entirely; see lib/planning/training-plan.ts. */
+  dailyTrainingPlan: DailyTrainingPlan | null;
   workoutSession: WorkoutSession;
   chatMessages: ChatMessage[];
   reviewRequests: ReviewRequest[];
@@ -64,14 +67,14 @@ export function createInitialWorkoutSession(): WorkoutSession {
 
 export function createInitialState(): AppState {
   return {
-    version: 2,
+    version: 3,
     workspaceId: DEMO_WORKSPACE_ID,
     clientId: DEMO_CLIENT_ID,
-    dateIso: new Date().toISOString().slice(0, 10),
+    dateIso: resolveLocalDateIso(new Date()),
     morningWeight: { weightLb: null, skipped: false },
     meals: {},
     cardio: { status: "not-started", durationMin: 0 },
-    workoutWindow: { status: "pending" },
+    dailyTrainingPlan: null,
     workoutSession: createInitialWorkoutSession(),
     chatMessages: [],
     reviewRequests: [],
@@ -101,9 +104,9 @@ export type Action =
   | { type: "START_CARDIO" }
   | { type: "COMPLETE_CARDIO"; durationMin: number; note?: string }
   | { type: "SKIP_CARDIO"; reason: SkipReason; note?: string }
-  | { type: "ACTIVATE_WORKOUT_WINDOW"; startIso: string; endIso: string }
-  | { type: "CHOOSE_WORKOUT_TIME"; label: string }
-  | { type: "SET_SCHEDULE_CHANGE"; choice: ScheduleChangeChoice }
+  | { type: "SET_TRAINING_TIME"; time24: string }
+  | { type: "SET_TRAINING_UNSURE" }
+  | { type: "SET_TRAINING_REST_DAY" }
   | { type: "START_WORKOUT" }
   | {
       type: "LOG_SET";
@@ -248,35 +251,50 @@ export function reducer(state: AppState, action: Action): AppState {
         },
       };
 
-    case "ACTIVATE_WORKOUT_WINDOW":
+    case "SET_TRAINING_TIME": {
+      const today = resolveLocalDateIso(new Date());
       return {
         ...state,
-        workoutWindow: {
-          status: "activated",
-          windowStartIso: action.startIso,
-          windowEndIso: action.endIso,
-        },
+        dailyTrainingPlan: setTrainingTime(
+          state.dailyTrainingPlan,
+          state.workspaceId,
+          state.clientId,
+          today,
+          action.time24,
+          new Date().toISOString()
+        ),
       };
+    }
 
-    case "CHOOSE_WORKOUT_TIME":
+    case "SET_TRAINING_UNSURE": {
+      const today = resolveLocalDateIso(new Date());
       return {
         ...state,
-        workoutWindow: {
-          ...state.workoutWindow,
-          status: "rescheduled",
-          chosenTimeLabel: action.label,
-        },
+        dailyTrainingPlan: setTrainingStatus(
+          state.dailyTrainingPlan,
+          state.workspaceId,
+          state.clientId,
+          today,
+          "unsure",
+          new Date().toISOString()
+        ),
       };
+    }
 
-    case "SET_SCHEDULE_CHANGE":
+    case "SET_TRAINING_REST_DAY": {
+      const today = resolveLocalDateIso(new Date());
       return {
         ...state,
-        workoutWindow: {
-          ...state.workoutWindow,
-          status: action.choice === "cannot-train-today" ? "declined" : "rescheduled",
-          scheduleChangeChoice: action.choice,
-        },
+        dailyTrainingPlan: setTrainingStatus(
+          state.dailyTrainingPlan,
+          state.workspaceId,
+          state.clientId,
+          today,
+          "rest_day",
+          new Date().toISOString()
+        ),
       };
+    }
 
     case "START_WORKOUT":
       return {
@@ -544,11 +562,14 @@ function buildCompletedDayPreset(): AppState {
 
   base.cardio = { status: "completed", durationMin: 20, completedAtIso: now };
 
-  base.workoutWindow = {
-    status: "activated",
-    windowStartIso: now,
-    windowEndIso: now,
-  };
+  base.dailyTrainingPlan = setTrainingTime(
+    null,
+    base.workspaceId,
+    base.clientId,
+    base.dateIso,
+    "09:00",
+    now
+  );
 
   const exerciseLogs: WorkoutSession["exerciseLogs"] = {};
   for (const exercise of PUSH_WORKOUT.exercises) {

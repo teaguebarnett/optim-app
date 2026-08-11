@@ -7,7 +7,7 @@ export function WorkoutDetailsSheet({ open, onClose }: { open: boolean; onClose:
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
   return (
     <Sheet open={open} onClose={onClose} title={PUSH_WORKOUT.name} description={PUSH_WORKOUT.focus}>
-      <div className="mb-4 rounded-[var(--radius-sm)] bg-white/[0.04] p-3">
+      <div className="mb-4 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
         <p className="text-xs font-medium uppercase tracking-wide text-neutral">Warm-up</p>
         <p className="mt-1 text-sm text-off-white">{PUSH_WORKOUT.warmupOverview}</p>
       </div>
@@ -30,7 +30,7 @@ export function WorkoutDetailsSheet({ open, onClose }: { open: boolean; onClose:
         ))}
       </div>
 
-      <div className="mt-4 rounded-[var(--radius-sm)] bg-white/[0.04] p-3">
+      <div className="mt-4 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
         <p className="text-xs font-medium uppercase tracking-wide text-neutral">Note from {coachName}</p>
         <p className="mt-1 text-sm text-off-white">{PUSH_WORKOUT.coachNote}</p>
       </div>

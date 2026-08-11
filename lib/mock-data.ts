@@ -1,4 +1,4 @@
-import { WORKSPACE_OPTIM_ID } from "./tenancy/seed";
+import { WORKSPACE_OPTIM_ID } from "./tenancy/seed.ts";
 import type {
   AdherencePoint,
   CardioTarget,

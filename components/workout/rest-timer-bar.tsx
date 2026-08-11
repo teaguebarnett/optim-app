@@ -37,10 +37,10 @@ export function RestTimerBar({ timer }: { timer: RestTimerState }) {
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-neutral">{timer.isFinished ? "Rest complete" : "Resting"}</p>
         <div className="flex items-center gap-1">
-          <button onClick={timer.minimize} aria-label="Minimize rest timer" className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-white/5">
+          <button onClick={timer.minimize} aria-label="Minimize rest timer" className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-off-white/5">
             <ChevronDown size={16} />
           </button>
-          <button onClick={timer.dismiss} aria-label="Close rest timer" className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-white/5">
+          <button onClick={timer.dismiss} aria-label="Close rest timer" className="flex h-8 w-8 items-center justify-center rounded-full text-neutral hover:bg-off-white/5">
             <X size={16} />
           </button>
         </div>
@@ -55,7 +55,7 @@ export function RestTimerBar({ timer }: { timer: RestTimerState }) {
         {formatSeconds(timer.remainingSeconds)}
       </p>
 
-      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.08]">
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-off-white/[0.08]">
         <div
           className="h-full rounded-full bg-accent transition-[width] duration-1000 ease-linear"
           style={{ width: `${progressPercent}%` }}

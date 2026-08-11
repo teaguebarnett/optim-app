@@ -1,6 +1,5 @@
 import { getGreeting } from "@/lib/calculations";
-import { DAILY_PLAN, PUSH_WORKOUT, CARDIO_TARGET } from "@/lib/mock-data";
-import { ProgressRing } from "@/components/ui/progress-ring";
+import { DAILY_PLAN } from "@/lib/mock-data";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 
 function formatDateLabel(dateIso: string): string {
@@ -8,28 +7,19 @@ function formatDateLabel(dateIso: string): string {
   return date.toLocaleDateString("en-US", { month: "long", day: "numeric" });
 }
 
-export function DayHeader({ completionPercent }: { completionPercent: number }) {
+/** Greeting and current date only — no completion percentage. The Today
+ * screen leads with "what's next," not a number; see NextActionBanner and
+ * FuelSection for where the day's real progress is actually shown. */
+export function DayHeader() {
   const { activeContext } = usePrototypeState();
   const greeting = getGreeting(new Date(), activeContext.clientProfile?.name ?? "there");
 
   return (
     <div className="px-4 pt-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold leading-tight text-off-white">{greeting.headline}</h1>
-          <p className="mt-1 text-[15px] text-neutral">{greeting.subline}</p>
-        </div>
-        <div className="shrink-0">
-          <ProgressRing
-            percent={completionPercent}
-            size={64}
-            strokeWidth={6}
-            label={`${completionPercent}%`}
-          />
-        </div>
-      </div>
+      <h1 className="text-2xl font-semibold leading-tight text-off-white">{greeting.headline}</h1>
+      <p className="mt-1 text-[15px] text-neutral">{greeting.subline}</p>
 
-      <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral">
+      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral">
         <span className="font-medium text-off-white">{DAILY_PLAN.dayOfWeek}</span>
         <span aria-hidden="true">·</span>
         <span>{formatDateLabel(DAILY_PLAN.dateIso)}</span>
@@ -38,10 +28,6 @@ export function DayHeader({ completionPercent }: { completionPercent: number }) 
           Week {DAILY_PLAN.programWeek} of {DAILY_PLAN.programTotalWeeks}
         </span>
       </div>
-
-      <p className="mt-2 text-[15px] leading-relaxed text-off-white/90">
-        {PUSH_WORKOUT.name}, four meals, and {CARDIO_TARGET.durationMin} minutes of cardio.
-      </p>
     </div>
   );
 }

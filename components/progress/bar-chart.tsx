@@ -32,7 +32,7 @@ export function BarChart({ points, color = "var(--pc-accent)", height = 120, max
               width={barWidth}
               height={barHeight}
               rx={4}
-              fill={isEmpty ? "rgba(255,255,255,0.08)" : color}
+              fill={isEmpty ? "var(--pc-track-empty)" : color}
             />
             {!isEmpty && (
               <text x={x + barWidth / 2} y={y - 6} textAnchor="middle" fontSize={10} fontWeight={600} fill="var(--pc-off-white)">

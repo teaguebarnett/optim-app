@@ -29,7 +29,7 @@ export function MealRow({
       <span
         className={
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full " +
-          (isLogged ? "bg-success-soft text-success" : "bg-white/[0.05] text-neutral")
+          (isLogged ? "bg-success-soft text-success" : "bg-off-white/[0.05] text-neutral")
         }
       >
         {isLogged ? <Check size={15} /> : null}

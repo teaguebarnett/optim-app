@@ -114,7 +114,7 @@ export function ExerciseCard({
       </div>
 
       {exercise.previousPerformance.length > 0 && (
-        <div className="rounded-[var(--radius-sm)] bg-white/[0.04] px-3 py-2.5">
+        <div className="rounded-[var(--radius-sm)] bg-off-white/[0.04] px-3 py-2.5">
           <p className="text-xs font-medium uppercase tracking-wide text-neutral">Previous performance</p>
           <p className="mt-0.5 text-sm text-off-white">
             {exercise.previousPerformance.map((p) => `${p.weightLb} lb × ${p.reps}`).join(", ")} at RPE{" "}
@@ -125,7 +125,7 @@ export function ExerciseCard({
       )}
 
       {isExerciseSkipped ? (
-        <div className="rounded-[var(--radius-md)] border border-border-strong bg-white/[0.03] p-4 text-sm text-neutral">
+        <div className="rounded-[var(--radius-md)] border border-border-strong bg-off-white/[0.03] p-4 text-sm text-neutral">
           This exercise was skipped for today.
         </div>
       ) : (

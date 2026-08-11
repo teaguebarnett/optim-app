@@ -16,7 +16,7 @@ export function WorkoutCompleteScreen({ session }: { session: WorkoutSession }) 
   if (session.status === "skipped") {
     return (
       <div className="flex min-h-[70vh] flex-col items-center justify-center px-6 text-center">
-        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/[0.06] text-neutral">
+        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-off-white/[0.06] text-neutral">
           <XCircle size={28} />
         </span>
         <h1 className="mt-4 text-xl font-semibold text-off-white">Today&apos;s workout was skipped.</h1>

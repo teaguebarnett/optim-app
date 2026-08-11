@@ -11,7 +11,13 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { CARDIO_TARGET } from "@/lib/mock-data";
 import type { DailyTaskState, SkipReason } from "@/lib/types";
 
-export function CardioTask({ state }: { state: DailyTaskState }) {
+export function CardioTask({
+  state,
+  emphasisOverride,
+}: {
+  state: DailyTaskState;
+  emphasisOverride?: "primary" | "secondary";
+}) {
   const { dispatch } = usePrototypeState();
   const [duration, setDuration] = useState(CARDIO_TARGET.durationMin);
   const [note, setNote] = useState("");
@@ -20,7 +26,14 @@ export function CardioTask({ state }: { state: DailyTaskState }) {
   const [skipNote, setSkipNote] = useState("");
 
   if (state === "completed" || state === "skipped") {
-    return <TaskShell title={`Cardio — ${CARDIO_TARGET.activity}`} icon={<HeartPulse size={17} />} state={state} />;
+    return (
+      <TaskShell
+        title={`Cardio — ${CARDIO_TARGET.activity}`}
+        icon={<HeartPulse size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+      />
+    );
   }
 
   if (state === "upcoming") {
@@ -29,6 +42,7 @@ export function CardioTask({ state }: { state: DailyTaskState }) {
         title={`Cardio — ${CARDIO_TARGET.activity}`}
         icon={<HeartPulse size={17} />}
         state={state}
+        emphasisOverride={emphasisOverride}
       >
         <p className="text-sm text-neutral">
           {CARDIO_TARGET.durationMin} minutes · target heart rate {CARDIO_TARGET.heartRateRangeLow}–
@@ -48,7 +62,12 @@ export function CardioTask({ state }: { state: DailyTaskState }) {
 
   return (
     <>
-      <TaskShell title={`Cardio — ${CARDIO_TARGET.activity}`} icon={<HeartPulse size={17} />} state={state}>
+      <TaskShell
+        title={`Cardio — ${CARDIO_TARGET.activity}`}
+        icon={<HeartPulse size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+      >
         <p className="text-sm text-neutral">
           Target heart rate {CARDIO_TARGET.heartRateRangeLow}–{CARDIO_TARGET.heartRateRangeHigh} bpm (coach
           guidance)
@@ -60,7 +79,7 @@ export function CardioTask({ state }: { state: DailyTaskState }) {
           </Button>
         ) : (
           <div className="mt-3 space-y-3">
-            <div className="flex items-center justify-between rounded-[var(--radius-sm)] bg-white/[0.04] px-3 py-2.5">
+            <div className="flex items-center justify-between rounded-[var(--radius-sm)] bg-off-white/[0.04] px-3 py-2.5">
               <span className="text-sm text-off-white">{duration} min logged</span>
               <button
                 onClick={() => setDuration((d) => d + 5)}

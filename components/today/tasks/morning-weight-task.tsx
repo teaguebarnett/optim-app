@@ -9,7 +9,13 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { isValidWeight } from "@/lib/calculations";
 import type { DailyTaskState } from "@/lib/types";
 
-export function MorningWeightTask({ state }: { state: DailyTaskState }) {
+export function MorningWeightTask({
+  state,
+  emphasisOverride,
+}: {
+  state: DailyTaskState;
+  emphasisOverride?: "primary" | "secondary";
+}) {
   const { state: appState, dispatch, activeContext } = usePrototypeState();
   const { morningWeight } = appState;
   const previousWeightLb = activeContext.clientProfile?.previousWeightLb ?? null;
@@ -37,7 +43,7 @@ export function MorningWeightTask({ state }: { state: DailyTaskState }) {
 
   if ((isLogged || morningWeight.skipped) && !editing) {
     return (
-      <TaskShell title="Morning weight" icon={<Scale size={17} />} state={state}>
+      <TaskShell title="Morning weight" icon={<Scale size={17} />} state={state} emphasisOverride={emphasisOverride}>
         {isLogged ? (
           <div className="flex items-center justify-between">
             <div>

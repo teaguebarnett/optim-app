@@ -23,7 +23,7 @@ export function MealOptionCard({ option, isSelected, onSelect }: MealOptionCardP
           <p className="mt-1 text-sm text-neutral">{option.description}</p>
         </div>
         {isSelected ? (
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent text-off-white">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent">
             <Check size={14} />
           </span>
         ) : null}

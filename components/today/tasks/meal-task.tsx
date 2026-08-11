@@ -22,7 +22,15 @@ function formatTime(iso?: string): string | undefined {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-export function MealTask({ period, state }: { period: MealPeriod; state: DailyTaskState }) {
+export function MealTask({
+  period,
+  state,
+  emphasisOverride,
+}: {
+  period: MealPeriod;
+  state: DailyTaskState;
+  emphasisOverride?: "primary" | "secondary";
+}) {
   const { state: appState } = usePrototypeState();
   const [sheetOpen, setSheetOpen] = useState(false);
   const selection = appState.meals[period];
@@ -56,6 +64,7 @@ export function MealTask({ period, state }: { period: MealPeriod; state: DailyTa
         title={label}
         icon={<UtensilsCrossed size={17} />}
         state={state}
+        emphasisOverride={emphasisOverride}
         timeLabel={selection?.completedAtIso ? `Logged at ${formatTime(selection.completedAtIso)}` : undefined}
       >
         {selection?.source === "skipped" ? (

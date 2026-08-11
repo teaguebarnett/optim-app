@@ -29,7 +29,7 @@ export function TaskShell({ title, icon, state, lockedHint, timeLabel, children,
   if (emphasis === "locked") {
     return (
       <div className="flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-charcoal/40 px-4 py-3.5 opacity-60">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-neutral">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-off-white/[0.04] text-neutral">
           <Lock size={16} />
         </span>
         <div className="min-w-0 flex-1">
@@ -43,7 +43,7 @@ export function TaskShell({ title, icon, state, lockedHint, timeLabel, children,
   if (emphasis === "quiet") {
     return (
       <div className="flex items-center gap-3 rounded-[var(--radius-md)] border border-border bg-charcoal/60 px-4 py-3">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.05] text-neutral">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-off-white/[0.05] text-neutral">
           {icon}
         </span>
         <div className="min-w-0 flex-1">
@@ -59,15 +59,15 @@ export function TaskShell({ title, icon, state, lockedHint, timeLabel, children,
   return (
     <div
       className={cn(
-        "rounded-[var(--radius-lg)] border bg-charcoal p-4",
-        isPrimary ? "border-accent/40 shadow-[0_0_0_1px_rgba(217,104,50,0.08)]" : "border-border"
+        "rounded-[var(--radius-lg)] border bg-charcoal p-4 shadow-[var(--shadow-subtle)]",
+        isPrimary ? "border-accent/40" : "border-border"
       )}
     >
       <div className="flex items-start gap-3">
         <span
           className={cn(
             "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
-            isPrimary ? "bg-accent-soft text-accent-strong" : "bg-white/[0.05] text-neutral"
+            isPrimary ? "bg-accent-soft text-accent-strong" : "bg-off-white/[0.05] text-neutral"
           )}
         >
           {icon}

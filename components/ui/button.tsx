@@ -12,9 +12,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: "bg-accent text-off-white hover:bg-accent-strong active:scale-[0.98]",
+  primary: "bg-accent text-on-accent hover:bg-accent-strong active:scale-[0.98]",
   secondary: "bg-surface-raised text-off-white border border-border-strong hover:border-accent/40",
-  ghost: "bg-transparent text-off-white hover:bg-white/5",
+  ghost: "bg-transparent text-off-white hover:bg-off-white/5",
   outline: "bg-transparent text-off-white border border-border-strong hover:border-accent/50",
   danger: "bg-error-soft text-off-white border border-error/30 hover:border-error/60",
 };

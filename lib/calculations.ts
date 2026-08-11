@@ -1,5 +1,7 @@
-import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT } from "./mock-data";
+import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT } from "./mock-data.ts";
+import { resolvePlannedDateTime } from "./planning/training-plan.ts";
 import type { AppState } from "./state";
+import type { DailyTrainingPlan } from "./planning/types";
 import type {
   DailyTask,
   DailyTaskId,
@@ -127,7 +129,6 @@ export function isDailyComplete(state: AppState): boolean {
 const TASK_LABELS: Record<DailyTaskId, string> = {
   "morning-weight": "Morning weight",
   breakfast: "Breakfast",
-  "workout-window": "Recommended workout window",
   workout: PUSH_WORKOUT.name,
   "post-workout-meal": MEAL_PERIOD_LABELS.postWorkout,
   lunch: "Lunch",
@@ -149,41 +150,46 @@ function hasUnresolvedReview(state: AppState): boolean {
   return state.reviewRequests.some((r) => !r.resolved);
 }
 
-function mealState(selection: AppState["meals"][MealPeriod], locked: boolean): DailyTaskState {
-  if (locked) return "locked";
-  if (!selection) return "recommended-now";
+// Phase 3 removed rigid chronological locking: an earlier meal being missed
+// must not block a later one (see lib/planning/planner.ts for the adaptive
+// schedule that replaced the old locked-checklist presentation on Today).
+// This function is kept for screens that still read a coarse per-task
+// status (e.g. the Training tab's workout StatePill) — it must stay
+// consistent with that flexible behavior rather than contradict it, so no
+// task here reports "locked" for something the client can actually do.
+function mealState(selection: AppState["meals"][MealPeriod], resolvedBefore: boolean): DailyTaskState {
+  if (!selection) return resolvedBefore ? "recommended-now" : "upcoming";
   if (selection.source === "skipped") return "skipped";
   if (selection.source === "planned-later") return "upcoming";
   return "completed";
 }
 
-export function deriveTaskStates(state: AppState): DailyTask[] {
+/**
+ * @param trainingPlan Optional — when the client has scheduled a training
+ * time in the future, the workout task reports "upcoming" instead of
+ * "recommended-now" so its StatePill never contradicts the adaptive
+ * planner's own "Planned for {time}" caption (see lib/planning/planner.ts,
+ * which applies the identical rule). Omitted callers keep the pre-Phase-3
+ * behavior (always "recommended-now" once not-started).
+ */
+export function deriveTaskStates(
+  state: AppState,
+  trainingPlan?: DailyTrainingPlan | null,
+  now: Date = new Date()
+): DailyTask[] {
   const weightDone = weightResolved(state);
-  const breakfastResolved = isMealResolved(state.meals.breakfast);
   const workoutDone = workoutResolved(state);
   const postWorkoutResolved = isMealResolved(state.meals.postWorkout);
   const lunchResolved = isMealResolved(state.meals.lunch);
   const dinnerResolved = isMealResolved(state.meals.dinner);
+  const plannedWorkoutAt = trainingPlan ? resolvePlannedDateTime(trainingPlan, now) : null;
 
   const states: Record<DailyTaskId, DailyTaskState> = {
     "morning-weight": weightDone ? "completed" : "recommended-now",
 
-    breakfast: mealState(state.meals.breakfast, false),
-
-    "workout-window": (() => {
-      if (!breakfastResolved) return "locked";
-      if (state.workoutWindow.status === "declined") return "skipped";
-      if (state.workoutSession.status !== "not-started") return "completed";
-      // "activated" just means the countdown has started — the task is
-      // still awaiting the client's choice, so it stays interactive until
-      // they actually pick a time or the workout begins.
-      if (state.workoutWindow.status === "rescheduled") return "completed";
-      return "recommended-now";
-    })(),
+    breakfast: mealState(state.meals.breakfast, true),
 
     workout: (() => {
-      if (!breakfastResolved || state.workoutWindow.status === "pending") return "locked";
-      if (state.workoutWindow.status === "declined") return "skipped";
       if (state.workoutSession.status === "completed") {
         if (hasUnresolvedReview(state)) return "awaiting-review";
         // A session that includes any skipped work is submitted, not fully
@@ -192,19 +198,13 @@ export function deriveTaskStates(state: AppState): DailyTask[] {
       }
       if (state.workoutSession.status === "skipped") return "skipped";
       if (state.workoutSession.status === "in-progress") return "in-progress";
-      if (state.workoutWindow.scheduleChangeChoice === "not-sure-yet") return "needs-attention";
-      if (
-        state.workoutWindow.status === "rescheduled" &&
-        state.workoutWindow.scheduleChangeChoice !== "earlier-than-planned"
-      ) {
-        return "upcoming";
-      }
+      if (plannedWorkoutAt && now.getTime() < plannedWorkoutAt.getTime()) return "upcoming";
       return "recommended-now";
     })(),
 
-    "post-workout-meal": mealState(state.meals.postWorkout, !workoutDone),
+    "post-workout-meal": mealState(state.meals.postWorkout, workoutDone),
 
-    lunch: mealState(state.meals.lunch, !postWorkoutResolved),
+    lunch: mealState(state.meals.lunch, postWorkoutResolved),
 
     cardio: (() => {
       if (state.cardio.status === "completed") return "completed";
@@ -213,9 +213,9 @@ export function deriveTaskStates(state: AppState): DailyTask[] {
       return workoutDone ? "recommended-now" : "upcoming";
     })(),
 
-    dinner: mealState(state.meals.dinner, !lunchResolved),
+    dinner: mealState(state.meals.dinner, lunchResolved),
 
-    snack: mealState(state.meals.snack, !dinnerResolved),
+    snack: mealState(state.meals.snack, dinnerResolved),
 
     "daily-completion": isDailyComplete(state) ? "completed" : "locked",
   };
@@ -223,7 +223,6 @@ export function deriveTaskStates(state: AppState): DailyTask[] {
   const order: DailyTaskId[] = [
     "morning-weight",
     "breakfast",
-    "workout-window",
     "workout",
     "post-workout-meal",
     "lunch",
