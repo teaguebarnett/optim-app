@@ -1,13 +1,21 @@
 import Link from "next/link";
 import { Sheet } from "@/components/ui/sheet";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { getScriptedTopicById } from "@/lib/scripted-chat";
-import { CHAT_ASSISTANT_DESCRIPTION } from "@/lib/mock-data";
+import { chatAssistantDescription } from "@/lib/mock-data";
 
 export function TechniqueQuestionSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const topic = getScriptedTopicById("exercise-technique");
+  const { activeContext } = usePrototypeState();
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
 
   return (
-    <Sheet open={open} onClose={onClose} title="Technique question" description={CHAT_ASSISTANT_DESCRIPTION}>
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Technique question"
+      description={chatAssistantDescription(activeContext.assistantDisplayName, coachName)}
+    >
       <div className="space-y-4">
         {topic ? (
           <div className="rounded-[var(--radius-md)] border border-border-strong p-4">
@@ -20,7 +28,7 @@ export function TechniqueQuestionSheet({ open, onClose }: { open: boolean; onClo
           <Link href="/chat" className="font-medium text-accent-strong">
             Open chat
           </Link>{" "}
-          to ask Teague directly.
+          to ask {coachName} directly.
         </p>
       </div>
     </Sheet>

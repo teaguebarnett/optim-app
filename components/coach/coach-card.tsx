@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
-import { COACH } from "@/lib/mock-data";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 
 interface CoachCardProps {
   note: string;
@@ -10,13 +10,16 @@ interface CoachCardProps {
 }
 
 export function CoachCard({ note, noteLabel = "Coach note", showChatLink = true }: CoachCardProps) {
+  const { activeContext } = usePrototypeState();
+  const coach = activeContext.primaryCoach;
+
   return (
     <div className="rounded-[var(--radius-lg)] border border-border bg-charcoal p-4">
       <div className="flex items-center gap-3">
-        <Avatar initials={COACH.avatarInitials} />
+        <Avatar initials={coach?.avatarInitials ?? "?"} />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-off-white">{COACH.name}</p>
-          <p className="text-xs text-neutral">{COACH.title}</p>
+          <p className="text-sm font-semibold text-off-white">{coach?.displayName ?? "Coach"}</p>
+          <p className="text-xs text-neutral">{coach?.title ?? "Your Coach"}</p>
         </div>
         {showChatLink ? (
           <Link

@@ -20,7 +20,8 @@ interface MealSelectionSheetProps {
 type View = "options" | "manual" | "skip";
 
 export function MealSelectionSheet({ period, open, onClose }: MealSelectionSheetProps) {
-  const { state, dispatch } = usePrototypeState();
+  const { state, dispatch, activeContext } = usePrototypeState();
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
   const [view, setView] = useState<View>("options");
   const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
   const [skipReason, setSkipReason] = useState<SkipReason | null>(null);
@@ -149,7 +150,7 @@ export function MealSelectionSheet({ period, open, onClose }: MealSelectionSheet
             label="Optional note"
             value={skipNote}
             onChange={(e) => setSkipNote(e.target.value)}
-            placeholder="Anything Teague should know?"
+            placeholder={`Anything ${coachName} should know?`}
           />
           <div className="flex gap-2">
             <Button className="flex-1" onClick={handleSkipConfirm} disabled={!skipReason}>

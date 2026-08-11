@@ -17,8 +17,9 @@ import {
 import { cn } from "@/lib/cn";
 
 export default function TrainingPage() {
-  const { isHydrated, state, tasks } = usePrototypeState();
+  const { isHydrated, state, tasks, activeContext } = usePrototypeState();
   const router = useRouter();
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
 
   if (!isHydrated) return <ScreenSkeleton />;
 
@@ -100,7 +101,7 @@ export default function TrainingPage() {
         <div className="mt-4 rounded-[var(--radius-lg)] border border-warning/30 bg-warning-soft p-4">
           <div className="flex items-center gap-2">
             <AlertCircle size={16} className="text-warning" />
-            <p className="text-sm font-medium text-off-white">Awaiting Teague&apos;s review</p>
+            <p className="text-sm font-medium text-off-white">Awaiting {coachName}&apos;s review</p>
           </div>
           <ul className="mt-2 space-y-1 text-sm text-neutral">
             {unresolvedReviews.map((r) => (
@@ -142,7 +143,7 @@ export default function TrainingPage() {
       </div>
 
       <div className="mt-5">
-        <CoachCard note={TRAINING_WEEKLY_NOTE} noteLabel="Teague's focus for this week" />
+        <CoachCard note={TRAINING_WEEKLY_NOTE} noteLabel={`${coachName}'s focus for this week`} />
       </div>
     </div>
   );

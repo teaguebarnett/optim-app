@@ -6,27 +6,29 @@ import { SuggestedPrompts } from "@/components/chat/suggested-prompts";
 import { ChatInput } from "@/components/chat/chat-input";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { CHAT_ASSISTANT_DESCRIPTION } from "@/lib/mock-data";
-import { findScriptedResponse, GENERIC_FALLBACK_RESPONSE, getScriptedTopicById } from "@/lib/scripted-chat";
+import { chatAssistantDescription } from "@/lib/mock-data";
+import { findScriptedResponse, genericFallbackResponse, getScriptedTopicById } from "@/lib/scripted-chat";
 import { nextId } from "@/lib/state";
 import type { ChatMessage } from "@/lib/types";
 
-const SEED_MESSAGE: Omit<ChatMessage, "id" | "createdAtIso"> = {
-  sender: "coach",
-  text: "Nice work last week — 100% consistency. Let's carry that into Week 8. Let me know if anything comes up today.",
-};
+type SeedMessage = Omit<ChatMessage, "id" | "createdAtIso" | "workspaceId" | "clientId">;
 
 export default function ChatPage() {
-  const { state, dispatch, isHydrated } = usePrototypeState();
+  const { state, dispatch, isHydrated, activeContext } = usePrototypeState();
   const scrollRef = useRef<HTMLDivElement>(null);
   const seeded = useRef(false);
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
 
   useEffect(() => {
     if (isHydrated && state.chatMessages.length === 0 && !seeded.current) {
       seeded.current = true;
+      const seedMessage: SeedMessage = {
+        sender: "coach",
+        text: "Nice work last week — 100% consistency. Let's carry that into Week 8. Let me know if anything comes up today.",
+      };
       dispatch({
         type: "ADD_CHAT_MESSAGE",
-        message: { id: nextId("msg"), createdAtIso: new Date().toISOString(), ...SEED_MESSAGE },
+        message: { id: nextId("msg"), createdAtIso: new Date().toISOString(), ...seedMessage },
       });
     }
   }, [isHydrated, state.chatMessages.length, dispatch]);
@@ -37,7 +39,7 @@ export default function ChatPage() {
 
   if (!isHydrated) return <ScreenSkeleton />;
 
-  function addMessage(message: Omit<ChatMessage, "id" | "createdAtIso">) {
+  function addMessage(message: SeedMessage) {
     dispatch({
       type: "ADD_CHAT_MESSAGE",
       message: { id: nextId("msg"), createdAtIso: new Date().toISOString(), ...message },
@@ -60,7 +62,7 @@ export default function ChatPage() {
       if (matched) {
         addMessage({ sender: matched.responseSender, text: matched.response });
       } else {
-        addMessage({ sender: "assistant", text: GENERIC_FALLBACK_RESPONSE });
+        addMessage({ sender: "assistant", text: genericFallbackResponse(coachName) });
       }
     }, 400);
   }
@@ -68,8 +70,10 @@ export default function ChatPage() {
   return (
     <div className="flex flex-col">
       <div className="border-b border-border px-4 py-3">
-        <p className="text-sm font-semibold text-off-white">Message Teague</p>
-        <p className="mt-0.5 text-xs text-neutral">{CHAT_ASSISTANT_DESCRIPTION}</p>
+        <p className="text-sm font-semibold text-off-white">Message {coachName}</p>
+        <p className="mt-0.5 text-xs text-neutral">
+          {chatAssistantDescription(activeContext.assistantDisplayName, coachName)}
+        </p>
       </div>
 
       <div className="min-h-[50vh] space-y-1 px-4 py-3">
@@ -83,7 +87,7 @@ export default function ChatPage() {
         <div className="pb-2 pt-2">
           <SuggestedPrompts onSelect={handleSelectPrompt} />
         </div>
-        <ChatInput onSend={handleSend} />
+        <ChatInput onSend={handleSend} coachName={coachName} />
       </div>
     </div>
   );

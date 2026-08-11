@@ -13,7 +13,8 @@ interface SettingsSheetProps {
 }
 
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
-  const { resetToday, loadPreset } = usePrototypeState();
+  const { resetToday, loadPreset, activeContext } = usePrototypeState();
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
   const [confirmClear, setConfirmClear] = useState(false);
 
   function handleResetToday() {
@@ -70,7 +71,7 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
           <AlertTriangle size={18} className="shrink-0 text-neutral" />
           <span>
             <span className="block text-sm font-medium text-off-white">Load awaiting-review example</span>
-            <span className="block text-xs text-neutral">See a day with a pain report flagged for Teague.</span>
+            <span className="block text-xs text-neutral">See a day with a pain report flagged for {coachName}.</span>
           </span>
         </button>
 

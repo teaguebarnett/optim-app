@@ -11,6 +11,7 @@ interface PainReportSheetProps {
   open: boolean;
   onClose: () => void;
   defaultMovement?: string;
+  coachName: string;
   onSubmit: (report: {
     location: string;
     ratingZeroToTen: number;
@@ -24,7 +25,7 @@ interface PainReportSheetProps {
 
 const ONSET_OPTIONS = ["Before starting", "During the set", "Right after the set", "Earlier today"];
 
-export function PainReportSheet({ open, onClose, defaultMovement, onSubmit }: PainReportSheetProps) {
+export function PainReportSheet({ open, onClose, defaultMovement, coachName, onSubmit }: PainReportSheetProps) {
   const [step, setStep] = useState<"form" | "confirmation">("form");
   const [location, setLocation] = useState("");
   const [rating, setRating] = useState<number | "">("");
@@ -60,7 +61,7 @@ export function PainReportSheet({ open, onClose, defaultMovement, onSubmit }: Pa
 
   function handleSubmit() {
     if (!location.trim() || rating === "" || !onset || continuedAfterSet === null || affectsOutsideGym === null) {
-      setError("Please fill in each field so Teague has the full picture.");
+      setError(`Please fill in each field so ${coachName} has the full picture.`);
       return;
     }
     onSubmit({
@@ -178,8 +179,8 @@ export function PainReportSheet({ open, onClose, defaultMovement, onSubmit }: Pa
       ) : (
         <div className="space-y-4">
           <p className="text-[15px] leading-relaxed text-off-white">
-            I&apos;ve logged this and prepared it for Teague&apos;s review. Your program has not been permanently
-            changed. Teague will review the details before any adjustment is finalized.
+            I&apos;ve logged this and prepared it for {coachName}&apos;s review. Your program has not been
+            permanently changed. {coachName} will review the details before any adjustment is finalized.
           </p>
           <Button className="w-full" onClick={handleClose}>
             Done

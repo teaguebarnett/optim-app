@@ -10,8 +10,9 @@ const KEYWORD_MAP: Array<{ topicId: string; keywords: string[] }> = [
   { topicId: "schedule-change", keywords: ["schedule", "later today", "reschedule", "train later"] },
 ];
 
-export const GENERIC_FALLBACK_RESPONSE =
-  "Real AI has not been connected in this prototype yet, so I can't answer that specific question. Teague will see your message and follow up, or you can try one of the suggested questions above.";
+export function genericFallbackResponse(coachName: string): string {
+  return `Real AI has not been connected in this prototype yet, so I can't answer that specific question. ${coachName} will see your message and follow up, or you can try one of the suggested questions above.`;
+}
 
 export function findScriptedResponse(userText: string): ScriptedChatTopic | null {
   const normalized = userText.toLowerCase();

@@ -7,12 +7,12 @@ import { NumberField } from "@/components/ui/number-field";
 import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { isValidWeight } from "@/lib/calculations";
-import { CLIENT } from "@/lib/mock-data";
 import type { DailyTaskState } from "@/lib/types";
 
 export function MorningWeightTask({ state }: { state: DailyTaskState }) {
-  const { state: appState, dispatch } = usePrototypeState();
+  const { state: appState, dispatch, activeContext } = usePrototypeState();
   const { morningWeight } = appState;
+  const previousWeightLb = activeContext.clientProfile?.previousWeightLb ?? null;
   const [draft, setDraft] = useState<number | "">("");
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,9 +46,9 @@ export function MorningWeightTask({ state }: { state: DailyTaskState }) {
                 <p className="mt-1 text-sm text-success">
                   Logged. Weekly trends matter more than a single morning.
                 </p>
-              ) : (
-                <p className="mt-1 text-sm text-neutral">Previous: {CLIENT.previousWeightLb} lb</p>
-              )}
+              ) : previousWeightLb !== null ? (
+                <p className="mt-1 text-sm text-neutral">Previous: {previousWeightLb} lb</p>
+              ) : null}
             </div>
             <Button
               variant="ghost"
@@ -77,7 +77,9 @@ export function MorningWeightTask({ state }: { state: DailyTaskState }) {
       state={state}
       emphasisOverride="secondary"
     >
-      <p className="mb-3 text-sm text-neutral">Previous recorded weight: {CLIENT.previousWeightLb} lb</p>
+      {previousWeightLb !== null ? (
+        <p className="mb-3 text-sm text-neutral">Previous recorded weight: {previousWeightLb} lb</p>
+      ) : null}
       <NumberField
         id="morning-weight"
         label="Today's weight"
@@ -90,7 +92,7 @@ export function MorningWeightTask({ state }: { state: DailyTaskState }) {
         min={60}
         max={600}
         suffix="lb"
-        placeholder={String(CLIENT.previousWeightLb)}
+        placeholder={previousWeightLb !== null ? String(previousWeightLb) : undefined}
         errorText={error ?? undefined}
       />
       <div className="mt-3 flex gap-2">

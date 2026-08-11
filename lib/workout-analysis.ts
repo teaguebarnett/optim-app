@@ -1,5 +1,23 @@
 import { PUSH_WORKOUT } from "./mock-data";
+import { ALL_CLIENT_PROFILES, ALL_COACH_PROFILES, ALL_WORKSPACES } from "./tenancy/seed";
 import type { Exercise, ExerciseLog, WorkoutSession, WorkoutSummary } from "./types";
+
+/** Resolves the business/coach display names for the session's workspace and
+ * client, so the zero-data message below never hardcodes a specific
+ * workspace's brand or coach name. Falls back to generic wording only if the
+ * session references a workspace/client this build doesn't know about.
+ * Uses the workspace's business name (not the assistant name) so the
+ * OPTIM demo workspace's required Phase 1 wording — "...so OPTIM cannot
+ * evaluate..." — is preserved exactly. */
+function resolveSessionIdentity(session: WorkoutSession): { businessName: string; coachName: string } {
+  const workspace = ALL_WORKSPACES.find((w) => w.id === session.workspaceId);
+  const client = ALL_CLIENT_PROFILES.find((c) => c.id === session.clientId);
+  const coach = client ? ALL_COACH_PROFILES.find((c) => c.id === client.primaryCoachId) : undefined;
+  return {
+    businessName: workspace?.branding.businessName ?? "the platform",
+    coachName: coach?.displayName ?? "your coach",
+  };
+}
 
 // Deterministic, rule-based prototype feedback. No real analysis engine —
 // every message is derived strictly from the sets the client actually
@@ -113,9 +131,9 @@ export function buildWorkoutSummary(
   let detail: string;
 
   if (workingSetsCompleted === 0) {
+    const { businessName, coachName } = resolveSessionIdentity(session);
     headline = "No performance data submitted.";
-    detail =
-      "No working-set data was submitted, so OPTIM cannot evaluate today's performance. Teague has been notified.";
+    detail = `No working-set data was submitted, so ${businessName} cannot evaluate today's performance. ${coachName} has been notified.`;
   } else {
     headline = fullyCompleted
       ? "Workout completed."

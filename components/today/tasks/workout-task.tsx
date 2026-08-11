@@ -11,9 +11,10 @@ import { PUSH_WORKOUT } from "@/lib/mock-data";
 import type { DailyTaskState } from "@/lib/types";
 
 export function WorkoutTask({ state }: { state: DailyTaskState }) {
-  const { state: appState, dispatch } = usePrototypeState();
+  const { state: appState, dispatch, activeContext } = usePrototypeState();
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
 
   if (state === "locked") {
     return (
@@ -51,7 +52,7 @@ export function WorkoutTask({ state }: { state: DailyTaskState }) {
           </div>
         ) : null}
         <p className="mt-3 text-xs text-warning">
-          I&apos;ve organized this for Teague&apos;s review. Teague will make any programming decisions.
+          I&apos;ve organized this for {coachName}&apos;s review. {coachName} will make any programming decisions.
         </p>
       </TaskShell>
     );
@@ -79,7 +80,7 @@ export function WorkoutTask({ state }: { state: DailyTaskState }) {
 
         {!isInProgress && (
           <div className="mt-3 rounded-[var(--radius-sm)] bg-white/[0.04] p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-neutral">Note from Teague</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-neutral">Note from {coachName}</p>
             <p className="mt-1 text-sm text-off-white">{PUSH_WORKOUT.coachNote}</p>
           </div>
         )}

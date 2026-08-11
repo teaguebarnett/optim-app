@@ -1,7 +1,10 @@
 import { Sheet } from "@/components/ui/sheet";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { PUSH_WORKOUT } from "@/lib/mock-data";
 
 export function WorkoutDetailsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { activeContext } = usePrototypeState();
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
   return (
     <Sheet open={open} onClose={onClose} title={PUSH_WORKOUT.name} description={PUSH_WORKOUT.focus}>
       <div className="mb-4 rounded-[var(--radius-sm)] bg-white/[0.04] p-3">
@@ -28,7 +31,7 @@ export function WorkoutDetailsSheet({ open, onClose }: { open: boolean; onClose:
       </div>
 
       <div className="mt-4 rounded-[var(--radius-sm)] bg-white/[0.04] p-3">
-        <p className="text-xs font-medium uppercase tracking-wide text-neutral">Note from Teague</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-neutral">Note from {coachName}</p>
         <p className="mt-1 text-sm text-off-white">{PUSH_WORKOUT.coachNote}</p>
       </div>
     </Sheet>

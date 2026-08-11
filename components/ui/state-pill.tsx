@@ -1,34 +1,50 @@
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 import type { DailyTaskState } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
-const STATE_CONFIG: Record<DailyTaskState, { label: string; className: string }> = {
-  locked: { label: "Locked", className: "bg-white/[0.06] text-neutral" },
-  upcoming: { label: "Upcoming", className: "bg-white/[0.06] text-neutral" },
-  "recommended-now": { label: "Recommended now", className: "bg-accent-soft text-accent-strong" },
-  "in-progress": { label: "In progress", className: "bg-accent-soft text-accent-strong" },
-  completed: { label: "Completed", className: "bg-success-soft text-success" },
-  "partially-completed": { label: "Partially completed", className: "bg-warning-soft text-warning" },
-  skipped: { label: "Skipped", className: "bg-white/[0.06] text-neutral" },
-  missed: { label: "Missed", className: "bg-error-soft text-error" },
-  "needs-attention": { label: "Needs attention", className: "bg-warning-soft text-warning" },
-  "awaiting-review": { label: "Awaiting Teague's review", className: "bg-warning-soft text-warning" },
+const STATE_CLASSNAMES: Record<DailyTaskState, string> = {
+  locked: "bg-white/[0.06] text-neutral",
+  upcoming: "bg-white/[0.06] text-neutral",
+  "recommended-now": "bg-accent-soft text-accent-strong",
+  "in-progress": "bg-accent-soft text-accent-strong",
+  completed: "bg-success-soft text-success",
+  "partially-completed": "bg-warning-soft text-warning",
+  skipped: "bg-white/[0.06] text-neutral",
+  missed: "bg-error-soft text-error",
+  "needs-attention": "bg-warning-soft text-warning",
+  "awaiting-review": "bg-warning-soft text-warning",
 };
 
+/** Builds the static (workspace-independent) labels, plus the one label that
+ * names the active coach — kept out of a plain constant map since it must
+ * resolve dynamically per workspace. */
+function buildStateLabels(coachDisplayName: string): Record<DailyTaskState, string> {
+  return {
+    locked: "Locked",
+    upcoming: "Upcoming",
+    "recommended-now": "Recommended now",
+    "in-progress": "In progress",
+    completed: "Completed",
+    "partially-completed": "Partially completed",
+    skipped: "Skipped",
+    missed: "Missed",
+    "needs-attention": "Needs attention",
+    "awaiting-review": `Awaiting ${coachDisplayName}'s review`,
+  };
+}
+
 export function StatePill({ state, className }: { state: DailyTaskState; className?: string }) {
-  const config = STATE_CONFIG[state];
+  const { activeContext } = usePrototypeState();
+  const label = buildStateLabels(activeContext.primaryCoach?.displayName ?? "your coach")[state];
   return (
     <span
       className={cn(
         "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium leading-none",
-        config.className,
+        STATE_CLASSNAMES[state],
         className
       )}
     >
-      {config.label}
+      {label}
     </span>
   );
-}
-
-export function stateLabel(state: DailyTaskState): string {
-  return STATE_CONFIG[state].label;
 }

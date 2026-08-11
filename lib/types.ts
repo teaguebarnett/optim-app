@@ -1,25 +1,14 @@
 // Core domain types for the OPTIM client prototype.
 // Business rules live in lib/calculations.ts and lib/workout-analysis.ts,
 // not in these type definitions.
+//
+// Client/coach identity now lives in lib/tenancy/types.ts (ClientProfile,
+// CoachProfile) so every workspace can have its own — this file only
+// re-imports the tenant-attribution types it needs to stamp onto records.
 
-export type ClientId = string;
+import type { ClientProfileId, WorkspaceId } from "./tenancy/types";
 
-export interface Client {
-  id: ClientId;
-  name: string;
-  goal: string;
-  programWeek: number;
-  programTotalWeeks: number;
-  avatarInitials: string;
-  previousWeightLb: number;
-}
-
-export interface Coach {
-  id: string;
-  name: string;
-  title: string;
-  avatarInitials: string;
-}
+export type ClientId = ClientProfileId;
 
 // ---------------------------------------------------------------------------
 // Nutrition
@@ -107,6 +96,10 @@ export interface Exercise {
 
 export interface Workout {
   id: string;
+  /** The workspace whose program library this workout belongs to — program
+   * content is workspace-specific even though today's prototype only has
+   * one workspace's catalog. */
+  workspaceId: WorkspaceId;
   name: string;
   dayOfWeek: DayOfWeek;
   focus: string;
@@ -159,6 +152,8 @@ export type SkipReason =
 
 export interface PainReport {
   id: string;
+  workspaceId: WorkspaceId;
+  clientId: ClientProfileId;
   createdAtIso: string;
   exerciseId?: string;
   location: string;
@@ -177,6 +172,8 @@ export type WorkoutSessionStatus =
   | "skipped";
 
 export interface WorkoutSession {
+  workspaceId: WorkspaceId;
+  clientId: ClientProfileId;
   workoutId: string;
   status: WorkoutSessionStatus;
   startedAtIso?: string;
@@ -297,6 +294,12 @@ export type ChatSender = "client" | "assistant" | "coach" | "system";
 
 export interface ChatMessage {
   id: string;
+  workspaceId: WorkspaceId;
+  clientId: ClientProfileId;
+  /** Set only for sender === "coach", so a coach-authored message keeps its
+   * author's identity even in a workspace with multiple coaches later. The
+   * assistant is never attributed to a coach — see sender === "assistant". */
+  authorCoachId?: string;
   sender: ChatSender;
   text: string;
   createdAtIso: string;
@@ -360,6 +363,8 @@ export type ReviewRequestKind =
 
 export interface ReviewRequest {
   id: string;
+  workspaceId: WorkspaceId;
+  clientId: ClientProfileId;
   kind: ReviewRequestKind;
   createdAtIso: string;
   summary: string;

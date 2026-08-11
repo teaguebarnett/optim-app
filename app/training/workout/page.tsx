@@ -28,8 +28,9 @@ type SkipTarget =
   | { kind: "workout" };
 
 export default function ActiveWorkoutPage() {
-  const { state, dispatch, isHydrated } = usePrototypeState();
+  const { state, dispatch, isHydrated, activeContext } = usePrototypeState();
   const router = useRouter();
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
   const restTimer = useRestTimer();
 
   const [overviewOpen, setOverviewOpen] = useState(false);
@@ -207,6 +208,7 @@ export default function ActiveWorkoutPage() {
         open={painOpen}
         onClose={() => setPainOpen(false)}
         defaultMovement={currentExercise.name}
+        coachName={coachName}
         onSubmit={handlePainSubmit}
       />
 
@@ -216,7 +218,7 @@ export default function ActiveWorkoutPage() {
         open={equipmentOpen}
         onClose={() => setEquipmentOpen(false)}
         title="Equipment unavailable"
-        description="This exercise will be marked skipped and flagged for Teague."
+        description={`This exercise will be marked skipped and flagged for ${coachName}.`}
       >
         <div className="space-y-4">
           <TextArea

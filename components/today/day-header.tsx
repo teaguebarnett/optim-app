@@ -1,6 +1,7 @@
 import { getGreeting } from "@/lib/calculations";
-import { CLIENT, DAILY_PLAN, PUSH_WORKOUT, CARDIO_TARGET } from "@/lib/mock-data";
+import { DAILY_PLAN, PUSH_WORKOUT, CARDIO_TARGET } from "@/lib/mock-data";
 import { ProgressRing } from "@/components/ui/progress-ring";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 
 function formatDateLabel(dateIso: string): string {
   const date = new Date(`${dateIso}T00:00:00`);
@@ -8,7 +9,8 @@ function formatDateLabel(dateIso: string): string {
 }
 
 export function DayHeader({ completionPercent }: { completionPercent: number }) {
-  const greeting = getGreeting(new Date(), CLIENT.name);
+  const { activeContext } = usePrototypeState();
+  const greeting = getGreeting(new Date(), activeContext.clientProfile?.name ?? "there");
 
   return (
     <div className="px-4 pt-5">

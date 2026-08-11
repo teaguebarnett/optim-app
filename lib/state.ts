@@ -1,5 +1,7 @@
 import { MEAL_OPTIONS, PUSH_WORKOUT } from "./mock-data";
 import { buildWorkoutSummary, canCompleteExercise } from "./workout-analysis";
+import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "./tenancy/seed";
+import type { ClientProfileId, WorkspaceId } from "./tenancy/types";
 import type {
   CardioLog,
   ChatMessage,
@@ -18,8 +20,18 @@ import type {
   WorkoutWindowState,
 } from "./types";
 
+// The demo app only ever runs as this one client, in this one workspace —
+// see lib/tenancy/seed.ts and lib/tenancy/context.ts for how a future
+// multi-workspace app would resolve these per-session instead of as
+// constants. Every new record the reducer creates is stamped with these so
+// components never have to remember to attribute a record correctly.
+const DEMO_WORKSPACE_ID: WorkspaceId = WORKSPACE_OPTIM_ID;
+const DEMO_CLIENT_ID: ClientProfileId = CLIENT_PROFILE_DEMO.id;
+
 export interface AppState {
-  version: 1;
+  version: 2;
+  workspaceId: WorkspaceId;
+  clientId: ClientProfileId;
   dateIso: string;
   morningWeight: MorningWeightLog;
   meals: Partial<Record<MealPeriod, MealSelection>>;
@@ -40,6 +52,8 @@ export function createInitialWorkoutSession(): WorkoutSession {
     };
   }
   return {
+    workspaceId: DEMO_WORKSPACE_ID,
+    clientId: DEMO_CLIENT_ID,
     workoutId: PUSH_WORKOUT.id,
     status: "not-started",
     currentExerciseIndex: 0,
@@ -50,7 +64,9 @@ export function createInitialWorkoutSession(): WorkoutSession {
 
 export function createInitialState(): AppState {
   return {
-    version: 1,
+    version: 2,
+    workspaceId: DEMO_WORKSPACE_ID,
+    clientId: DEMO_CLIENT_ID,
     dateIso: new Date().toISOString().slice(0, 10),
     morningWeight: { weightLb: null, skipped: false },
     meals: {},
@@ -124,7 +140,7 @@ export type Action =
   | { type: "SET_CURRENT_EXERCISE_INDEX"; index: number }
   | { type: "COMPLETE_WORKOUT"; summary: WorkoutSummary }
   | { type: "SKIP_WORKOUT"; reason: SkipReason; note?: string }
-  | { type: "ADD_CHAT_MESSAGE"; message: ChatMessage }
+  | { type: "ADD_CHAT_MESSAGE"; message: Omit<ChatMessage, "workspaceId" | "clientId"> }
   | { type: "RESET_TODAY" }
   | { type: "LOAD_PRESET"; preset: "completed-day" | "awaiting-review" };
 
@@ -393,6 +409,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case "REPORT_PAIN": {
       const report: PainReport = {
         id: nextId("pain"),
+        workspaceId: state.workspaceId,
+        clientId: state.clientId,
         createdAtIso: new Date().toISOString(),
         exerciseId: action.exerciseId,
         location: action.location,
@@ -405,6 +423,8 @@ export function reducer(state: AppState, action: Action): AppState {
       };
       const reviewRequest: ReviewRequest = {
         id: nextId("review"),
+        workspaceId: state.workspaceId,
+        clientId: state.clientId,
         kind: "pain-report",
         createdAtIso: report.createdAtIso,
         summary: `Pain reported: ${action.location} during today's workout.`,
@@ -438,6 +458,8 @@ export function reducer(state: AppState, action: Action): AppState {
         const hasSkippedWork = action.summary.exercisesSkipped > 0 || action.summary.skippedSetsCount > 0;
         reviewRequests.push({
           id: nextId("review"),
+          workspaceId: state.workspaceId,
+          clientId: state.clientId,
           kind: hasSkippedWork ? "workout-skipped" : "rpe-anomaly",
           createdAtIso: new Date().toISOString(),
           summary: hasSkippedWork
@@ -461,6 +483,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case "SKIP_WORKOUT": {
       const reviewRequest: ReviewRequest = {
         id: nextId("review"),
+        workspaceId: state.workspaceId,
+        clientId: state.clientId,
         kind: "workout-skipped",
         createdAtIso: new Date().toISOString(),
         summary: "Today's push workout was skipped.",
@@ -478,8 +502,13 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
 
-    case "ADD_CHAT_MESSAGE":
-      return { ...state, chatMessages: [...state.chatMessages, action.message] };
+    case "ADD_CHAT_MESSAGE": {
+      // Stamp tenant attribution centrally rather than trusting each dispatch
+      // site to set it — every message is attributed to the active
+      // workspace/client no matter where ADD_CHAT_MESSAGE is dispatched from.
+      const message: ChatMessage = { ...action.message, workspaceId: state.workspaceId, clientId: state.clientId };
+      return { ...state, chatMessages: [...state.chatMessages, message] };
+    }
 
     case "RESET_TODAY":
       return createInitialState();
@@ -540,6 +569,8 @@ function buildCompletedDayPreset(): AppState {
   const startedAtIso = new Date(Date.now() - 64 * 60_000).toISOString();
 
   const sessionBeforeSummary: WorkoutSession = {
+    workspaceId: base.workspaceId,
+    clientId: base.clientId,
     workoutId: PUSH_WORKOUT.id,
     status: "in-progress",
     startedAtIso,
@@ -576,6 +607,8 @@ function buildAwaitingReviewPreset(): AppState {
   base.workoutSession.painReports = [
     {
       id: nextId("pain"),
+      workspaceId: base.workspaceId,
+      clientId: base.clientId,
       createdAtIso: now,
       exerciseId: "incline-db-press",
       location: "Right shoulder",
@@ -599,6 +632,8 @@ function buildAwaitingReviewPreset(): AppState {
   base.reviewRequests = [
     {
       id: nextId("review"),
+      workspaceId: base.workspaceId,
+      clientId: base.clientId,
       kind: "pain-report",
       createdAtIso: now,
       summary: "Pain reported: right shoulder during Incline Dumbbell Press.",
@@ -606,6 +641,8 @@ function buildAwaitingReviewPreset(): AppState {
     },
     {
       id: nextId("review"),
+      workspaceId: base.workspaceId,
+      clientId: base.clientId,
       kind: "rpe-anomaly",
       createdAtIso: now,
       summary: "Today's push workout has RPE values worth a second look.",

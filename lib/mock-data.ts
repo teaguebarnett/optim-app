@@ -1,8 +1,7 @@
+import { WORKSPACE_OPTIM_ID } from "./tenancy/seed";
 import type {
   AdherencePoint,
   CardioTarget,
-  Client,
-  Coach,
   DailyPlan,
   Exercise,
   MealOption,
@@ -18,24 +17,11 @@ import type {
   DayOfWeek,
 } from "./types";
 
-// Single source of truth for the demo client's identity. Every screen reads
-// this dynamically — never hardcode a client name elsewhere.
-export const CLIENT: Client = {
-  id: "client",
-  name: "Client",
-  goal: "Build muscle and improve training consistency",
-  programWeek: 8,
-  programTotalWeeks: 16,
-  avatarInitials: "C",
-  previousWeightLb: 191.4,
-};
-
-export const COACH: Coach = {
-  id: "teague",
-  name: "Teague",
-  title: "Your Coach",
-  avatarInitials: "TB",
-};
+// Client and coach identity now live in lib/tenancy/seed.ts (ClientProfile,
+// CoachProfile) as part of the OPTIM demo workspace — every screen resolves
+// them dynamically through useActiveContext() rather than importing a
+// CLIENT/COACH constant from here. This file stays focused on program/
+// nutrition/progress catalog content.
 
 export const NUTRITION_TARGETS: NutritionTargets = {
   calories: 3000,
@@ -340,6 +326,7 @@ const PUSH_EXERCISES: Exercise[] = [
 
 export const PUSH_WORKOUT: Workout = {
   id: TODAY_WORKOUT_ID,
+  workspaceId: WORKSPACE_OPTIM_ID,
   name: "Push Workout",
   dayOfWeek: "Monday",
   focus: "Chest, shoulders, and triceps",
@@ -491,5 +478,8 @@ export const SCRIPTED_CHAT_TOPICS: ScriptedChatTopic[] = [
   },
 ];
 
-export const CHAT_ASSISTANT_DESCRIPTION =
-  "The OPTIM Assistant helps answer routine questions and organizes anything that needs Teague's review.";
+// Built from the active workspace's assistant/coach names rather than a
+// hardcoded constant, so a differently-branded workspace gets its own copy.
+export function chatAssistantDescription(assistantDisplayName: string, coachDisplayName: string): string {
+  return `The ${assistantDisplayName} helps answer routine questions and organizes anything that needs ${coachDisplayName}'s review.`;
+}

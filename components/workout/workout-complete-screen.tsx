@@ -4,12 +4,14 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2, XCircle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SKIP_REASON_LABELS } from "@/components/ui/reason-picker";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 import type { WorkoutSession } from "@/lib/types";
-
-const TEAGUE_REVIEW_SENTENCE = "I've organized this for Teague's review. Teague will make any programming decisions.";
 
 export function WorkoutCompleteScreen({ session }: { session: WorkoutSession }) {
   const router = useRouter();
+  const { activeContext } = usePrototypeState();
+  const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
+  const reviewSentence = `I've organized this for ${coachName}'s review. ${coachName} will make any programming decisions.`;
 
   if (session.status === "skipped") {
     return (
@@ -24,7 +26,11 @@ export function WorkoutCompleteScreen({ session }: { session: WorkoutSession }) 
         <p className="mt-4 max-w-xs text-sm leading-relaxed text-neutral">
           Your program has not been permanently changed.
         </p>
-        <AssistantNote text={TEAGUE_REVIEW_SENTENCE} className="mt-4 max-w-xs" />
+        <AssistantNote
+          text={reviewSentence}
+          assistantName={activeContext.assistantDisplayName}
+          className="mt-4 max-w-xs"
+        />
         <Button className="mt-6" onClick={() => router.push("/today")}>
           Back to Today
         </Button>
@@ -51,14 +57,19 @@ export function WorkoutCompleteScreen({ session }: { session: WorkoutSession }) 
         <Stat label="Pain reports" value={summary.painReportCount} />
       </div>
 
-      <AssistantNote text={summary.detail} className="mx-auto mt-6 max-w-sm" />
+      <AssistantNote text={summary.detail} assistantName={activeContext.assistantDisplayName} className="mx-auto mt-6 max-w-sm" />
 
       {summary.needsReview ? (
-        <AssistantNote text={TEAGUE_REVIEW_SENTENCE} className="mx-auto mt-3 max-w-sm" tone="warning" />
+        <AssistantNote
+          text={reviewSentence}
+          assistantName={activeContext.assistantDisplayName}
+          className="mx-auto mt-3 max-w-sm"
+          tone="warning"
+        />
       ) : (
         <p className="mx-auto mt-6 max-w-sm text-sm leading-relaxed text-neutral">
-          Teague remains your coach and the final decision-maker — he&apos;ll review your performance and RPE
-          trends before making future programming decisions.
+          {coachName} remains your coach and the final decision-maker — reviewing your performance and RPE trends
+          before making future programming decisions.
         </p>
       )}
 
@@ -71,10 +82,12 @@ export function WorkoutCompleteScreen({ session }: { session: WorkoutSession }) 
 
 function AssistantNote({
   text,
+  assistantName,
   className,
   tone = "neutral",
 }: {
   text: string;
+  assistantName: string;
   className?: string;
   tone?: "neutral" | "warning";
 }) {
@@ -82,7 +95,7 @@ function AssistantNote({
     <div className={className}>
       <div className="flex items-center justify-center gap-1.5">
         <Sparkles size={13} className="text-neutral" />
-        <span className="text-xs font-medium text-neutral">OPTIM Assistant</span>
+        <span className="text-xs font-medium text-neutral">{assistantName}</span>
       </div>
       <p
         className={`mt-1.5 text-[15px] leading-relaxed ${tone === "warning" ? "text-warning" : "text-neutral"}`}

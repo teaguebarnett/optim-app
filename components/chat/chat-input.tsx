@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { ArrowUp } from "lucide-react";
 
-export function ChatInput({ onSend }: { onSend: (text: string) => void }) {
+export function ChatInput({ onSend, coachName }: { onSend: (text: string) => void; coachName: string }) {
   const [value, setValue] = useState("");
 
   function handleSubmit(e: FormEvent) {
@@ -30,7 +30,7 @@ export function ChatInput({ onSend }: { onSend: (text: string) => void }) {
             handleSubmit(e);
           }
         }}
-        placeholder="Message Teague..."
+        placeholder={`Message ${coachName}...`}
         className="max-h-28 flex-1 resize-none rounded-[var(--radius-md)] border border-border-strong bg-surface px-3.5 py-2.5 text-[15px] text-off-white outline-none placeholder:text-neutral/60 focus-visible:border-accent"
       />
       <button

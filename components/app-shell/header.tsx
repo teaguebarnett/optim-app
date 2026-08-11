@@ -5,18 +5,17 @@ import { Settings, Bell } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { SettingsSheet } from "@/components/app-shell/settings-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { CLIENT } from "@/lib/mock-data";
 
 export function Header() {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { state } = usePrototypeState();
+  const { state, activeContext } = usePrototypeState();
   const hasUnresolvedReview = state.reviewRequests.some((r) => !r.resolved);
 
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-near-black/90 pc-safe-top backdrop-blur-md">
       <div className="mx-auto flex max-w-lg items-center justify-between px-4 py-3">
         <span className="text-[15px] font-semibold tracking-tight text-off-white">
-          <span className="text-accent">OPTIM</span>
+          <span className="text-accent">{activeContext.branding.businessName}</span>
         </span>
 
         <div className="flex items-center gap-2">
@@ -36,7 +35,7 @@ export function Header() {
           >
             <Settings size={19} />
           </button>
-          <Avatar initials={CLIENT.avatarInitials} size="sm" />
+          <Avatar initials={activeContext.clientProfile?.avatarInitials ?? "?"} size="sm" />
         </div>
       </div>
       <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />

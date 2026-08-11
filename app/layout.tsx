@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { PrototypeStateProvider } from "@/hooks/use-prototype-state";
 import { AppShell } from "@/components/app-shell/shell";
+import { COACH_PROFILE_TEAGUE, WORKSPACE_OPTIM } from "@/lib/tenancy/seed";
 
 const inter = Inter({
   variable: "--font-sans",
@@ -10,9 +11,13 @@ const inter = Inter({
   display: "swap",
 });
 
+// Static route metadata is resolved at build/module-load time, outside the
+// React tree, so it can't go through useActiveContext() — it still reads
+// from the same centralized tenancy seed data rather than a separate
+// hardcoded string.
 export const metadata: Metadata = {
-  title: "OPTIM",
-  description: "Your daily coaching plan from Teague — training, nutrition, and progress in one place.",
+  title: WORKSPACE_OPTIM.branding.businessName,
+  description: `Your daily coaching plan from ${COACH_PROFILE_TEAGUE.displayName} — training, nutrition, and progress in one place.`,
 };
 
 export const viewport: Viewport = {
