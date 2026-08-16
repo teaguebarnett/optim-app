@@ -8,12 +8,15 @@ import { CoachCard } from "@/components/coach/coach-card";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import {
-  DAILY_PLAN,
   LAST_WEEK_SUMMARY,
   PUSH_WORKOUT,
   TRAINING_WEEK,
   TRAINING_WEEKLY_NOTE,
+  catalogWorkoutForDay,
+  trainingWeekEntryForDay,
 } from "@/lib/mock-data";
+import { localDateDayOfWeek } from "@/lib/shared/local-date";
+import { deriveProgramWeek } from "@/lib/scheduling/enrollment";
 import { cn } from "@/lib/cn";
 
 export default function TrainingPage() {
@@ -24,10 +27,31 @@ export default function TrainingPage() {
   if (!isHydrated) return <ScreenSkeleton />;
 
   const workoutTaskState = tasks.find((t) => t.id === "workout")?.state ?? "locked";
+
+  // Phase 4.1 corrective — every day-relative label on this route resolves
+  // from the same client-local effective date the Today screen already
+  // uses (state.dateIso), never a hardcoded Monday. See
+  // components/today/day-header.tsx and lib/planning/planner.ts for the
+  // identical resolution chain.
+  const todayDayOfWeek = localDateDayOfWeek(state.dateIso);
+  const programWeek = deriveProgramWeek(state.programEnrollment, state.dateIso);
+  const todaysScheduleEntry = trainingWeekEntryForDay(todayDayOfWeek);
+  const catalogWorkoutToday = catalogWorkoutForDay(todayDayOfWeek);
+  const scheduledWithoutDetail = !catalogWorkoutToday && todaysScheduleEntry?.type === "training";
+  const cardWorkoutName = catalogWorkoutToday?.name ?? todaysScheduleEntry?.workoutName ?? PUSH_WORKOUT.name;
+  const cardSubtitle = catalogWorkoutToday
+    ? `${catalogWorkoutToday.focus} · ${catalogWorkoutToday.estimatedDurationMin} min`
+    : scheduledWithoutDetail
+      ? (todaysScheduleEntry?.focus ?? "")
+      : `${PUSH_WORKOUT.focus} · ${PUSH_WORKOUT.estimatedDurationMin} min`;
+
   // A fully-skipped workout never shows as "completed" here — only real,
-  // submitted work does. This keeps the week strip consistent with the
-  // Today screen's own accountability rules.
-  const mondayStatus = state.workoutSession.status === "completed" ? "completed" : "today";
+  // submitted work does. Only claims "completed" when today's schedule
+  // actually has real content to have completed (see catalogWorkoutToday) —
+  // otherwise this reduces to "today", never fabricating a completion
+  // against a session that isn't really today's own prescribed workout.
+  const todaysLiveStatus =
+    catalogWorkoutToday && state.workoutSession.status === "completed" ? "completed" : "today";
 
   const unresolvedReviews = state.reviewRequests.filter((r) => !r.resolved);
 
@@ -36,13 +60,14 @@ export default function TrainingPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-off-white">Training</h1>
         <span className="text-sm text-neutral">
-          Week {DAILY_PLAN.programWeek} of {DAILY_PLAN.programTotalWeeks}
+          {programWeek !== null ? `Week ${programWeek} of ${state.programEnrollment.durationWeeks}` : ""}
         </span>
       </div>
 
       <div className="mt-4 grid grid-cols-7 gap-1.5">
         {TRAINING_WEEK.map((day) => {
-          const status = day.dayOfWeek === "Monday" ? mondayStatus : day.status;
+          const isRealToday = day.dayOfWeek === todayDayOfWeek;
+          const status = isRealToday ? todaysLiveStatus : day.type === "rest" ? "rest" : "upcoming";
           return (
             <div
               key={day.dayOfWeek}
@@ -74,7 +99,7 @@ export default function TrainingPage() {
       </div>
 
       <div className="mt-5">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral">Today · Monday</p>
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral">Today · {todayDayOfWeek}</p>
         <div className="rounded-[var(--radius-lg)] border border-accent/40 bg-charcoal p-4">
           <div className="flex items-start gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
@@ -82,12 +107,13 @@ export default function TrainingPage() {
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[15px] font-semibold text-off-white">{PUSH_WORKOUT.name}</p>
+                <p className="text-[15px] font-semibold text-off-white">{cardWorkoutName}</p>
                 <StatePill state={workoutTaskState} />
               </div>
-              <p className="mt-0.5 text-xs text-neutral">
-                {PUSH_WORKOUT.focus} · {PUSH_WORKOUT.estimatedDurationMin} min
-              </p>
+              {cardSubtitle ? <p className="mt-0.5 text-xs text-neutral">{cardSubtitle}</p> : null}
+              {scheduledWithoutDetail ? (
+                <p className="mt-1 text-xs text-neutral">Full session detail isn&apos;t available yet.</p>
+              ) : null}
             </div>
           </div>
           <Button className="mt-3 w-full" onClick={() => router.push("/today")}>
@@ -114,7 +140,7 @@ export default function TrainingPage() {
       <div className="mt-5">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral">This week</p>
         <div className="space-y-2">
-          {TRAINING_WEEK.filter((d) => d.dayOfWeek !== "Monday").map((day) => (
+          {TRAINING_WEEK.filter((d) => d.dayOfWeek !== todayDayOfWeek).map((day) => (
             <div
               key={day.dayOfWeek}
               className="flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-charcoal px-4 py-3"

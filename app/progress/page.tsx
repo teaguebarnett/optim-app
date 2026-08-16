@@ -1,93 +1,65 @@
 "use client";
 
-import { Award } from "lucide-react";
-import { Card } from "@/components/ui/card";
-import { LineChart } from "@/components/progress/line-chart";
-import { BarChart } from "@/components/progress/bar-chart";
-import { CoachCard } from "@/components/coach/coach-card";
-import { ScreenSkeleton } from "@/components/ui/skeleton";
+import { Suspense } from "react";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import {
-  MILESTONES,
-  NUTRITION_ADHERENCE_HISTORY,
-  PROGRESS_COACH_NOTE,
-  STRENGTH_HISTORY,
-  WEEKLY_COMPLETION_HISTORY,
-  WEIGHT_HISTORY,
-} from "@/lib/mock-data";
+import { useProgressDashboard } from "@/hooks/use-progress-dashboard";
+import { ScreenSkeleton } from "@/components/ui/skeleton";
+import { ProgressHeader } from "@/components/progress/progress-header";
+import { PriorityCard } from "@/components/progress/priority-card";
+import { WeightCard } from "@/components/progress/weight-card";
+import { TrainingCard } from "@/components/progress/training-card";
+import { NutritionCard } from "@/components/progress/nutrition-card";
+import { CardioCard } from "@/components/progress/cardio-card";
+import { CheckInCard } from "@/components/progress/checkin-card";
+import { CoachGuidanceCard } from "@/components/progress/coach-guidance-card";
 
-function formatShortDate(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-export default function ProgressPage() {
+// Phase 4.2 — the client-visible expression of OPTIM's memory. Every value
+// on this page traces back to a Phase 4.1 record, correction, weekly
+// review, authored note, or pure derivation — see lib/progress/
+// build-dashboard.ts, the one place this data is assembled. Card order is
+// stable and never rearranges; only the priority card is conditional.
+function ProgressDashboard() {
   const { isHydrated } = usePrototypeState();
+  const { dashboard, source } = useProgressDashboard();
+
   if (!isHydrated) return <ScreenSkeleton />;
 
   return (
-    <div className="px-4 pb-6 pt-5">
-      <h1 className="text-xl font-semibold text-off-white">Progress</h1>
-      <p className="mt-1 text-sm text-neutral">A high-level look at the last four weeks.</p>
-
-      <Card className="mt-4">
-        <p className="text-sm font-semibold text-off-white">Body weight</p>
-        <p className="text-xs text-neutral">Last four weekly check-ins</p>
-        <div className="mt-2">
-          <LineChart
-            points={WEIGHT_HISTORY.map((p) => ({ label: formatShortDate(p.dateIso), value: p.weightLb }))}
-            valueSuffix=" lb"
-          />
+    <div className="space-y-4 pb-6 pt-5">
+      {source === "fixture" ? (
+        <div
+          role="status"
+          className="mx-4 rounded-[var(--radius-md)] border border-warning/30 bg-warning-soft px-4 py-2.5 text-center text-xs font-medium text-warning"
+        >
+          Demo data — not connected to your real history
         </div>
-      </Card>
+      ) : null}
 
-      <Card className="mt-4">
-        <p className="text-sm font-semibold text-off-white">Weekly training completion</p>
-        <p className="text-xs text-neutral">Share of programmed sessions logged</p>
-        <div className="mt-2">
-          <BarChart points={WEEKLY_COMPLETION_HISTORY.map((p) => ({ label: p.weekLabel, value: p.completionPercent }))} color="var(--pc-accent)" />
-        </div>
-      </Card>
+      <ProgressHeader header={dashboard.header} />
 
-      <Card className="mt-4">
-        <p className="text-sm font-semibold text-off-white">Nutrition adherence</p>
-        <p className="text-xs text-neutral">Days on target with logged nutrition</p>
-        <div className="mt-2">
-          <BarChart points={NUTRITION_ADHERENCE_HISTORY.map((p) => ({ label: p.weekLabel, value: p.adherencePercent }))} color="var(--pc-success)" />
-        </div>
-      </Card>
+      <PriorityCard priority={dashboard.priority} />
 
-      <Card className="mt-4">
-        <p className="text-sm font-semibold text-off-white">Incline Dumbbell Press — top set</p>
-        <p className="text-xs text-neutral">Heaviest working set logged each week</p>
-        <div className="mt-2">
-          <LineChart
-            points={STRENGTH_HISTORY.map((p) => ({ label: formatShortDate(p.dateIso), value: p.topSetWeightLb }))}
-            color="var(--pc-success)"
-            valueSuffix=" lb"
-          />
-        </div>
-      </Card>
+      <WeightCard weight={dashboard.weight} />
 
-      <div className="mt-5">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral">Recent milestones</p>
-        <div className="space-y-2">
-          {MILESTONES.map((m) => (
-            <div key={m.id} className="flex gap-3 rounded-[var(--radius-md)] border border-border bg-charcoal px-4 py-3.5">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
-                <Award size={16} />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-off-white">{m.title}</p>
-                <p className="mt-0.5 text-xs text-neutral">{m.detail}</p>
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 gap-3 px-4 max-[360px]:grid-cols-1">
+        <TrainingCard training={dashboard.training} />
+        <NutritionCard nutrition={dashboard.nutrition} />
       </div>
 
-      <div className="mt-5">
-        <CoachCard note={PROGRESS_COACH_NOTE} />
+      <div className="grid grid-cols-2 gap-3 px-4 max-[360px]:grid-cols-1">
+        <CardioCard cardio={dashboard.cardio} />
+        <CheckInCard checkIn={dashboard.checkIn} />
       </div>
+
+      <CoachGuidanceCard coachGuidance={dashboard.coachGuidance} />
     </div>
+  );
+}
+
+export default function ProgressPage() {
+  return (
+    <Suspense fallback={<ScreenSkeleton />}>
+      <ProgressDashboard />
+    </Suspense>
   );
 }

@@ -23,7 +23,9 @@ import { createInitialState, reducer, type Action, type AppState } from "@/lib/s
 import { migrateStoredState } from "@/lib/tenancy/migrate";
 import { getActiveAppContext } from "@/lib/tenancy/context";
 import { buildDailyPlan } from "@/lib/planning/planner";
-import { resolveLocalDateIso, resolveScopedTrainingPlan } from "@/lib/planning/training-plan";
+import { resolveScopedTrainingPlan } from "@/lib/planning/training-plan";
+import { resolveClientLocalDateIso } from "@/lib/shared/local-date";
+import { resolveRollover } from "@/lib/history/rollover";
 import type { ActiveAppContext } from "@/lib/tenancy/types";
 import type { DailyPlanResult, DailyTrainingPlan } from "@/lib/planning/types";
 import type { DailyTask, DailyTaskId } from "@/lib/types";
@@ -63,15 +65,17 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
       // Upgrades Phase 1 (version 1, no workspace/client attribution) state
       // to the current shape — existing users never need to clear storage.
       const migrated = migrateStoredState(storedRaw);
-      // Local calendar date, not UTC — see lib/planning/training-plan.ts's
-      // timezone note. Using toISOString() here would roll a late-night
-      // session onto tomorrow's UTC date for anyone west of UTC.
-      const today = resolveLocalDateIso(new Date());
-      if (migrated && migrated.dateIso === today) {
-        dispatch({ type: "HYDRATE", payload: migrated });
+      if (migrated) {
+        // Client-local calendar date in the enrollment's configured IANA
+        // timezone (Phase 4.1) — see lib/shared/local-date.ts. A stale day
+        // is archived (not silently discarded) before a fresh one begins;
+        // see lib/history/rollover.ts.
+        const today = resolveClientLocalDateIso(new Date(), migrated.programEnrollment.timeZone);
+        const { nextState } = resolveRollover(migrated, today);
+        dispatch({ type: "HYDRATE", payload: nextState });
       } else if (storedRaw) {
-        // Either from a previous day, or an unrecognized/corrupt shape —
-        // start fresh rather than showing stale or garbage data as today's.
+        // Unrecognized/corrupt shape — start fresh rather than showing
+        // garbage data as today's.
         clearState();
       }
       setIsHydrated(true);
