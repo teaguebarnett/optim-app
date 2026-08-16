@@ -2,8 +2,11 @@ import { MEAL_OPTIONS, PUSH_WORKOUT } from "./mock-data.ts";
 import { buildWorkoutSummary, canCompleteExercise } from "./workout-analysis.ts";
 import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "./tenancy/seed.ts";
 import type { ClientProfileId, WorkspaceId } from "./tenancy/types";
-import { resolveLocalDateIso, setTrainingStatus, setTrainingTime } from "./planning/training-plan.ts";
+import { setTrainingStatus, setTrainingTime } from "./planning/training-plan.ts";
 import type { DailyTrainingPlan } from "./planning/types";
+import { buildDemoDefaultProgramEnrollment } from "./scheduling/enrollment.ts";
+import { resolveClientLocalDateIso } from "./shared/local-date.ts";
+import type { ProgramEnrollment } from "./scheduling/types";
 import type {
   CardioLog,
   ChatMessage,
@@ -29,7 +32,7 @@ const DEMO_WORKSPACE_ID: WorkspaceId = WORKSPACE_OPTIM_ID;
 const DEMO_CLIENT_ID: ClientProfileId = CLIENT_PROFILE_DEMO.id;
 
 export interface AppState {
-  version: 3;
+  version: 5;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   dateIso: string;
@@ -43,6 +46,12 @@ export interface AppState {
   workoutSession: WorkoutSession;
   chatMessages: ChatMessage[];
   reviewRequests: ReviewRequest[];
+  /** Phase 4.1 — the client's real program enrollment, replacing
+   * ClientProfile.programWeek as a hand-set display value with a derivable
+   * one. See lib/scheduling/enrollment.ts. A small, singular, current-config
+   * record — unlike the growing history log in lib/history/, it belongs
+   * directly in AppState the same way dailyTrainingPlan already does. */
+  programEnrollment: ProgramEnrollment;
 }
 
 export function createInitialWorkoutSession(): WorkoutSession {
@@ -66,11 +75,18 @@ export function createInitialWorkoutSession(): WorkoutSession {
 }
 
 export function createInitialState(): AppState {
+  // Phase 4.1 corrective — dateIso and programEnrollment are derived from
+  // the exact same instant, through the same client-local IANA-timezone
+  // resolver (lib/shared/local-date.ts), so they can never diverge into two
+  // different "today"s — see the module doc on maintaining one
+  // authoritative effective-date source.
+  const now = new Date();
+  const programEnrollment = buildDemoDefaultProgramEnrollment(now);
   return {
-    version: 3,
+    version: 5,
     workspaceId: DEMO_WORKSPACE_ID,
     clientId: DEMO_CLIENT_ID,
-    dateIso: resolveLocalDateIso(new Date()),
+    dateIso: resolveClientLocalDateIso(now, programEnrollment.timeZone),
     morningWeight: { weightLb: null, skipped: false },
     meals: {},
     cardio: { status: "not-started", durationMin: 0 },
@@ -78,6 +94,7 @@ export function createInitialState(): AppState {
     workoutSession: createInitialWorkoutSession(),
     chatMessages: [],
     reviewRequests: [],
+    programEnrollment,
   };
 }
 
@@ -85,6 +102,14 @@ let idCounter = 0;
 export function nextId(prefix: string): string {
   idCounter += 1;
   return `${prefix}-${Date.now()}-${idCounter}`;
+}
+
+// Phase 3.1.1 §2 — the client can now type an exact cardio duration
+// directly (not just +/- 1 min steps), so the reducer itself enforces the
+// sensible floor/ceiling rather than trusting the UI alone.
+const CARDIO_DURATION_MAX_MIN = 180;
+function clampCardioDurationMin(value: number): number {
+  return Math.min(CARDIO_DURATION_MAX_MIN, Math.max(0, Math.round(value)));
 }
 
 export type Action =
@@ -101,9 +126,11 @@ export type Action =
   | { type: "SKIP_MEAL"; period: MealPeriod; reason: SkipReason; note?: string }
   | { type: "PLAN_MEAL_LATER"; period: MealPeriod }
   | { type: "UNDO_MEAL_SELECTION"; period: MealPeriod }
-  | { type: "START_CARDIO" }
+  | { type: "START_CARDIO"; durationMin: number }
   | { type: "COMPLETE_CARDIO"; durationMin: number; note?: string }
   | { type: "SKIP_CARDIO"; reason: SkipReason; note?: string }
+  | { type: "SET_CARDIO_DURATION"; durationMin: number }
+  | { type: "SELECT_CARDIO_OPTION"; optionId: string }
   | { type: "SET_TRAINING_TIME"; time24: string }
   | { type: "SET_TRAINING_UNSURE" }
   | { type: "SET_TRAINING_REST_DAY" }
@@ -227,39 +254,72 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "START_CARDIO":
-      return { ...state, cardio: { ...state.cardio, status: "in-progress" } };
+      return {
+        ...state,
+        cardio: { ...state.cardio, status: "in-progress", durationMin: clampCardioDurationMin(action.durationMin) },
+      };
 
     case "COMPLETE_CARDIO":
       return {
         ...state,
         cardio: {
+          ...state.cardio,
           status: "completed",
-          durationMin: action.durationMin,
+          durationMin: clampCardioDurationMin(action.durationMin),
           note: action.note,
           completedAtIso: new Date().toISOString(),
         },
       };
 
-    case "SKIP_CARDIO":
+    // A session with any real minutes already logged is "partial," never
+    // "skipped" — the client did some cardio, just not to completion. Mirrors
+    // SKIP_WORKOUT's ended-early distinction. See Phase 4.1's cardio-partial
+    // correction.
+    case "SKIP_CARDIO": {
+      const hasPartialProgress = state.cardio.durationMin > 0;
       return {
         ...state,
         cardio: {
-          status: "skipped",
-          durationMin: 0,
+          ...state.cardio,
+          status: hasPartialProgress ? "partial" : "skipped",
+          durationMin: hasPartialProgress ? state.cardio.durationMin : 0,
           skipReason: action.reason,
           note: action.note,
         },
       };
+    }
 
+    // The +/- controls and the exact-entry field both dispatch this so the
+    // actual duration a client has logged so far survives a refresh — never
+    // below zero, never above a sane ceiling, and never touching the
+    // separate prescribed target duration. See Phase 3.1 §6 and Phase
+    // 3.1.1 §2.
+    case "SET_CARDIO_DURATION":
+      return { ...state, cardio: { ...state.cardio, durationMin: clampCardioDurationMin(action.durationMin) } };
+
+    // Switching the approved option only changes what a *new*/in-progress
+    // session is tracked against — COMPLETE_CARDIO above preserves whatever
+    // was selected at that moment via its own `...state.cardio` spread, so
+    // a later switch never rewrites an already-completed log.
+    case "SELECT_CARDIO_OPTION":
+      return { ...state, cardio: { ...state.cardio, selectedOptionId: action.optionId } };
+
+    // Phase 4.1 corrective — these three cases used to recompute "today"
+    // independently via the machine-local resolveLocalDateIso(new Date()),
+    // a second date system that could disagree with state.dateIso (the one
+    // authoritative effective date already resolved at hydration/rollover
+    // time — see lib/history/rollover.ts). Reusing state.dateIso directly
+    // means dailyTrainingPlan is always scoped to the exact same date the
+    // rest of the app already agreed on, with no possibility of drift
+    // (e.g. a request evaluated right at a local-midnight boundary).
     case "SET_TRAINING_TIME": {
-      const today = resolveLocalDateIso(new Date());
       return {
         ...state,
         dailyTrainingPlan: setTrainingTime(
           state.dailyTrainingPlan,
           state.workspaceId,
           state.clientId,
-          today,
+          state.dateIso,
           action.time24,
           new Date().toISOString()
         ),
@@ -267,14 +327,13 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "SET_TRAINING_UNSURE": {
-      const today = resolveLocalDateIso(new Date());
       return {
         ...state,
         dailyTrainingPlan: setTrainingStatus(
           state.dailyTrainingPlan,
           state.workspaceId,
           state.clientId,
-          today,
+          state.dateIso,
           "unsure",
           new Date().toISOString()
         ),
@@ -282,14 +341,13 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "SET_TRAINING_REST_DAY": {
-      const today = resolveLocalDateIso(new Date());
       return {
         ...state,
         dailyTrainingPlan: setTrainingStatus(
           state.dailyTrainingPlan,
           state.workspaceId,
           state.clientId,
-          today,
+          state.dateIso,
           "rest_day",
           new Date().toISOString()
         ),
@@ -499,22 +557,39 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "SKIP_WORKOUT": {
+      // A session with at least one completed working set is "ended early,"
+      // never "skipped" — the client did train, just not to completion. See
+      // Phase 3.1 §4. Every logged set and its RPE is preserved untouched
+      // either way.
+      const workingSetsCompleted = Object.values(state.workoutSession.exerciseLogs).reduce(
+        (sum, log) => sum + log.loggedSets.filter((s) => !s.isWarmup && s.status === "completed").length,
+        0
+      );
+      const endedEarly = workingSetsCompleted > 0;
+      const nowIso = new Date().toISOString();
       const reviewRequest: ReviewRequest = {
         id: nextId("review"),
         workspaceId: state.workspaceId,
         clientId: state.clientId,
         kind: "workout-skipped",
-        createdAtIso: new Date().toISOString(),
-        summary: "Today's push workout was skipped.",
+        createdAtIso: nowIso,
+        summary: endedEarly
+          ? "Today's push workout ended early after partial completion."
+          : "Today's push workout was skipped.",
         resolved: false,
       };
+      const summary = endedEarly
+        ? buildWorkoutSummary(state.workoutSession, state.workoutSession.startedAtIso ?? nowIso, nowIso)
+        : undefined;
       return {
         ...state,
         workoutSession: {
           ...state.workoutSession,
-          status: "skipped",
+          status: endedEarly ? "ended-early" : "skipped",
+          completedAtIso: endedEarly ? nowIso : state.workoutSession.completedAtIso,
           skipReason: action.reason,
           skipNote: action.note,
+          summary,
         },
         reviewRequests: [...state.reviewRequests, reviewRequest],
       };

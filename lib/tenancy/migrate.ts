@@ -15,6 +15,7 @@
 // existing "unrecognized stored state" behavior.
 
 import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "./seed.ts";
+import { buildDemoDefaultProgramEnrollment } from "../scheduling/enrollment.ts";
 import type { AppState } from "../state";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -66,9 +67,54 @@ function migrateV2ToV3(stored: Record<string, unknown>): Record<string, unknown>
   return migrated;
 }
 
+/** v3 -> v4 (Phase 4.1): adds programEnrollment, replacing
+ * ClientProfile.programWeek/programTotalWeeks as a hand-set display value
+ * with a real, derivable enrollment. The new enrollment's startDateIso is
+ * reverse-derived so it reports the SAME program week the client was
+ * already seeing (CLIENT_PROFILE_DEMO.programWeek) evaluated against
+ * today's real date — never reset to Week 1, and never depending on a
+ * hardcoded calendar date (buildDemoDefaultProgramEnrollment always reads
+ * the real current instant). Idempotent by construction: this step only
+ * ever runs when `working.version === 3`, so already-migrated (v4) data is
+ * never touched a second time and never gets a second, different
+ * enrollment. */
+function migrateV3ToV4(stored: Record<string, unknown>): Record<string, unknown> {
+  return { ...stored, version: 4, programEnrollment: buildDemoDefaultProgramEnrollment() };
+}
+
+/** v4 -> v5 (Phase 4.2 correction): corrects the stale durationWeeks a v4
+ * programEnrollment was always built with. Schema version 4 never had any
+ * coach-configuration UI for program duration, so every v4 enrollment's
+ * durationWeeks is necessarily the old default (16, copied at the time from
+ * ClientProfile.programTotalWeeks — see lib/scheduling/enrollment.ts) —
+ * version 4 is itself the provenance marker this correction is scoped
+ * through, per the "do not identify the prototype enrollment through a
+ * brittle client name or one-off ID" requirement. Only durationWeeks is
+ * touched — startDateIso (and therefore the derived current week), all
+ * history, corrections, weekly reviews, and check-in data are untouched.
+ * The `=== 16` guard is an extra, deliberately conservative safety net: if
+ * a v4 enrollment somehow already carries a different value, this step
+ * leaves it alone rather than assuming it's the stale default.
+ * Idempotent by construction: this step only ever runs when
+ * `working.version === 4`, so a real future coach-configured 16-week
+ * enrollment (created once schema version has already moved past 4) can
+ * never be silently reverted to 12 by a repeat hydration. */
+function migrateV4ToV5(stored: Record<string, unknown>): Record<string, unknown> {
+  const migrated: Record<string, unknown> = { ...stored, version: 5 };
+  const enrollment = stored.programEnrollment;
+  if (isRecord(enrollment) && enrollment.durationWeeks === 16) {
+    migrated.programEnrollment = {
+      ...enrollment,
+      durationWeeks: 12,
+      updatedAtIso: new Date().toISOString(),
+    };
+  }
+  return migrated;
+}
+
 /**
  * Upgrades raw localStorage content (of unknown/any prior shape) to the
- * current AppState (version 3), stepping through every intermediate version
+ * current AppState (version 5), stepping through every intermediate version
  * in order. Returns null when the input isn't a recognized AppState at all,
  * so the caller can safely fall back to a fresh state instead of hydrating
  * garbage.
@@ -84,8 +130,24 @@ export function migrateStoredState(stored: unknown): AppState | null {
   if (working.version === 2 && typeof working.workspaceId === "string" && typeof working.clientId === "string") {
     working = migrateV2ToV3(working);
   }
-
   if (working.version === 3 && typeof working.workspaceId === "string" && typeof working.clientId === "string") {
+    working = migrateV3ToV4(working);
+  }
+  if (
+    working.version === 4 &&
+    typeof working.workspaceId === "string" &&
+    typeof working.clientId === "string" &&
+    isRecord(working.programEnrollment)
+  ) {
+    working = migrateV4ToV5(working);
+  }
+
+  if (
+    working.version === 5 &&
+    typeof working.workspaceId === "string" &&
+    typeof working.clientId === "string" &&
+    isRecord(working.programEnrollment)
+  ) {
     return working as unknown as AppState;
   }
 
