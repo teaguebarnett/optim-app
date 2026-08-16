@@ -70,6 +70,17 @@ export interface PrescribedSet {
   targetRepsLow: number;
   targetRepsHigh: number;
   targetRpe: RpeValue;
+  /** The coach's prescribed load for this set, when set. Working sets use
+   * this to show a read-only "prescribed weight" instead of asking the
+   * client to type one in — see components/workout/set-row.tsx. Warm-up
+   * sets may also carry a (lighter) suggested weight purely for the
+   * non-interactive guidance text; it's never required or logged. */
+  prescribedWeightLb?: number;
+  /** A single representative target rep count (derived from targetRepsLow/
+   * High) so a working set can display and auto-log one crisp number
+   * instead of asking the client to pick from a range — see
+   * components/workout/set-row.tsx. */
+  prescribedReps: number;
 }
 
 export interface PreviousPerformanceEntry {
@@ -169,6 +180,11 @@ export type WorkoutSessionStatus =
   | "not-started"
   | "in-progress"
   | "completed"
+  /** The client ended the session before reaching "Complete workout," but
+   * had already logged at least one valid working set. Distinct from
+   * "skipped" (zero working sets ever completed) — a partial session must
+   * never be described as skipped. See lib/state.ts's SKIP_WORKOUT case. */
+  | "ended-early"
   | "skipped";
 
 export interface WorkoutSession {
@@ -257,9 +273,50 @@ export interface CardioTarget {
 // Cardio
 // ---------------------------------------------------------------------------
 
+/**
+ * One coach-approved cardio option. A CardioPrescription can list several —
+ * e.g. a default steady-state option plus an approved time-saving
+ * alternative — but the coach still controls exactly which options exist;
+ * the client only ever picks among what's already approved, never an
+ * arbitrary substitution.
+ */
+export interface CardioOption {
+  id: string;
+  type: string;
+  displayName: string;
+  isDefault: boolean;
+  /** Short client-facing description of when this option makes sense, e.g.
+   * "Approved time-saving alternative when you're short on time." */
+  intendedUse: string;
+  targetDurationMin: number;
+  heartRateRangeLow?: number;
+  heartRateRangeHigh?: number;
+  /** Coach-authored protocol/instructions. Only ever real, coach-approved
+   * content — never invented. */
+  protocol: string;
+}
+
+/** A client's approved cardio plan for a given prescribed session. Coach-
+ * controlled and configurable per client — see lib/mock-data.ts's
+ * CARDIO_PRESCRIPTIONS_BY_CLIENT. Most clients will have exactly one option;
+ * only a plan with more than one should ever show a picker. */
+export interface CardioPrescription {
+  options: CardioOption[];
+}
+
 export interface CardioLog {
-  status: "not-started" | "in-progress" | "completed" | "skipped";
+  /** "partial" — the client stopped before completing the target duration
+   * but had already logged some real time (durationMin > 0) when they
+   * skipped. Distinct from "skipped" (zero minutes logged) the same way a
+   * workout can be "ended-early" rather than "skipped" — see
+   * WorkoutSessionStatus and Phase 4.1's cardio-partial correction. */
+  status: "not-started" | "in-progress" | "completed" | "partial" | "skipped";
   durationMin: number;
+  /** Which approved CardioOption this log reflects — null/undefined until
+   * the client starts or completes cardio using a specific option. Switching
+   * options never rewrites a previously completed log; it only changes what
+   * a *new* session is tracked against. */
+  selectedOptionId?: string;
   note?: string;
   skipReason?: SkipReason;
   completedAtIso?: string;
@@ -296,44 +353,6 @@ export interface ScriptedChatTopic {
   prompt: string;
   responseSender: Extract<ChatSender, "assistant" | "coach">;
   response: string;
-}
-
-// ---------------------------------------------------------------------------
-// Progress
-// ---------------------------------------------------------------------------
-
-export interface ProgressMetric {
-  label: string;
-  value: string;
-  trend?: "up" | "down" | "flat";
-  helpText?: string;
-}
-
-export interface WeightPoint {
-  dateIso: string;
-  weightLb: number;
-}
-
-export interface WeeklyCompletionPoint {
-  weekLabel: string;
-  completionPercent: number;
-}
-
-export interface AdherencePoint {
-  weekLabel: string;
-  adherencePercent: number;
-}
-
-export interface StrengthPoint {
-  dateIso: string;
-  topSetWeightLb: number;
-}
-
-export interface Milestone {
-  id: string;
-  dateIso: string;
-  title: string;
-  detail: string;
 }
 
 // ---------------------------------------------------------------------------

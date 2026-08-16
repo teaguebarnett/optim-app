@@ -7,7 +7,8 @@ import { TaskShell } from "@/components/today/task-shell";
 import { Button } from "@/components/ui/button";
 import { WorkoutDetailsSheet } from "@/components/workout/workout-details-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { PUSH_WORKOUT } from "@/lib/mock-data";
+import { PUSH_WORKOUT, trainingWeekEntryForDay } from "@/lib/mock-data";
+import { localDateDayOfWeek } from "@/lib/shared/local-date";
 import type { DailyTaskState } from "@/lib/types";
 
 export function WorkoutTask({
@@ -22,13 +23,21 @@ export function WorkoutTask({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
 
+  // Phase 4.1 corrective — "locked" for the workout task now means "today's
+  // real schedule prescribes a session with no available detail," not the
+  // old countdown-window concept. The scheduled name comes from the real
+  // training-week catalog (see lib/mock-data.ts's trainingWeekEntryForDay),
+  // never Push Workout's name — the client is never told a different
+  // session is Push Workout just because Push is the only loggable one.
   if (state === "locked") {
+    const todaysEntry = trainingWeekEntryForDay(localDateDayOfWeek(appState.dateIso));
+    const scheduledName = todaysEntry?.workoutName ?? "Today's workout";
     return (
       <TaskShell
-        title={PUSH_WORKOUT.name}
+        title={scheduledName}
         icon={<Dumbbell size={17} />}
         state={state}
-        lockedHint="Unlocks once your workout window is set."
+        lockedHint={`${scheduledName} is scheduled today, but full session detail isn't available yet. Check with ${coachName} if you have questions.`}
       />
     );
   }
@@ -46,9 +55,12 @@ export function WorkoutTask({
 
   if (state === "partially-completed") {
     const summary = appState.workoutSession.summary;
+    const endedEarly = appState.workoutSession.status === "ended-early";
     return (
       <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
-        <p className="text-sm text-off-white">Submitted with skipped work.</p>
+        <p className="text-sm text-off-white">
+          {endedEarly ? "Ended early — completed sets and RPE are saved." : "Submitted with skipped work."}
+        </p>
         {summary ? <p className="mt-1 text-sm text-neutral">{summary.detail}</p> : null}
       </TaskShell>
     );
@@ -56,11 +68,13 @@ export function WorkoutTask({
 
   if (state === "awaiting-review") {
     const summary = appState.workoutSession.summary;
+    const endedEarly = appState.workoutSession.status === "ended-early";
     return (
       <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
+        {endedEarly ? <p className="text-sm text-off-white">Ended early — completed sets and RPE are saved.</p> : null}
         {summary ? (
           <div>
-            <p className="text-sm text-off-white">{summary.headline}</p>
+            {!endedEarly ? <p className="text-sm text-off-white">{summary.headline}</p> : null}
             <p className="mt-1 text-sm text-neutral">{summary.detail}</p>
           </div>
         ) : null}

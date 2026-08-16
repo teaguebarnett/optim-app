@@ -1,16 +1,23 @@
-import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT } from "./mock-data.ts";
+import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT, catalogWorkoutForDay, trainingWeekEntryForDay } from "./mock-data.ts";
 import { resolvePlannedDateTime } from "./planning/training-plan.ts";
+import { localDateDayOfWeek } from "./shared/local-date.ts";
 import type { AppState } from "./state";
 import type { DailyTrainingPlan } from "./planning/types";
 import type {
   DailyTask,
   DailyTaskId,
   DailyTaskState,
+  DayOfWeek,
   MacroValues,
   MealPeriod,
+  MealSelection,
 } from "./types";
 
-const MEAL_ORDER: MealPeriod[] = ["breakfast", "postWorkout", "lunch", "dinner", "snack"];
+// The one canonical ordering of meal periods within a day — every screen
+// that needs to reason about "which meal comes before which" (nutrition
+// totals, remaining-meal counts, the meal-sequence warning) reads from this
+// single array rather than re-declaring its own copy.
+export const MEAL_ORDER: MealPeriod[] = ["breakfast", "postWorkout", "lunch", "dinner", "snack"];
 
 // ---------------------------------------------------------------------------
 // Greeting
@@ -18,19 +25,51 @@ const MEAL_ORDER: MealPeriod[] = ["breakfast", "postWorkout", "lunch", "dinner",
 
 export type TimeOfDay = "morning" | "afternoon" | "evening";
 
-export function getTimeOfDay(date: Date): TimeOfDay {
-  const hour = date.getHours();
-  if (hour < 12) return "morning";
-  if (hour < 17) return "afternoon";
+/** Phase 4.1 corrective — takes the client-local hour (0-23) directly
+ * rather than a Date, so callers must resolve it via
+ * lib/shared/local-date.ts's resolveClientLocalTime24 against the client's
+ * configured timezone instead of the machine's own via Date.getHours(). */
+export function getTimeOfDay(hour24: number): TimeOfDay {
+  if (hour24 < 12) return "morning";
+  if (hour24 < 17) return "afternoon";
   return "evening";
 }
 
-export function getGreeting(date: Date, clientName: string): { headline: string; subline: string } {
-  const timeOfDay = getTimeOfDay(date);
+export interface GreetingWeekContext {
+  /** The client's real program week for today, or null when today falls
+   * outside the enrollment's active weeks — see
+   * lib/scheduling/enrollment.ts's deriveProgramWeek. */
+  programWeek: number | null;
+  /** True only when today is the enrollment's configured start-of-week day
+   * (see lib/shared/local-date.ts's startOfLocalWeek). "Let's start Week X
+   * strong" is only ever shown then, never on every day of the week. */
+  isStartOfWeek: boolean;
+}
+
+/**
+ * Phase 4.1 corrective — the subline must name the real client-local
+ * weekday and never claim "Let's start Week X" on a day that isn't
+ * actually the configured start of that week. dayOfWeek/timeOfDay are
+ * supplied by the caller (see components/today/day-header.tsx), derived
+ * from the same client-local date/timezone utilities the rest of Phase 4.1
+ * uses — this function has no notion of "now" or machine time at all.
+ */
+export function getGreeting(
+  dayOfWeek: DayOfWeek,
+  timeOfDay: TimeOfDay,
+  clientName: string,
+  week: GreetingWeekContext
+): { headline: string; subline: string } {
   const greetingWord = timeOfDay === "morning" ? "Good morning" : timeOfDay === "afternoon" ? "Good afternoon" : "Good evening";
+  const subline =
+    week.isStartOfWeek && week.programWeek !== null
+      ? `Happy ${dayOfWeek}. Let's start Week ${week.programWeek} strong.`
+      : week.programWeek !== null
+        ? `Happy ${dayOfWeek}. Week ${week.programWeek} is underway.`
+        : `Happy ${dayOfWeek}.`;
   return {
     headline: `${greetingWord}, ${clientName}.`,
-    subline: "Happy Monday. Let's start Week 8 strong.",
+    subline,
   };
 }
 
@@ -69,6 +108,31 @@ export function computeRemaining(totals: MacroValues): RemainingTargets {
 
 export function countRemainingMeals(meals: AppState["meals"]): number {
   return MEAL_ORDER.filter((period) => !meals[period]).length;
+}
+
+/**
+ * Phase 3.1.1 §1 — finds the first meal period, in canonical order, that
+ * comes before `period` and is still genuinely incomplete: never logged, or
+ * explicitly deferred ("planned for later"). A period the client logged
+ * (option/manual) or legitimately skipped never blocks a later one — nor
+ * does a period that isn't part of today's plan at all (e.g. an optional
+ * snack that was never shown). Generic over any pair of periods, not
+ * hardcoded to lunch/dinner. Returns null when nothing earlier is pending.
+ */
+export function findEarliestIncompleteMealBefore(
+  meals: Partial<Record<MealPeriod, MealSelection>>,
+  period: MealPeriod,
+  periodsInPlan: MealPeriod[]
+): MealPeriod | null {
+  for (const candidate of MEAL_ORDER) {
+    if (candidate === period) return null;
+    if (!periodsInPlan.includes(candidate)) continue;
+    const selection = meals[candidate];
+    if (!selection || selection.source === "planned-later") {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 export function nutritionStatusMessage(totals: MacroValues, meals: AppState["meals"]): string {
@@ -143,7 +207,11 @@ function weightResolved(state: AppState): boolean {
 }
 
 function workoutResolved(state: AppState): boolean {
-  return state.workoutSession.status === "completed" || state.workoutSession.status === "skipped";
+  return (
+    state.workoutSession.status === "completed" ||
+    state.workoutSession.status === "skipped" ||
+    state.workoutSession.status === "ended-early"
+  );
 }
 
 function hasUnresolvedReview(state: AppState): boolean {
@@ -196,8 +264,31 @@ export function deriveTaskStates(
         // completed — see WorkoutSummary.fullyCompleted.
         return state.workoutSession.summary?.fullyCompleted ? "completed" : "partially-completed";
       }
+      // Ended early with at least one completed working set — never
+      // reported as "skipped." See Phase 3.1 §4.
+      if (state.workoutSession.status === "ended-early") {
+        return hasUnresolvedReview(state) ? "awaiting-review" : "partially-completed";
+      }
       if (state.workoutSession.status === "skipped") return "skipped";
       if (state.workoutSession.status === "in-progress") return "in-progress";
+
+      // Phase 4.1 corrective — a genuinely scheduled training day whose
+      // catalog has no real, loggable content (e.g. Friday's "Upper
+      // Workout" label, which has no matching entry in WORKOUTS_BY_ID) must
+      // never present itself as an actionable Push Workout session under a
+      // different label. This is the one real, honest exception to "no
+      // task here reports locked for something the client can actually
+      // do" above — here the client genuinely can't, because no real
+      // session exists for today. A client who has explicitly declared
+      // today a rest day keeps the existing "optional, begin anyway"
+      // treatment below regardless of what the schedule says.
+      const clientDeclaredRest = trainingPlan?.status === "rest_day";
+      if (!clientDeclaredRest) {
+        const todaysEntry = trainingWeekEntryForDay(localDateDayOfWeek(state.dateIso));
+        const hasRealContentToday = !!catalogWorkoutForDay(localDateDayOfWeek(state.dateIso));
+        if (todaysEntry?.type === "training" && !hasRealContentToday) return "locked";
+      }
+
       if (plannedWorkoutAt && now.getTime() < plannedWorkoutAt.getTime()) return "upcoming";
       return "recommended-now";
     })(),
@@ -208,6 +299,9 @@ export function deriveTaskStates(
 
     cardio: (() => {
       if (state.cardio.status === "completed") return "completed";
+      // Distinct from "skipped" — some real minutes were logged before the
+      // client stopped. See Phase 4.1's cardio-partial correction.
+      if (state.cardio.status === "partial") return "partially-completed";
       if (state.cardio.status === "skipped") return "skipped";
       if (state.cardio.status === "in-progress") return "in-progress";
       return workoutDone ? "recommended-now" : "upcoming";

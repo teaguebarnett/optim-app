@@ -12,12 +12,14 @@
 // client didn't actually do — see the adaptability rules in the Phase 3
 // spec this implements.
 
-import { CARDIO_TARGET, MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT } from "../mock-data.ts";
+import { cardioPrescriptionForClient, MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT, catalogWorkoutForDay, trainingWeekEntryForDay } from "../mock-data.ts";
 import { resolvePlannedDateTime } from "./training-plan.ts";
 import { comfortableTrainingWindow, mealTimingProfileForMacros, mealTimingProfileForOption } from "./meal-timing.ts";
+import { buildMealSchedule } from "./meal-schedule.ts";
+import { localDateDayOfWeek } from "../shared/local-date.ts";
 import type { AppState } from "../state";
 import type { MacroValues, MealOption, MealPeriod, MealSelection } from "../types";
-import type { DailyPlanResult, DailyTrainingPlan, PlannerItem, PlannerItemStatus } from "./types";
+import type { DailyMealSchedule, DailyPlanResult, DailyTrainingPlan, MealScheduleEntry, PlannerItem, PlannerItemStatus } from "./types";
 
 function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -54,6 +56,32 @@ interface BuildDailyPlanInput {
   nutritionTotals: MacroValues;
 }
 
+/** Generalizes the old breakfast-only "is this meal cutting it close before
+ * training" / "eat something beforehand" copy to whichever meal the
+ * schedule actually assigned the pre-workout role — never hardcoded to a
+ * specific period. */
+function preWorkoutRoleExplanation(
+  period: MealPeriod,
+  selection: MealSelection | undefined,
+  entry: MealScheduleEntry | undefined,
+  trainingPlan: DailyTrainingPlan | null,
+  now: Date
+): string | undefined {
+  if (!entry || entry.role !== "pre-workout" || trainingPlan?.status !== "scheduled") return undefined;
+  if (isMealCounted(selection) && selection?.completedAtIso) {
+    const plannedAt = resolvePlannedDateTime(trainingPlan, now);
+    if (!plannedAt) return undefined;
+    const option = selectedOptionFor(period, selection);
+    const profile = option ? mealTimingProfileForOption(option) : mealTimingProfileForMacros(selection.macros ?? null);
+    const leadMinutesAvailable = Math.round((plannedAt.getTime() - new Date(selection.completedAtIso).getTime()) / 60_000);
+    if (leadMinutesAvailable >= 0 && leadMinutesAvailable < profile.preTrainingLeadMinLow) {
+      return "This is a larger meal for the time available before training. A lighter option may feel better.";
+    }
+    return undefined;
+  }
+  return `Eating something beforehand can help fuel your ${trainingPlan.plannedTimeLabel} session.`;
+}
+
 export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: BuildDailyPlanInput): DailyPlanResult {
   const items: PlannerItem[] = [];
 
@@ -67,40 +95,38 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     actionLabel: weightDone ? undefined : "Log weight",
   });
 
-  // --- Breakfast (also the app's natural pre-workout meal — see the
-  // meal-timing module doc comment for why there's no separate period). ---
-  const breakfastSelection = state.meals.breakfast;
-  const breakfastOption = selectedOptionFor("breakfast", breakfastSelection);
-  const breakfastStatus = mealItemStatus(breakfastSelection);
-  let breakfastExplanation: string | undefined;
+  // --- Full-day meal schedule (Phase 3.1 §2) — computed once, up front, so
+  // every meal item below (and the Nutrition page, via mealSchedule on the
+  // returned result) reads the exact same recommended times. ---
+  const snack = evaluateSnackRecommendation(state, nutritionTotals, now);
+  const snackSelection = state.meals.snack;
+  const showSnack = !!snackSelection || snack.show;
+  const periods: MealPeriod[] = ["breakfast", "postWorkout", "lunch", "dinner"];
+  if (showSnack) periods.push("snack");
 
+  const mealSchedule: DailyMealSchedule = buildMealSchedule({
+    trainingPlan,
+    now,
+    meals: state.meals,
+    periods,
+    workoutEstimatedDurationMin: PUSH_WORKOUT.estimatedDurationMin,
+  });
+
+  // --- Breakfast ---
+  const breakfastSelection = state.meals.breakfast;
+  const breakfastStatus = mealItemStatus(breakfastSelection);
+  const breakfastEntry = mealSchedule.entries.breakfast;
+  let breakfastExplanation = preWorkoutRoleExplanation("breakfast", breakfastSelection, breakfastEntry, trainingPlan, now);
   if (
-    trainingPlan?.status === "scheduled" &&
-    isMealCounted(breakfastSelection) &&
-    breakfastSelection?.completedAtIso
-  ) {
-    const plannedAt = resolvePlannedDateTime(trainingPlan, now);
-    const profile = breakfastOption
-      ? mealTimingProfileForOption(breakfastOption)
-      : mealTimingProfileForMacros(breakfastSelection.macros ?? null);
-    if (plannedAt) {
-      const leadMinutesAvailable = Math.round(
-        (plannedAt.getTime() - new Date(breakfastSelection.completedAtIso).getTime()) / 60_000
-      );
-      if (leadMinutesAvailable >= 0 && leadMinutesAvailable < profile.preTrainingLeadMinLow) {
-        breakfastExplanation =
-          "This is a larger meal for the time available before training. A lighter option may feel better.";
-      }
-    }
-  } else if (trainingPlan?.status === "scheduled" && breakfastStatus === "recommended") {
-    breakfastExplanation = `Eating something beforehand can help fuel your ${trainingPlan.plannedTimeLabel} session.`;
-  } else if (
-    (!trainingPlan || trainingPlan.status === "unsure") &&
+    !breakfastExplanation &&
+    !mealSchedule.hasAnchor &&
+    trainingPlan?.status !== "rest_day" &&
     isMealCounted(breakfastSelection) &&
     breakfastSelection?.completedAtIso
   ) {
     // Training time is unknown — offer a broad, optional window derived
     // from this specific meal rather than a countdown or deadline.
+    const breakfastOption = selectedOptionFor("breakfast", breakfastSelection);
     const profile = breakfastOption
       ? mealTimingProfileForOption(breakfastOption)
       : mealTimingProfileForMacros(breakfastSelection.macros ?? null);
@@ -115,7 +141,7 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     kind: "meal",
     title: MEAL_LABELS.breakfast,
     status: breakfastStatus,
-    timeLabel: breakfastSelection?.completedAtIso ? `Logged at ${formatClockTime(breakfastSelection.completedAtIso)}` : undefined,
+    timeLabel: breakfastEntry?.timeLabel ?? undefined,
     explanation: breakfastExplanation,
     isNextAction: false,
     actionLabel: breakfastStatus === "recommended" ? "Choose breakfast" : undefined,
@@ -125,26 +151,56 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   // --- Workout ---
   const session = state.workoutSession;
   const plannedAt = trainingPlan ? resolvePlannedDateTime(trainingPlan, now) : null;
-  const isRestDay = trainingPlan?.status === "rest_day";
+
+  // Phase 4.1 corrective — "today's workout" must be resolved against the
+  // real training schedule (TRAINING_WEEK, keyed by the client-local day of
+  // week derived from state.dateIso — the same date system every other
+  // Phase 4.1 selector uses), not always assumed to be Push Workout. A
+  // client's own explicit rest-day choice still wins over the schedule, and
+  // real progress on the (only loggable) session always wins over both —
+  // see the session.status branches above this.
+  const todayDayOfWeek = localDateDayOfWeek(state.dateIso);
+  const todaysScheduleEntry = trainingWeekEntryForDay(todayDayOfWeek);
+  const catalogWorkoutToday = catalogWorkoutForDay(todayDayOfWeek);
+  const clientDeclaredRest = trainingPlan?.status === "rest_day";
+  // A genuinely scheduled training day whose catalog has no real, loggable
+  // content (e.g. Friday's "Upper Workout" label) — never silently
+  // substitutes Push Workout's content under a different name.
+  const scheduledWithoutDetail = !clientDeclaredRest && !catalogWorkoutToday && todaysScheduleEntry?.type === "training";
+  const isRestDay = clientDeclaredRest || (!clientDeclaredRest && !trainingPlan && todaysScheduleEntry?.type === "rest");
+  const workoutDisplayName = catalogWorkoutToday?.name ?? todaysScheduleEntry?.workoutName ?? PUSH_WORKOUT.name;
+
   let workoutStatus: PlannerItemStatus;
   let workoutTimeLabel: string | undefined;
   let workoutExplanation: string | undefined;
   let workoutActionLabel: string | undefined;
+  let workoutHref: string | undefined = "/training/workout";
 
   if (session.status === "completed") {
     workoutStatus = "completed";
     workoutExplanation = session.summary?.headline;
+  } else if (session.status === "ended-early") {
+    workoutStatus = "partially-completed";
+    workoutExplanation = session.summary?.headline ?? "Ended early — completed sets and RPE are saved.";
   } else if (session.status === "skipped") {
     workoutStatus = "skipped";
   } else if (session.status === "in-progress") {
     workoutStatus = "in-progress";
     workoutActionLabel = "Resume workout";
+  } else if (scheduledWithoutDetail) {
+    // Honest "scheduled but detail unavailable" state — never a fabricated
+    // workout, never Push Workout's content reused under a different label.
+    workoutStatus = "optional";
+    workoutExplanation = `${workoutDisplayName} is scheduled today, but full session detail isn't available yet.`;
+    workoutHref = undefined;
   } else if (isRestDay) {
     // Rest day changes today's schedule, but the prescribed workout is
     // truthfully preserved as unresolved — never marked complete, skipped,
     // or deleted.
     workoutStatus = "upcoming";
-    workoutExplanation = `Today is set as a rest day. ${PUSH_WORKOUT.name} stays available if your plan changes.`;
+    workoutExplanation = clientDeclaredRest
+      ? `Today is set as a rest day. ${PUSH_WORKOUT.name} stays available if your plan changes.`
+      : `Today is a scheduled rest day. ${PUSH_WORKOUT.name} stays available if you'd like to train anyway.`;
     workoutActionLabel = "Begin workout anyway";
   } else if (plannedAt && now.getTime() >= plannedAt.getTime()) {
     workoutStatus = "recommended";
@@ -162,25 +218,31 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   items.push({
     id: "workout",
     kind: "workout",
-    title: PUSH_WORKOUT.name,
+    title: scheduledWithoutDetail ? workoutDisplayName : PUSH_WORKOUT.name,
     status: workoutStatus,
     timeLabel: workoutTimeLabel,
     explanation: workoutExplanation,
     isNextAction: false,
     actionLabel: workoutActionLabel,
-    href: "/training/workout",
+    href: workoutHref,
   });
 
   // --- Post-workout meal ---
-  const workoutResolved = session.status === "completed" || session.status === "skipped";
+  // "ended-early" still counts as resolved for scheduling purposes — some
+  // training did occur, so a post-workout meal remains appropriate. Only a
+  // true "skipped" (zero working sets ever completed) falls back to a
+  // generic meal label below — see Phase 3.1 §4.
+  const workoutResolved = session.status === "completed" || session.status === "skipped" || session.status === "ended-early";
+  const trainingOccurredToday = session.status === "completed" || session.status === "ended-early";
   const postWorkoutSelection = state.meals.postWorkout;
+  const postWorkoutEntry = mealSchedule.entries.postWorkout;
   const postWorkoutStatus: PlannerItemStatus = !workoutResolved && !postWorkoutSelection ? "upcoming" : mealItemStatus(postWorkoutSelection);
   items.push({
     id: "post-workout-meal",
     kind: "meal",
-    title: MEAL_LABELS.postWorkout,
+    title: trainingOccurredToday || !workoutResolved ? MEAL_LABELS.postWorkout : "Meal",
     status: postWorkoutStatus,
-    timeLabel: postWorkoutSelection?.completedAtIso ? `Logged at ${formatClockTime(postWorkoutSelection.completedAtIso)}` : undefined,
+    timeLabel: postWorkoutEntry?.timeLabel ?? undefined,
     explanation: !workoutResolved && !postWorkoutSelection ? "Available once today's workout is completed or skipped." : undefined,
     isNextAction: false,
     actionLabel: postWorkoutStatus === "recommended" ? "Log post-workout meal" : undefined,
@@ -189,12 +251,14 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
 
   // --- Lunch ---
   const lunchSelection = state.meals.lunch;
+  const lunchEntry = mealSchedule.entries.lunch;
   items.push({
     id: "lunch",
     kind: "meal",
     title: MEAL_LABELS.lunch,
     status: mealItemStatus(lunchSelection),
-    timeLabel: lunchSelection?.completedAtIso ? `Logged at ${formatClockTime(lunchSelection.completedAtIso)}` : undefined,
+    timeLabel: lunchEntry?.timeLabel ?? undefined,
+    explanation: preWorkoutRoleExplanation("lunch", lunchSelection, lunchEntry, trainingPlan, now),
     isNextAction: false,
     actionLabel: !lunchSelection ? "View lunch options" : undefined,
     href: "#lunch",
@@ -206,10 +270,15 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   else if (state.cardio.status === "skipped") cardioStatus = "skipped";
   else if (state.cardio.status === "in-progress") cardioStatus = "in-progress";
   else cardioStatus = workoutResolved ? "recommended" : "upcoming";
+  const cardioPrescription = cardioPrescriptionForClient(state.clientId);
+  const selectedCardioOption =
+    cardioPrescription.options.find((o) => o.id === state.cardio.selectedOptionId) ??
+    cardioPrescription.options.find((o) => o.isDefault) ??
+    cardioPrescription.options[0];
   items.push({
     id: "cardio",
     kind: "cardio",
-    title: `Cardio — ${CARDIO_TARGET.activity}`,
+    title: `Cardio — ${selectedCardioOption.displayName}`,
     status: cardioStatus,
     isNextAction: false,
     actionLabel: cardioStatus === "recommended" ? "Start cardio" : undefined,
@@ -218,27 +287,28 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
 
   // --- Dinner ---
   const dinnerSelection = state.meals.dinner;
+  const dinnerEntry = mealSchedule.entries.dinner;
   items.push({
     id: "dinner",
     kind: "meal",
     title: MEAL_LABELS.dinner,
     status: mealItemStatus(dinnerSelection),
-    timeLabel: dinnerSelection?.completedAtIso ? `Logged at ${formatClockTime(dinnerSelection.completedAtIso)}` : undefined,
+    timeLabel: dinnerEntry?.timeLabel ?? undefined,
+    explanation: preWorkoutRoleExplanation("dinner", dinnerSelection, dinnerEntry, trainingPlan, now),
     isNextAction: false,
     actionLabel: !dinnerSelection ? "View dinner options" : undefined,
     href: "#dinner",
   });
 
   // --- Snack (optional) ---
-  const snack = evaluateSnackRecommendation(state, nutritionTotals, now);
-  const snackSelection = state.meals.snack;
-  if (snackSelection || snack.show) {
+  const snackEntry = mealSchedule.entries.snack;
+  if (showSnack) {
     items.push({
       id: "snack",
       kind: "meal",
       title: "Snack (optional)",
       status: snackSelection ? mealItemStatus(snackSelection) : "optional",
-      timeLabel: snackSelection?.completedAtIso ? `Logged at ${formatClockTime(snackSelection.completedAtIso)}` : undefined,
+      timeLabel: snackEntry?.timeLabel ?? undefined,
       explanation: !snackSelection ? snack.reason : undefined,
       isNextAction: false,
       actionLabel: !snackSelection ? "View snack options" : undefined,
@@ -268,6 +338,8 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
       status: "completed",
       explanation: "Nice work staying consistent today.",
       isNextAction: false,
+      actionLabel: "Review today",
+      href: "#review-today",
     });
   }
 
@@ -277,7 +349,7 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     nextAction.isNextAction = true;
   }
 
-  return { items, nextAction, snack };
+  return { items, nextAction, snack, mealSchedule };
 }
 
 function selectNextAction(items: PlannerItem[], trainingPlan: DailyTrainingPlan | null): PlannerItem | null {

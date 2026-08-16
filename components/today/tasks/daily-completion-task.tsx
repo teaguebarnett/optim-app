@@ -1,13 +1,24 @@
 "use client";
 
+import { useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { TaskShell } from "@/components/today/task-shell";
+import { Button } from "@/components/ui/button";
+import { ReviewTodaySheet } from "@/components/today/review-today-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { NUTRITION_TARGETS, TRAINING_WEEK } from "@/lib/mock-data";
+import { NUTRITION_TARGETS, trainingWeekEntryForDay } from "@/lib/mock-data";
+import { addDaysToLocalDate, localDateDayOfWeek } from "@/lib/shared/local-date";
 import type { DailyTaskState } from "@/lib/types";
+
+const WORKOUT_STATUS_TEXT: Record<string, string> = {
+  completed: "completed",
+  "ended-early": "ended early",
+  skipped: "skipped",
+};
 
 export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
   const { state: appState, nutritionTotals } = usePrototypeState();
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   if (state === "locked") {
     return (
@@ -25,52 +36,65 @@ export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
       ? "Target reached"
       : `${Math.round((nutritionTotals.proteinG / NUTRITION_TARGETS.proteinG) * 100)}% of target`;
 
-  const tuesday = TRAINING_WEEK.find((d) => d.dayOfWeek === "Tuesday");
+  // Phase 4.1 corrective — "today" and "tomorrow" resolve from the real
+  // client-local effective date rather than being hardcoded to Monday/
+  // Tuesday, so this card (and its "prepare for tomorrow" preview) stays
+  // honest on whichever real day it's actually shown.
+  const todayDayOfWeek = localDateDayOfWeek(appState.dateIso);
+  const tomorrowDayOfWeek = localDateDayOfWeek(addDaysToLocalDate(appState.dateIso, 1));
+  const tomorrow = trainingWeekEntryForDay(tomorrowDayOfWeek);
 
   return (
-    <TaskShell
-      title="Monday complete."
-      icon={<CheckCircle2 size={17} />}
-      state={state}
-      emphasisOverride="primary"
-    >
-      <p className="text-sm text-off-white">Nice work staying consistent today.</p>
+    <>
+      <TaskShell
+        title={`${todayDayOfWeek} complete.`}
+        icon={<CheckCircle2 size={17} />}
+        state={state}
+        emphasisOverride="primary"
+      >
+        <p className="text-sm text-off-white">Nice work staying consistent today.</p>
 
-      <ul className="mt-3 space-y-1.5 text-sm text-neutral">
-        <li>
-          Workout —{" "}
-          <span className="text-off-white">
-            {appState.workoutSession.status === "completed" ? "completed" : "skipped"}
-          </span>
-        </li>
-        <li>
-          Meals —{" "}
-          <span className="text-off-white">
-            {Object.values(appState.meals).filter((m) => m && m.source !== "planned-later").length} of 5 logged
-          </span>
-        </li>
-        <li>
-          Protein — <span className="text-off-white">{proteinStatus}</span>
-        </li>
-        <li>
-          Cardio —{" "}
-          <span className="text-off-white">
-            {appState.cardio.status === "completed" ? "completed" : "skipped"}
-          </span>
-        </li>
-      </ul>
+        <ul className="mt-3 space-y-1.5 text-sm text-neutral">
+          <li>
+            Workout —{" "}
+            <span className="text-off-white">
+              {WORKOUT_STATUS_TEXT[appState.workoutSession.status] ?? "not started"}
+            </span>
+          </li>
+          <li>
+            Meals —{" "}
+            <span className="text-off-white">
+              {Object.values(appState.meals).filter((m) => m && m.source !== "planned-later").length} of 5 logged
+            </span>
+          </li>
+          <li>
+            Protein — <span className="text-off-white">{proteinStatus}</span>
+          </li>
+          <li>
+            Cardio —{" "}
+            <span className="text-off-white">
+              {appState.cardio.status === "completed" ? "completed" : "skipped"}
+            </span>
+          </li>
+        </ul>
 
-      <div className="mt-4 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
-        <p className="text-xs font-medium uppercase tracking-wide text-neutral">Prepare for tomorrow</p>
-        <p className="mt-1 text-sm text-off-white">
-          Set out tomorrow&apos;s training clothes and make sure breakfast ingredients are ready.
-        </p>
-        {tuesday ? (
-          <p className="mt-2 text-xs text-neutral">
-            Tuesday: {tuesday.workoutName} — {tuesday.focus}
+        <div className="mt-4 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-neutral">Prepare for tomorrow</p>
+          <p className="mt-1 text-sm text-off-white">
+            Set out tomorrow&apos;s training clothes and make sure breakfast ingredients are ready.
           </p>
-        ) : null}
-      </div>
-    </TaskShell>
+          {tomorrow ? (
+            <p className="mt-2 text-xs text-neutral">
+              {tomorrowDayOfWeek}: {tomorrow.type === "rest" ? "Rest day" : `${tomorrow.workoutName} — ${tomorrow.focus}`}
+            </p>
+          ) : null}
+        </div>
+
+        <Button variant="outline" className="mt-3 w-full" onClick={() => setReviewOpen(true)}>
+          Review today
+        </Button>
+      </TaskShell>
+      <ReviewTodaySheet open={reviewOpen} onClose={() => setReviewOpen(false)} />
+    </>
   );
 }
