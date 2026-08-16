@@ -11,12 +11,12 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { PUSH_WORKOUT } from "@/lib/mock-data";
 
-// Today's information hierarchy (see Phase 3 spec):
+// Today's information hierarchy (Phase 3.1 §5 moved Fuel to the top):
 // 1. Greeting + date (DayHeader)
-// 2. Training-time entry or current plan (TrainingTimeCard)
-// 3. One clear next action (NextActionBanner)
-// 4. Adaptive daily schedule (AdaptiveSchedule)
-// 5. Compact Fuel summary (FuelSection)
+// 2. Calories + all three macros (FuelSection)
+// 3. Training-time entry or current plan (TrainingTimeCard)
+// 4. One clear next action (NextActionBanner)
+// 5. Adaptive daily schedule (AdaptiveSchedule)
 // 6. Secondary info (CoachCard)
 export default function TodayPage() {
   const { isHydrated, dailyTrainingPlan, dailyPlan } = usePrototypeState();
@@ -30,6 +30,8 @@ export default function TodayPage() {
     <div className="space-y-5 pb-4">
       <DayHeader />
 
+      <FuelSection />
+
       <TrainingTimeCard
         plan={dailyTrainingPlan}
         open={trainingTimeSheetOpen}
@@ -42,8 +44,6 @@ export default function TodayPage() {
       />
 
       <AdaptiveSchedule dailyPlan={dailyPlan} />
-
-      <FuelSection />
 
       <div className="px-4">
         <CoachCard note={PUSH_WORKOUT.coachNote} />

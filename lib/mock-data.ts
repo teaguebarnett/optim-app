@@ -1,18 +1,16 @@
-import { WORKSPACE_OPTIM_ID } from "./tenancy/seed.ts";
+import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "./tenancy/seed.ts";
+import type { ClientProfileId } from "./tenancy/types";
 import type {
-  AdherencePoint,
+  CardioOption,
+  CardioPrescription,
   CardioTarget,
   DailyPlan,
   Exercise,
   MealOption,
   MealPeriod,
-  Milestone,
   NutritionTargets,
   PrescribedSet,
   ScriptedChatTopic,
-  StrengthPoint,
-  WeeklyCompletionPoint,
-  WeightPoint,
   Workout,
   DayOfWeek,
 } from "./types";
@@ -37,6 +35,47 @@ export const CARDIO_TARGET: CardioTarget = {
   heartRateRangeHigh: 148,
 };
 
+const STAIRMASTER_OPTION: CardioOption = {
+  id: "cardio-stairmaster",
+  type: "StairMaster",
+  displayName: "StairMaster",
+  isDefault: true,
+  intendedUse: "Your standard steady-state cardio session.",
+  targetDurationMin: CARDIO_TARGET.durationMin,
+  heartRateRangeLow: CARDIO_TARGET.heartRateRangeLow,
+  heartRateRangeHigh: CARDIO_TARGET.heartRateRangeHigh,
+  protocol: `${CARDIO_TARGET.durationMin} minutes at a steady pace, keeping your heart rate between ${CARDIO_TARGET.heartRateRangeLow} and ${CARDIO_TARGET.heartRateRangeHigh} bpm.`,
+};
+
+const HIIT_OPTION: CardioOption = {
+  id: "cardio-hiit",
+  type: "HIIT",
+  displayName: "HIIT workout",
+  isDefault: false,
+  intendedUse: "Approved time-saving alternative when you're short on time.",
+  targetDurationMin: 12,
+  heartRateRangeLow: CARDIO_TARGET.heartRateRangeLow,
+  heartRateRangeHigh: CARDIO_TARGET.heartRateRangeHigh,
+  protocol: `12 minutes total: alternate 30 seconds of hard effort with 60 seconds of easy recovery, keeping your hard efforts in the ${CARDIO_TARGET.heartRateRangeLow}-${CARDIO_TARGET.heartRateRangeHigh} bpm range.`,
+};
+
+/** Per-client approved cardio options — coach-controlled and configurable so
+ * a client with only one approved option never sees a picker, while a
+ * client whose coach has approved an alternative (e.g. a time-saving HIIT
+ * substitution) does. Keyed by ClientProfileId rather than hardcoded to any
+ * one client's name, so this stays correct for future clients/workspaces.
+ * Any client not present here falls back to the single default option — see
+ * cardioPrescriptionForClient() below. */
+export const CARDIO_PRESCRIPTIONS_BY_CLIENT: Record<ClientProfileId, CardioPrescription> = {
+  [CLIENT_PROFILE_DEMO.id]: { options: [STAIRMASTER_OPTION, HIIT_OPTION] },
+};
+
+const DEFAULT_CARDIO_PRESCRIPTION: CardioPrescription = { options: [STAIRMASTER_OPTION] };
+
+export function cardioPrescriptionForClient(clientId: ClientProfileId): CardioPrescription {
+  return CARDIO_PRESCRIPTIONS_BY_CLIENT[clientId] ?? DEFAULT_CARDIO_PRESCRIPTION;
+}
+
 export const TODAY_WORKOUT_ID = "push-day-w8";
 
 export const DAILY_PLAN: DailyPlan = {
@@ -57,9 +96,19 @@ function makeSetPrescriptions(
   working: number,
   repsLow: number,
   repsHigh: number,
-  targetRpe: Exercise["targetRpe"]
+  targetRpe: Exercise["targetRpe"],
+  /** Coach-prescribed working weight for this exercise today — the client
+   * sees this instead of typing one in. Defaults to the most recent
+   * previousPerformance entry when omitted at the call site. */
+  workingWeightLb?: number
 ): PrescribedSet[] {
   const sets: PrescribedSet[] = [];
+  // Warm-up weight is only ever displayed as guidance text (never logged or
+  // required), so a simple fraction of the working weight is a reasonable
+  // suggestion rather than a precise prescription.
+  const warmupWeightLb = workingWeightLb !== undefined ? Math.round((workingWeightLb * 0.55) / 5) * 5 : undefined;
+  const warmupReps = Math.round((10 + 12) / 2);
+  const workingReps = Math.round((repsLow + repsHigh) / 2);
   for (let i = 1; i <= warmup; i++) {
     sets.push({
       setNumber: i,
@@ -67,6 +116,8 @@ function makeSetPrescriptions(
       targetRepsLow: 10,
       targetRepsHigh: 12,
       targetRpe: 6,
+      prescribedWeightLb: warmupWeightLb,
+      prescribedReps: warmupReps,
     });
   }
   for (let i = 1; i <= working; i++) {
@@ -76,6 +127,8 @@ function makeSetPrescriptions(
       targetRepsLow: repsLow,
       targetRepsHigh: repsHigh,
       targetRpe,
+      prescribedWeightLb: workingWeightLb,
+      prescribedReps: workingReps,
     });
   }
   return sets;
@@ -244,7 +297,7 @@ const PUSH_EXERCISES: Exercise[] = [
       { weightLb: 85, reps: 8, rpe: 9 },
       { weightLb: 85, reps: 7, rpe: 9 },
     ],
-    prescribedSets: makeSetPrescriptions(2, 3, 6, 10, 8),
+    prescribedSets: makeSetPrescriptions(2, 3, 6, 10, 8, 85),
   },
   {
     id: "machine-chest-press",
@@ -263,7 +316,7 @@ const PUSH_EXERCISES: Exercise[] = [
       { weightLb: 160, reps: 10, rpe: 8 },
       { weightLb: 160, reps: 9, rpe: 9 },
     ],
-    prescribedSets: makeSetPrescriptions(1, 3, 8, 12, 8),
+    prescribedSets: makeSetPrescriptions(1, 3, 8, 12, 8, 160),
   },
   {
     id: "cable-fly",
@@ -282,7 +335,7 @@ const PUSH_EXERCISES: Exercise[] = [
       { weightLb: 30, reps: 12, rpe: 8 },
       { weightLb: 30, reps: 11, rpe: 9 },
     ],
-    prescribedSets: makeSetPrescriptions(1, 3, 10, 15, 8),
+    prescribedSets: makeSetPrescriptions(1, 3, 10, 15, 8, 30),
   },
   {
     id: "cable-lateral-raise",
@@ -301,7 +354,7 @@ const PUSH_EXERCISES: Exercise[] = [
       { weightLb: 15, reps: 13, rpe: 8 },
       { weightLb: 15, reps: 12, rpe: 9 },
     ],
-    prescribedSets: makeSetPrescriptions(1, 3, 12, 15, 8),
+    prescribedSets: makeSetPrescriptions(1, 3, 12, 15, 8, 15),
   },
   {
     id: "rope-pressdown",
@@ -320,7 +373,7 @@ const PUSH_EXERCISES: Exercise[] = [
       { weightLb: 50, reps: 13, rpe: 9 },
       { weightLb: 50, reps: 12, rpe: 9 },
     ],
-    prescribedSets: makeSetPrescriptions(1, 3, 10, 15, 9),
+    prescribedSets: makeSetPrescriptions(1, 3, 10, 15, 9, 50),
   },
 ];
 
@@ -364,6 +417,34 @@ export const TRAINING_WEEK: TrainingWeekDay[] = [
   { dayOfWeek: "Sunday", label: "Sun", type: "rest", status: "rest" },
 ];
 
+/** The real schedule entry for a given local day of week, or undefined for
+ * a day the training-week template doesn't cover at all ("no session
+ * scheduled" — TRAINING_WEEK currently covers all seven days as either
+ * "training" or "rest", so this is undefined only for a future/alternate
+ * template). Accepts an injectable template only so tests can exercise the
+ * "no entry at all" path directly; every real caller uses the default. */
+export function trainingWeekEntryForDay(
+  dayOfWeek: DayOfWeek,
+  trainingWeek: TrainingWeekDay[] = TRAINING_WEEK
+): TrainingWeekDay | undefined {
+  return trainingWeek.find((d) => d.dayOfWeek === dayOfWeek);
+}
+
+/** The real, fully-authored catalog Workout (with loggable exercises) that
+ * matches a given day of week, if one exists. WORKOUTS_BY_ID currently only
+ * has real content for the day(s) it's been authored for (today, just
+ * Monday's Push Workout) — a day whose TRAINING_WEEK entry names a workout
+ * (e.g. Friday's "Upper Workout") but has no matching entry here is
+ * label-only and must never be presented as if real session detail exists.
+ * Accepts an injectable catalog only for tests; every real caller uses the
+ * default. */
+export function catalogWorkoutForDay(
+  dayOfWeek: DayOfWeek,
+  catalog: Record<string, Workout> = WORKOUTS_BY_ID
+): Workout | undefined {
+  return Object.values(catalog).find((w) => w.dayOfWeek === dayOfWeek);
+}
+
 export const TRAINING_WEEKLY_NOTE =
   "Push the incline press progression again this week if RPE allows — everything else stays exactly the same as last week.";
 
@@ -372,62 +453,6 @@ export const LAST_WEEK_SUMMARY = {
   completionPercent: 100,
   note: "Every session logged, all working sets within target RPE. Strong week.",
 };
-
-// ---------------------------------------------------------------------------
-// Progress screen mock history
-// ---------------------------------------------------------------------------
-
-export const WEIGHT_HISTORY: WeightPoint[] = [
-  { dateIso: "2026-06-29", weightLb: 193.8 },
-  { dateIso: "2026-07-06", weightLb: 193.1 },
-  { dateIso: "2026-07-13", weightLb: 192.2 },
-  { dateIso: "2026-07-20", weightLb: 191.4 },
-];
-
-export const WEEKLY_COMPLETION_HISTORY: WeeklyCompletionPoint[] = [
-  { weekLabel: "W5", completionPercent: 88 },
-  { weekLabel: "W6", completionPercent: 94 },
-  { weekLabel: "W7", completionPercent: 100 },
-  { weekLabel: "W8", completionPercent: 0 },
-];
-
-export const NUTRITION_ADHERENCE_HISTORY: AdherencePoint[] = [
-  { weekLabel: "W5", adherencePercent: 82 },
-  { weekLabel: "W6", adherencePercent: 90 },
-  { weekLabel: "W7", adherencePercent: 95 },
-  { weekLabel: "W8", adherencePercent: 0 },
-];
-
-export const STRENGTH_HISTORY: StrengthPoint[] = [
-  { dateIso: "2026-06-29", topSetWeightLb: 75 },
-  { dateIso: "2026-07-06", topSetWeightLb: 80 },
-  { dateIso: "2026-07-13", topSetWeightLb: 80 },
-  { dateIso: "2026-07-20", topSetWeightLb: 85 },
-];
-
-export const MILESTONES: Milestone[] = [
-  {
-    id: "m-1",
-    dateIso: "2026-07-20",
-    title: "New incline press top set",
-    detail: "85 lb dumbbells for 9 reps at RPE 8 — a 5 lb jump from three weeks ago.",
-  },
-  {
-    id: "m-2",
-    dateIso: "2026-07-13",
-    title: "7-week consistency streak",
-    detail: "Every programmed session logged for seven consecutive weeks.",
-  },
-  {
-    id: "m-3",
-    dateIso: "2026-07-01",
-    title: "Down 2.4 lb since Week 5",
-    detail: "Steady downward trend while working sets kept climbing — a good sign of body recomposition.",
-  },
-];
-
-export const PROGRESS_COACH_NOTE =
-  "Your pressing numbers are trending in the right direction and consistency has been excellent. Let's keep the same approach through Week 9 before we talk about the next progression.";
 
 // ---------------------------------------------------------------------------
 // Chat

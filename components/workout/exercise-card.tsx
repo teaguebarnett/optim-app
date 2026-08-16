@@ -7,16 +7,46 @@ import { Button } from "@/components/ui/button";
 import { canCompleteExercise } from "@/lib/workout-analysis";
 import type { Exercise, ExerciseLog, LoggedSet, RpeValue } from "@/lib/types";
 
+// Phase 3.1.1 §3 — replaces the old interruptive countdown popup with a
+// simple, non-disruptive line pulled from this exercise's own prescribed
+// rest interval. Never the same fixed value for every exercise — see
+// exercise.restSeconds in lib/mock-data.ts. Falls back to a calm default
+// only when no prescription exists at all.
+function formatRestRecommendation(restSeconds?: number): string {
+  if (!restSeconds || restSeconds <= 0) return "Rest as needed.";
+  const totalMinutes = restSeconds / 60;
+  const lowMin = Math.max(1, Math.floor(totalMinutes));
+  const highMin = Math.max(lowMin, Math.ceil(totalMinutes));
+  if (lowMin === highMin) return `Recommended rest: ${lowMin} minute${lowMin === 1 ? "" : "s"}.`;
+  return `Recommended rest: ${lowMin}–${highMin} minutes.`;
+}
+
 interface Slot {
   absoluteSetNumber: number;
   displayNumber: number;
   targetRepsLow: number;
   targetRepsHigh: number;
   targetRpe: RpeValue;
+  /** Present only for prescribed working sets — extra sets the client adds
+   * themselves have no prescription, so SetRow falls back to full manual
+   * entry for those. See Phase 3.1 §3. */
+  prescribedWeightLb?: number;
+  prescribedReps?: number;
   loggedSet?: LoggedSet;
 }
 
-function buildSlots(exercise: Exercise, log: ExerciseLog, extraCount: number): { warmup: Slot[]; working: Slot[] } {
+interface WarmupGuidance {
+  displayNumber: number;
+  targetRepsLow: number;
+  targetRepsHigh: number;
+  prescribedWeightLb?: number;
+}
+
+function buildSlots(
+  exercise: Exercise,
+  log: ExerciseLog,
+  extraCount: number
+): { warmup: WarmupGuidance[]; working: Slot[] } {
   const loggedByNumber = new Map<number, LoggedSet>();
   for (const set of log.loggedSets) {
     loggedByNumber.set(set.setNumber, set);
@@ -30,13 +60,11 @@ function buildSlots(exercise: Exercise, log: ExerciseLog, extraCount: number): {
     .filter((s) => !s.isWarmup && s.setNumber > maxPrescribedNumber)
     .sort((a, b) => a.setNumber - b.setNumber);
 
-  const warmup: Slot[] = warmupPrescribed.map((s, i) => ({
-    absoluteSetNumber: s.setNumber,
+  const warmup: WarmupGuidance[] = warmupPrescribed.map((s, i) => ({
     displayNumber: i + 1,
     targetRepsLow: s.targetRepsLow,
     targetRepsHigh: s.targetRepsHigh,
-    targetRpe: s.targetRpe,
-    loggedSet: loggedByNumber.get(s.setNumber),
+    prescribedWeightLb: s.prescribedWeightLb,
   }));
 
   const working: Slot[] = workingPrescribed.map((s, i) => ({
@@ -45,6 +73,8 @@ function buildSlots(exercise: Exercise, log: ExerciseLog, extraCount: number): {
     targetRepsLow: s.targetRepsLow,
     targetRepsHigh: s.targetRepsHigh,
     targetRpe: s.targetRpe,
+    prescribedWeightLb: s.prescribedWeightLb,
+    prescribedReps: s.prescribedReps,
     loggedSet: loggedByNumber.get(s.setNumber),
   }));
 
@@ -109,7 +139,7 @@ export function ExerciseCard({
         <h2 className="text-xl font-semibold text-off-white">{exercise.name}</h2>
         <p className="mt-1 text-sm text-neutral">{exercise.cue}</p>
         <p className="mt-1 text-xs text-neutral">
-          Tempo {exercise.tempo} · Rest {exercise.restSeconds}s
+          Tempo {exercise.tempo} · {formatRestRecommendation(exercise.restSeconds)}
         </p>
       </div>
 
@@ -131,34 +161,35 @@ export function ExerciseCard({
       ) : (
         <>
           {warmup.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-medium uppercase tracking-wide text-neutral">Warm-up</p>
-              {warmup.map((slot) => (
-                <SetRow
-                  key={`w-${slot.absoluteSetNumber}`}
-                  setNumber={slot.displayNumber}
-                  isWarmup
-                  targetRepsLow={slot.targetRepsLow}
-                  targetRepsHigh={slot.targetRepsHigh}
-                  targetRpe={slot.targetRpe}
-                  loggedSet={slot.loggedSet}
-                  onComplete={(w, r, rpe, note) => onLogSet(slot.absoluteSetNumber, true, w, r, rpe, note)}
-                  onSkipRequested={() => onSkipSetRequested(slot.absoluteSetNumber, true)}
-                />
-              ))}
+            <div className="rounded-[var(--radius-md)] border border-border-strong bg-off-white/[0.02] p-3.5">
+              <p className="text-xs font-medium uppercase tracking-wide text-neutral">Warm-up · guidance only</p>
+              <div className="mt-1.5 space-y-1">
+                {warmup.map((slot) => (
+                  <p key={`w-${slot.displayNumber}`} className="text-sm text-neutral">
+                    Set {slot.displayNumber} — {slot.targetRepsLow}–{slot.targetRepsHigh} reps
+                    {slot.prescribedWeightLb ? `, about ${slot.prescribedWeightLb} lb` : ""}
+                  </p>
+                ))}
+              </div>
             </div>
           )}
 
           <div className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wide text-neutral">Working sets</p>
             {working.map((slot) => (
+              // Phase 3.1.1 §4 — the key includes the exercise id so React
+              // remounts (and therefore blanks) each SetRow's local RPE/
+              // weight/reps state when advancing to a different exercise,
+              // instead of silently reusing a same-numbered set's leftover
+              // selection from the exercise just left.
               <SetRow
-                key={`s-${slot.absoluteSetNumber}`}
+                key={`${exercise.id}-s-${slot.absoluteSetNumber}`}
                 setNumber={slot.displayNumber}
-                isWarmup={false}
                 targetRepsLow={slot.targetRepsLow}
                 targetRepsHigh={slot.targetRepsHigh}
                 targetRpe={slot.targetRpe}
+                prescribedWeightLb={slot.prescribedWeightLb}
+                prescribedReps={slot.prescribedReps}
                 loggedSet={slot.loggedSet}
                 onComplete={(w, r, rpe, note) => onLogSet(slot.absoluteSetNumber, false, w, r, rpe, note)}
                 onSkipRequested={() => onSkipSetRequested(slot.absoluteSetNumber, false)}

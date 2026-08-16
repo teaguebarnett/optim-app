@@ -8,10 +8,15 @@ import type { MealPeriod, MealSelection } from "@/lib/types";
 export function MealRow({
   period,
   selection,
+  timeLabel,
   onClick,
 }: {
   period: MealPeriod;
   selection?: MealSelection;
+  /** Recommended/logged time caption from the shared meal schedule — see
+   * lib/planning/meal-schedule.ts. Passed in rather than recomputed so this
+   * always matches what Today shows for the same meal. */
+  timeLabel?: string;
   onClick: () => void;
 }) {
   const label = MEAL_PERIOD_LABELS[period];
@@ -48,6 +53,7 @@ export function MealRow({
         ) : (
           <p className="text-xs text-neutral">Not logged yet</p>
         )}
+        {timeLabel ? <p className="mt-0.5 text-xs text-neutral">{timeLabel}</p> : null}
       </div>
       <ChevronRight size={16} className="shrink-0 text-neutral" />
     </button>

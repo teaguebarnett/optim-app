@@ -15,11 +15,24 @@ interface SheetProps {
 
 export function Sheet({ open, onClose, title, description, children, className }: SheetProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Phase 3.1.1 §5 — most callers pass an inline `onClose` (a new function
+  // reference every render of the parent). Keeping that in this effect's
+  // dependency array meant the effect — including the focus-stealing
+  // panelRef.current?.focus() call below — re-ran on every keystroke inside
+  // any input this sheet contains (typing updates the parent's state,
+  // re-rendering the parent, recreating onClose), yanking focus off the
+  // field after each character. Reading the latest onClose from a ref lets
+  // the effect depend on `open` alone, so it only (re)runs when the sheet
+  // actually opens or closes.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKeyDown);
     const previousOverflow = document.body.style.overflow;
@@ -29,7 +42,7 @@ export function Sheet({ open, onClose, title, description, children, className }
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

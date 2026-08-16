@@ -57,7 +57,14 @@ export function AdaptiveSchedule({ dailyPlan }: { dailyPlan: DailyPlanResult }) 
                 emphasisOverride={emphasisFor(item.id, taskState("cardio"), item.isNextAction)}
               />
             ) : item.kind === "review" ? (
-              <DailyCompletionTask state={taskState("daily-completion")} />
+              // The planner only ever includes a "review" item once its own
+              // dayFullyResolved rule is satisfied — that can be true even
+              // when the stricter "daily-completion" task state (used for
+              // the % completion checklist) reports "locked" for an
+              // ended-early workout day. Trust the planner's own decision
+              // here rather than the mismatched checklist state, so Review
+              // Today is never a dead end. See lib/planning/planner.ts.
+              <DailyCompletionTask state="completed" />
             ) : item.id === "breakfast" ? (
               <MealTask
                 period="breakfast"

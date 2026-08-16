@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight } from "lucide-react";
+import { ReviewTodaySheet } from "@/components/today/review-today-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import type { PlannerItem } from "@/lib/planning/types";
 
@@ -21,6 +23,7 @@ interface NextActionBannerProps {
 export function NextActionBanner({ nextAction, onOpenTrainingTime }: NextActionBannerProps) {
   const { dispatch } = usePrototypeState();
   const router = useRouter();
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   if (!nextAction) return null;
 
@@ -33,6 +36,10 @@ export function NextActionBanner({ nextAction, onOpenTrainingTime }: NextActionB
     if (nextAction.kind === "workout") {
       dispatch({ type: "START_WORKOUT" });
       router.push("/training/workout");
+      return;
+    }
+    if (nextAction.kind === "review") {
+      setReviewOpen(true);
       return;
     }
     if (nextAction.href?.startsWith("#")) {
@@ -54,6 +61,7 @@ export function NextActionBanner({ nextAction, onOpenTrainingTime }: NextActionB
         </div>
         <ArrowRight size={20} className="shrink-0 text-on-accent" aria-hidden="true" />
       </button>
+      <ReviewTodaySheet open={reviewOpen} onClose={() => setReviewOpen(false)} />
     </div>
   );
 }

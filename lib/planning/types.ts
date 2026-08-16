@@ -8,6 +8,7 @@
 // derived fresh on every render by lib/planning/planner.ts.
 
 import type { ClientProfileId, WorkspaceId } from "../tenancy/types";
+import type { MealPeriod } from "../types";
 
 export type TrainingPlanStatus = "scheduled" | "unsure" | "rest_day";
 
@@ -36,7 +37,7 @@ export interface DailyTrainingPlan {
   updatedAtIso: string;
 }
 
-export type MealTimingCategory = "light" | "standard" | "larger";
+export type MealTimingCategory = "light" | "medium" | "heavy";
 
 /**
  * Evidence-informed (not exact) estimate of how a meal option relates to
@@ -64,7 +65,10 @@ export type PlannerItemStatus =
   | "optional"
   | "skipped"
   | "missed"
-  | "not-started";
+  | "not-started"
+  /** The client ended the session early but had already completed at least
+   * one working set — distinct from "skipped". See Phase 3.1 §4. */
+  | "partially-completed";
 
 export type PlannerItemKind =
   | "training-time"
@@ -96,8 +100,49 @@ export interface SnackRecommendation {
   reason?: string;
 }
 
+/**
+ * A meal's relationship to today's training, decided fresh each time the
+ * schedule is built — never hardcoded to a specific period name. Most days
+ * exactly one meal is "pre-workout" (whichever naturally falls last before
+ * training) and the dedicated postWorkout slot is "post-workout"; every
+ * other meal (including postWorkout on a day with no training) is "normal".
+ */
+export type MealRole = "pre-workout" | "post-workout" | "normal";
+
+export interface MealScheduleEntry {
+  period: MealPeriod;
+  role: MealRole;
+  category: MealTimingCategory;
+  /** Local ISO datetime this meal is recommended for. Null when there isn't
+   * enough anchor information to project forward (no scheduled training
+   * time) — see lib/planning/meal-schedule.ts. Once a meal is logged, its
+   * actual completedAtIso is the source of truth instead; see isLocked. */
+  recommendedAtIso: string | null;
+  /** Human-readable form of recommendedAtIso, e.g. "Recommended around 9:15 AM". */
+  timeLabel: string | null;
+  /** True once this meal has already been logged for today — its recorded
+   * time is authoritative and this entry's recommendedAtIso reflects that
+   * recorded time rather than a recalculated projection. */
+  isLocked: boolean;
+}
+
+export interface DailyMealSchedule {
+  /** One entry per meal period present in today's plan. */
+  entries: Partial<Record<MealPeriod, MealScheduleEntry>>;
+  /** True only when a scheduled training time made forward projection
+   * possible. False for "unsure"/rest-day/no-decision-yet days — those days
+   * intentionally show no invented clock times. */
+  hasAnchor: boolean;
+}
+
 export interface DailyPlanResult {
   items: PlannerItem[];
   nextAction: PlannerItem | null;
   snack: SnackRecommendation;
+  /** The same computed full-day meal schedule the items' timeLabels are
+   * built from — exposed directly so other screens (e.g. the Nutrition
+   * page) can show recommended times per meal without recomputing them, so
+   * Today and Nutrition can never drift apart. See lib/planning/
+   * meal-schedule.ts. */
+  mealSchedule: DailyMealSchedule;
 }

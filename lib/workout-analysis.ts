@@ -112,13 +112,17 @@ export function buildWorkoutSummary(
 
   const missedMajorityOfWork = workingSetsCompleted < totalPrescribedWorkingSets() / 2;
 
-  // Fully completed means every prescribed working set has a valid logged
-  // RPE and nothing anywhere in the session was skipped.
+  // Fully completed means every prescribed working set was actually
+  // addressed with a valid logged RPE, nothing anywhere in the session was
+  // skipped, AND no exercise was simply left untouched (not-started) — the
+  // last check matters for an ended-early session, which never marks
+  // remaining exercises "skipped" but still hasn't done the full workout.
   const fullyCompleted =
     workingSetsCompleted > 0 &&
     exercisesSkipped === 0 &&
     skippedSetsCount === 0 &&
-    missingRpeCount === 0;
+    missingRpeCount === 0 &&
+    workingSetsCompleted >= totalPrescribedWorkingSets();
 
   const needsReview =
     anyRpeAnomaly ||

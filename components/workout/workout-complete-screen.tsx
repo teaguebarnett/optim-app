@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { CheckCircle2, XCircle, Sparkles } from "lucide-react";
+import { CheckCircle2, PauseCircle, XCircle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SKIP_REASON_LABELS } from "@/components/ui/reason-picker";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
@@ -41,12 +41,28 @@ export function WorkoutCompleteScreen({ session }: { session: WorkoutSession }) 
   const summary = session.summary;
   if (!summary) return null;
 
+  const endedEarly = session.status === "ended-early";
+
   return (
     <div className="px-4 py-8 text-center">
-      <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success-soft text-success">
-        <CheckCircle2 size={28} />
+      <span
+        className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${
+          endedEarly ? "bg-warning-soft text-warning" : "bg-success-soft text-success"
+        }`}
+      >
+        {endedEarly ? <PauseCircle size={28} /> : <CheckCircle2 size={28} />}
       </span>
-      <h1 className="mt-4 text-xl font-semibold text-off-white">{summary.headline}</h1>
+      <h1 className="mt-4 text-xl font-semibold text-off-white">
+        {endedEarly ? "Workout ended early." : summary.headline}
+      </h1>
+      {endedEarly && session.skipReason ? (
+        <p className="mt-2 text-sm text-neutral">Reason: {SKIP_REASON_LABELS[session.skipReason]}</p>
+      ) : null}
+      {endedEarly ? (
+        <p className="mt-2 max-w-xs mx-auto text-sm leading-relaxed text-neutral">
+          Completed sets and their RPE are saved. Your program has not been permanently changed.
+        </p>
+      ) : null}
 
       <div className="mx-auto mt-6 grid max-w-sm grid-cols-2 gap-3 text-left">
         <Stat label="Exercises completed" value={summary.exercisesCompleted} />

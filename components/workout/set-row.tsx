@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Pencil, X } from "lucide-react";
+import { Check, Pencil, SlidersHorizontal, X } from "lucide-react";
 import { RpeSelector } from "@/components/workout/rpe-selector";
 import { Button } from "@/components/ui/button";
 import { SKIP_REASON_LABELS } from "@/components/ui/reason-picker";
@@ -10,10 +10,15 @@ import type { LoggedSet, RpeValue } from "@/lib/types";
 
 interface SetRowProps {
   setNumber: number;
-  isWarmup: boolean;
   targetRepsLow: number;
   targetRepsHigh: number;
   targetRpe: RpeValue;
+  /** The coach's prescribed load/reps for this working set, when known. When
+   * both are present the client's only required input is RPE — see the
+   * "prescribed" branch below. Sets the client added themselves (beyond the
+   * program) have neither, and fall back to full manual entry. */
+  prescribedWeightLb?: number;
+  prescribedReps?: number;
   loggedSet?: LoggedSet;
   onComplete: (weightLb: number, reps: number, rpe: RpeValue, note?: string) => void;
   onSkipRequested: () => void;
@@ -22,32 +27,36 @@ interface SetRowProps {
 
 export function SetRow({
   setNumber,
-  isWarmup,
   targetRepsLow,
   targetRepsHigh,
   targetRpe,
+  prescribedWeightLb,
+  prescribedReps,
   loggedSet,
   onComplete,
   onSkipRequested,
   onRemoveExtra,
 }: SetRowProps) {
+  const isPrescribed = prescribedWeightLb !== undefined && prescribedReps !== undefined;
+
   const [editing, setEditing] = useState(false);
-  const [weight, setWeight] = useState<string>(loggedSet?.weightLb != null ? String(loggedSet.weightLb) : "");
-  const [reps, setReps] = useState<string>(loggedSet?.reps != null ? String(loggedSet.reps) : "");
+  const [adjusting, setAdjusting] = useState(false);
+  const [weight, setWeight] = useState<string>(
+    loggedSet?.weightLb != null ? String(loggedSet.weightLb) : prescribedWeightLb != null ? String(prescribedWeightLb) : ""
+  );
+  const [reps, setReps] = useState<string>(
+    loggedSet?.reps != null ? String(loggedSet.reps) : prescribedReps != null ? String(prescribedReps) : ""
+  );
   const [rpe, setRpe] = useState<RpeValue | null>(loggedSet?.rpe ?? null);
   const [note, setNote] = useState(loggedSet?.note ?? "");
   const [showNote, setShowNote] = useState(!!loggedSet?.note);
   const [error, setError] = useState<string | null>(null);
 
-  const label = isWarmup ? "Warm-up" : "Working set";
-
   if (loggedSet?.status === "skipped" && !editing) {
     return (
       <div className="flex items-center justify-between rounded-[var(--radius-sm)] bg-off-white/[0.03] px-3 py-3">
         <div>
-          <p className="text-sm font-medium text-off-white/70">
-            {label} {setNumber}
-          </p>
+          <p className="text-sm font-medium text-off-white/70">Working set {setNumber}</p>
           <p className="text-xs text-neutral">Skipped — {SKIP_REASON_LABELS[loggedSet.skipReason ?? "other"]}</p>
         </div>
       </div>
@@ -62,9 +71,7 @@ export function SetRow({
             <Check size={14} />
           </span>
           <div>
-            <p className="text-sm font-medium text-off-white">
-              {label} {setNumber}
-            </p>
+            <p className="text-sm font-medium text-off-white">Working set {setNumber}</p>
             <p className="text-sm text-neutral">
               {loggedSet.weightLb} lb × {loggedSet.reps}
               {loggedSet.rpe ? ` @ RPE ${loggedSet.rpe}` : " · RPE not recorded"}
@@ -73,7 +80,7 @@ export function SetRow({
         </div>
         <button
           onClick={() => setEditing(true)}
-          aria-label={`Edit ${label.toLowerCase()} ${setNumber}`}
+          aria-label={`Edit working set ${setNumber}`}
           className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-off-white/5 hover:text-off-white"
         >
           <Pencil size={15} />
@@ -83,6 +90,19 @@ export function SetRow({
   }
 
   function handleComplete() {
+    if (isPrescribed && !adjusting) {
+      // Coach-prescribed weight/reps are saved automatically alongside
+      // whatever RPE the client enters — see Phase 3.1 §3.
+      if (rpe === null) {
+        setError("Select the RPE you actually hit.");
+        return;
+      }
+      onComplete(prescribedWeightLb as number, prescribedReps as number, rpe, note.trim() || undefined);
+      setEditing(false);
+      setError(null);
+      return;
+    }
+
     const weightNum = Number(weight);
     const repsNum = Number(reps);
     if (weight === "" || Number.isNaN(weightNum) || weightNum < 0 || weightNum > 1500) {
@@ -98,15 +118,23 @@ export function SetRow({
     setError(null);
   }
 
+  const showManualInputs = !isPrescribed || adjusting;
+
   return (
     <div className="rounded-[var(--radius-md)] border border-border-strong p-3.5">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-off-white">
-          {label} {setNumber}
-          <span className="ml-2 font-normal text-neutral">
-            Target {targetRepsLow}–{targetRepsHigh} reps · RPE {targetRpe}
-          </span>
-        </p>
+        <div>
+          <p className="text-sm font-semibold text-off-white">Working set {setNumber}</p>
+          {isPrescribed ? (
+            <p className="mt-0.5 text-sm text-neutral">
+              Target <span className="text-off-white">{prescribedWeightLb} lb × {prescribedReps} reps</span>
+            </p>
+          ) : (
+            <p className="mt-0.5 text-sm text-neutral">
+              Target {targetRepsLow}–{targetRepsHigh} reps · RPE {targetRpe}
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           {editing ? (
             <button
@@ -128,44 +156,57 @@ export function SetRow({
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2.5">
-        <div>
-          <label htmlFor={`weight-${setNumber}-${isWarmup}`} className="mb-1 block text-xs text-neutral">
-            Weight (lb)
-          </label>
-          <input
-            id={`weight-${setNumber}-${isWarmup}`}
-            type="number"
-            inputMode="decimal"
-            value={weight}
-            onChange={(e) => {
-              setWeight(e.target.value);
-              setError(null);
-            }}
-            className="h-11 w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 text-center text-[15px] text-off-white outline-none focus-visible:border-accent"
-          />
+      {showManualInputs ? (
+        <div className="mt-3 grid grid-cols-2 gap-2.5">
+          <div>
+            <label htmlFor={`weight-${setNumber}`} className="mb-1 block text-xs text-neutral">
+              Weight (lb)
+            </label>
+            <input
+              id={`weight-${setNumber}`}
+              type="number"
+              inputMode="decimal"
+              value={weight}
+              onChange={(e) => {
+                setWeight(e.target.value);
+                setError(null);
+              }}
+              className="h-11 w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 text-center text-[15px] text-off-white outline-none focus-visible:border-accent"
+            />
+          </div>
+          <div>
+            <label htmlFor={`reps-${setNumber}`} className="mb-1 block text-xs text-neutral">
+              Reps
+            </label>
+            <input
+              id={`reps-${setNumber}`}
+              type="number"
+              inputMode="numeric"
+              value={reps}
+              onChange={(e) => {
+                setReps(e.target.value);
+                setError(null);
+              }}
+              className="h-11 w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 text-center text-[15px] text-off-white outline-none focus-visible:border-accent"
+            />
+          </div>
         </div>
-        <div>
-          <label htmlFor={`reps-${setNumber}-${isWarmup}`} className="mb-1 block text-xs text-neutral">
-            Reps
-          </label>
-          <input
-            id={`reps-${setNumber}-${isWarmup}`}
-            type="number"
-            inputMode="numeric"
-            value={reps}
-            onChange={(e) => {
-              setReps(e.target.value);
-              setError(null);
-            }}
-            className="h-11 w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 text-center text-[15px] text-off-white outline-none focus-visible:border-accent"
-          />
-        </div>
-      </div>
+      ) : null}
 
       <div className="mt-3">
-        <RpeSelector id={`rpe-${setNumber}-${isWarmup}`} value={rpe} onChange={setRpe} />
+        <RpeSelector id={`rpe-${setNumber}`} value={rpe} onChange={setRpe} />
       </div>
+
+      {isPrescribed && !adjusting ? (
+        <button
+          type="button"
+          onClick={() => setAdjusting(true)}
+          className="mt-2 flex items-center gap-1 text-xs font-medium text-neutral hover:text-off-white"
+        >
+          <SlidersHorizontal size={12} />
+          Actual weight or reps were different
+        </button>
+      ) : null}
 
       {showNote ? (
         <input

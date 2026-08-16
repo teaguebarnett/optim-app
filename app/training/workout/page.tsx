@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ActiveWorkoutHeader } from "@/components/workout/active-workout-header";
 import { ExerciseCard } from "@/components/workout/exercise-card";
-import { RestTimerBar } from "@/components/workout/rest-timer-bar";
 import { SkipReasonSheet } from "@/components/workout/skip-reason-sheet";
 import { PainReportSheet } from "@/components/workout/pain-report-sheet";
 import { TechniqueQuestionSheet } from "@/components/workout/technique-question-sheet";
@@ -17,7 +16,6 @@ import { TextArea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { useRestTimer } from "@/hooks/use-rest-timer";
 import { PUSH_WORKOUT } from "@/lib/mock-data";
 import { buildWorkoutSummary } from "@/lib/workout-analysis";
 import type { RpeValue, SkipReason } from "@/lib/types";
@@ -31,7 +29,6 @@ export default function ActiveWorkoutPage() {
   const { state, dispatch, isHydrated, activeContext } = usePrototypeState();
   const router = useRouter();
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
-  const restTimer = useRestTimer();
 
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [skipTarget, setSkipTarget] = useState<SkipTarget | null>(null);
@@ -59,7 +56,7 @@ export default function ActiveWorkoutPage() {
     );
   }
 
-  if (session.status === "completed" || session.status === "skipped") {
+  if (session.status === "completed" || session.status === "skipped" || session.status === "ended-early") {
     return <WorkoutCompleteScreen session={session} />;
   }
 
@@ -85,9 +82,6 @@ export default function ActiveWorkoutPage() {
       rpe,
       note,
     });
-    if (!isWarmup) {
-      restTimer.start(currentExercise.restSeconds);
-    }
   }
 
   function handleSkipConfirm(reason: SkipReason, note?: string) {
@@ -152,7 +146,12 @@ export default function ActiveWorkoutPage() {
       />
 
       <div className="px-4 py-4">
+        {/* Phase 3.1.1 §4 — keying by exercise id fully remounts the card
+            (including its own "extra set" counter, not just each SetRow's
+            RPE/weight/reps) whenever the client advances, so nothing from
+            the previous exercise can carry forward as a stale selection. */}
         <ExerciseCard
+          key={currentExercise.id}
           exercise={currentExercise}
           log={currentLog}
           onLogSet={handleLogSet}
@@ -187,8 +186,6 @@ export default function ActiveWorkoutPage() {
         </button>
       </div>
 
-      <RestTimerBar timer={restTimer} />
-
       <WorkoutDetailsSheet open={overviewOpen} onClose={() => setOverviewOpen(false)} />
 
       <SkipReasonSheet
@@ -199,7 +196,9 @@ export default function ActiveWorkoutPage() {
             ? "Skip this set"
             : skipTarget?.kind === "exercise"
               ? "Skip this exercise"
-              : "Skip today's workout"
+              : preview.workingSetsCompleted > 0
+                ? "End today's workout"
+                : "Skip today's workout"
         }
         onConfirm={handleSkipConfirm}
       />

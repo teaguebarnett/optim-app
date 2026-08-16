@@ -7,13 +7,12 @@ import { MealRow } from "@/components/nutrition/meal-row";
 import { MealSelectionSheet } from "@/components/meals/meal-selection-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
+import { MEAL_ORDER } from "@/lib/calculations";
 import { NUTRITION_TARGETS } from "@/lib/mock-data";
 import type { MealPeriod } from "@/lib/types";
 
-const MEAL_ORDER: MealPeriod[] = ["breakfast", "postWorkout", "lunch", "dinner", "snack"];
-
 export default function NutritionPage() {
-  const { isHydrated, state, nutritionTotals, nutritionMessage } = usePrototypeState();
+  const { isHydrated, state, nutritionTotals, nutritionMessage, dailyPlan } = usePrototypeState();
   const [activePeriod, setActivePeriod] = useState<MealPeriod | null>(null);
 
   if (!isHydrated) return <ScreenSkeleton />;
@@ -50,7 +49,13 @@ export default function NutritionPage() {
       <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-neutral">Today&apos;s meals</h2>
       <div className="space-y-2">
         {MEAL_ORDER.map((period) => (
-          <MealRow key={period} period={period} selection={state.meals[period]} onClick={() => setActivePeriod(period)} />
+          <MealRow
+            key={period}
+            period={period}
+            selection={state.meals[period]}
+            timeLabel={dailyPlan.mealSchedule.entries[period]?.timeLabel ?? undefined}
+            onClick={() => setActivePeriod(period)}
+          />
         ))}
       </div>
 

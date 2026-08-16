@@ -16,39 +16,47 @@ import type { MealTimingCategory, MealTimingProfile } from "./types";
 const LIGHT_PROFILE: Omit<MealTimingProfile, "isFallback"> = {
   category: "light",
   label: "Light",
-  preTrainingLeadMinLow: 30,
-  preTrainingLeadMinHigh: 75,
+  preTrainingLeadMinLow: 45,
+  preTrainingLeadMinHigh: 90,
 };
 
-const STANDARD_PROFILE: Omit<MealTimingProfile, "isFallback"> = {
-  category: "standard",
-  label: "Standard",
-  preTrainingLeadMinLow: 75,
-  preTrainingLeadMinHigh: 120,
+const MEDIUM_PROFILE: Omit<MealTimingProfile, "isFallback"> = {
+  category: "medium",
+  label: "Medium",
+  preTrainingLeadMinLow: 90,
+  preTrainingLeadMinHigh: 150,
 };
 
-const LARGER_PROFILE: Omit<MealTimingProfile, "isFallback"> = {
-  category: "larger",
-  label: "Larger",
-  preTrainingLeadMinLow: 120,
-  preTrainingLeadMinHigh: 180,
+const HEAVY_PROFILE: Omit<MealTimingProfile, "isFallback"> = {
+  category: "heavy",
+  label: "Heavy",
+  preTrainingLeadMinLow: 150,
+  preTrainingLeadMinHigh: 210,
+};
+
+const PROFILES_BY_CATEGORY: Record<MealTimingCategory, Omit<MealTimingProfile, "isFallback">> = {
+  light: LIGHT_PROFILE,
+  medium: MEDIUM_PROFILE,
+  heavy: HEAVY_PROFILE,
 };
 
 /** Conservative default used whenever there isn't enough data to estimate
  * from — deliberately the widest, safest window rather than a guess. */
 export function fallbackMealTimingProfile(): MealTimingProfile {
-  return { ...STANDARD_PROFILE, isFallback: true };
+  return { ...MEDIUM_PROFILE, isFallback: true };
 }
 
-function categoryFromMacros(macros: MacroValues): MealTimingCategory {
+/** Classifies a meal's digestive load from its existing macro fields. Higher
+ * fat and larger total calories slow gastric emptying — a real,
+ * well-established (if individually variable) effect, so both push the
+ * estimate toward a longer recommended lead time. This is a coarse
+ * heuristic, not a metabolic calculation. Exported so lib/planning/
+ * meal-schedule.ts can classify every meal in the day using the same rule. */
+export function categoryFromMacros(macros: MacroValues): MealTimingCategory {
   const { calories, fatG, proteinG, carbsG } = macros;
-  // Higher fat and larger total calories slow gastric emptying — a real,
-  // well-established (if individually variable) effect, so both push the
-  // estimate toward a longer recommended lead time. This is a coarse
-  // heuristic, not a metabolic calculation.
   if (calories <= 400 && fatG <= 12) return "light";
-  if (calories >= 700 || fatG >= 25 || proteinG + carbsG >= 140) return "larger";
-  return "standard";
+  if (calories >= 700 || fatG >= 25 || proteinG + carbsG >= 140) return "heavy";
+  return "medium";
 }
 
 /** Derives a timing profile for a specific meal option using its existing
@@ -56,9 +64,7 @@ function categoryFromMacros(macros: MacroValues): MealTimingCategory {
  * app's meal data doesn't carry a separate weight/volume field. */
 export function mealTimingProfileForOption(option: MealOption | null | undefined): MealTimingProfile {
   if (!option) return fallbackMealTimingProfile();
-  const category = categoryFromMacros(option.macros);
-  const base = category === "light" ? LIGHT_PROFILE : category === "larger" ? LARGER_PROFILE : STANDARD_PROFILE;
-  return { ...base, isFallback: false };
+  return { ...PROFILES_BY_CATEGORY[categoryFromMacros(option.macros)], isFallback: false };
 }
 
 /** Derives a timing profile from a manual/estimated macro entry (e.g. "I ate
@@ -67,9 +73,7 @@ export function mealTimingProfileForOption(option: MealOption | null | undefined
  * client-entered rather than picked from the plan's catalog. */
 export function mealTimingProfileForMacros(macros: MacroValues | null | undefined): MealTimingProfile {
   if (!macros) return fallbackMealTimingProfile();
-  const category = categoryFromMacros(macros);
-  const base = category === "light" ? LIGHT_PROFILE : category === "larger" ? LARGER_PROFILE : STANDARD_PROFILE;
-  return { ...base, isFallback: false };
+  return { ...PROFILES_BY_CATEGORY[categoryFromMacros(macros)], isFallback: false };
 }
 
 /**
