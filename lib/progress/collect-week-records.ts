@@ -90,3 +90,11 @@ export function collectCurrentWeekRecords(input: CollectRecordsInput, weekStarts
   const weekEnd = addDaysToLocalDate(weekStart, 6);
   return collectDateRangeRecords(input, weekStart, weekEnd);
 }
+
+/** Phase 4.3 — resolves exactly one date the same way every other selector
+ * in this file does (future/today/archived-with-corrections), for the
+ * Historical Day Review. Reuses resolveDaySlot directly rather than
+ * duplicating its future/today/archived branching. */
+export function collectSingleDayRecord(input: CollectRecordsInput, dateIso: string): DayRecordSlot {
+  return resolveDaySlot(input, dateIso);
+}

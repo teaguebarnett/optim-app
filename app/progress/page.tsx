@@ -12,6 +12,7 @@ import { NutritionCard } from "@/components/progress/nutrition-card";
 import { CardioCard } from "@/components/progress/cardio-card";
 import { CheckInCard } from "@/components/progress/checkin-card";
 import { CoachGuidanceCard } from "@/components/progress/coach-guidance-card";
+import { HistoryDayPicker } from "@/components/progress/history-day-picker";
 
 // Phase 4.2 — the client-visible expression of OPTIM's memory. Every value
 // on this page traces back to a Phase 4.1 record, correction, weekly
@@ -52,6 +53,8 @@ function ProgressDashboard() {
       </div>
 
       <CoachGuidanceCard coachGuidance={dashboard.coachGuidance} />
+
+      <HistoryDayPicker />
     </div>
   );
 }

@@ -10,7 +10,8 @@
     "verify:tenancy": "node --experimental-strip-types lib/tenancy/verify-isolation.mts",
     "verify:planner": "node --experimental-strip-types lib/planning/verify-planner.mts",
     "verify:history": "node --experimental-strip-types lib/history/verify-history.mts",
-    "verify:progress": "node --experimental-strip-types lib/progress/verify-progress.mts"
+    "verify:progress": "node --experimental-strip-types lib/progress/verify-progress.mts",
+    "verify:historical": "node --experimental-strip-types lib/progress/verify-historical-day.mts"
   },
   "dependencies": {
     "lucide-react": "^1.27.0",

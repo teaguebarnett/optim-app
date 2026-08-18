@@ -62,7 +62,12 @@ export function deriveMealPlanAdherence(record: DailyRecord): MealPlanAdherenceR
 
 export type TargetMetResult = "met" | "not_met" | "insufficient_data";
 
-function sumKnownActualMacros(record: DailyRecord): { totals: MacroValues; allKnown: boolean } {
+/** Exported for lib/progress/build-historical-day.ts — the Historical Day
+ * Review needs the actual summed totals themselves (not just whether a
+ * target was met), and this is already the one place that correctly skips
+ * skipped/planned-later meals and tracks whether every counted meal's
+ * macros are actually known. */
+export function sumKnownActualMacros(record: DailyRecord): { totals: MacroValues; allKnown: boolean } {
   const { meals, periodsInPlan } = record.nutrition;
   const totals: MacroValues = { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 };
   let allKnown = true;
