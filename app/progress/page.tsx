@@ -47,10 +47,16 @@ function ProgressDashboard() {
         <NutritionCard nutrition={dashboard.nutrition} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 px-4 max-[360px]:grid-cols-1">
-        <CardioCard cardio={dashboard.cardio} />
-        <CheckInCard checkIn={dashboard.checkIn} />
-      </div>
+      {dashboard.checkIn ? (
+        <div className="grid grid-cols-2 gap-3 px-4 max-[360px]:grid-cols-1">
+          <CardioCard cardio={dashboard.cardio} />
+          <CheckInCard checkIn={dashboard.checkIn} />
+        </div>
+      ) : (
+        <div className="px-4">
+          <CardioCard cardio={dashboard.cardio} />
+        </div>
+      )}
 
       <CoachGuidanceCard coachGuidance={dashboard.coachGuidance} />
 

@@ -35,8 +35,8 @@ const STATUS_TONE: Record<CheckInStatus, BadgeTone> = {
 export function CheckInCard({ checkIn }: { checkIn: CheckInCardModel }) {
   return (
     <ExpandableCard
-      title="Weekly check-in"
-      detailTitle="Weekly check-in"
+      title={checkIn.title}
+      detailTitle={checkIn.title}
       detail={
         <div className="space-y-4 text-sm">
           <StatusBadge label={STATUS_LABEL[checkIn.status]} tone={STATUS_TONE[checkIn.status]} />

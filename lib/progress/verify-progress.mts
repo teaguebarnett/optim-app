@@ -525,6 +525,7 @@ check("buildProgressDashboard produces a stable card structure with honest empty
     source: "live",
     effectiveDateIso: "2026-08-14",
     enrollment: ENROLLMENT,
+    checkInSchedule: null,
     liveState: null,
     coachDisplayName: "Teague",
     chatMessages: [],
@@ -542,6 +543,44 @@ check("buildProgressDashboard produces a stable card structure with honest empty
   }
 });
 
+check("No coach-assigned check-in means no check-in card, and it never leaks into the priority precedence as overdue/due", () => {
+  const store = newStore();
+  const dashboard = buildProgressDashboard({
+    store,
+    scope: SCOPE,
+    source: "live",
+    effectiveDateIso: "2026-08-14",
+    enrollment: ENROLLMENT,
+    checkInSchedule: null,
+    liveState: null,
+    coachDisplayName: "Teague",
+    chatMessages: [],
+    now: ANCHOR_NOW,
+  });
+  assert.equal(dashboard.checkIn, null, "no assignment must mean no check-in card model at all");
+  assert.equal(dashboard.priority.eligible, false, "an unassigned check-in must never surface as a priority action");
+});
+
+check("An assigned check-in schedule produces a real, titled check-in card", () => {
+  const store = newStore();
+  const config = buildDemoCheckInScheduleConfig({ workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, enrollmentId: SCOPE.enrollmentId, timeZone: "UTC", now: ANCHOR_NOW });
+  const dashboard = buildProgressDashboard({
+    store,
+    scope: SCOPE,
+    source: "live",
+    effectiveDateIso: "2026-08-14",
+    enrollment: ENROLLMENT,
+    checkInSchedule: config,
+    liveState: null,
+    coachDisplayName: "Teague",
+    chatMessages: [],
+    now: ANCHOR_NOW,
+  });
+  assert.notEqual(dashboard.checkIn, null);
+  assert.equal(dashboard.checkIn?.title, config.label);
+  assert.ok(["due", "overdue", "not_available"].includes(dashboard.checkIn?.status ?? ""));
+});
+
 check("The demo fixture, loaded end to end through buildProgressDashboard, never crosses into a live-mode dashboard", () => {
   const fixtureStore = newStore();
   const fixture = buildDemoHistoryFixture("2026-08-14", ENROLLMENT);
@@ -549,12 +588,14 @@ check("The demo fixture, loaded end to end through buildProgressDashboard, never
   for (const c of fixture.corrections) fixtureStore.appendCorrection(c);
   for (const w of fixture.weeklyReviews) fixtureStore.putWeeklyReview(w);
 
+  const demoConfig = buildDemoCheckInScheduleConfig({ workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, enrollmentId: SCOPE.enrollmentId, timeZone: "UTC", now: ANCHOR_NOW });
   const demoDashboard = buildProgressDashboard({
     store: fixtureStore,
     scope: SCOPE,
     source: "fixture",
     effectiveDateIso: "2026-08-14",
     enrollment: ENROLLMENT,
+    checkInSchedule: demoConfig,
     liveState: null,
     coachDisplayName: "Teague",
     chatMessages: [],
@@ -570,6 +611,7 @@ check("The demo fixture, loaded end to end through buildProgressDashboard, never
     source: "live",
     effectiveDateIso: "2026-08-14",
     enrollment: ENROLLMENT,
+    checkInSchedule: null,
     liveState: null,
     coachDisplayName: "Teague",
     chatMessages: [],

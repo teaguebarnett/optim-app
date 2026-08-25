@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePrototypeState } from "./use-prototype-state";
 import { buildProgressDashboard } from "@/lib/progress/build-dashboard";
+import { buildDemoCheckInScheduleConfig } from "@/lib/scheduling/check-in";
 import { getFixtureHistoryStore, getLiveHistoryStore } from "@/lib/history/local-storage-history-store";
 import type { ProgressDashboardModel, ProgressSource } from "@/lib/progress/types";
 
@@ -36,12 +37,28 @@ export function useProgressDashboard(): UseProgressDashboardResult {
       clientId: state.clientId,
       enrollmentId: state.programEnrollment.id,
     };
+    // Fixture/demo mode keeps demonstrating the full check-in card
+    // lifecycle with an example weekly schedule; live mode reflects the
+    // client's real (currently unassigned) checkInSchedule — see
+    // AppState.checkInSchedule's doc and lib/progress/build-dashboard.ts.
+    const checkInSchedule =
+      source === "fixture"
+        ? buildDemoCheckInScheduleConfig({
+            workspaceId: state.workspaceId,
+            clientId: state.clientId,
+            enrollmentId: state.programEnrollment.id,
+            timeZone: state.programEnrollment.timeZone,
+            now: new Date(),
+          })
+        : state.checkInSchedule;
+
     return buildProgressDashboard({
       store,
       scope,
       source,
       effectiveDateIso: state.dateIso,
       enrollment: state.programEnrollment,
+      checkInSchedule,
       liveState: source === "live" ? state : null,
       coachDisplayName: activeContext.primaryCoach?.displayName ?? "your coach",
       chatMessages: source === "live" ? state.chatMessages : [],

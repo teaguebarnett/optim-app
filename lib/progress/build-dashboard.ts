@@ -4,7 +4,6 @@
 
 import { addDaysToLocalDate } from "../shared/local-date.ts";
 import { deriveProgramPhase, deriveProgramWeek } from "../scheduling/enrollment.ts";
-import { buildDemoCheckInScheduleConfig } from "../scheduling/check-in.ts";
 import { collectCurrentWeekRecords, collectDateRangeRecords } from "./collect-week-records.ts";
 import type { CollectRecordsInput } from "./collect-week-records";
 import { aggregateTraining } from "./aggregate-training.ts";
@@ -15,7 +14,7 @@ import { aggregateCheckIn } from "./aggregate-checkin.ts";
 import { aggregatePriority } from "./aggregate-priority.ts";
 import { aggregateCoachGuidance } from "./aggregate-coach-guidance.ts";
 import type { HistoryScope, HistoryStore } from "../history/store";
-import type { ProgramEnrollment } from "../scheduling/types";
+import type { CheckInScheduleConfig, ProgramEnrollment } from "../scheduling/types";
 import type { AppState } from "../state";
 import type { ProgressDashboardModel, ProgressSource } from "./types";
 import type { ChatMessage } from "../types";
@@ -26,6 +25,12 @@ export interface BuildProgressDashboardInput {
   source: ProgressSource;
   effectiveDateIso: string;
   enrollment: ProgramEnrollment;
+  /** The active coach-assigned check-in, or null when none has been
+   * assigned — see lib/state.ts's AppState.checkInSchedule. Null means the
+   * dashboard's checkIn card model is also null (no card rendered); the
+   * caller (see hooks/use-progress-dashboard.ts) decides what to pass for
+   * live vs. fixture/demo mode. */
+  checkInSchedule: CheckInScheduleConfig | null;
   /** Present only in live mode — used to project today's still-open day
    * without archiving it. Fixture/demo mode passes null: every date
    * resolves purely from what's already in the fixture store. */
@@ -60,29 +65,25 @@ export function buildProgressDashboard(input: BuildProgressDashboardInput): Prog
   const cardio = aggregateCardio(weekRecords);
   const weight = aggregateWeight(fourWeekRecords, fullProgramRecords);
 
-  // The one check-in schedule this demo has (see lib/scheduling/check-in.ts
-  // — the same "buildDemo..." constructor already reused for real live
-  // state elsewhere, e.g. lib/scheduling/enrollment.ts's
-  // buildDemoDefaultProgramEnrollment).
-  const checkInConfig = buildDemoCheckInScheduleConfig({
-    workspaceId: input.scope.workspaceId,
-    clientId: input.scope.clientId,
-    enrollmentId: input.scope.enrollmentId,
-    timeZone: input.enrollment.timeZone,
-    now: input.now,
-  });
-  const checkIn = aggregateCheckIn(input.store, input.scope, checkInConfig, input.effectiveDateIso, input.enrollment.weekStartsOn, input.now);
+  // A check-in card only ever renders when the coach has actually assigned
+  // one (input.checkInSchedule) — no client gets a check-in auto-populated
+  // just because they exist. See AppState.checkInSchedule's doc.
+  const checkIn = input.checkInSchedule
+    ? aggregateCheckIn(input.store, input.scope, input.checkInSchedule, input.effectiveDateIso, input.enrollment.weekStartsOn, input.now)
+    : null;
 
   const corrections = input.store.listCorrections(input.scope);
   const coachGuidance = aggregateCoachGuidance(input.chatMessages, corrections, input.coachDisplayName);
 
   // No read/unread tracking or adjustment-approval workflow exists anywhere
   // in this app's data model yet — always false, never fabricated. See
-  // lib/progress/aggregate-priority.ts.
+  // lib/progress/aggregate-priority.ts. With no assigned check-in at all,
+  // "not_available" is the honest status to feed the priority precedence
+  // (never overdue/due for a check-in that was never assigned).
   const priority = aggregatePriority({
     hasUnreadCoachFeedback: false,
     hasApprovedAdjustmentNeedingReview: false,
-    checkInStatus: checkIn.status,
+    checkInStatus: checkIn?.status ?? "not_available",
     correctionNeededDates: [],
   });
 

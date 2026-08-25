@@ -149,6 +149,11 @@ export interface CardioCardModel {
 // ---------------------------------------------------------------------------
 
 export interface CheckInCardModel {
+  /** Coach-authored display name for this check-in (see
+   * CheckInScheduleConfig.label) — never hardcoded to "Weekly check-in" in
+   * a presentation component, since a future coach could assign a
+   * differently-cadenced check-in. */
+  title: string;
   status: CheckInStatus;
   weekStartDateIso: string;
   openTimeLocal: string;
@@ -200,7 +205,10 @@ export interface ProgressDashboardModel {
   training: TrainingCardModel;
   nutrition: NutritionCardModel;
   cardio: CardioCardModel;
-  checkIn: CheckInCardModel;
+  /** Null when no coach has assigned an active check-in for this client —
+   * the page renders no check-in card at all in that case. See
+   * lib/state.ts's AppState.checkInSchedule and build-dashboard.ts. */
+  checkIn: CheckInCardModel | null;
   coachGuidance: CoachGuidanceCardModel;
 }
 

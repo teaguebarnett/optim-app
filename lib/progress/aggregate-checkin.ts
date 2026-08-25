@@ -38,6 +38,7 @@ export function aggregateCheckIn(
   }
 
   return {
+    title: config.label,
     status,
     weekStartDateIso,
     openTimeLocal: config.openTimeLocal,

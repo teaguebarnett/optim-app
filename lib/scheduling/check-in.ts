@@ -81,10 +81,13 @@ export function deriveCheckInStatus(
   return nowInstant.getTime() < overdueAtInstant.getTime() ? "due" : "overdue";
 }
 
-/** The one check-in schedule this demo needs — mirrors
- * buildDemoDefaultProgramEnrollment's "this app only ever runs as one
- * client" convention. Default: due 8am the morning after the program's
- * final scheduled training day, overdue 24h later. */
+/** An example weekly check-in schedule, used only where a demonstration
+ * config is actually wanted (e.g. the fixture Progress preview — see
+ * hooks/use-progress-dashboard.ts). This is never assigned to a real client
+ * automatically: a real client's AppState.checkInSchedule stays null (no
+ * check-in card at all) until a coach-facing assignment UI writes a real
+ * config there. Default: due 8am the morning after the program's final
+ * scheduled training day, overdue 24h later. */
 export function buildDemoCheckInScheduleConfig(params: {
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
@@ -99,6 +102,7 @@ export function buildDemoCheckInScheduleConfig(params: {
     workspaceId: params.workspaceId,
     clientId: params.clientId,
     enrollmentId: params.enrollmentId,
+    label: "Weekly check-in",
     rule: { kind: "after_final_training_day" },
     openTimeLocal: "08:00",
     dueWindowHours: 24,

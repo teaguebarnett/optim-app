@@ -55,7 +55,7 @@ export function MacroDetailSheet({ macro, open, onClose, consumed, target }: Mac
                 <p className="mt-1 text-heading text-neutral">{target}g</p>
               </div>
             </div>
-            <ProgressBar percent={percent} color={accent} className="mt-4" />
+            <ProgressBar percent={percent} color={accent} trackClassName="mt-1.5" />
             <p className="mt-2 text-meta text-neutral">{macroRemainingCaption(consumed, target)}</p>
           </div>
 

@@ -6,7 +6,7 @@ import { setTrainingStatus, setTrainingTime } from "./planning/training-plan.ts"
 import type { DailyTrainingPlan } from "./planning/types";
 import { buildDemoDefaultProgramEnrollment } from "./scheduling/enrollment.ts";
 import { resolveClientLocalDateIso } from "./shared/local-date.ts";
-import type { ProgramEnrollment } from "./scheduling/types";
+import type { CheckInScheduleConfig, ProgramEnrollment } from "./scheduling/types";
 import {
   advanceAfterExerciseResolved,
   buildInitialFlowState,
@@ -48,7 +48,7 @@ const DEMO_WORKSPACE_ID: WorkspaceId = WORKSPACE_OPTIM_ID;
 const DEMO_CLIENT_ID: ClientProfileId = CLIENT_PROFILE_DEMO.id;
 
 export interface AppState {
-  version: 6;
+  version: 7;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   dateIso: string;
@@ -68,6 +68,15 @@ export interface AppState {
    * record — unlike the growing history log in lib/history/, it belongs
    * directly in AppState the same way dailyTrainingPlan already does. */
   programEnrollment: ProgramEnrollment;
+  /** The coach's optional check-in assignment for this client — null means
+   * no coach has assigned an active check-in, and the Progress page must
+   * render no check-in card at all (see lib/progress/build-dashboard.ts).
+   * This is the minimal client-side state boundary for the future
+   * coach-controlled check-in system: a coach-facing assignment UI doesn't
+   * exist yet, so this only ever stays null for the demo client until
+   * that's built — never auto-populated with a default weekly schedule the
+   * way it used to be. */
+  checkInSchedule: CheckInScheduleConfig | null;
 }
 
 /** Not-started per-exercise warm-up outcomes for every exercise in a
@@ -120,7 +129,7 @@ export function createInitialState(): AppState {
   const now = new Date();
   const programEnrollment = buildDemoDefaultProgramEnrollment(now);
   return {
-    version: 6,
+    version: 7,
     workspaceId: DEMO_WORKSPACE_ID,
     clientId: DEMO_CLIENT_ID,
     dateIso: resolveClientLocalDateIso(now, programEnrollment.timeZone),
@@ -132,6 +141,9 @@ export function createInitialState(): AppState {
     chatMessages: [],
     reviewRequests: [],
     programEnrollment,
+    // No coach-facing assignment UI exists yet — the demo client never
+    // gets a check-in auto-assigned. See the field's doc on AppState.
+    checkInSchedule: null,
   };
 }
 

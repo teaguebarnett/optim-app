@@ -69,6 +69,10 @@ export interface CheckInScheduleConfig {
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   enrollmentId: ProgramEnrollmentId;
+  /** Coach-authored display name for this check-in, e.g. "Weekly check-in"
+   * or "Monthly review" — the client-facing card title is always derived
+   * from this rather than assuming every check-in is weekly. */
+  label: string;
   rule: CheckInScheduleRule;
   /** Local "HH:MM" the check-in opens on its due day. */
   openTimeLocal: string;
