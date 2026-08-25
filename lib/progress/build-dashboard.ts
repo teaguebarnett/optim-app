@@ -62,7 +62,7 @@ export function buildProgressDashboard(input: BuildProgressDashboardInput): Prog
 
   const training = aggregateTraining(weekRecords);
   const nutrition = aggregateNutrition(weekRecords);
-  const cardio = aggregateCardio(weekRecords);
+  const cardio = aggregateCardio(weekRecords, input.scope.clientId);
   const weight = aggregateWeight(fourWeekRecords, fullProgramRecords);
 
   // A check-in card only ever renders when the coach has actually assigned

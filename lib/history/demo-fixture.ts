@@ -17,7 +17,7 @@
 // Tue/Thu/Fri/Sat program content is authored in Phase 4.1, and avoids
 // fabricating catalog detail nothing else in the app backs.
 
-import { CARDIO_PRESCRIPTIONS_BY_CLIENT, MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT } from "../mock-data.ts";
+import { CARDIO_PRESCRIPTIONS_BY_CLIENT, MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT, isCardioAssignedForDay } from "../mock-data.ts";
 import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "../tenancy/seed.ts";
 import { addDaysToLocalDate, localDateDayOfWeek, startOfLocalWeek } from "../shared/local-date.ts";
 import { deriveProgramPhase, deriveProgramWeek } from "../scheduling/enrollment.ts";
@@ -113,6 +113,7 @@ function buildFixtureDay(enrollment: ProgramEnrollment, input: FixtureDayInput):
       targetsSnapshot: deepClone(NUTRITION_TARGETS),
     },
     cardio: {
+      cardioDayType: isCardioAssignedForDay(CLIENT_PROFILE_DEMO.id, localDateDayOfWeek(input.dateIso)) ? "scheduled" : "not_scheduled",
       status: input.cardio.status,
       durationMin: input.cardio.durationMin,
       selectedOptionSnapshot: cardioOption ? deepClone(cardioOption) : null,

@@ -134,6 +134,7 @@ export interface CardioDaySummaryModel {
   durationMin: number;
   targetDurationMin: number;
   usedApprovedAlternative: boolean;
+  isToday: boolean;
 }
 
 export interface CardioCardModel {

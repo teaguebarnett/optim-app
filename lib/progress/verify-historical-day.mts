@@ -95,6 +95,7 @@ function record(dateIso: string, overrides: Partial<DailyRecord> = {}): DailyRec
       targetsSnapshot: { calories: 2950, proteinG: 200, carbsG: 360, fatG: 85 },
     },
     cardio: {
+      cardioDayType: "scheduled",
       status: "completed",
       durationMin: 20,
       selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" },
@@ -313,6 +314,21 @@ check("A rest day renders as not_applicable, never as a missed workout", () => {
   if (result.status !== "ok") return;
   assert.equal(result.review.training.trainingDayType, "scheduled_rest");
   assert.equal(result.review.training.outcome, "not_applicable");
+});
+
+check("A day cardio wasn't assigned for renders as not_applicable, never as a missed session, and never holds back an otherwise-complete day", () => {
+  const store = newStore();
+  const dateIso = addDaysToLocalDate(TODAY, -9);
+  store.putDailyRecordIdempotent(
+    record(dateIso, {
+      cardio: { cardioDayType: "not_scheduled", status: "not-started", durationMin: 0, selectedOptionSnapshot: null },
+    })
+  );
+  const result = buildHistoricalDayReview(baseInput({ store, requestedDateIso: dateIso }));
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.equal(result.review.cardio.outcome, "not_applicable");
+  assert.equal(result.review.summary.overallStatus, "complete", "an unassigned cardio day must never hold back an otherwise-complete day");
 });
 
 console.log("\n7. Sparse and legacy records — honest empty states, never fabricated\n");

@@ -122,12 +122,35 @@ export interface NutritionDaySnapshot {
 // Cardio day
 // ---------------------------------------------------------------------------
 
+/** Whether the client's coach-assigned program actually prescribes cardio
+ * this day — a separate axis from what was logged, mirroring how
+ * TrainingDayType separates a day's *type* from its lifecycle/outcome. Set
+ * once at snapshot time from lib/mock-data.ts's isCardioAssignedForDay, so
+ * a later change to a client's assigned schedule can never retroactively
+ * rewrite what a past day required — same snapshot-integrity reasoning as
+ * prescribedWorkoutSnapshot below. */
+export type CardioDayType = "scheduled" | "not_scheduled";
+
+/** Every DailyRecord written going forward always carries a real
+ * cardioDayType, but a record archived before this field existed has none
+ * at all in storage — this resolves that gap the same honest way the rest
+ * of this app treats a sparse/legacy record (see e.g. HistoricalTrainingModel's
+ * hasWorkoutDetail/hasAnySetDetail): a day with no recorded assignment at
+ * all keeps behaving as "scheduled", the one universal assumption every
+ * record written before per-day cardio assignment existed was already
+ * built on, rather than being silently reclassified as "not_scheduled". */
+export function resolvedCardioDayType(cardio: CardioDaySnapshot): CardioDayType {
+  return cardio.cardioDayType ?? "scheduled";
+}
+
 export interface CardioDaySnapshot {
+  cardioDayType: CardioDayType;
   status: "not-started" | "in-progress" | "completed" | "partial" | "skipped";
   durationMin: number;
   /** Deep copy of the CardioOption actually selected/completed against —
    * never a live optionId reference, for the same snapshot-integrity reason
-   * as prescribedWorkoutSnapshot above. Null when cardio was never started. */
+   * as prescribedWorkoutSnapshot above. Null when cardio was never started
+   * (including every not_scheduled day). */
   selectedOptionSnapshot: CardioOption | null;
   note?: string;
   skipReason?: SkipReason;

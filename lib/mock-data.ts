@@ -15,6 +15,8 @@ import type {
   DayOfWeek,
 } from "./types";
 
+const ALL_DAYS_OF_WEEK: DayOfWeek[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 // Client and coach identity now live in lib/tenancy/seed.ts (ClientProfile,
 // CoachProfile) as part of the OPTIM demo workspace — every screen resolves
 // them dynamically through useActiveContext() rather than importing a
@@ -59,21 +61,37 @@ const HIIT_OPTION: CardioOption = {
   protocol: `12 minutes total: alternate 30 seconds of hard effort with 60 seconds of easy recovery, keeping your hard efforts in the ${CARDIO_TARGET.heartRateRangeLow}-${CARDIO_TARGET.heartRateRangeHigh} bpm range.`,
 };
 
-/** Per-client approved cardio options — coach-controlled and configurable so
- * a client with only one approved option never sees a picker, while a
- * client whose coach has approved an alternative (e.g. a time-saving HIIT
- * substitution) does. Keyed by ClientProfileId rather than hardcoded to any
- * one client's name, so this stays correct for future clients/workspaces.
- * Any client not present here falls back to the single default option — see
- * cardioPrescriptionForClient() below. */
+/** Per-client approved cardio options and assigned days — coach-controlled
+ * and configurable so a client with only one approved option never sees a
+ * picker, while a client whose coach has approved an alternative (e.g. a
+ * time-saving HIIT substitution) does, and so each client's actual assigned
+ * cardio days drive Progress/History rather than an app-wide assumption
+ * that cardio is prescribed every day for everyone. Keyed by ClientProfileId
+ * rather than hardcoded to any one client's name, so this stays correct for
+ * future clients/workspaces. The current demo client is prescribed cardio
+ * every day; any client not present here falls back to the single default
+ * option with no assigned days at all — see cardioPrescriptionForClient()
+ * and isCardioAssignedForDay() below. */
 export const CARDIO_PRESCRIPTIONS_BY_CLIENT: Record<ClientProfileId, CardioPrescription> = {
-  [CLIENT_PROFILE_DEMO.id]: { options: [STAIRMASTER_OPTION, HIIT_OPTION] },
+  [CLIENT_PROFILE_DEMO.id]: { options: [STAIRMASTER_OPTION, HIIT_OPTION], assignedDays: ALL_DAYS_OF_WEEK },
 };
 
-const DEFAULT_CARDIO_PRESCRIPTION: CardioPrescription = { options: [STAIRMASTER_OPTION] };
+/** No options-picker assumption and no assigned days — a future client the
+ * coach hasn't configured a cardio program for yet must never silently
+ * inherit the demo client's every-day schedule. */
+const DEFAULT_CARDIO_PRESCRIPTION: CardioPrescription = { options: [STAIRMASTER_OPTION], assignedDays: [] };
 
 export function cardioPrescriptionForClient(clientId: ClientProfileId): CardioPrescription {
   return CARDIO_PRESCRIPTIONS_BY_CLIENT[clientId] ?? DEFAULT_CARDIO_PRESCRIPTION;
+}
+
+/** The one shared "does this client's coach-assigned program actually
+ * prescribe cardio on this day of week" check — read by both the live
+ * Today experience and every Progress/History derivation (see
+ * lib/history/build-daily-record.ts, lib/history/demo-fixture.ts) so they
+ * can never disagree about which days count. */
+export function isCardioAssignedForDay(clientId: ClientProfileId, dayOfWeek: DayOfWeek): boolean {
+  return cardioPrescriptionForClient(clientId).assignedDays.includes(dayOfWeek);
 }
 
 export const TODAY_WORKOUT_ID = "push-day-w8";

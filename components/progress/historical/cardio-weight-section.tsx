@@ -8,6 +8,9 @@ function CardioBody({ cardio }: { cardio: HistoricalCardioModel }) {
   if (cardio.outcome === "no_record") {
     return <p className="text-sm text-neutral">Nothing recorded for this day.</p>;
   }
+  if (cardio.outcome === "not_applicable") {
+    return <p className="text-sm text-neutral">Not scheduled for this day.</p>;
+  }
   if (cardio.status === "not-started") {
     return <p className="text-sm text-neutral">Not started.</p>;
   }

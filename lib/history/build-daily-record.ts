@@ -10,7 +10,7 @@
 // change if lib/mock-data.ts's catalog is edited later. See Phase 4.1 §1.
 
 import { MEAL_ORDER } from "../calculations.ts";
-import { NUTRITION_TARGETS, WORKOUTS_BY_ID, cardioPrescriptionForClient } from "../mock-data.ts";
+import { NUTRITION_TARGETS, WORKOUTS_BY_ID, cardioPrescriptionForClient, isCardioAssignedForDay } from "../mock-data.ts";
 import { ALL_CLIENT_PROFILES } from "../tenancy/seed.ts";
 import { localDateDayOfWeek } from "../shared/local-date.ts";
 import { deriveProgramPhase, deriveProgramWeek } from "../scheduling/enrollment.ts";
@@ -92,6 +92,7 @@ export function buildDailyRecordFromLiveState(state: AppState, enrollment: Progr
   const cardioOption =
     cardioPrescriptionForClient(state.clientId).options.find((o) => o.id === state.cardio.selectedOptionId) ?? null;
   const cardio: CardioDaySnapshot = {
+    cardioDayType: isCardioAssignedForDay(state.clientId, localDateDayOfWeek(dateIso)) ? "scheduled" : "not_scheduled",
     status: state.cardio.status,
     durationMin: state.cardio.durationMin,
     selectedOptionSnapshot: cardioOption ? deepClone(cardioOption) : null,

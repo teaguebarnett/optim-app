@@ -5,7 +5,8 @@
 // status is ever persisted on the DailyRecord itself — see lib/history/
 // types.ts's module doc — so this always recomputes fresh from raw facts.
 
-import type { DailyRecord, TrainingDayType } from "./types";
+import { resolvedCardioDayType } from "./types.ts";
+import type { CardioDayType, DailyRecord, TrainingDayType } from "./types";
 import { deriveTrainingAdherence } from "./derive-training-adherence.ts";
 import { deriveMealPlanAdherence } from "./derive-nutrition.ts";
 import { deriveCardioAdherence } from "./derive-cardio.ts";
@@ -29,13 +30,14 @@ export interface RequiredDomains {
   training: boolean;
 }
 
-/** Weight, nutrition, and cardio are tracked every day in this program;
- * training is only required on a day actually assigned a workout. Nothing
- * here varies by day-of-week or program phase beyond that — see the Phase
- * 4.1 report for why (no per-day domain opt-out exists in the live product
- * today). */
-export function deriveRequiredDomains(trainingDayType: TrainingDayType): RequiredDomains {
-  return { weight: true, nutrition: true, cardio: true, training: trainingDayType === "scheduled_workout" };
+/** Weight and nutrition are tracked every day in this program; training is
+ * only required on a day actually assigned a workout, and cardio is only
+ * required on a day the client's coach-assigned program actually
+ * prescribes it (record.cardio.cardioDayType — see lib/mock-data.ts's
+ * isCardioAssignedForDay). Nothing here varies by program phase beyond
+ * that. */
+export function deriveRequiredDomains(trainingDayType: TrainingDayType, cardioDayType: CardioDayType): RequiredDomains {
+  return { weight: true, nutrition: true, cardio: cardioDayType === "scheduled", training: trainingDayType === "scheduled_workout" };
 }
 
 function weightOutcome(record: DailyRecord): DomainOutcome {
@@ -58,7 +60,7 @@ function weightOutcome(record: DailyRecord): DomainOutcome {
  * premature and "partial" would misrepresent a day still being lived.
  */
 export function deriveOverallAdherenceStatus(record: DailyRecord, lifecycle: DayLifecycle): OverallAdherenceStatus {
-  const required = deriveRequiredDomains(record.training.trainingDayType);
+  const required = deriveRequiredDomains(record.training.trainingDayType, resolvedCardioDayType(record.cardio));
   const outcomes: DomainOutcome[] = [];
   if (required.weight) outcomes.push(weightOutcome(record));
   if (required.nutrition) outcomes.push(deriveMealPlanAdherence(record).outcome);

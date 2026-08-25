@@ -3,7 +3,14 @@
 // prescribed duration ratio is capped at full credit; a coach-approved
 // alternative gets full credit measured against its OWN target duration
 // (never the default option's target); a skip is always zero.
+//
+// A day cardio was never assigned for (record.cardio.cardioDayType ===
+// "not_scheduled") is not_applicable, never missed — mirrors how
+// deriveTrainingAdherence treats a non-scheduled_workout day. See
+// lib/mock-data.ts's isCardioAssignedForDay, which is what actually decided
+// cardioDayType at snapshot time.
 
+import { resolvedCardioDayType } from "./types.ts";
 import type { DailyRecord } from "./types";
 import type { DomainOutcome } from "./derive-day-status";
 
@@ -14,6 +21,10 @@ export interface CardioAdherenceResult {
 
 export function deriveCardioAdherence(record: DailyRecord): CardioAdherenceResult {
   const cardio = record.cardio;
+
+  if (resolvedCardioDayType(cardio) === "not_scheduled") {
+    return { outcome: "not_applicable", ratio: 0 };
+  }
 
   if (cardio.status === "skipped" || cardio.status === "not-started") {
     return { outcome: "missed", ratio: 0 };

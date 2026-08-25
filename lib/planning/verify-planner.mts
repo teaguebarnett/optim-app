@@ -26,7 +26,7 @@ import {
   getTimeOfDay,
 } from "../calculations.ts";
 import { canCompleteExercise } from "../workout-analysis.ts";
-import { cardioPrescriptionForClient, catalogWorkoutForDay, MEAL_OPTIONS, PUSH_WORKOUT, TRAINING_WEEK, trainingWeekEntryForDay } from "../mock-data.ts";
+import { cardioPrescriptionForClient, catalogWorkoutForDay, isCardioAssignedForDay, MEAL_OPTIONS, PUSH_WORKOUT, TRAINING_WEEK, trainingWeekEntryForDay } from "../mock-data.ts";
 import { CLIENT_PROFILE_DEMO, CLIENT_PROFILE_SECONDARY, WORKSPACE_ATLAS, WORKSPACE_OPTIM } from "../tenancy/seed.ts";
 import { localDateDayOfWeek, resolveClientLocalDateIso, resolveClientLocalTime24, startOfLocalWeek } from "../shared/local-date.ts";
 import type { AppState } from "../state.ts";
@@ -539,6 +539,16 @@ check("A client without a configured multi-option plan only ever sees the single
   const prescription = cardioPrescriptionForClient(CLIENT_PROFILE_SECONDARY.id);
   assert.equal(prescription.options.length, 1);
   assert.equal(prescription.options[0].isDefault, true);
+});
+
+check("The demo client is assigned cardio every day of the week", () => {
+  const days: ReturnType<typeof localDateDayOfWeek>[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  assert.ok(days.every((d) => isCardioAssignedForDay(CLIENT_PROFILE_DEMO.id, d)));
+});
+
+check("A client without a configured cardio schedule has no assigned cardio days — never a hardcoded every-day assumption", () => {
+  const days: ReturnType<typeof localDateDayOfWeek>[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  assert.ok(days.every((d) => !isCardioAssignedForDay(CLIENT_PROFILE_SECONDARY.id, d)));
 });
 
 check("Selecting a cardio option persists and survives completing the session", () => {

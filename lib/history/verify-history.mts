@@ -117,7 +117,7 @@ function makeMinimalRecord(overrides: Partial<DailyRecord> = {}): DailyRecord {
       periodsInPlan: ["breakfast", "postWorkout", "lunch", "dinner", "snack"],
       targetsSnapshot: { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 },
     },
-    cardio: { status: "completed", durationMin: 20, selectedOptionSnapshot: null },
+    cardio: { cardioDayType: "scheduled", status: "completed", durationMin: 20, selectedOptionSnapshot: null },
     weight: { weightLb: 190, loggedAtIso: "2026-08-01T07:00:00.000Z", skipped: false },
   };
   return { ...base, ...overrides };
@@ -515,7 +515,7 @@ check("Protein target-met is asymmetric: below target minus tolerance fails, at 
 console.log("\n8. Cardio derivation (Phase 4 Correction #4)\n");
 
 check("A skip is always zero adherence regardless of any prior partial progress on the snapshot", () => {
-  const record = makeMinimalRecord({ cardio: { status: "skipped", durationMin: 0, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } });
+  const record = makeMinimalRecord({ cardio: { cardioDayType: "scheduled", status: "skipped", durationMin: 0, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } });
   const result = deriveCardioAdherence(record);
   assert.equal(result.outcome, "missed");
   assert.equal(result.ratio, 0);
@@ -523,7 +523,7 @@ check("A skip is always zero adherence regardless of any prior partial progress 
 
 check("A partial cardio session derives a real ratio against its own selected option's target, capped at 1", () => {
   const record = makeMinimalRecord({
-    cardio: { status: "partial", durationMin: 10, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } },
+    cardio: { cardioDayType: "scheduled", status: "partial", durationMin: 10, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } },
   });
   const result = deriveCardioAdherence(record);
   assert.equal(result.outcome, "partial");
@@ -532,11 +532,27 @@ check("A partial cardio session derives a real ratio against its own selected op
 
 check("An approved alternative gets full credit measured against its own (shorter) target, never the default option's", () => {
   const record = makeMinimalRecord({
-    cardio: { status: "completed", durationMin: 12, selectedOptionSnapshot: { id: "cardio-hiit", type: "HIIT", displayName: "HIIT workout", isDefault: false, intendedUse: "", targetDurationMin: 12, protocol: "" } },
+    cardio: { cardioDayType: "scheduled", status: "completed", durationMin: 12, selectedOptionSnapshot: { id: "cardio-hiit", type: "HIIT", displayName: "HIIT workout", isDefault: false, intendedUse: "", targetDurationMin: 12, protocol: "" } },
   });
   const result = deriveCardioAdherence(record);
   assert.equal(result.outcome, "complete");
   assert.equal(result.ratio, 1);
+});
+
+check("A day cardio was never assigned for derives not_applicable, never missed, regardless of what the log shows", () => {
+  const record = makeMinimalRecord({
+    cardio: { cardioDayType: "not_scheduled", status: "not-started", durationMin: 0, selectedOptionSnapshot: null },
+  });
+  const result = deriveCardioAdherence(record);
+  assert.equal(result.outcome, "not_applicable");
+  assert.equal(result.ratio, 0);
+});
+
+check("A record archived before cardioDayType existed (missing the field entirely) keeps behaving as scheduled, never silently reclassified", () => {
+  const legacyCardio = { status: "completed", durationMin: 20, selectedOptionSnapshot: null } as unknown as DailyRecord["cardio"];
+  const record = makeMinimalRecord({ cardio: legacyCardio });
+  const result = deriveCardioAdherence(record);
+  assert.equal(result.outcome, "complete", "a pre-existing record with no cardioDayType field must default to scheduled, not not_scheduled");
 });
 
 console.log("\n9. Weight trend derivation (Phase 4 Correction #5)\n");
@@ -579,26 +595,42 @@ check("A gap day with no logged weight is excluded from the trailing average, ne
 console.log("\n10. Overall day-status derivation (Phase 4 Correction #1)\n");
 
 check("A rest day requires nutrition/cardio/weight but never training", () => {
-  const required = deriveRequiredDomains("scheduled_rest");
+  const required = deriveRequiredDomains("scheduled_rest", "scheduled");
   assert.equal(required.training, false);
   assert.equal(required.weight && required.nutrition && required.cardio, true);
+});
+
+check("A day cardio wasn't assigned for excludes cardio from required domains, regardless of training day type", () => {
+  const required = deriveRequiredDomains("scheduled_workout", "not_scheduled");
+  assert.equal(required.cardio, false);
+  assert.equal(required.training, true, "cardio assignment must never affect the separate training requirement");
 });
 
 check("Every required domain fully complete derives an overall complete day", () => {
   const record = makeMinimalRecord({
     training: { trainingDayType: "scheduled_workout", prescribedWorkoutSnapshot: null, sessionStatus: "completed", exerciseLogs: {}, painReports: [], workingSetsCompleted: 15, workingSetsPrescribed: 15 },
     nutrition: { meals: Object.fromEntries(["breakfast", "postWorkout", "lunch", "dinner", "snack"].map((p) => [p, { period: p, source: "option", macros: { calories: 500, proteinG: 30, carbsG: 50, fatG: 10 } }])) as never, periodsInPlan: ["breakfast", "postWorkout", "lunch", "dinner", "snack"], targetsSnapshot: { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 } },
-    cardio: { status: "completed", durationMin: 20, selectedOptionSnapshot: null },
+    cardio: { cardioDayType: "scheduled", status: "completed", durationMin: 20, selectedOptionSnapshot: null },
     weight: { weightLb: 190, skipped: false },
   });
   assert.equal(deriveOverallAdherenceStatus(record, "closed"), "complete");
+});
+
+check("A day cardio wasn't assigned for still derives an overall complete day when every required domain is complete", () => {
+  const record = makeMinimalRecord({
+    training: { trainingDayType: "scheduled_workout", prescribedWorkoutSnapshot: null, sessionStatus: "completed", exerciseLogs: {}, painReports: [], workingSetsCompleted: 15, workingSetsPrescribed: 15 },
+    nutrition: { meals: Object.fromEntries(["breakfast", "postWorkout", "lunch", "dinner", "snack"].map((p) => [p, { period: p, source: "option", macros: { calories: 500, proteinG: 30, carbsG: 50, fatG: 10 } }])) as never, periodsInPlan: ["breakfast", "postWorkout", "lunch", "dinner", "snack"], targetsSnapshot: { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 } },
+    cardio: { cardioDayType: "not_scheduled", status: "not-started", durationMin: 0, selectedOptionSnapshot: null },
+    weight: { weightLb: 190, skipped: false },
+  });
+  assert.equal(deriveOverallAdherenceStatus(record, "closed"), "complete", "an unassigned cardio day must never hold back an otherwise-complete day");
 });
 
 check("Every required domain fully missed derives an overall missed day (closed)", () => {
   const record = makeMinimalRecord({
     training: { trainingDayType: "scheduled_workout", prescribedWorkoutSnapshot: null, sessionStatus: "skipped", exerciseLogs: {}, painReports: [], workingSetsCompleted: 0, workingSetsPrescribed: 15 },
     nutrition: { meals: {}, periodsInPlan: ["breakfast"], targetsSnapshot: { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 } },
-    cardio: { status: "skipped", durationMin: 0, selectedOptionSnapshot: null },
+    cardio: { cardioDayType: "scheduled", status: "skipped", durationMin: 0, selectedOptionSnapshot: null },
     weight: { weightLb: null, skipped: true },
   });
   assert.equal(deriveOverallAdherenceStatus(record, "closed"), "missed");
@@ -608,7 +640,7 @@ check("A mix of complete and missed domains derives partial, not missed or compl
   const record = makeMinimalRecord({
     training: { trainingDayType: "scheduled_workout", prescribedWorkoutSnapshot: null, sessionStatus: "completed", exerciseLogs: {}, painReports: [], workingSetsCompleted: 15, workingSetsPrescribed: 15 },
     nutrition: { meals: {}, periodsInPlan: ["breakfast"], targetsSnapshot: { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 } },
-    cardio: { status: "skipped", durationMin: 0, selectedOptionSnapshot: null },
+    cardio: { cardioDayType: "scheduled", status: "skipped", durationMin: 0, selectedOptionSnapshot: null },
     weight: { weightLb: null, skipped: true },
   });
   assert.equal(deriveOverallAdherenceStatus(record, "closed"), "partial");

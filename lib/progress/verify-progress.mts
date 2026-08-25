@@ -18,7 +18,7 @@ import { buildDailyRecordId } from "../history/types.ts";
 import { buildCorrectionId } from "../history/types.ts";
 import { buildDemoHistoryFixture } from "../history/demo-fixture.ts";
 import { addDaysToLocalDate, localDateDayOfWeek } from "../shared/local-date.ts";
-import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "../tenancy/seed.ts";
+import { CLIENT_PROFILE_DEMO, CLIENT_PROFILE_SECONDARY, WORKSPACE_OPTIM_ID } from "../tenancy/seed.ts";
 import { PUSH_WORKOUT } from "../mock-data.ts";
 import { collectCurrentWeekRecords, collectDateRangeRecords } from "./collect-week-records.ts";
 import { aggregateTraining } from "./aggregate-training.ts";
@@ -33,6 +33,7 @@ import { createInitialState } from "../state.ts";
 import type { StorageLike } from "../history/local-storage-history-store.ts";
 import type { DailyRecord } from "../history/types.ts";
 import type { HistoryScope } from "../history/store.ts";
+import type { DayRecordSlot } from "./collect-week-records.ts";
 import type { ProgramEnrollment } from "../scheduling/types.ts";
 
 let passed = 0;
@@ -107,6 +108,7 @@ function record(dateIso: string, overrides: Partial<DailyRecord> = {}): DailyRec
       targetsSnapshot: { calories: 2950, proteinG: 200, carbsG: 360, fatG: 85 },
     },
     cardio: {
+      cardioDayType: "scheduled",
       status: "completed",
       durationMin: 20,
       selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" },
@@ -451,12 +453,12 @@ console.log("\n7. Cardio\n");
 
 check("Full completion, partial duration, an approved alternative's own target, and a skip all derive correctly", () => {
   const store = newStore();
-  store.putDailyRecordIdempotent(record("2026-08-10", { cardio: { status: "completed", durationMin: 20, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
-  store.putDailyRecordIdempotent(record("2026-08-11", { cardio: { status: "partial", durationMin: 5, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
-  store.putDailyRecordIdempotent(record("2026-08-12", { cardio: { status: "completed", durationMin: 12, selectedOptionSnapshot: { id: "cardio-hiit", type: "HIIT", displayName: "HIIT", isDefault: false, intendedUse: "", targetDurationMin: 12, protocol: "" } } }));
-  store.putDailyRecordIdempotent(record("2026-08-13", { cardio: { status: "skipped", durationMin: 0, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
+  store.putDailyRecordIdempotent(record("2026-08-10", { cardio: { cardioDayType: "scheduled", status: "completed", durationMin: 20, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
+  store.putDailyRecordIdempotent(record("2026-08-11", { cardio: { cardioDayType: "scheduled", status: "partial", durationMin: 5, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
+  store.putDailyRecordIdempotent(record("2026-08-12", { cardio: { cardioDayType: "scheduled", status: "completed", durationMin: 12, selectedOptionSnapshot: { id: "cardio-hiit", type: "HIIT", displayName: "HIIT", isDefault: false, intendedUse: "", targetDurationMin: 12, protocol: "" } } }));
+  store.putDailyRecordIdempotent(record("2026-08-13", { cardio: { cardioDayType: "scheduled", status: "skipped", durationMin: 0, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
   const slots = collectDateRangeRecords({ store, scope: SCOPE, source: "live", effectiveDateIso: "2026-08-14", enrollment: ENROLLMENT, liveState: null }, "2026-08-10", "2026-08-13");
-  const result = aggregateCardio(slots);
+  const result = aggregateCardio(slots, SCOPE.clientId);
   const byDate = new Map(result.days.map((d) => [d.dateIso, d]));
   assert.equal(byDate.get("2026-08-10")!.outcome, "complete");
   assert.equal(byDate.get("2026-08-11")!.outcome, "partial");
@@ -467,11 +469,45 @@ check("Full completion, partial duration, an approved alternative's own target, 
 
 check("Over-target duration is capped for the adherence ratio while the raw actual duration is preserved", () => {
   const store = newStore();
-  store.putDailyRecordIdempotent(record("2026-08-10", { cardio: { status: "completed", durationMin: 35, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
+  store.putDailyRecordIdempotent(record("2026-08-10", { cardio: { cardioDayType: "scheduled", status: "completed", durationMin: 35, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
   const slots = collectDateRangeRecords({ store, scope: SCOPE, source: "live", effectiveDateIso: "2026-08-14", enrollment: ENROLLMENT, liveState: null }, "2026-08-10", "2026-08-10");
-  const result = aggregateCardio(slots);
+  const result = aggregateCardio(slots, SCOPE.clientId);
   assert.equal(result.completedDurationMin, 35, "raw actual duration must never be silently capped");
   assert.equal(result.adherenceRatio, 1, "the ratio itself is capped at full credit");
+});
+
+check("A day cardio was never assigned for is excluded from adherence and reported not_applicable, never missed", () => {
+  const store = newStore();
+  store.putDailyRecordIdempotent(record("2026-08-10", { cardio: { cardioDayType: "scheduled", status: "completed", durationMin: 20, selectedOptionSnapshot: { id: "cardio-stairmaster", type: "StairMaster", displayName: "StairMaster", isDefault: true, intendedUse: "", targetDurationMin: 20, protocol: "" } } }));
+  store.putDailyRecordIdempotent(record("2026-08-11", { cardio: { cardioDayType: "not_scheduled", status: "not-started", durationMin: 0, selectedOptionSnapshot: null } }));
+  const slots = collectDateRangeRecords({ store, scope: SCOPE, source: "live", effectiveDateIso: "2026-08-14", enrollment: ENROLLMENT, liveState: null }, "2026-08-10", "2026-08-11");
+  const result = aggregateCardio(slots, SCOPE.clientId);
+  const byDate = new Map(result.days.map((d) => [d.dateIso, d]));
+  assert.equal(byDate.get("2026-08-11")!.outcome, "not_applicable");
+  assert.equal(result.completedDurationMin, 20, "the unassigned day's zero minutes must never be summed into the week's total");
+  assert.equal(result.targetDurationMin, 20, "the unassigned day's target must never inflate the week's required total");
+});
+
+check("A future day cardio isn't assigned for (per the client's live schedule) reports not_applicable rather than Upcoming", () => {
+  const store = newStore();
+  const slots = collectDateRangeRecords({ store, scope: SCOPE, source: "live", effectiveDateIso: "2026-08-10", enrollment: ENROLLMENT, liveState: null }, "2026-08-11", "2026-08-11");
+  const result = aggregateCardio(slots, CLIENT_PROFILE_SECONDARY.id);
+  assert.equal(result.days[0].outcome, "not_applicable", "a client with no configured cardio schedule must never default to Upcoming for a future day");
+  assert.equal(result.status, "not_applicable");
+});
+
+check("Today's not-yet-started cardio is never reported as missed", () => {
+  const todaySlot: DayRecordSlot = {
+    dateIso: "2026-08-14",
+    record: record("2026-08-14", { cardio: { cardioDayType: "scheduled", status: "not-started", durationMin: 0, selectedOptionSnapshot: null } }),
+    isFuture: false,
+    isToday: true,
+    correctedFieldPaths: [],
+  };
+  const result = aggregateCardio([todaySlot], SCOPE.clientId);
+  assert.notEqual(result.days[0].outcome, "missed", "today isn't over yet — nothing has actually been missed");
+  assert.equal(result.days[0].isToday, true);
+  assert.equal(result.status, "insufficient_data", "an unresolved today must never count as evaluable adherence data");
 });
 
 console.log("\n8. Check-in and priority\n");
@@ -721,10 +757,10 @@ check("Extending the fixture's weight history leaves current-week training/nutri
   assert.deepEqual(weekSlotsAll, weekSlotsSixOnly, "the current-week slot collection itself must be unaffected by the older additions");
   const training = aggregateTraining(weekSlotsAll);
   const nutrition = aggregateNutrition(weekSlotsAll);
-  const cardio = aggregateCardio(weekSlotsAll);
+  const cardio = aggregateCardio(weekSlotsAll, SCOPE.clientId);
   assert.deepEqual(training, aggregateTraining(weekSlotsSixOnly));
   assert.deepEqual(nutrition, aggregateNutrition(weekSlotsSixOnly));
-  assert.deepEqual(cardio, aggregateCardio(weekSlotsSixOnly));
+  assert.deepEqual(cardio, aggregateCardio(weekSlotsSixOnly, SCOPE.clientId));
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

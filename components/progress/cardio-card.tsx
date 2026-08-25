@@ -6,17 +6,20 @@ function cardioBadge(day: CardioDaySummaryModel) {
   if (day.outcome === "complete") return <StatusBadge label="Completed" tone="success" />;
   if (day.outcome === "partial") return <StatusBadge label="Partial" tone="warning" />;
   if (day.outcome === "missed") return <StatusBadge label="Skipped" tone="error" />;
-  if (day.outcome === "future") return <StatusBadge label="Upcoming" tone="neutral" />;
+  if (day.outcome === "not_applicable") return <StatusBadge label="Not scheduled" tone="neutral" />;
+  if (day.outcome === "future") return <StatusBadge label={day.isToday ? "Today" : "Upcoming"} tone="neutral" />;
   return <StatusBadge label="No record" tone="neutral" />;
 }
 
 export function CardioCard({ cardio }: { cardio: CardioCardModel }) {
   const summary =
-    cardio.status === "insufficient_data"
-      ? "Not enough data yet"
-      : cardio.targetDurationMin > 0
-        ? `${cardio.completedDurationMin} of ${cardio.targetDurationMin} min`
-        : `${cardio.completedDurationMin} min logged`;
+    cardio.status === "not_applicable"
+      ? "No cardio scheduled this week"
+      : cardio.status === "insufficient_data"
+        ? "Not enough data yet"
+        : cardio.targetDurationMin > 0
+          ? `${cardio.completedDurationMin} of ${cardio.targetDurationMin} min`
+          : `${cardio.completedDurationMin} min logged`;
 
   return (
     <ExpandableCard
@@ -29,11 +32,15 @@ export function CardioCard({ cardio }: { cardio: CardioCardModel }) {
               <div className="min-w-0">
                 <p className="text-sm font-medium text-off-white">{day.dayOfWeek}</p>
                 <p className="text-xs text-neutral">
-                  {day.outcome === "future"
-                    ? "Upcoming"
-                    : day.outcome === "no_record"
-                      ? "No record"
-                      : `${day.durationMin} of ${day.targetDurationMin} min${day.usedApprovedAlternative ? " · approved alternative" : ""}`}
+                  {day.outcome === "not_applicable"
+                    ? "Not scheduled"
+                    : day.outcome === "future"
+                      ? day.isToday
+                        ? "Today"
+                        : "Upcoming"
+                      : day.outcome === "no_record"
+                        ? "No record"
+                        : `${day.durationMin} of ${day.targetDurationMin} min${day.usedApprovedAlternative ? " · approved alternative" : ""}`}
                 </p>
               </div>
               {cardioBadge(day)}

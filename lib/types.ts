@@ -581,6 +581,12 @@ export interface CardioOption {
  * only a plan with more than one should ever show a picker. */
 export interface CardioPrescription {
   options: CardioOption[];
+  /** Which days of the week the coach has actually assigned cardio —
+   * coach-controlled and configurable per client, exactly like `options`
+   * above. A client with no explicit schedule configured gets no assigned
+   * days at all (see lib/mock-data.ts's DEFAULT_CARDIO_PRESCRIPTION), never
+   * a default "every day" assumption. See isCardioAssignedForDay(). */
+  assignedDays: DayOfWeek[];
 }
 
 export interface CardioLog {
