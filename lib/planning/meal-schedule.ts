@@ -67,7 +67,11 @@ function formatClockTime(d: Date): string {
 }
 
 function isLoggedSelection(selection: MealSelection | undefined): selection is MealSelection & { completedAtIso: string } {
-  return !!selection && (selection.source === "option" || selection.source === "manual") && !!selection.completedAtIso;
+  return (
+    !!selection &&
+    (selection.source === "option" || selection.source === "manual" || selection.source === "photo-estimate") &&
+    !!selection.completedAtIso
+  );
 }
 
 function macrosForPeriod(period: MealPeriod, selection: MealSelection | undefined): MacroValues | null {

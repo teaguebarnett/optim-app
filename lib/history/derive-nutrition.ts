@@ -36,7 +36,9 @@ export const DEFAULT_NUTRITION_TOLERANCE: NutritionToleranceConfig = {
 };
 
 function isMealResolvedAdherent(selection: MealSelectionSnapshot | undefined): boolean {
-  return !!selection && (selection.source === "option" || selection.source === "manual");
+  return (
+    !!selection && (selection.source === "option" || selection.source === "manual" || selection.source === "photo-estimate")
+  );
 }
 
 export interface MealPlanAdherenceResult {

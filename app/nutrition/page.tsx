@@ -1,67 +1,90 @@
 "use client";
 
 import { useState } from "react";
-import { ProgressRing } from "@/components/ui/progress-ring";
-import { MacroRow } from "@/components/nutrition/macro-row";
-import { MealRow } from "@/components/nutrition/meal-row";
-import { MealSelectionSheet } from "@/components/meals/meal-selection-sheet";
+import { Camera, ChevronRight } from "lucide-react";
+import { FuelOverview } from "@/components/nutrition/fuel-overview";
+import { MacroDetailSheet } from "@/components/nutrition/macro-detail-sheet";
+import { MealTimeline } from "@/components/nutrition/meal-timeline";
+import { PhotoMealSheet } from "@/components/nutrition/photo/photo-meal-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
-import { MEAL_ORDER } from "@/lib/calculations";
 import { NUTRITION_TARGETS } from "@/lib/mock-data";
+import { deriveNutritionStatusLine } from "@/lib/nutrition/status";
+import { MACRO_FIELD, nextRelevantMealPeriod } from "@/lib/nutrition/view-model";
+import type { MacroKey } from "@/lib/nutrition/view-model";
 import type { MealPeriod } from "@/lib/types";
 
+// Nutrition's visual architecture (see docs/design/OPTIM_VISUAL_CONSTITUTION.md
+// and this feature's product spec): one coordinated instrument panel (the
+// calorie ring + three dedicated macro tiles), a brief intelligent status
+// line, the primary meal-photo estimator action, and today's meal sequence —
+// composed, not stacked, and reusing exactly the same computed
+// nutritionTotals/dailyPlan every other screen already reads from
+// usePrototypeState() so nothing here can ever drift from Today.
 export default function NutritionPage() {
-  const { isHydrated, state, nutritionTotals, nutritionMessage, dailyPlan } = usePrototypeState();
-  const [activePeriod, setActivePeriod] = useState<MealPeriod | null>(null);
+  const { isHydrated, state, nutritionTotals, dailyPlan } = usePrototypeState();
+  const [activeMacro, setActiveMacro] = useState<MacroKey | null>(null);
+  const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
 
   if (!isHydrated) return <ScreenSkeleton />;
 
-  const caloriePercent = (nutritionTotals.calories / NUTRITION_TARGETS.calories) * 100;
+  const statusLine = deriveNutritionStatusLine({
+    state,
+    dailyPlan,
+    totals: nutritionTotals,
+    targets: NUTRITION_TARGETS,
+    now: new Date(),
+  });
+
+  const periodsInPlan = Object.keys(dailyPlan.mealSchedule.entries) as MealPeriod[];
+  const suggestedPeriod: MealPeriod = nextRelevantMealPeriod(state, dailyPlan) ?? periodsInPlan[0] ?? "breakfast";
 
   return (
-    <div className="px-4 pb-6 pt-5">
-      <h1 className="text-xl font-semibold text-off-white">Nutrition</h1>
-      <p className="mt-1 text-sm text-neutral">{nutritionMessage}</p>
+    <div className="pb-6 pt-5">
+      <div className="px-4">
+        <h1 className="text-display text-off-white">Nutrition</h1>
+      </div>
 
-      <div className="mt-5 flex items-center gap-5 rounded-[var(--radius-lg)] border border-border bg-charcoal p-4">
-        <ProgressRing
-          percent={caloriePercent}
-          label={String(Math.round(nutritionTotals.calories))}
-          sublabel={`of ${NUTRITION_TARGETS.calories}`}
+      <FuelOverview
+        totals={nutritionTotals}
+        targets={NUTRITION_TARGETS}
+        onOpenMacro={setActiveMacro}
+        statusLine={statusLine}
+      />
+
+      <div className="px-4 mt-3">
+        <button
+          type="button"
+          onClick={() => setPhotoSheetOpen(true)}
+          className="flex w-full items-center gap-3 rounded-[var(--radius-md)] bg-accent px-4 py-3 text-left shadow-[var(--shadow-subtle)] transition-transform duration-150 active:scale-[0.99]"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-on-accent">
+            <Camera size={17} aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-subheading text-on-accent">Log a meal photo</span>
+            <span className="block text-meta text-on-accent/70">Get an OPTIM estimate, then review and confirm.</span>
+          </span>
+          <ChevronRight size={18} className="shrink-0 text-on-accent/70" aria-hidden="true" />
+        </button>
+      </div>
+
+      <h2 className="mx-4 mb-2 mt-6 text-label text-neutral">Today&apos;s meals</h2>
+      <div className="px-4">
+        <MealTimeline />
+      </div>
+
+      {activeMacro ? (
+        <MacroDetailSheet
+          macro={activeMacro}
+          open={!!activeMacro}
+          onClose={() => setActiveMacro(null)}
+          consumed={nutritionTotals[MACRO_FIELD[activeMacro]]}
+          target={NUTRITION_TARGETS[MACRO_FIELD[activeMacro]]}
         />
-        <div className="min-w-0 flex-1 space-y-1 text-sm">
-          <p className="text-off-white">
-            <span className="font-semibold">{Math.round(nutritionTotals.calories)}</span> cal consumed
-          </p>
-          <p className="text-neutral">
-            {Math.max(0, NUTRITION_TARGETS.calories - Math.round(nutritionTotals.calories))} cal remaining
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-4 rounded-[var(--radius-lg)] border border-border bg-charcoal p-4">
-        <MacroRow label="Protein" consumed={nutritionTotals.proteinG} target={NUTRITION_TARGETS.proteinG} unit="g" color="var(--pc-accent)" />
-        <MacroRow label="Carbs" consumed={nutritionTotals.carbsG} target={NUTRITION_TARGETS.carbsG} unit="g" color="var(--pc-success)" />
-        <MacroRow label="Fat" consumed={nutritionTotals.fatG} target={NUTRITION_TARGETS.fatG} unit="g" color="var(--pc-warning)" />
-      </div>
-
-      <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-neutral">Today&apos;s meals</h2>
-      <div className="space-y-2">
-        {MEAL_ORDER.map((period) => (
-          <MealRow
-            key={period}
-            period={period}
-            selection={state.meals[period]}
-            timeLabel={dailyPlan.mealSchedule.entries[period]?.timeLabel ?? undefined}
-            onClick={() => setActivePeriod(period)}
-          />
-        ))}
-      </div>
-
-      {activePeriod ? (
-        <MealSelectionSheet period={activePeriod} open={!!activePeriod} onClose={() => setActivePeriod(null)} />
       ) : null}
+
+      <PhotoMealSheet open={photoSheetOpen} onClose={() => setPhotoSheetOpen(false)} suggestedPeriod={suggestedPeriod} />
     </div>
   );
 }

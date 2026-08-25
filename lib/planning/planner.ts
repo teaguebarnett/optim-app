@@ -12,7 +12,7 @@
 // client didn't actually do — see the adaptability rules in the Phase 3
 // spec this implements.
 
-import { cardioPrescriptionForClient, MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT, catalogWorkoutForDay, trainingWeekEntryForDay } from "../mock-data.ts";
+import { cardioPrescriptionForClient, MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
 import { resolvePlannedDateTime } from "./training-plan.ts";
 import { comfortableTrainingWindow, mealTimingProfileForMacros, mealTimingProfileForOption } from "./meal-timing.ts";
 import { buildMealSchedule } from "./meal-schedule.ts";
@@ -26,7 +26,7 @@ function formatClockTime(iso: string): string {
 }
 
 function isMealCounted(selection: MealSelection | undefined): boolean {
-  return !!selection && (selection.source === "option" || selection.source === "manual");
+  return !!selection && (selection.source === "option" || selection.source === "manual" || selection.source === "photo-estimate");
 }
 
 function selectedOptionFor(period: MealPeriod, selection: MealSelection | undefined): MealOption | null {
@@ -160,15 +160,17 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   // real progress on the (only loggable) session always wins over both —
   // see the session.status branches above this.
   const todayDayOfWeek = localDateDayOfWeek(state.dateIso);
-  const todaysScheduleEntry = trainingWeekEntryForDay(todayDayOfWeek);
-  const catalogWorkoutToday = catalogWorkoutForDay(todayDayOfWeek);
   const clientDeclaredRest = trainingPlan?.status === "rest_day";
-  // A genuinely scheduled training day whose catalog has no real, loggable
-  // content (e.g. Friday's "Upper Workout" label) — never silently
-  // substitutes Push Workout's content under a different name.
-  const scheduledWithoutDetail = !clientDeclaredRest && !catalogWorkoutToday && todaysScheduleEntry?.type === "training";
-  const isRestDay = clientDeclaredRest || (!clientDeclaredRest && !trainingPlan && todaysScheduleEntry?.type === "rest");
-  const workoutDisplayName = catalogWorkoutToday?.name ?? todaysScheduleEntry?.workoutName ?? PUSH_WORKOUT.name;
+  // Resolved through the one shared resolveWorkoutAvailabilityForDay (Phase
+  // 4.4B-1.1) — a genuinely scheduled training day whose catalog has no
+  // real, loggable content (e.g. Friday's "Upper Workout" label) never
+  // silently substitutes Push Workout's content under a different name, and
+  // this can never disagree with what Today or Training decide for the
+  // exact same day.
+  const availability = resolveWorkoutAvailabilityForDay(todayDayOfWeek, clientDeclaredRest);
+  const scheduledWithoutDetail = availability.isUnavailable;
+  const isRestDay = clientDeclaredRest || (!clientDeclaredRest && !trainingPlan && availability.scheduleEntry?.type === "rest");
+  const workoutDisplayName = availability.displayName;
 
   let workoutStatus: PlannerItemStatus;
   let workoutTimeLabel: string | undefined;
@@ -191,7 +193,7 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     // Honest "scheduled but detail unavailable" state — never a fabricated
     // workout, never Push Workout's content reused under a different label.
     workoutStatus = "optional";
-    workoutExplanation = `${workoutDisplayName} is scheduled today, but full session detail isn't available yet.`;
+    workoutExplanation = `Workout details unavailable — ${workoutDisplayName} is scheduled today, but full session detail isn't available yet.`;
     workoutHref = undefined;
   } else if (isRestDay) {
     // Rest day changes today's schedule, but the prescribed workout is

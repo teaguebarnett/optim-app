@@ -15,6 +15,7 @@ function mealDescription(period: MealPeriod, selection: MealSelection | undefine
   if (selection.source === "skipped") return `Skipped — ${SKIP_REASON_LABELS[selection.skipReason ?? "other"]}`;
   if (selection.source === "planned-later") return "Planned for later";
   if (selection.source === "manual") return selection.manualName ?? "Logged manually";
+  if (selection.source === "photo-estimate") return `${selection.manualName ?? "Logged"} (photo estimate)`;
   const option = MEAL_OPTIONS[period].find((o) => o.id === selection.optionId);
   return option?.name ?? "Logged";
 }
@@ -116,7 +117,7 @@ export function ReviewTodaySheet({ open, onClose }: { open: boolean; onClose: ()
               {summary.painReportCount > 0 ? <Row label="Pain reports" value={String(summary.painReportCount)} /> : null}
             </>
           ) : (
-            <p className="text-sm text-neutral">No working sets logged yet today.</p>
+            <p className="text-meta text-neutral">No working sets logged yet today.</p>
           )}
         </Section>
 
@@ -133,12 +134,12 @@ export function ReviewTodaySheet({ open, onClose }: { open: boolean; onClose: ()
         {session.painReports.length > 0 || exceptions.length > 0 ? (
           <Section title="Notes & exceptions">
             {session.painReports.map((report) => (
-              <p key={report.id} className="text-sm text-neutral">
+              <p key={report.id} className="text-meta text-neutral">
                 Pain — {report.location} ({report.ratingZeroToTen}/10){report.note ? `: ${report.note}` : ""}
               </p>
             ))}
             {exceptions.map((line, i) => (
-              <p key={i} className="text-sm text-neutral">
+              <p key={i} className="text-meta text-neutral">
                 {line}
               </p>
             ))}
@@ -152,7 +153,7 @@ export function ReviewTodaySheet({ open, onClose }: { open: boolean; onClose: ()
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
-      <p className="text-xs font-medium uppercase tracking-wide text-neutral">{title}</p>
+      <p className="text-label text-neutral">{title}</p>
       <div className="mt-2 space-y-1.5">{children}</div>
     </div>
   );
@@ -160,11 +161,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 function Row({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="flex items-start justify-between gap-3 text-sm">
+    <div className="flex items-start justify-between gap-3 text-meta">
       <span className="text-neutral">{label}</span>
       <span className="text-right text-off-white">
         {value}
-        {sub ? <span className="block text-xs text-neutral">{sub}</span> : null}
+        {sub ? <span className="block text-meta text-neutral">{sub}</span> : null}
       </span>
     </div>
   );

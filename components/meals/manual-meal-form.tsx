@@ -9,14 +9,19 @@ import type { MacroValues } from "@/lib/types";
 interface ManualMealFormProps {
   onSave: (name: string, macros: MacroValues) => void;
   onCancel: () => void;
+  /** Prefills the form for correcting a previously logged entry rather than
+   * starting from a blank meal — see the "Edit" path in
+   * components/meals/meal-selection-sheet.tsx's summary view. */
+  initial?: { name: string; macros: MacroValues };
+  submitLabel?: string;
 }
 
-export function ManualMealForm({ onSave, onCancel }: ManualMealFormProps) {
-  const [name, setName] = useState("");
-  const [calories, setCalories] = useState<number | "">("");
-  const [protein, setProtein] = useState<number | "">("");
-  const [carbs, setCarbs] = useState<number | "">("");
-  const [fat, setFat] = useState<number | "">("");
+export function ManualMealForm({ onSave, onCancel, initial, submitLabel = "Save estimate" }: ManualMealFormProps) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [calories, setCalories] = useState<number | "">(initial?.macros.calories ?? "");
+  const [protein, setProtein] = useState<number | "">(initial?.macros.proteinG ?? "");
+  const [carbs, setCarbs] = useState<number | "">(initial?.macros.carbsG ?? "");
+  const [fat, setFat] = useState<number | "">(initial?.macros.fatG ?? "");
   const [error, setError] = useState<string | null>(null);
 
   function handleSave() {
@@ -73,7 +78,7 @@ export function ManualMealForm({ onSave, onCancel }: ManualMealFormProps) {
 
       <div className="flex gap-2">
         <Button className="flex-1" onClick={handleSave}>
-          Save estimate
+          {submitLabel}
         </Button>
         <Button variant="ghost" onClick={onCancel}>
           Cancel

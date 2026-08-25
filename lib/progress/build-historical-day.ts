@@ -165,7 +165,10 @@ function buildTrainingSection(record: DailyRecord | null, timeZone: string): His
 
 function mealStatus(source: string | undefined): HistoricalMealStatus {
   if (source === "option") return "completed";
-  if (source === "manual") return "replaced";
+  // A photo estimate is a client-confirmed replacement for the catalog
+  // option, the same way a manual entry is — see MealSelectionSource's doc
+  // in lib/types.ts.
+  if (source === "manual" || source === "photo-estimate") return "replaced";
   if (source === "skipped") return "skipped";
   if (source === "planned-later") return "planned_later";
   return "not_logged";
@@ -194,7 +197,7 @@ function buildNutritionSection(record: DailyRecord | null, timeZone: string): Hi
       label: MEAL_PERIOD_LABELS[period],
       status: mealStatus(selection?.source),
       itemName:
-        selection?.source === "manual"
+        selection?.source === "manual" || selection?.source === "photo-estimate"
           ? selection.manualName ?? null
           : selection?.source === "option"
             ? MEAL_OPTIONS[period]?.find((o) => o.id === selection.optionId)?.name ?? null

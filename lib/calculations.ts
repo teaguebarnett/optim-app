@@ -1,4 +1,4 @@
-import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT, catalogWorkoutForDay, trainingWeekEntryForDay } from "./mock-data.ts";
+import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "./mock-data.ts";
 import { resolvePlannedDateTime } from "./planning/training-plan.ts";
 import { localDateDayOfWeek } from "./shared/local-date.ts";
 import type { AppState } from "./state";
@@ -78,7 +78,7 @@ export function getGreeting(
 // ---------------------------------------------------------------------------
 
 function isMealCounted(selection: AppState["meals"][MealPeriod]): boolean {
-  return !!selection && (selection.source === "option" || selection.source === "manual");
+  return !!selection && (selection.source === "option" || selection.source === "manual" || selection.source === "photo-estimate");
 }
 
 export function computeNutritionTotals(meals: AppState["meals"]): MacroValues {
@@ -140,7 +140,10 @@ export function nutritionStatusMessage(totals: MacroValues, meals: AppState["mea
   const calorieRatio = totals.calories / NUTRITION_TARGETS.calories;
   const proteinRatio = totals.proteinG / NUTRITION_TARGETS.proteinG;
 
-  if (totals.calories === 0) return "Your day is off to a strong start.";
+  // Phase 4.4B-2.1 correction — the true zero/unentered state must never
+  // claim progress that hasn't happened. "Off to a strong start" falsely
+  // congratulates a day where nothing has been logged yet.
+  if (totals.calories === 0) return "Your nutrition targets are set for today.";
   if (calorieRatio > 1.05) return "Slightly above target — one day does not define the week.";
   if (calorieRatio >= 0.95) return "Daily target reached. Nice work staying consistent.";
   if (proteinRatio < 0.55 && remainingMeals <= 1) return "Protein is slightly behind — the next meal is a good chance to close the gap.";
@@ -272,21 +275,24 @@ export function deriveTaskStates(
       if (state.workoutSession.status === "skipped") return "skipped";
       if (state.workoutSession.status === "in-progress") return "in-progress";
 
-      // Phase 4.1 corrective — a genuinely scheduled training day whose
-      // catalog has no real, loggable content (e.g. Friday's "Upper
-      // Workout" label, which has no matching entry in WORKOUTS_BY_ID) must
-      // never present itself as an actionable Push Workout session under a
-      // different label. This is the one real, honest exception to "no
-      // task here reports locked for something the client can actually
-      // do" above — here the client genuinely can't, because no real
-      // session exists for today. A client who has explicitly declared
-      // today a rest day keeps the existing "optional, begin anyway"
-      // treatment below regardless of what the schedule says.
+      // Phase 4.1 corrective (Phase 4.4B-1.1: now resolved through the one
+      // shared resolveWorkoutAvailabilityForDay, so Today and Training can
+      // never disagree — see that function's doc) — a genuinely scheduled
+      // training day whose catalog has no real, loggable content (e.g.
+      // Friday's "Upper Workout" label, which has no matching entry in
+      // WORKOUTS_BY_ID) must never present itself as an actionable Push
+      // Workout session under a different label. This is the one real,
+      // honest exception to "no task here reports locked for something the
+      // client can actually do" above — here the client genuinely can't,
+      // because no real session exists for today. This is strictly a data-
+      // availability fact, never influenced by the client's training-time
+      // decision (trainingPlan.status) — selecting or changing a time can
+      // never itself lock or unlock a workout. A client who has explicitly
+      // declared today a rest day keeps the existing "optional, begin
+      // anyway" treatment below regardless of what the schedule says.
       const clientDeclaredRest = trainingPlan?.status === "rest_day";
-      if (!clientDeclaredRest) {
-        const todaysEntry = trainingWeekEntryForDay(localDateDayOfWeek(state.dateIso));
-        const hasRealContentToday = !!catalogWorkoutForDay(localDateDayOfWeek(state.dateIso));
-        if (todaysEntry?.type === "training" && !hasRealContentToday) return "locked";
+      if (resolveWorkoutAvailabilityForDay(localDateDayOfWeek(state.dateIso), clientDeclaredRest).isUnavailable) {
+        return "locked";
       }
 
       if (plannedWorkoutAt && now.getTime() < plannedWorkoutAt.getTime()) return "upcoming";

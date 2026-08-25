@@ -20,6 +20,7 @@ import type {
   MealSelectionSource,
   NutritionTargets,
   PainReport,
+  PhotoMealEstimateSnapshot,
   RpeValue,
   SkipReason,
   Workout,
@@ -98,6 +99,9 @@ export interface MealSelectionSnapshot {
   completedAtIso?: string;
   skipReason?: SkipReason;
   skipNote?: string;
+  /** Mirrors MealSelection.photoEstimate — present only when source ===
+   * "photo-estimate". */
+  photoEstimate?: PhotoMealEstimateSnapshot;
 }
 
 export interface NutritionDaySnapshot {
