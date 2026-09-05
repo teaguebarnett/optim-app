@@ -13,8 +13,10 @@
 
 import type {
   ClientProfile,
+  ClientProfileId,
   CoachClientAssignment,
   CoachProfile,
+  CoachProfileId,
   Platform,
   PlatformUser,
   SessionPointer,
@@ -48,8 +50,8 @@ export const WORKSPACE_OPTIM: Workspace = {
   branding: {
     businessName: "OPTIM",
     logoUrl: null,
-    primaryColor: "#16294a",
-    accentColor: "#21396a",
+    primaryColor: "#3157F6",
+    accentColor: "#2544c9",
     assistantDisplayName: "OPTIM Assistant",
     // This is OPTIM's own first-party workspace, not a customer running
     // white-label — no "Powered by OPTIM" attribution needed here.
@@ -293,6 +295,22 @@ export const ALL_ASSIGNMENTS: CoachClientAssignment[] = [
   ASSIGNMENT_PRIYA_JORDAN,
 ];
 
+/** The one place anything client-side resolves "which coach is this
+ * client's messages/escalations/review-requests routed to" — every Chat
+ * dispatch site (see lib/state.ts) calls this instead of importing a coach
+ * constant directly, so a different client's assigned coach is never
+ * silently swapped for another's. Throws (never falls back to a default
+ * coach) if the client itself can't be found — the same default-deny
+ * posture as the rest of this file's access checks, since a client with no
+ * resolvable coach is a data-integrity bug, not a case to paper over. */
+export function resolveAssignedCoachId(clientId: ClientProfileId): CoachProfileId {
+  const client = ALL_CLIENT_PROFILES.find((c) => c.id === clientId);
+  if (!client) {
+    throw new Error(`resolveAssignedCoachId: no client profile found for id "${clientId}".`);
+  }
+  return client.primaryCoachId;
+}
+
 // ---------------------------------------------------------------------------
 // Sample workspace-scoped chat/review records — isolation verification only.
 //
@@ -309,6 +327,7 @@ export const OPTIM_SAMPLE_MESSAGES: ChatMessage[] = [
     id: "msg-optim-1",
     workspaceId: WORKSPACE_OPTIM_ID,
     clientId: CLIENT_PROFILE_DEMO.id,
+    assignedCoachId: COACH_PROFILE_TEAGUE.id,
     sender: "client",
     text: "Can I use turkey instead of chicken?",
     createdAtIso: "2026-07-27T16:00:00.000Z",
@@ -317,6 +336,7 @@ export const OPTIM_SAMPLE_MESSAGES: ChatMessage[] = [
     id: "msg-optim-2",
     workspaceId: WORKSPACE_OPTIM_ID,
     clientId: CLIENT_PROFILE_DEMO.id,
+    assignedCoachId: COACH_PROFILE_TEAGUE.id,
     sender: "assistant",
     text: "Yes — keep the meal's protein and total calories close to the original.",
     createdAtIso: "2026-07-27T16:00:05.000Z",
@@ -325,6 +345,7 @@ export const OPTIM_SAMPLE_MESSAGES: ChatMessage[] = [
     id: "msg-optim-3",
     workspaceId: WORKSPACE_OPTIM_ID,
     clientId: CLIENT_PROFILE_DEMO.id,
+    assignedCoachId: COACH_PROFILE_TEAGUE.id,
     sender: "coach",
     text: "Nice work last week — 100% consistency.",
     createdAtIso: "2026-07-27T09:00:00.000Z",
@@ -336,6 +357,7 @@ export const ATLAS_SAMPLE_MESSAGES: ChatMessage[] = [
     id: "msg-atlas-1",
     workspaceId: WORKSPACE_ATLAS_ID,
     clientId: CLIENT_PROFILE_JORDAN.id,
+    assignedCoachId: COACH_PROFILE_PRIYA.id,
     sender: "client",
     text: "Can I move my long run to Friday?",
     createdAtIso: "2026-07-27T16:00:00.000Z",
@@ -344,6 +366,7 @@ export const ATLAS_SAMPLE_MESSAGES: ChatMessage[] = [
     id: "msg-atlas-2",
     workspaceId: WORKSPACE_ATLAS_ID,
     clientId: CLIENT_PROFILE_JORDAN.id,
+    assignedCoachId: COACH_PROFILE_PRIYA.id,
     sender: "coach",
     text: "Yes, that works — I'll adjust the plan.",
     createdAtIso: "2026-07-27T16:05:00.000Z",
@@ -357,9 +380,13 @@ export const OPTIM_SAMPLE_REVIEW_REQUESTS: ReviewRequest[] = [
     id: "review-optim-1",
     workspaceId: WORKSPACE_OPTIM_ID,
     clientId: CLIENT_PROFILE_DEMO.id,
+    assignedCoachId: COACH_PROFILE_TEAGUE.id,
     kind: "rpe-anomaly",
+    severity: "normal",
     createdAtIso: "2026-07-27T18:00:00.000Z",
+    updatedAtIso: "2026-07-27T18:00:00.000Z",
     summary: "Today's push workout has RPE values worth a second look.",
+    status: "needs_review",
     resolved: false,
   },
 ];
@@ -369,9 +396,13 @@ export const ATLAS_SAMPLE_REVIEW_REQUESTS: ReviewRequest[] = [
     id: "review-atlas-1",
     workspaceId: WORKSPACE_ATLAS_ID,
     clientId: CLIENT_PROFILE_JORDAN.id,
+    assignedCoachId: COACH_PROFILE_PRIYA.id,
     kind: "schedule-change",
+    severity: "normal",
     createdAtIso: "2026-07-27T18:00:00.000Z",
+    updatedAtIso: "2026-07-27T18:00:00.000Z",
     summary: "Long run moved to Friday.",
+    status: "needs_review",
     resolved: false,
   },
 ];

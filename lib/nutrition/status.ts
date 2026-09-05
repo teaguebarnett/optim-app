@@ -72,5 +72,5 @@ export function deriveNutritionStatusLine(params: {
       : `Next up: ${MEAL_PERIOD_LABELS[nextUnresolved]}.`;
   }
 
-  return nutritionStatusMessage(totals, state.meals);
+  return nutritionStatusMessage(totals, state.meals, targets);
 }

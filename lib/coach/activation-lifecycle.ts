@@ -1,0 +1,385 @@
+// Phase 5.4A — the activation-generation lifecycle: idempotent generation,
+// regeneration-with-history, and the one real write path that makes an
+// approved selection reach the client's actual Today/Training/Nutrition
+// experience (Part X of the phase brief).
+//
+// Every pure decision (what state a client is in, whether generation is
+// idempotent, what regenerating produces) lives here as a testable function
+// — see lib/coach/verify-activation-lifecycle.mts. The one genuinely
+// side-effecting function, approveActivation, follows the exact same
+// "direct AppState read/merge/write, PlatformState change handled
+// separately by the caller" split already established by
+// lib/coach/setup.ts/program-assignment.ts/review-lifecycle.ts — there is
+// no transaction system in this client-side prototype, so "atomic" here
+// means "every write is derived from data computed before any write
+// begins, executed in one synchronous call with no intervening async gap,"
+// not a real multi-store transaction. This is disclosed, not hidden.
+
+import { applyCoachSetup } from "./setup.ts";
+import { saveClientProgram } from "./program-assignment.ts";
+import { getHealthReview } from "./repository.ts";
+import { RESOLVED_HEALTH_REVIEW_STATUSES } from "./types.ts";
+import { extractClientSnapshot, generateThreeNutritionStrategies, generateThreeTrainingOptions, type GeneratedNutritionStrategy, type GeneratedTrainingOption } from "./activation-generation.ts";
+import { buildInitialCommunicationPolicy, type ClientCommunicationPolicy } from "./communication-policy.ts";
+import type { CoachOperatingModel } from "./operating-model.ts";
+import type { CoachAiAuthoritySettings } from "./ai-authority.ts";
+import type { PlatformState } from "./platform-store.ts";
+import type { ClientProfile, ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
+import type { OnboardingProgress } from "./types";
+
+export const ACTIVATION_GENERATOR_VERSION = "5.4A-deterministic-1";
+
+export type ActivationLifecycleState =
+  | "awaiting_coach_calibration"
+  | "awaiting_client_onboarding"
+  | "ready_to_generate"
+  | "generating"
+  | "ready_for_review"
+  | "blocked"
+  | "approved"
+  | "activated"
+  | "superseded"
+  | "generation_failed";
+
+export interface ActivationApprovalRecord {
+  approvedByCoachId: CoachProfileId;
+  approvedAtIso: string;
+  aiAuthorityLevelAtApproval: string;
+  resultingProgramId: string;
+}
+
+export interface ActivationGenerationRecord {
+  id: string;
+  clientId: ClientProfileId;
+  workspaceId: WorkspaceId;
+  coachId: CoachProfileId;
+  coachModelVersion: number;
+  generatorVersion: string;
+  /** Real idempotency key — see computeIdempotencyKey. Two generation
+   * requests with the same key always resolve to the SAME record (see
+   * findExistingGeneration), never a duplicate. */
+  idempotencyKey: string;
+  state: ActivationLifecycleState;
+  createdAtIso: string;
+  updatedAtIso: string;
+  trainingOptions: GeneratedTrainingOption[];
+  nutritionOptions: GeneratedNutritionStrategy[];
+  blockedReasons?: string[];
+  selectedTrainingOptionId?: string;
+  selectedNutritionOptionId?: string;
+  regeneratedFromRecordId?: string;
+  regenerationInstruction?: string;
+  approval?: ActivationApprovalRecord;
+  failureReason?: string;
+}
+
+export function computeIdempotencyKey(input: { clientId: ClientProfileId; onboardingCompletedAtIso: string; coachModelVersion: number; regenerationInstruction?: string }): string {
+  const suffix = input.regenerationInstruction ? `::regen:${input.regenerationInstruction.trim().toLowerCase()}` : "";
+  return `${input.clientId}::${input.onboardingCompletedAtIso}::com-v${input.coachModelVersion}::${ACTIVATION_GENERATOR_VERSION}${suffix}`;
+}
+
+/** Real idempotency — retrying the same generation request (same client,
+ * same completed onboarding, same active Coach Operating Model version,
+ * same generator version, same/no regeneration instruction) always returns
+ * the existing record rather than creating a duplicate. See this phase's
+ * brief §V and §XV.22. */
+export function findExistingGeneration(records: ActivationGenerationRecord[], idempotencyKey: string): ActivationGenerationRecord | null {
+  return records.find((r) => r.idempotencyKey === idempotencyKey) ?? null;
+}
+
+export function latestGenerationForClient(records: ActivationGenerationRecord[], clientId: ClientProfileId): ActivationGenerationRecord | null {
+  const forClient = records.filter((r) => r.clientId === clientId).sort((a, b) => (a.createdAtIso < b.createdAtIso ? 1 : -1));
+  return forClient[0] ?? null;
+}
+
+export interface DetermineStateInput {
+  onboarding: OnboardingProgress | null;
+  activeCoachOperatingModel: CoachOperatingModel | null;
+  healthReviewResolved: boolean | "no_review_needed";
+}
+
+/** The honest lifecycle state for a client BEFORE any generation attempt —
+ * see this phase's brief §V's state list. Never returns "ready_to_generate"
+ * unless every real prerequisite is actually met. */
+export function determinePreGenerationState(input: DetermineStateInput): ActivationLifecycleState {
+  if (!input.activeCoachOperatingModel) return "awaiting_coach_calibration";
+  if (!input.onboarding?.completedAtIso) return "awaiting_client_onboarding";
+  if (input.healthReviewResolved === false) return "blocked";
+  return "ready_to_generate";
+}
+
+export interface GenerateActivationInput {
+  clientId: ClientProfileId;
+  workspaceId: WorkspaceId;
+  coachId: CoachProfileId;
+  onboarding: OnboardingProgress | null;
+  activeCoachOperatingModel: CoachOperatingModel | null;
+  healthReviewResolved: boolean | "no_review_needed";
+  existingRecords: ActivationGenerationRecord[];
+  durationWeeks?: number;
+  regenerationInstruction?: string;
+  nowIso: string;
+}
+
+export interface GenerateActivationResult {
+  record: ActivationGenerationRecord;
+  /** True when an existing record was returned instead of generating a new
+   * one — the idempotency path. */
+  reused: boolean;
+}
+
+/**
+ * The one real generation orchestrator. Pure: given the same inputs, always
+ * produces the same decision. Deterministic generation is synchronous in
+ * this prototype (no real model call to await), so "generating" is never
+ * actually observed as a persisted state — it is still a real, valid value
+ * of ActivationLifecycleState for a future async provider (see this
+ * phase's final report §16) to use.
+ */
+export function generateActivation(input: GenerateActivationInput): GenerateActivationResult {
+  const preState = determinePreGenerationState({ onboarding: input.onboarding, activeCoachOperatingModel: input.activeCoachOperatingModel, healthReviewResolved: input.healthReviewResolved });
+
+  if (preState !== "ready_to_generate") {
+    const reasons =
+      preState === "awaiting_coach_calibration"
+        ? ["This coach hasn't completed coach onboarding yet — no active Coach Operating Model exists."]
+        : preState === "awaiting_client_onboarding"
+          ? ["This client hasn't completed onboarding yet."]
+          : ["The client's intake flagged something that needs coach review before activation can proceed."];
+    return {
+      reused: false,
+      record: {
+        id: `activation-${input.clientId}-${Date.now()}`,
+        clientId: input.clientId,
+        workspaceId: input.workspaceId,
+        coachId: input.coachId,
+        coachModelVersion: input.activeCoachOperatingModel?.version ?? 0,
+        generatorVersion: ACTIVATION_GENERATOR_VERSION,
+        idempotencyKey: `${input.clientId}::${preState}`,
+        state: preState,
+        createdAtIso: input.nowIso,
+        updatedAtIso: input.nowIso,
+        trainingOptions: [],
+        nutritionOptions: [],
+        blockedReasons: reasons,
+      },
+    };
+  }
+
+  const idempotencyKey = computeIdempotencyKey({
+    clientId: input.clientId,
+    onboardingCompletedAtIso: input.onboarding!.completedAtIso!,
+    coachModelVersion: input.activeCoachOperatingModel!.version,
+    regenerationInstruction: input.regenerationInstruction,
+  });
+  const existing = findExistingGeneration(input.existingRecords, idempotencyKey);
+  // "blocked" (every option failed a hard constraint) and "generation_failed"
+  // (an exception) are never treated as a valid cached result to reuse —
+  // both represent an attempt that produced nothing usable, so a coach
+  // retrying (after e.g. a fix to the generator, or updated client data)
+  // must always get a fresh run rather than the same non-result forever.
+  if (existing && existing.state !== "generation_failed" && existing.state !== "blocked") return { record: existing, reused: true };
+
+  // Lineage for the audit trail (Part XIV): a plain retry of the identical
+  // request links back to the exact same-key record it's replacing (the
+  // blocked/failed case above). A genuine "regenerate with instruction"
+  // request always computes a DIFFERENT idempotency key (see
+  // computeIdempotencyKey's regenerationInstruction suffix), so `existing`
+  // is never a match for it — without this, regeneratedFromRecordId would
+  // silently stay unset for every real regeneration, breaking the "new
+  // version, old one preserved and traceable" requirement. Link instead to
+  // this client's most recent prior record.
+  const lineageSource = existing ?? (input.regenerationInstruction ? latestGenerationForClient(input.existingRecords, input.clientId) : null);
+
+  const snapshotResult = extractClientSnapshot(input.onboarding);
+  if ("missing" in snapshotResult) {
+    return {
+      reused: false,
+      record: {
+        id: `activation-${input.clientId}-${Date.now()}`,
+        clientId: input.clientId,
+        workspaceId: input.workspaceId,
+        coachId: input.coachId,
+        coachModelVersion: input.activeCoachOperatingModel!.version,
+        generatorVersion: ACTIVATION_GENERATOR_VERSION,
+        idempotencyKey,
+        state: "blocked",
+        createdAtIso: input.nowIso,
+        updatedAtIso: input.nowIso,
+        trainingOptions: [],
+        nutritionOptions: [],
+        blockedReasons: snapshotResult.missing,
+      },
+    };
+  }
+
+  try {
+    const durationWeeks = input.durationWeeks ?? input.activeCoachOperatingModel!.practice.typicalProgramLengthWeeks ?? 12;
+    const trainingOptions = generateThreeTrainingOptions({
+      clientId: input.clientId,
+      workspaceId: input.workspaceId,
+      coachId: input.coachId,
+      snapshot: snapshotResult.snapshot,
+      com: input.activeCoachOperatingModel!,
+      durationWeeks,
+      nowIso: input.nowIso,
+    });
+    const nutritionOptions = generateThreeNutritionStrategies({ snapshot: snapshotResult.snapshot, com: input.activeCoachOperatingModel!, nowIso: input.nowIso });
+
+    const anyHardConstraintFailure = trainingOptions.every((o) => !o.constraints.passed);
+    const record: ActivationGenerationRecord = {
+      id: `activation-${input.clientId}-${Date.now()}`,
+      clientId: input.clientId,
+      workspaceId: input.workspaceId,
+      coachId: input.coachId,
+      coachModelVersion: input.activeCoachOperatingModel!.version,
+      generatorVersion: ACTIVATION_GENERATOR_VERSION,
+      idempotencyKey,
+      state: anyHardConstraintFailure ? "blocked" : "ready_for_review",
+      createdAtIso: input.nowIso,
+      updatedAtIso: input.nowIso,
+      trainingOptions,
+      nutritionOptions,
+      blockedReasons: anyHardConstraintFailure ? ["Every generated training option failed a hard constraint check — see each option's constraint results."] : undefined,
+      regeneratedFromRecordId: lineageSource?.id,
+      regenerationInstruction: input.regenerationInstruction,
+    };
+    return { record, reused: false };
+  } catch (err) {
+    return {
+      reused: false,
+      record: {
+        id: `activation-${input.clientId}-${Date.now()}`,
+        clientId: input.clientId,
+        workspaceId: input.workspaceId,
+        coachId: input.coachId,
+        coachModelVersion: input.activeCoachOperatingModel!.version,
+        generatorVersion: ACTIVATION_GENERATOR_VERSION,
+        idempotencyKey,
+        state: "generation_failed",
+        createdAtIso: input.nowIso,
+        updatedAtIso: input.nowIso,
+        trainingOptions: [],
+        nutritionOptions: [],
+        failureReason: err instanceof Error ? err.message : "Unknown generation error.",
+      },
+    };
+  }
+}
+
+export function selectActivationOptions(record: ActivationGenerationRecord, trainingOptionId: string, nutritionOptionId: string | null, nowIso: string): ActivationGenerationRecord {
+  return { ...record, selectedTrainingOptionId: trainingOptionId, selectedNutritionOptionId: nutritionOptionId ?? undefined, updatedAtIso: nowIso };
+}
+
+export interface ApproveActivationInput {
+  record: ActivationGenerationRecord;
+  client: ClientProfile;
+  approvedByCoachId: CoachProfileId;
+  aiAuthorityLevelAtApproval: string;
+  clientFirstName: string;
+  coachName: string;
+  businessName: string;
+  com: CoachOperatingModel;
+  aiMayRespondDirectlyForRoutine: boolean;
+  assignWeeklyCheckIn: boolean;
+  startDateIso: string;
+  nowIso: string;
+}
+
+export interface ApproveActivationResult {
+  updatedRecord: ActivationGenerationRecord;
+  communicationPolicy: ClientCommunicationPolicy;
+}
+
+/**
+ * The one real write path from an approved selection to the client's
+ * actual daily experience (Part X of the phase brief). Requires a selected
+ * training option (nutrition is optional — a coach may run
+ * training-only). Writes, in order: the real ClientAssignedProgram (full
+ * weeks/exercises — see saveClientProgram), the real enrollment + nutrition
+ * targets (see applyCoachSetup), and returns the real communication-policy
+ * record and the updated generation record for the caller to persist via
+ * the platform reducer (SAVE_ACTIVATION_GENERATION,
+ * SAVE_COMMUNICATION_POLICY, SET_CLIENT_LIFECYCLE) — see
+ * components/coach/activation-studio/ for that call site.
+ */
+export function approveActivation(input: ApproveActivationInput): ApproveActivationResult {
+  const selectedTraining = input.record.trainingOptions.find((o) => o.id === input.record.selectedTrainingOptionId);
+  if (!selectedTraining) throw new Error("No training option selected — cannot approve activation.");
+  const selectedNutrition = input.record.nutritionOptions.find((o) => o.id === input.record.selectedNutritionOptionId) ?? null;
+
+  // Real write #1: the full, real training content — every week, every
+  // exercise, every prescribed set (see lib/coach/training.ts's
+  // buildPrescribedSets) — exactly what the client's live guided workout
+  // flow and Training/Today pages already know how to render.
+  saveClientProgram(input.client.id, input.client.workspaceId, input.approvedByCoachId, selectedTraining.program);
+
+  // Real write #2: the enrollment (start date/duration/week derivation) and
+  // real nutrition targets on AppState — the same applyCoachSetup path the
+  // existing manual coach-setup screen already uses, so a generated
+  // activation and a manually-built one are indistinguishable downstream.
+  applyCoachSetup({
+    clientId: input.client.id,
+    workspaceId: input.client.workspaceId,
+    primaryCoachId: input.approvedByCoachId,
+    startDateIso: input.startDateIso,
+    durationWeeks: selectedTraining.program.durationWeeks,
+    nutritionTargets: selectedNutrition?.targets ?? { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+    assignWeeklyCheckIn: input.assignWeeklyCheckIn,
+    now: new Date(input.nowIso),
+  });
+
+  const communicationPolicy = buildInitialCommunicationPolicy({
+    clientId: input.client.id,
+    workspaceId: input.client.workspaceId,
+    coachId: input.approvedByCoachId,
+    clientFirstName: input.clientFirstName,
+    coachName: input.coachName,
+    businessName: input.businessName,
+    com: input.com,
+    aiMayRespondDirectlyForRoutine: input.aiMayRespondDirectlyForRoutine,
+    nowIso: input.nowIso,
+  });
+
+  const updatedRecord: ActivationGenerationRecord = {
+    ...input.record,
+    state: "activated",
+    updatedAtIso: input.nowIso,
+    approval: {
+      approvedByCoachId: input.approvedByCoachId,
+      approvedAtIso: input.nowIso,
+      aiAuthorityLevelAtApproval: input.aiAuthorityLevelAtApproval,
+      resultingProgramId: selectedTraining.program.id,
+    },
+  };
+
+  return { updatedRecord, communicationPolicy };
+}
+
+/** Whether this client's health status honestly permits auto-activation —
+ * consulted independently of (and BEFORE) any AI Authority disposition, per
+ * this phase's brief: "Safety rules... override every authority level." */
+export function healthReviewPermitsActivation(platform: PlatformState, clientId: ClientProfileId): boolean | "no_review_needed" {
+  const review = getHealthReview(platform, clientId);
+  if (!review) return "no_review_needed";
+  return RESOLVED_HEALTH_REVIEW_STATUSES.has(review.status);
+}
+
+/** All AI Authority settings must independently agree AND the health/data
+ * checks must pass before OPTIM may auto-activate a client with no
+ * per-action coach approval — this phase's brief §XI's "Autonomous" level.
+ * Never consulted for Advisor/Copilot/AI-led, which always require at
+ * least the concise-confirmation-or-approval path built into the
+ * Activation Studio UI. */
+export function canAutoActivateWithoutApproval(input: {
+  authoritySettings: CoachAiAuthoritySettings;
+  clientId: ClientProfileId;
+  healthReviewResolved: boolean | "no_review_needed";
+  record: ActivationGenerationRecord;
+}): boolean {
+  if (input.healthReviewResolved === false) return false;
+  if (input.record.state !== "ready_for_review") return false;
+  const selected = input.record.trainingOptions.find((o) => o.id === input.record.selectedTrainingOptionId);
+  if (!selected || !selected.constraints.passed) return false;
+  return input.authoritySettings.clientOverrides[input.clientId]?.level === "review_only" || input.authoritySettings.global.level === "review_only";
+}

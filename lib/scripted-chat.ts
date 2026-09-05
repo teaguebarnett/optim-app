@@ -1,18 +1,17 @@
-import { SCRIPTED_CHAT_TOPICS } from "./mock-data";
+import { SCRIPTED_CHAT_TOPICS } from "./mock-data.ts";
 import type { ScriptedChatTopic } from "./types";
 
+// "shoulder-discomfort" is deliberately absent here — pain/injury language
+// is always intercepted and escalated to the assigned coach before this
+// keyword map is ever consulted (see lib/chat/assistant.ts's
+// classifyClientMessage), so it must never resolve to this canned reply.
 const KEYWORD_MAP: Array<{ topicId: string; keywords: string[] }> = [
   { topicId: "meal-substitution", keywords: ["turkey", "substitut", "swap", "instead of chicken"] },
   { topicId: "exercise-technique", keywords: ["rpe", "technique", "form", "how do i"] },
   { topicId: "missed-workout", keywords: ["miss", "skip today", "can't train", "cant train"] },
-  { topicId: "shoulder-discomfort", keywords: ["shoulder", "hurt", "pain", "sore"] },
   { topicId: "restaurant-meal", keywords: ["restaurant", "eating out", "dinner out"] },
   { topicId: "schedule-change", keywords: ["schedule", "later today", "reschedule", "train later"] },
 ];
-
-export function genericFallbackResponse(coachName: string): string {
-  return `Real AI has not been connected in this prototype yet, so I can't answer that specific question. ${coachName} will see your message and follow up, or you can try one of the suggested questions above.`;
-}
 
 export function findScriptedResponse(userText: string): ScriptedChatTopic | null {
   const normalized = userText.toLowerCase();

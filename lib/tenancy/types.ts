@@ -98,6 +98,13 @@ export interface CoachProfile {
   displayName: string;
   title: string;
   avatarInitials: string;
+  /** A coach-authored replacement for the generated client-welcome copy
+   * (see components/onboarding/coach-welcome.tsx) — absent for every coach
+   * today, since there's no editor UI for it yet (white-label coach
+   * onboarding is a future phase). The welcome screen already reads this
+   * field so that editor can ship later without touching the screen
+   * itself. */
+  welcomeMessage?: string;
 }
 
 /** The client-facing identity used throughout the app. Every screen must
@@ -108,6 +115,10 @@ export interface ClientProfile {
   workspaceId: WorkspaceId;
   userId?: UserId;
   name: string;
+  /** Present for a client created through the coach's "Add client" flow
+   * (see lib/coach/repository.ts) — the seeded demo/fixture clients predate
+   * that flow and never had one. */
+  email?: string;
   goal: string;
   programWeek: number;
   programTotalWeeks: number;

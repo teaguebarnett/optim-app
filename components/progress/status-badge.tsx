@@ -1,14 +1,16 @@
-import { AlertCircle, CheckCircle2, Circle, Clock, MinusCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, Clock, MinusCircle, Sparkles } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export type BadgeTone = "success" | "warning" | "error" | "neutral" | "accent";
+export type BadgeTone = "success" | "warning" | "error" | "neutral" | "accent" | "steel" | "brass";
 
 const TONE_CLASSNAMES: Record<BadgeTone, string> = {
   success: "bg-success-soft text-success",
   warning: "bg-warning-soft text-warning",
   error: "bg-error-soft text-error",
-  neutral: "bg-off-white/[0.06] text-neutral",
+  neutral: "bg-surface-raised text-neutral border border-border",
   accent: "bg-accent-soft text-accent-strong",
+  steel: "bg-steel-soft text-steel",
+  brass: "bg-brass-soft text-brass-strong",
 };
 
 const TONE_ICONS: Record<BadgeTone, typeof CheckCircle2> = {
@@ -17,6 +19,8 @@ const TONE_ICONS: Record<BadgeTone, typeof CheckCircle2> = {
   error: MinusCircle,
   neutral: Circle,
   accent: Clock,
+  steel: Circle,
+  brass: Sparkles,
 };
 
 /** A single small badge shared by every Progress card — status is always

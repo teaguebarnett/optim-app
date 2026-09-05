@@ -1,10 +1,10 @@
-import { MEAL_OPTIONS, PUSH_WORKOUT } from "./mock-data.ts";
+import { MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT } from "./mock-data.ts";
 import { buildWorkoutSummary } from "./workout-analysis.ts";
-import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID } from "./tenancy/seed.ts";
-import type { ClientProfileId, WorkspaceId } from "./tenancy/types";
+import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID, resolveAssignedCoachId } from "./tenancy/seed.ts";
+import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
 import { setTrainingStatus, setTrainingTime } from "./planning/training-plan.ts";
 import type { DailyTrainingPlan } from "./planning/types";
-import { buildDemoDefaultProgramEnrollment } from "./scheduling/enrollment.ts";
+import { buildDefaultProgramEnrollmentFor, buildDemoDefaultProgramEnrollment } from "./scheduling/enrollment.ts";
 import { resolveClientLocalDateIso } from "./shared/local-date.ts";
 import type { CheckInScheduleConfig, ProgramEnrollment } from "./scheduling/types";
 import {
@@ -16,9 +16,11 @@ import {
 } from "./workout/session-flow.ts";
 import { resolveExerciseWarmupConfig, resolveSessionWarmupConfig } from "./workout/warmup.ts";
 import { classifyPainSeverity } from "./workout/pain-policy.ts";
+import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import type {
   CardioLog,
   ChatMessage,
+  ClientAssignedProgram,
   ExerciseLog,
   LoggedSet,
   MacroValues,
@@ -27,10 +29,12 @@ import type {
   MealPeriod,
   MealSelection,
   MorningWeightLog,
+  NutritionTargets,
   PainInterruption,
   PainReport,
   PainSymptomQuality,
   ReviewRequest,
+  ReviewRequestKind,
   RpeValue,
   SkipReason,
   WarmupOutcome,
@@ -48,9 +52,17 @@ const DEMO_WORKSPACE_ID: WorkspaceId = WORKSPACE_OPTIM_ID;
 const DEMO_CLIENT_ID: ClientProfileId = CLIENT_PROFILE_DEMO.id;
 
 export interface AppState {
-  version: 7;
+  version: 12;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
+  /** This client's assigned coach, resolved ONCE when this state is first
+   * created and carried forward from then on — never re-derived via
+   * lib/tenancy/seed.ts's resolveAssignedCoachId, which only knows the
+   * compile-time seed roster and throws for a coach-created client (see
+   * lib/coach/repository.ts's module doc). Every reducer case that stamps
+   * assignedCoachId onto a new ChatMessage/ReviewRequest reads this field
+   * directly instead. */
+  primaryCoachId: CoachProfileId;
   dateIso: string;
   morningWeight: MorningWeightLog;
   meals: Partial<Record<MealPeriod, MealSelection>>;
@@ -77,6 +89,21 @@ export interface AppState {
    * that's built — never auto-populated with a default weekly schedule the
    * way it used to be. */
   checkInSchedule: CheckInScheduleConfig | null;
+  /** Phase 5.0B — this client's own coach-controlled daily targets. OPTIM
+   * never derives or silently adjusts these; they only ever change through
+   * an explicit coach action (see lib/coach/setup.ts's applyCoachSetup).
+   * Defaults to the same NUTRITION_TARGETS every client has always used
+   * (lib/mock-data.ts) so the seeded demo client's behavior is unchanged —
+   * a newly coach-activated client gets their own real values written here
+   * instead by the coach setup flow. */
+  nutritionTargets: NutritionTargets;
+  /** Phase 5.2 — this client's own independent training-protocol copy,
+   * created directly by the coach or assigned from one of their saved
+   * templates (see lib/coach/training.ts). Null/undefined means no coach
+   * has assigned one yet — resolveWorkoutAvailabilityForDay (lib/mock-data.ts)
+   * falls back to the global demo catalog exactly as it always has, so the
+   * seeded demo client is completely unaffected by this field's addition. */
+  assignedProgram?: ClientAssignedProgram;
 }
 
 /** Not-started per-exercise warm-up outcomes for every exercise in a
@@ -90,7 +117,10 @@ function initialExerciseWarmups(): Record<string, WarmupOutcome> {
   return warmups;
 }
 
-export function createInitialWorkoutSession(): WorkoutSession {
+export function createInitialWorkoutSession(
+  workspaceId: WorkspaceId = DEMO_WORKSPACE_ID,
+  clientId: ClientProfileId = DEMO_CLIENT_ID
+): WorkoutSession {
   const exerciseLogs: WorkoutSession["exerciseLogs"] = {};
   for (const exercise of PUSH_WORKOUT.exercises) {
     exerciseLogs[exercise.id] = {
@@ -100,8 +130,8 @@ export function createInitialWorkoutSession(): WorkoutSession {
     };
   }
   return {
-    workspaceId: DEMO_WORKSPACE_ID,
-    clientId: DEMO_CLIENT_ID,
+    workspaceId,
+    clientId,
     workoutId: PUSH_WORKOUT.id,
     status: "not-started",
     exerciseLogs,
@@ -120,30 +150,53 @@ export function createInitialWorkoutSession(): WorkoutSession {
   };
 }
 
-export function createInitialState(): AppState {
+export interface CreateInitialStateOptions {
+  /** Overrides the identity a fresh state is stamped with — used to give a
+   * coach-created client their OWN independent state (see
+   * lib/tenancy/client-state-store.ts) rather than the demo client's.
+   * Defaults preserve every existing call site's exact prior behavior. */
+  workspaceId?: WorkspaceId;
+  clientId?: ClientProfileId;
+  /** This client's assigned coach — required for any clientId outside the
+   * compile-time seed roster (resolveAssignedCoachId throws for those; see
+   * AppState.primaryCoachId's own doc). Every caller creating state for a
+   * coach-created client (lib/tenancy/client-state-store.ts,
+   * lib/coach/setup.ts) already has the real ClientProfile in hand and
+   * passes its primaryCoachId here. */
+  primaryCoachId?: CoachProfileId;
+}
+
+export function createInitialState(options: CreateInitialStateOptions = {}): AppState {
+  const workspaceId = options.workspaceId ?? DEMO_WORKSPACE_ID;
+  const clientId = options.clientId ?? DEMO_CLIENT_ID;
+  const primaryCoachId = options.primaryCoachId ?? resolveAssignedCoachId(clientId);
   // Phase 4.1 corrective — dateIso and programEnrollment are derived from
   // the exact same instant, through the same client-local IANA-timezone
   // resolver (lib/shared/local-date.ts), so they can never diverge into two
   // different "today"s — see the module doc on maintaining one
   // authoritative effective-date source.
   const now = new Date();
-  const programEnrollment = buildDemoDefaultProgramEnrollment(now);
+  const programEnrollment =
+    clientId === DEMO_CLIENT_ID
+      ? buildDemoDefaultProgramEnrollment(now)
+      : buildDefaultProgramEnrollmentFor(workspaceId, clientId, now);
   return {
-    version: 7,
-    workspaceId: DEMO_WORKSPACE_ID,
-    clientId: DEMO_CLIENT_ID,
+    version: 12,
+    workspaceId,
+    clientId,
+    primaryCoachId,
     dateIso: resolveClientLocalDateIso(now, programEnrollment.timeZone),
     morningWeight: { weightLb: null, skipped: false },
     meals: {},
     cardio: { status: "not-started", durationMin: 0 },
     dailyTrainingPlan: null,
-    workoutSession: createInitialWorkoutSession(),
+    workoutSession: createInitialWorkoutSession(workspaceId, clientId),
     chatMessages: [],
     reviewRequests: [],
     programEnrollment,
-    // No coach-facing assignment UI exists yet — the demo client never
-    // gets a check-in auto-assigned. See the field's doc on AppState.
+    // No check-in is ever auto-assigned — see the field's doc on AppState.
     checkInSchedule: null,
+    nutritionTargets: NUTRITION_TARGETS,
   };
 }
 
@@ -281,7 +334,14 @@ export type Action =
   | { type: "WORKOUT_ROUTE_LEFT" }
   | { type: "COMPLETE_WORKOUT"; summary: WorkoutSummary }
   | { type: "SKIP_WORKOUT"; reason: SkipReason; note?: string }
-  | { type: "ADD_CHAT_MESSAGE"; message: Omit<ChatMessage, "workspaceId" | "clientId"> }
+  | { type: "ADD_CHAT_MESSAGE"; message: Omit<ChatMessage, "workspaceId" | "clientId" | "assignedCoachId"> }
+  /** A Chat-originated escalation (pain/injury, an exercise substitution, or
+   * a broader program-change request) that must go to the assigned coach —
+   * OPTIM itself never approves or invents these. `sourceMessageId` links
+   * back to the client's own ChatMessage (and any attachments on it) so a
+   * future coach workspace never has to duplicate that content onto the
+   * request itself. See lib/chat/assistant.ts for what routes here. */
+  | { type: "CREATE_CHAT_REVIEW_REQUEST"; kind: ReviewRequestKind; summary: string; sourceMessageId?: string }
   | { type: "RESET_TODAY" }
   | { type: "LOAD_PRESET"; preset: "completed-day" | "awaiting-review" };
 
@@ -731,15 +791,26 @@ export function reducer(state: AppState, action: Action): AppState {
         note: action.note,
         requiresCoachReview: true,
       };
-      const reviewRequest: ReviewRequest = {
-        id: nextId("review"),
+      const painReviewCandidate = {
         workspaceId: state.workspaceId,
         clientId: state.clientId,
-        kind: "pain-report",
-        createdAtIso: report.createdAtIso,
-        summary: `Pain reported: ${action.location} during today's workout.`,
-        resolved: false,
+        assignedCoachId: state.primaryCoachId,
+        kind: "pain-report" as const,
+        sourceEventId: report.id,
       };
+      const existingPainReview = findDuplicateReviewRequest(state.reviewRequests, painReviewCandidate);
+      const reviewRequest: ReviewRequest | null = existingPainReview
+        ? null
+        : {
+            id: nextId("review"),
+            ...painReviewCandidate,
+            severity: severityForKind("pain-report"),
+            createdAtIso: report.createdAtIso,
+            updatedAtIso: report.createdAtIso,
+            summary: `Pain reported: ${action.location} during today's workout.`,
+            status: "needs_review",
+            resolved: false,
+          };
 
       const interruption: PainInterruption | undefined = exerciseId
         ? {
@@ -773,7 +844,7 @@ export function reducer(state: AppState, action: Action): AppState {
           // safety state with no subject.
           ...(interruption ? { phase: "pain-review" as const, activePainInterruption: interruption } : {}),
         },
-        reviewRequests: [...state.reviewRequests, reviewRequest],
+        reviewRequests: reviewRequest ? [...state.reviewRequests, reviewRequest] : state.reviewRequests,
       };
     }
 
@@ -805,15 +876,20 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "FLAG_TECHNIQUE_QUESTION": {
+      const nowIso = new Date().toISOString();
       const reviewRequest: ReviewRequest = {
         id: nextId("review"),
         workspaceId: state.workspaceId,
         clientId: state.clientId,
+        assignedCoachId: state.primaryCoachId,
         kind: "technique-flag",
-        createdAtIso: new Date().toISOString(),
+        severity: severityForKind("technique-flag"),
+        createdAtIso: nowIso,
+        updatedAtIso: nowIso,
         summary: action.context
           ? `Technique question on ${action.exerciseName}: ${action.context}`
           : `Technique question flagged for ${action.exerciseName}.`,
+        status: "needs_review",
         resolved: false,
       };
       return { ...state, reviewRequests: [...state.reviewRequests, reviewRequest] };
@@ -1009,23 +1085,35 @@ export function reducer(state: AppState, action: Action): AppState {
       // action outside the normal gated UI flow.
       if (action.summary.workingSetsCompleted === 0) return state;
       const reviewRequests = [...state.reviewRequests];
+      const completeWorkoutNowIso = new Date().toISOString();
       if (action.summary.needsReview) {
         // Describe the actual reason for the flag rather than a generic
         // claim — never say "RPE values" unless that's really why.
         const hasSkippedWork = action.summary.exercisesSkipped > 0 || action.summary.skippedSetsCount > 0;
-        reviewRequests.push({
-          id: nextId("review"),
+        const kind: "workout-skipped" | "rpe-anomaly" = hasSkippedWork ? "workout-skipped" : "rpe-anomaly";
+        const candidate = {
           workspaceId: state.workspaceId,
           clientId: state.clientId,
-          kind: hasSkippedWork ? "workout-skipped" : "rpe-anomaly",
-          createdAtIso: new Date().toISOString(),
-          summary: hasSkippedWork
-            ? "Today's push workout was submitted with skipped work."
-            : "Today's push workout has RPE values worth a second look.",
-          resolved: false,
-        });
+          assignedCoachId: state.primaryCoachId,
+          kind,
+          sourceEventId: `${state.workoutSession.workoutId}-${completeWorkoutNowIso.slice(0, 10)}`,
+        };
+        if (!findDuplicateReviewRequest(reviewRequests, candidate)) {
+          reviewRequests.push({
+            id: nextId("review"),
+            ...candidate,
+            severity: severityForKind(kind),
+            createdAtIso: completeWorkoutNowIso,
+            updatedAtIso: completeWorkoutNowIso,
+            summary: hasSkippedWork
+              ? "Today's push workout was submitted with skipped work."
+              : "Today's push workout has RPE values worth a second look.",
+            status: "needs_review",
+            resolved: false,
+          });
+        }
       }
-      const nowIso = new Date().toISOString();
+      const nowIso = completeWorkoutNowIso;
       return {
         ...state,
         workoutSession: {
@@ -1053,17 +1141,28 @@ export function reducer(state: AppState, action: Action): AppState {
       );
       const endedEarly = workingSetsCompleted > 0;
       const nowIso = new Date().toISOString();
-      const reviewRequest: ReviewRequest = {
-        id: nextId("review"),
+      const skipCandidate = {
         workspaceId: state.workspaceId,
         clientId: state.clientId,
-        kind: "workout-skipped",
-        createdAtIso: nowIso,
-        summary: endedEarly
-          ? "Today's push workout ended early after partial completion."
-          : "Today's push workout was skipped.",
-        resolved: false,
+        assignedCoachId: state.primaryCoachId,
+        kind: "workout-skipped" as const,
+        sourceEventId: `${state.workoutSession.workoutId}-${nowIso.slice(0, 10)}`,
       };
+      const existingSkipReview = findDuplicateReviewRequest(state.reviewRequests, skipCandidate);
+      const reviewRequest: ReviewRequest | null = existingSkipReview
+        ? null
+        : {
+            id: nextId("review"),
+            ...skipCandidate,
+            severity: severityForKind("workout-skipped"),
+            createdAtIso: nowIso,
+            updatedAtIso: nowIso,
+            summary: endedEarly
+              ? "Today's push workout ended early after partial completion."
+              : "Today's push workout was skipped.",
+            status: "needs_review",
+            resolved: false,
+          };
       const summary = endedEarly
         ? buildWorkoutSummary(state.workoutSession, state.workoutSession.startedAtIso ?? nowIso, nowIso)
         : undefined;
@@ -1079,23 +1178,62 @@ export function reducer(state: AppState, action: Action): AppState {
           events: [...state.workoutSession.events, { type: "completed", atIso: nowIso }],
           activePainInterruption: null,
         },
-        reviewRequests: [...state.reviewRequests, reviewRequest],
+        reviewRequests: reviewRequest ? [...state.reviewRequests, reviewRequest] : state.reviewRequests,
       };
     }
 
     case "ADD_CHAT_MESSAGE": {
       // Stamp tenant attribution centrally rather than trusting each dispatch
       // site to set it — every message is attributed to the active
-      // workspace/client no matter where ADD_CHAT_MESSAGE is dispatched from.
-      const message: ChatMessage = { ...action.message, workspaceId: state.workspaceId, clientId: state.clientId };
+      // workspace/client/assigned-coach no matter where ADD_CHAT_MESSAGE is
+      // dispatched from. assignedCoachId always comes from the real
+      // client->coach assignment (see resolveAssignedCoachId) — never a
+      // hardcoded coach.
+      const message: ChatMessage = {
+        ...action.message,
+        workspaceId: state.workspaceId,
+        clientId: state.clientId,
+        assignedCoachId: state.primaryCoachId,
+      };
       return { ...state, chatMessages: [...state.chatMessages, message] };
     }
 
+    case "CREATE_CHAT_REVIEW_REQUEST": {
+      const chatReviewCandidate = {
+        workspaceId: state.workspaceId,
+        clientId: state.clientId,
+        assignedCoachId: state.primaryCoachId,
+        kind: action.kind,
+        sourceEventId: action.sourceMessageId,
+      };
+      if (findDuplicateReviewRequest(state.reviewRequests, chatReviewCandidate)) return state;
+      const chatReviewNowIso = new Date().toISOString();
+      const reviewRequest: ReviewRequest = {
+        id: nextId("review"),
+        ...chatReviewCandidate,
+        sourceMessageId: action.sourceMessageId,
+        severity: severityForKind(action.kind),
+        createdAtIso: chatReviewNowIso,
+        updatedAtIso: chatReviewNowIso,
+        summary: action.summary,
+        status: "needs_review",
+        resolved: false,
+      };
+      return { ...state, reviewRequests: [...state.reviewRequests, reviewRequest] };
+    }
+
     case "RESET_TODAY":
-      return createInitialState();
+      // Preserves whichever client (and their real assigned coach) this
+      // state already belongs to — a coach-created client's own "Reset
+      // today" must never silently reassign their daily state to the
+      // seeded demo client's identity, or throw trying to re-derive a
+      // coach id lib/tenancy/seed.ts's resolver can't resolve for them.
+      return createInitialState({ workspaceId: state.workspaceId, clientId: state.clientId, primaryCoachId: state.primaryCoachId });
 
     case "LOAD_PRESET":
-      return action.preset === "completed-day" ? buildCompletedDayPreset() : buildAwaitingReviewPreset();
+      return action.preset === "completed-day"
+        ? buildCompletedDayPreset(state.workspaceId, state.clientId, state.primaryCoachId)
+        : buildAwaitingReviewPreset(state.workspaceId, state.clientId, state.primaryCoachId);
 
     default:
       return state;
@@ -1106,8 +1244,12 @@ export function reducer(state: AppState, action: Action): AppState {
 // Presets for testable states (prototype settings menu)
 // ---------------------------------------------------------------------------
 
-function buildCompletedDayPreset(): AppState {
-  const base = createInitialState();
+function buildCompletedDayPreset(
+  workspaceId: WorkspaceId = DEMO_WORKSPACE_ID,
+  clientId: ClientProfileId = DEMO_CLIENT_ID,
+  primaryCoachId?: CoachProfileId
+): AppState {
+  const base = createInitialState({ workspaceId, clientId, primaryCoachId });
   const now = new Date().toISOString();
 
   base.morningWeight = { weightLb: 190.8, loggedAtIso: now, skipped: false };
@@ -1196,8 +1338,12 @@ function buildCompletedDayPreset(): AppState {
   return base;
 }
 
-function buildAwaitingReviewPreset(): AppState {
-  const base = buildCompletedDayPreset();
+function buildAwaitingReviewPreset(
+  workspaceId: WorkspaceId = DEMO_WORKSPACE_ID,
+  clientId: ClientProfileId = DEMO_CLIENT_ID,
+  primaryCoachId?: CoachProfileId
+): AppState {
+  const base = buildCompletedDayPreset(workspaceId, clientId, primaryCoachId);
   const now = new Date().toISOString();
 
   const inclineLog = base.workoutSession.exerciseLogs["incline-db-press"];
@@ -1237,18 +1383,26 @@ function buildAwaitingReviewPreset(): AppState {
       id: nextId("review"),
       workspaceId: base.workspaceId,
       clientId: base.clientId,
+      assignedCoachId: base.primaryCoachId,
       kind: "pain-report",
+      severity: severityForKind("pain-report"),
       createdAtIso: now,
+      updatedAtIso: now,
       summary: "Pain reported: right shoulder during Incline Dumbbell Press.",
+      status: "needs_review",
       resolved: false,
     },
     {
       id: nextId("review"),
       workspaceId: base.workspaceId,
       clientId: base.clientId,
+      assignedCoachId: base.primaryCoachId,
       kind: "rpe-anomaly",
+      severity: severityForKind("rpe-anomaly"),
       createdAtIso: now,
+      updatedAtIso: now,
       summary: "Today's push workout has RPE values worth a second look.",
+      status: "needs_review",
       resolved: false,
     },
   ];

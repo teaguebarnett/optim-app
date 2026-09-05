@@ -4,6 +4,7 @@ import type {
   CardioOption,
   CardioPrescription,
   CardioTarget,
+  ClientAssignedProgram,
   DailyPlan,
   Exercise,
   MealOption,
@@ -463,6 +464,85 @@ export function catalogWorkoutForDay(
   return Object.values(catalog).find((w) => w.dayOfWeek === dayOfWeek);
 }
 
+export interface WorkoutAvailability {
+  /** The real schedule entry for this day (TRAINING_WEEK), if any. */
+  scheduleEntry: TrainingWeekDay | undefined;
+  /** The real, fully-authored catalog Workout for this day, if one exists —
+   * see catalogWorkoutForDay. */
+  workout: Workout | undefined;
+  /** True only when the weekly schedule prescribes training this day but no
+   * catalog entry backs it, and the client hasn't declared a rest day — an
+   * honest data gap (e.g. Friday's "Upper Workout," which has no matching
+   * WORKOUTS_BY_ID entry), never fabricated and never silently mapped to a
+   * different day's content. */
+  isUnavailable: boolean;
+  /** The catalog workout's own real name when one exists, otherwise the
+   * schedule-only label. Never PUSH_WORKOUT's name unless PUSH_WORKOUT
+   * genuinely is this day's catalog workout. */
+  displayName: string;
+  focus: string | undefined;
+}
+
+/**
+ * The one shared "is there real, executable workout content for this day"
+ * result (Phase 4.4B-1.1 corrective) — computed identically wherever Today
+ * (lib/calculations.ts, components/today/tasks/workout-task.tsx) or
+ * Training (components/training/today-session-card.tsx) need to decide
+ * whether the workout tile/session surface is interactive versus an honest
+ * "Workout details unavailable" state, and lib/planning/planner.ts's daily
+ * plan derivation. Selecting or changing a training time never affects this
+ * result — availability is strictly about whether real catalog content
+ * exists for `dayOfWeek`, never about the client's training-time decision,
+ * so setting a time can never itself lock or unlock a workout.
+ */
+export function resolveWorkoutAvailabilityForDay(
+  dayOfWeek: DayOfWeek,
+  clientDeclaredRest: boolean,
+  /** This client's own coach-assigned program (see lib/coach/training.ts)
+   * and the 1-based week within it that's currently active (see
+   * lib/scheduling/enrollment.ts's deriveProgramWeek) — when both are
+   * present and that week exists, its real content is used INSTEAD of the
+   * global demo catalog below. A client with no assignedProgram, or whose
+   * program doesn't yet cover the current week, falls back to that catalog
+   * exactly as every client always has. */
+  assignedProgram?: ClientAssignedProgram,
+  assignedProgramWeekNumber?: number | null
+): WorkoutAvailability {
+  const assignedWeek =
+    assignedProgram && assignedProgramWeekNumber != null ? assignedProgram.weeks.find((w) => w.weekNumber === assignedProgramWeekNumber) : undefined;
+  const assignedDay = assignedWeek?.days.find((d) => d.dayOfWeek === dayOfWeek);
+
+  if (assignedDay) {
+    const isUnavailable = !clientDeclaredRest && assignedDay.type === "training" && !assignedDay.workout;
+    const scheduleEntry: TrainingWeekDay = {
+      dayOfWeek,
+      label: dayOfWeek.slice(0, 3),
+      type: assignedDay.type,
+      workoutName: assignedDay.workout?.name,
+      focus: assignedDay.workout?.focus,
+      status: "upcoming",
+    };
+    return {
+      scheduleEntry,
+      workout: assignedDay.workout,
+      isUnavailable,
+      displayName: assignedDay.workout?.name ?? (assignedDay.type === "rest" ? "Rest day" : PUSH_WORKOUT.name),
+      focus: assignedDay.workout?.focus,
+    };
+  }
+
+  const scheduleEntry = trainingWeekEntryForDay(dayOfWeek);
+  const workout = catalogWorkoutForDay(dayOfWeek);
+  const isUnavailable = !clientDeclaredRest && !workout && scheduleEntry?.type === "training";
+  return {
+    scheduleEntry,
+    workout,
+    isUnavailable,
+    displayName: workout?.name ?? scheduleEntry?.workoutName ?? PUSH_WORKOUT.name,
+    focus: workout?.focus ?? scheduleEntry?.focus,
+  };
+}
+
 export const TRAINING_WEEKLY_NOTE =
   "Push the incline press progression again this week if RPE allows — everything else stays exactly the same as last week.";
 
@@ -496,14 +576,18 @@ export const SCRIPTED_CHAT_TOPICS: ScriptedChatTopic[] = [
     prompt: "I'm going to miss today's workout.",
     responseSender: "assistant",
     response:
-      "Thanks for letting me know. I've noted it on today's plan and flagged it for Teague. If you can, let me know when you'd like to make it up — otherwise Teague will factor it into this week's programming.",
+      "Thanks for letting me know — I've noted it here so {{coach}} can see it. Let me know if you'd like to make it up, or {{coach}} will factor it into this week's programming.",
   },
   {
+    // Pain/injury is always routed to the assigned coach (see
+    // lib/chat/assistant.ts's classifyClientMessage) rather than answered
+    // with a canned tip — this entry exists only to give the suggestion
+    // carousel a real pain/form example prompt; its `response` is never
+    // actually shown (routing intercepts it before any scripted lookup).
     id: "shoulder-discomfort",
     prompt: "My shoulder hurt during incline press.",
     responseSender: "assistant",
-    response:
-      "I've logged this and prepared it for Teague's review. Your program has not been permanently changed. Teague will review the details before any adjustment is finalized.",
+    response: "Pain and injury reports always go to {{coach}} for review — OPTIM never diagnoses or adjusts your program on its own.",
   },
   {
     id: "restaurant-meal",
@@ -513,11 +597,15 @@ export const SCRIPTED_CHAT_TOPICS: ScriptedChatTopic[] = [
       "Pick a protein-forward entree if you can — grilled meat, fish, or poultry with a starch and vegetable side works well. Log it as \"I ate something else\" with your best estimate afterward and don't stress about being exact.",
   },
   {
+    // Chat routes this to the safe-immediate-action schedule flow (see
+    // lib/chat/assistant.ts's classifyClientMessage) rather than this
+    // canned reply — this entry exists to give the suggestion carousel a
+    // real schedule example prompt.
     id: "schedule-change",
     prompt: "My schedule changed today — can I train later?",
     responseSender: "assistant",
     response:
-      "Of course. Use \"My schedule changed\" on today's workout window and choose the option that fits — I'll update today's plan and Teague will see the change.",
+      "Of course — I'll update today's plan and {{coach}} will see the change.",
   },
 ];
 

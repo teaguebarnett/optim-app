@@ -2,62 +2,186 @@
 
 :root {
   /* ---------------------------------------------------------------------
-   * Core design tokens — premium light client theme.
+   * Core design tokens — OPTIM Visual Constitution v2: Pearl Ivory (light) /
+   * Midnight Navy (dark) + Electric Cobalt. See
+   * docs/design/OPTIM_VISUAL_CONSTITUTION.md.
    *
    * These are the ONLY place raw color values should ever appear. Every
    * component consumes them through the Tailwind utility classes mapped
    * below (bg-accent, text-off-white, border-border, etc.) — never a raw
-   * hex/rgba value in a component file. A workspace's configured branding
-   * (see components/app-shell/workspace-theme.tsx) overrides --pc-accent /
-   * --pc-accent-strong / --pc-accent-soft at runtime from Phase 2's
-   * centralized branding config, so a different coaching business's primary
-   * color replaces OPTIM's navy without editing any component.
+   * hex/rgba value in a component file. This block is the LIGHT (Pearl
+   * Ivory) palette; :root[data-theme="dark"] below overrides surfaces,
+   * text, borders, and status colors for Midnight Navy. --pc-accent /
+   * --pc-accent-strong / --pc-accent-soft / --pc-selected-bg are
+   * deliberately NOT re-themed below — they're set at runtime by
+   * components/app-shell/workspace-theme.tsx from the active workspace's
+   * branding (Phase 2), and are chosen to already read correctly against
+   * both a Pearl Ivory and a Midnight Navy canvas, so a differently-branded
+   * workspace's primary color keeps working the instant a user switches
+   * theme without any per-theme branding math.
    * ------------------------------------------------------------------- */
 
-  /* Backgrounds & surfaces */
-  --pc-near-black: #f7f5f0; /* app background — warm near-white */
-  --pc-charcoal: #ffffff; /* primary card/elevated surface — white */
+  /* Backgrounds & surfaces — bright, crisp ivory-white, never yellow-beige. */
+  --pc-near-black: #f6f5ef; /* app canvas — Pearl Ivory */
+  --pc-charcoal: #fffefa; /* primary panel/sidebar/card surface */
   --pc-surface: #ffffff;
-  --pc-surface-raised: #fbfaf6; /* subtle secondary elevation, e.g. inner blocks */
+  --pc-surface-raised: #f1f0e8; /* secondary elevation inside a panel (inner blocks, tabs) */
+  --pc-surface-input: #ecebe1; /* recessed input/control fill — a "well," never confusable with the panel itself */
 
   /* Typography */
-  --pc-off-white: #101a2c; /* primary text — dark blue-black */
-  --pc-neutral: #5b6577; /* secondary text — softer gray-blue */
-  --pc-on-accent: #ffffff; /* text placed on a solid accent/navy surface */
+  --pc-off-white: #0a1b31; /* primary ink — deep navy-black, not sterile black */
+  --pc-neutral: #647080; /* secondary text */
+  --pc-on-accent: #ffffff; /* text placed on a solid accent/navy fill */
 
-  /* Borders */
-  --pc-border: rgba(16, 25, 44, 0.1);
-  --pc-border-strong: rgba(16, 25, 44, 0.18);
+  /* Borders — quiet, neutral, never warm-tinted beige */
+  --pc-border: #dfdfd9;
+  --pc-border-strong: #c7c7be;
 
-  /* Primary interactive color — deep smooth navy (OPTIM demo workspace
-   * default; overridden per-workspace at runtime). */
-  --pc-accent: #16294a;
-  --pc-accent-strong: #21396a;
-  --pc-accent-soft: rgba(22, 41, 74, 0.09);
+  /* Primary interactive color — electric performance cobalt (OPTIM demo
+   * workspace default; overridden per-workspace at runtime — see this
+   * block's own doc above). Used for primary actions, active states, and
+   * interactive focus only — see --pc-brass below for the rare premium
+   * micro-accent, and --pc-navy below for the signature structural surface. */
+  --pc-accent: #3157f6;
+  --pc-accent-strong: #2544c9;
+  --pc-accent-soft: rgba(49, 87, 246, 0.1);
+  /* A stronger selected-state fill — an unselected input's border/fill vs.
+   * a selected one must be unmistakable at a glance, not a 9%-opacity
+   * difference. Selected controls pair this with --pc-accent as a real
+   * border, never background alone. */
+  --pc-selected-bg: rgba(49, 87, 246, 0.14);
 
-  /* Status colors — used only for their specific meaning */
-  --pc-success: #5c7a52; /* muted mineral/olive green — completion, improvement */
-  --pc-success-soft: rgba(92, 122, 82, 0.13);
-  --pc-warning: #b8863a; /* amber — genuine attention states only */
-  --pc-warning-soft: rgba(184, 134, 58, 0.13);
-  --pc-error: #b23b3b; /* red — genuine warnings only */
-  --pc-error-soft: rgba(178, 59, 59, 0.13);
+  /* Signature deep-navy focus surface — OPTIM's structural identity anchor,
+   * independent of the workspace-branded accent above. Used for the coach
+   * command center's highest-priority decision surface and other rare,
+   * genuinely-singular focal moments — never a general-purpose panel
+   * background. Always dark text-on-navy (--pc-navy-ink), in both themes. */
+  --pc-navy: #071a34;
+  --pc-navy-strong: #0d2a50;
+  --pc-navy-soft: rgba(7, 26, 52, 0.06);
+  --pc-navy-ink: #f5f8fb;
+  --pc-navy-ink-muted: #aab6c6;
+
+  /* Brass — a rare premium micro-detail (a chapter icon, a progress fill),
+   * never a dominant wash. Muted architectural gold, never bright metallic,
+   * never a primary action fill or large surface. */
+  --pc-brass: #a9834a;
+  --pc-brass-strong: #8a6935;
+  --pc-brass-soft: rgba(169, 131, 74, 0.16);
+
+  /* Status colors — semantic only, never decorative, but bright enough to
+   * actually be seen (Phase 5.3C correction — the v2 values were legible
+   * but too muted to read as real color in a live UI). success="mint",
+   * warning="amber", error="coral" — the exact three semantic hues named
+   * throughout the product brief. */
+  --pc-success: #0ea173;
+  --pc-success-strong: #0b7d5a;
+  --pc-success-soft: rgba(14, 161, 115, 0.14);
+  --pc-warning: #d97f0a;
+  --pc-warning-strong: #b3690a;
+  --pc-warning-soft: rgba(217, 127, 10, 0.16);
+  --pc-error: #e0492e;
+  --pc-error-strong: #b93b24;
+  --pc-error-soft: rgba(224, 73, 46, 0.14);
+  /* Violet — one consistent role: recovery/AI-insight framing only. Never a
+   * second accent color, never used for actions or navigation. */
+  --pc-violet: #7c5cea;
+  --pc-violet-strong: #6743d1;
+  --pc-violet-soft: rgba(124, 92, 234, 0.14);
+  /* Steel/slate — neutral informational state distinct from plain gray text,
+   * used for e.g. "invited" / "paused" lifecycle badges that are neither
+   * good nor bad news, just a fact. */
+  --pc-steel: #5b6672;
+  --pc-steel-soft: rgba(91, 102, 114, 0.13);
 
   /* Empty/track fill for rings and bars (SVG can't use Tailwind opacity
    * modifiers, so this gets its own token). */
-  --pc-track-empty: rgba(16, 25, 44, 0.08);
+  --pc-track-empty: rgba(10, 27, 49, 0.08);
 
   /* Semantic roles */
   --background: var(--pc-near-black);
   --foreground: var(--pc-off-white);
   --muted-foreground: var(--pc-neutral);
 
+  /* Engineered geometry — 16–20px major-surface radius, smaller for
+   * controls. -sm sits well under it for compact inner controls (inputs,
+   * small chips); -lg/-xl are the major-surface range (panels, sheets,
+   * signature surfaces); -xs is reserved for the very smallest chips
+   * (status badges) so they never default to a full pill. */
+  --radius-xs: 8px;
   --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 22px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 20px;
   --radius-full: 999px;
 
-  --shadow-subtle: 0 1px 2px rgba(16, 25, 44, 0.05), 0 8px 24px -14px rgba(16, 25, 44, 0.16);
+  --shadow-subtle: 0 1px 2px rgba(10, 27, 49, 0.06), 0 8px 24px -14px rgba(10, 27, 49, 0.16);
+  --shadow-elevated: 0 4px 10px rgba(10, 27, 49, 0.08), 0 24px 48px -20px rgba(10, 27, 49, 0.24);
+
+  /* Motion — one shared set of durations/easing so "purposeful, engineered"
+   * motion means the same 160–240ms everywhere rather than ad hoc
+   * transition-duration values per component. */
+  --motion-fast: 160ms;
+  --motion-base: 200ms;
+  --motion-slow: 240ms;
+  /* Phase 5.3C — major view/panel transitions only (a new focus item
+   * promoting into place, a resolved decision leaving the queue). Never
+   * used for routine hover/press feedback. */
+  --motion-slower: 380ms;
+  --motion-ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* ---------------------------------------------------------------------
+ * Midnight Navy — the dark theme. Applied via a `data-theme="dark"`
+ * attribute on <html> (see components/app-shell/theme-provider.tsx), never
+ * `prefers-color-scheme` — appearance is always an explicit, persisted user
+ * choice, never inferred from the OS. Intentionally designed (distinct
+ * surface steps, brightened status hues for AA contrast on dark), never a
+ * crude inversion of the light tokens above.
+ * ------------------------------------------------------------------- */
+:root[data-theme="dark"] {
+  --pc-near-black: #0b1119; /* app canvas */
+  --pc-charcoal: #131d28; /* primary panel/sidebar/card surface */
+  --pc-surface: #131d28;
+  --pc-surface-raised: #1a2735;
+  --pc-surface-input: #0f1720;
+
+  --pc-off-white: #f5f8fb;
+  --pc-neutral: #aab6c6;
+
+  --pc-border: #263546;
+  --pc-border-strong: #33465c;
+
+  /* Lifted from the light theme's #071a34 so the signature surface reads as
+   * a distinct structural accent against the near-black canvas, rather than
+   * disappearing into it. */
+  --pc-navy: #0d2a50;
+  --pc-navy-strong: #123563;
+  --pc-navy-soft: rgba(13, 42, 80, 0.35);
+
+  --pc-brass: #c7a467;
+  --pc-brass-strong: #e0bd82;
+  --pc-brass-soft: rgba(199, 164, 103, 0.18);
+
+  --pc-success: #2ee6a8;
+  --pc-success-strong: #1fbf8a;
+  --pc-success-soft: rgba(46, 230, 168, 0.16);
+  --pc-warning: #f5a623;
+  --pc-warning-strong: #d98c0f;
+  --pc-warning-soft: rgba(245, 166, 35, 0.16);
+  --pc-error: #ff6b52;
+  --pc-error-strong: #ea5138;
+  --pc-error-soft: rgba(255, 107, 82, 0.16);
+  --pc-violet: #9b81f2;
+  --pc-violet-strong: #8367e8;
+  --pc-violet-soft: rgba(155, 129, 242, 0.18);
+  --pc-steel: #8593a6;
+  --pc-steel-soft: rgba(133, 147, 166, 0.18);
+
+  --pc-track-empty: rgba(245, 248, 251, 0.1);
+
+  --shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -14px rgba(0, 0, 0, 0.5);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.35), 0 24px 48px -20px rgba(0, 0, 0, 0.6);
 }
 
 @theme inline {
@@ -68,6 +192,7 @@
   --color-charcoal: var(--pc-charcoal);
   --color-surface: var(--pc-surface);
   --color-surface-raised: var(--pc-surface-raised);
+  --color-surface-input: var(--pc-surface-input);
   --color-off-white: var(--pc-off-white);
   --color-neutral: var(--pc-neutral);
   --color-on-accent: var(--pc-on-accent);
@@ -76,19 +201,141 @@
   --color-accent: var(--pc-accent);
   --color-accent-soft: var(--pc-accent-soft);
   --color-accent-strong: var(--pc-accent-strong);
+  --color-selected-bg: var(--pc-selected-bg);
+  --color-navy: var(--pc-navy);
+  --color-navy-strong: var(--pc-navy-strong);
+  --color-navy-soft: var(--pc-navy-soft);
+  --color-navy-ink: var(--pc-navy-ink);
+  --color-navy-ink-muted: var(--pc-navy-ink-muted);
+  --color-brass: var(--pc-brass);
+  --color-brass-soft: var(--pc-brass-soft);
+  --color-brass-strong: var(--pc-brass-strong);
   --color-success: var(--pc-success);
+  --color-success-strong: var(--pc-success-strong);
   --color-success-soft: var(--pc-success-soft);
   --color-warning: var(--pc-warning);
+  --color-warning-strong: var(--pc-warning-strong);
   --color-warning-soft: var(--pc-warning-soft);
   --color-error: var(--pc-error);
+  --color-error-strong: var(--pc-error-strong);
   --color-error-soft: var(--pc-error-soft);
+  --color-violet: var(--pc-violet);
+  --color-violet-strong: var(--pc-violet-strong);
+  --color-violet-soft: var(--pc-violet-soft);
+  --color-steel: var(--pc-steel);
+  --color-steel-soft: var(--pc-steel-soft);
 
   --font-sans: var(--font-sans);
 
+  --radius-xs: var(--radius-xs);
   --radius-sm: var(--radius-sm);
   --radius-md: var(--radius-md);
   --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
   --radius-full: var(--radius-full);
+}
+
+/* -----------------------------------------------------------------------
+ * Semantic typography — OPTIM Visual Constitution v1 §10.
+ *
+ * OPTIM uses exactly ONE font family — Manrope — everywhere. Hierarchy
+ * comes entirely from scale, weight, line-height, tracking, and spatial
+ * placement, never from switching typefaces. Components must reach for one
+ * of the roles below instead of choosing an arbitrary font-size/weight —
+ * this is what keeps hierarchy consistent as Training, Nutrition,
+ * Progress, Chat, and History pick up the same system. Each utility sets
+ * ONLY font-family/size/weight/line-height/tracking — never color — so it
+ * composes with a normal text-color utility (text-off-white, text-neutral,
+ * text-brass-strong…) exactly like any other Tailwind class.
+ *
+ * - text-display    30px, 600 — the daily greeting and rare hero
+ *                    statements. One per screen, at most.
+ * - text-metric      36px, 600, tabular numerals — one sculptural focal
+ *                    number per surface (calories, bodyweight). Not for
+ *                    every number — only the one a surface is built
+ *                    around. Weight and scale carry the "sculptural" feel
+ *                    now that no display typeface does.
+ * - text-heading     18px, 600 — a major card/surface title (the one thing
+ *                    a surface is currently about, e.g. a spotlighted
+ *                    task's name).
+ * - text-subheading  15px, 600 — secondary/compact titles: a tile's task
+ *                    name, a coach's name, a resolved status line
+ *                    ("5:30 PM").
+ * - text-body        15px, 400 — real sentences: descriptions, coach
+ *                    guidance, encouragement copy.
+ * - text-label       11px, 600, uppercase, restrained tracking — short
+ *                    category tags (FUEL, TRAINING, RIGHT NOW). Compact
+ *                    and clearly subordinate; never a substitute for
+ *                    text-heading.
+ * - text-meta        13px, 400 — times, dates, program-week context,
+ *                    recommendations, supporting status fragments. Small
+ *                    is not the same as faint — pair with text-neutral,
+ *                    not a low-opacity color.
+ * - text-action      14px, 600 — bespoke interactive text that isn't going
+ *                    through the Button component (inline links like
+ *                    "Change" or "Message"). Button's own size variants
+ *                    already encode this role for real buttons.
+ * ------------------------------------------------------------------- */
+
+@utility text-display {
+  font-family: var(--font-sans);
+  font-size: 1.875rem; /* 30px */
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+}
+
+@utility text-metric {
+  font-family: var(--font-sans);
+  font-size: 2.25rem; /* 36px */
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+@utility text-heading {
+  font-family: var(--font-sans);
+  font-size: 1.125rem; /* 18px */
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+@utility text-subheading {
+  font-family: var(--font-sans);
+  font-size: 0.9375rem; /* 15px */
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+@utility text-body {
+  font-family: var(--font-sans);
+  font-size: 0.9375rem; /* 15px */
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+@utility text-label {
+  font-family: var(--font-sans);
+  font-size: 0.6875rem; /* 11px */
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+@utility text-meta {
+  font-family: var(--font-sans);
+  font-size: 0.8125rem; /* 13px */
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+@utility text-action {
+  font-family: var(--font-sans);
+  font-size: 0.875rem; /* 14px */
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 * {
@@ -98,6 +345,9 @@
 html {
   color-scheme: light;
 }
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
 
 body {
   background: var(--background);
@@ -105,6 +355,7 @@ body {
   font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+  transition: background-color var(--motion-slow) var(--motion-ease), color var(--motion-slow) var(--motion-ease);
 }
 
 ::selection {
@@ -143,6 +394,33 @@ input[type="number"] {
   animation: pc-fade-in 0.35s ease-out both;
 }
 
+/* Phase 4.4B-2.2 correction — the guided workout's phase panels (session
+ * warm-up, exercise intro, set-ready, set-logging, set-feedback, exercise
+ * transition, pain review, etc.) are swapped by plain conditional rendering:
+ * there's no exit animation, and each new panel is the ONLY surface in the
+ * content area, so pc-fade-in's `from { opacity: 0 }` meant every phase
+ * change painted a fully transparent frame first — visible as a brief blank
+ * canvas before the panel faded up. Sheets/overlays elsewhere still use
+ * pc-animate-in unchanged (fading in from nothing over already-visible page
+ * content is correct there). This is the same fade + rise, just never
+ * starting from fully invisible, so a surface is always at least partly
+ * present — see components/workout/live's phase panels for where this
+ * replaces pc-animate-in on the outermost wrapper only. */
+@keyframes pc-panel-fade-in {
+  from {
+    opacity: 0.55;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pc-panel-in {
+  animation: pc-panel-fade-in 0.2s ease-out both;
+}
+
 @keyframes pc-pulse-ring {
   0% {
     box-shadow: 0 0 0 0 var(--pc-accent-soft);
@@ -176,4 +454,315 @@ input[type="number"] {
 }
 .pc-safe-top {
   padding-top: env(safe-area-inset-top);
+}
+
+/* -----------------------------------------------------------------------
+ * Phase 5.3A — reusable motion/interaction primitives.
+ *
+ * One shared vocabulary for chapter transitions, selection confirmation,
+ * conditional-field reveal, and feedback states — built for onboarding
+ * first, but deliberately generic so Today/Training/Nutrition/Progress/
+ * Chat/the coach workspace can reach for the exact same classes later
+ * instead of each screen inventing its own. All CSS, no animation
+ * dependency: everything here composes with the existing --motion-*
+ * tokens/pc-animate-in/pc-panel-in above, and is already covered by this
+ * file's one prefers-reduced-motion block (durations collapse to ~0
+ * globally — nothing below needs its own reduced-motion override).
+ * ------------------------------------------------------------------- */
+
+/* Chapter/page transitions — direction-aware slide+fade. Replayed by
+ * changing the `key` on the transitioning wrapper (remount, not a real
+ * exit animation) — see components/onboarding/chapter-transition.tsx. */
+@keyframes pc-enter-forward {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes pc-enter-back {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.pc-enter-forward {
+  animation: pc-enter-forward var(--motion-slow) var(--motion-ease) both;
+}
+.pc-enter-back {
+  animation: pc-enter-back var(--motion-slow) var(--motion-ease) both;
+}
+
+/* Selection confirmation — a small, quick pop on the checkmark itself, not
+ * the whole card (the card's own selected fill/border already transitions
+ * via transition-colors). See components/ui/option-card.tsx. */
+@keyframes pc-check-pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.pc-check-pop {
+  animation: pc-check-pop var(--motion-base) var(--motion-ease) both;
+}
+
+/* Conditional-field expand/collapse — the CSS grid-template-rows trick,
+ * the one way to animate to/from an unknown ("auto") height without
+ * measuring in JS. See components/ui/collapse.tsx. */
+.pc-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--motion-base) var(--motion-ease);
+}
+.pc-collapse.pc-collapse-open {
+  grid-template-rows: 1fr;
+}
+.pc-collapse > div {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Button loading spinner. */
+@keyframes pc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.pc-spin {
+  animation: pc-spin 0.6s linear infinite;
+}
+
+/* Submission/completion feedback — a confident, quick pop, never a
+ * confetti-style celebration. */
+@keyframes pc-success-pop {
+  0% {
+    transform: scale(0.7);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.pc-success-pop {
+  animation: pc-success-pop 0.4s var(--motion-ease) both;
+}
+
+/* A genuinely-waiting state (setup-status) — restrained, continuous, never
+ * distracting. Exempted like every other animation here by the global
+ * prefers-reduced-motion block below, which zeroes it to a static dot. */
+@keyframes pc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.pc-pulse {
+  animation: pc-pulse 1.6s ease-in-out infinite;
+}
+
+/* -----------------------------------------------------------------------
+ * Phase 5.3B — the signature deep-navy focus surface (see --pc-navy in the
+ * token block above). One restrained radial glow, anchored top-left, never
+ * a full-surface gradient wash — the ONE place in the app a gradient is
+ * used at all. Text inside always pairs with text-navy-ink/text-navy-ink-
+ * muted, never the canvas-mode off-white/neutral pair, since navy stays
+ * dark in both themes.
+ * ------------------------------------------------------------------- */
+.pc-signature-surface {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--pc-navy);
+  overflow: hidden;
+}
+.pc-signature-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: radial-gradient(120% 100% at 0% 0%, var(--pc-accent-soft) 0%, transparent 55%), radial-gradient(90% 80% at 100% 100%, var(--pc-violet-soft) 0%, transparent 60%);
+  pointer-events: none;
+}
+.pc-signature-surface > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* -----------------------------------------------------------------------
+ * Phase 5.3C — kinetic queue/decision motion. A row promoting into the
+ * focal position moves and scales, never just fades; a resolved row
+ * condenses and slides away rather than vanishing in place.
+ * ------------------------------------------------------------------- */
+@keyframes pc-row-promote {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.pc-row-promote {
+  animation: pc-row-promote var(--motion-slower) var(--motion-ease) both;
+}
+
+@keyframes pc-row-resolve-out {
+  from {
+    opacity: 1;
+    max-height: 640px;
+    transform: scale(1);
+  }
+  60% {
+    opacity: 0;
+    transform: scale(0.97) translateX(12px);
+  }
+  to {
+    opacity: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin: 0;
+    transform: scale(0.97) translateX(12px);
+  }
+}
+.pc-row-resolve-out {
+  animation: pc-row-resolve-out var(--motion-slower) var(--motion-ease) both;
+  overflow: hidden;
+}
+
+/* Segmented bars / discrete sliders — width and position both animate as
+ * real layout movement, never opacity-only. */
+.pc-segment {
+  transition: width var(--motion-slow) var(--motion-ease), flex-basis var(--motion-slow) var(--motion-ease);
+}
+.pc-slider-thumb {
+  transition: left var(--motion-base) var(--motion-ease), transform var(--motion-base) var(--motion-ease);
+}
+
+/* -----------------------------------------------------------------------
+ * Coach-onboarding refinement pass — the AI Coaching Authority slider
+ * (components/ui/discrete-slider.tsx). A native <input type="range"> was
+ * tried first, but a stepped native range only ever HAS four valid values
+ * — the browser has no concept of an "in between" position, so its own
+ * rendered thumb necessarily jumps from stop to stop mid-drag instead of
+ * following the pointer. Real "follow the pointer continuously, snap only
+ * on release" requires knowing the raw pointer position independently of
+ * the committed value, which means a real (but small, deliberate) custom
+ * pointer-driven rail: a `div[role=slider]` tracks pointer capture/drag
+ * itself; the DISCRETE value is only ever committed on release or a
+ * keyboard step (see the component for the full split). `--pc-rail-percent`
+ * is set inline per frame — continuously during a drag (no transition, so
+ * the thumb tracks the pointer directly), or once on commit (with the
+ * short 160ms ease-out snap below, no bounce/overshoot per this pass's
+ * brief). The global prefers-reduced-motion block above already zeroes
+ * this transition when the user asks for less motion.
+ * ------------------------------------------------------------------- */
+.pc-authority-rail {
+  --pc-snap-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  height: 44px;
+  width: 100%;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+.pc-authority-rail:focus-visible {
+  outline: none;
+}
+.pc-authority-rail:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset: 8px -4px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--pc-accent-strong);
+  pointer-events: none;
+}
+
+.pc-authority-track {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 4px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--pc-surface-raised);
+}
+.pc-authority-fill {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  height: 4px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--pc-accent-strong);
+  width: var(--pc-rail-percent);
+}
+.pc-authority-fill.pc-snap {
+  transition: width var(--pc-snap-duration, 160ms) var(--pc-snap-ease);
+}
+
+.pc-authority-tick {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: var(--pc-border-strong);
+}
+.pc-authority-tick.pc-active {
+  background: var(--pc-on-accent);
+}
+
+.pc-authority-thumb {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%) scale(1);
+  left: var(--pc-rail-percent);
+  background: var(--pc-accent);
+  border: 2px solid var(--pc-on-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
+}
+.pc-authority-thumb.pc-snap {
+  transition: left var(--pc-snap-duration, 160ms) var(--pc-snap-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
+}
+.pc-authority-rail:hover .pc-authority-thumb {
+  box-shadow: 0 0 0 3px var(--pc-accent-soft), 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.pc-authority-rail:focus-visible .pc-authority-thumb {
+  box-shadow: 0 0 0 3px var(--pc-accent-soft), 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.pc-authority-rail.pc-dragging .pc-authority-thumb {
+  transform: translate(-50%, -50%) scale(1.15);
+  box-shadow: 0 0 0 4px var(--pc-accent-soft), 0 2px 6px rgba(0, 0, 0, 0.35);
 }

@@ -206,3 +206,12 @@ export function startOfLocalWeek(dateIso: string, weekStartsOn: WeekStartsOn = D
   const offset = weekStartsOn === "monday" ? (utcDayIndex === 0 ? 6 : utcDayIndex - 1) : utcDayIndex;
   return addDaysToLocalDate(dateIso, -offset);
 }
+
+/** "Tuesday, August 25" — a date-only display label with no time-of-day
+ * component, safe to build directly from the anchored local-noon instant
+ * (see toUtcNoon) rather than needing a client timezone. Used by Training's
+ * future/past day session cards (Phase 4.4B-1) to give a selected non-today
+ * day its own clear date context. */
+export function formatLongDateLabel(dateIso: string): string {
+  return toUtcNoon(dateIso).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "long", day: "numeric" });
+}

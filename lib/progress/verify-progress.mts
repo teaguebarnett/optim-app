@@ -525,7 +525,7 @@ check("Unread human-coach guidance is eligible for the priority card; OPTIM/syst
   assert.equal(eligible.kind, "unread_coach_feedback");
 
   const guidance = aggregateCoachGuidance(
-    [{ id: "m1", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, sender: "assistant", text: "An OPTIM-generated note.", createdAtIso: "2026-08-10T00:00:00.000Z" }],
+    [{ id: "m1", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "assistant", text: "An OPTIM-generated note.", createdAtIso: "2026-08-10T00:00:00.000Z" }],
     [],
     "Teague"
   );

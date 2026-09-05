@@ -1,5 +1,6 @@
 import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "./mock-data.ts";
 import { resolvePlannedDateTime } from "./planning/training-plan.ts";
+import { deriveProgramWeek } from "./scheduling/enrollment.ts";
 import { localDateDayOfWeek } from "./shared/local-date.ts";
 import type { AppState } from "./state";
 import type { DailyTrainingPlan } from "./planning/types";
@@ -11,6 +12,7 @@ import type {
   MacroValues,
   MealPeriod,
   MealSelection,
+  NutritionTargets,
 } from "./types";
 
 // The one canonical ordering of meal periods within a day — every screen
@@ -97,12 +99,16 @@ export function computeNutritionTotals(meals: AppState["meals"]): MacroValues {
 
 export type RemainingTargets = MacroValues;
 
-export function computeRemaining(totals: MacroValues): RemainingTargets {
+/** `targets` defaults to the shared NUTRITION_TARGETS constant so every
+ * existing call site keeps its exact prior behavior; callers that have a
+ * specific client's own coach-configured targets (see AppState.
+ * nutritionTargets) pass them explicitly instead. */
+export function computeRemaining(totals: MacroValues, targets: NutritionTargets = NUTRITION_TARGETS): RemainingTargets {
   return {
-    calories: Math.max(0, NUTRITION_TARGETS.calories - totals.calories),
-    proteinG: Math.max(0, NUTRITION_TARGETS.proteinG - totals.proteinG),
-    carbsG: Math.max(0, NUTRITION_TARGETS.carbsG - totals.carbsG),
-    fatG: Math.max(0, NUTRITION_TARGETS.fatG - totals.fatG),
+    calories: Math.max(0, targets.calories - totals.calories),
+    proteinG: Math.max(0, targets.proteinG - totals.proteinG),
+    carbsG: Math.max(0, targets.carbsG - totals.carbsG),
+    fatG: Math.max(0, targets.fatG - totals.fatG),
   };
 }
 
@@ -135,10 +141,10 @@ export function findEarliestIncompleteMealBefore(
   return null;
 }
 
-export function nutritionStatusMessage(totals: MacroValues, meals: AppState["meals"]): string {
+export function nutritionStatusMessage(totals: MacroValues, meals: AppState["meals"], targets: NutritionTargets = NUTRITION_TARGETS): string {
   const remainingMeals = countRemainingMeals(meals);
-  const calorieRatio = totals.calories / NUTRITION_TARGETS.calories;
-  const proteinRatio = totals.proteinG / NUTRITION_TARGETS.proteinG;
+  const calorieRatio = totals.calories / targets.calories;
+  const proteinRatio = totals.proteinG / targets.proteinG;
 
   // Phase 4.4B-2.1 correction — the true zero/unentered state must never
   // claim progress that hasn't happened. "Off to a strong start" falsely
@@ -291,7 +297,14 @@ export function deriveTaskStates(
       // declared today a rest day keeps the existing "optional, begin
       // anyway" treatment below regardless of what the schedule says.
       const clientDeclaredRest = trainingPlan?.status === "rest_day";
-      if (resolveWorkoutAvailabilityForDay(localDateDayOfWeek(state.dateIso), clientDeclaredRest).isUnavailable) {
+      if (
+        resolveWorkoutAvailabilityForDay(
+          localDateDayOfWeek(state.dateIso),
+          clientDeclaredRest,
+          state.assignedProgram,
+          deriveProgramWeek(state.programEnrollment, state.dateIso)
+        ).isUnavailable
+      ) {
         return "locked";
       }
 

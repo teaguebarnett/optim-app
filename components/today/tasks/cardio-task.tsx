@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { HeartPulse, Minus, Plus } from "lucide-react";
+import { HeartPulse } from "lucide-react";
 import { TaskShell } from "@/components/today/task-shell";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { ReasonPicker } from "@/components/ui/reason-picker";
 import { TextArea } from "@/components/ui/textarea";
+import { NumberWheel } from "@/components/ui/number-wheel";
 import { cn } from "@/lib/cn";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { cardioPrescriptionForClient } from "@/lib/mock-data";
@@ -27,9 +28,17 @@ function clampDuration(value: number): number {
 export function CardioTask({
   state,
   emphasisOverride,
+  scheduleLabel,
+  fillWidth,
+  expanded,
+  onToggleExpand,
 }: {
   state: DailyTaskState;
   emphasisOverride?: "primary" | "secondary";
+  scheduleLabel?: string;
+  fillWidth?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }) {
   const { state: appState, dispatch } = usePrototypeState();
   const [note, setNote] = useState("");
@@ -38,20 +47,6 @@ export function CardioTask({
   const [skipNote, setSkipNote] = useState("");
 
   const duration = appState.cardio.durationMin;
-  // Free-typed local mirror of the saved duration so a client can clear the
-  // field and type an exact value (e.g. 17) without every keystroke
-  // round-tripping through the store and briefly showing 0. Resyncs
-  // whenever the saved duration changes from elsewhere (the +/- stepper,
-  // another tab after refresh, etc) — adjusted during render rather than in
-  // an effect, per React's guidance on resetting state from a changed prop.
-  // Declared unconditionally, before any early return below, per the Rules
-  // of Hooks.
-  const [durationInput, setDurationInput] = useState(String(duration));
-  const [syncedDuration, setSyncedDuration] = useState(duration);
-  if (duration !== syncedDuration) {
-    setSyncedDuration(duration);
-    setDurationInput(String(duration));
-  }
 
   const prescription = cardioPrescriptionForClient(appState.clientId);
   // Multiple approved options only ever appear when the assigned plan
@@ -64,6 +59,10 @@ export function CardioTask({
     prescription.options.find((o) => o.id === appState.cardio.selectedOptionId) ?? defaultOption;
 
   const title = `Cardio — ${selectedOption.displayName}`;
+  const heartRateLabel =
+    selectedOption.heartRateRangeLow !== undefined && selectedOption.heartRateRangeHigh !== undefined
+      ? `${selectedOption.targetDurationMin} min · Target ${selectedOption.heartRateRangeLow}–${selectedOption.heartRateRangeHigh} bpm`
+      : `${selectedOption.targetDurationMin} min`;
 
   function selectOption(option: CardioOption) {
     dispatch({ type: "SELECT_CARDIO_OPTION", optionId: option.id });
@@ -79,14 +78,14 @@ export function CardioTask({
             type="button"
             onClick={() => selectOption(option)}
             className={cn(
-              "flex-1 rounded-[var(--radius-sm)] border px-3 py-2 text-left text-sm font-medium transition-colors",
+              "flex-1 rounded-[var(--radius-sm)] border px-3 py-2 text-left text-subheading transition-colors",
               active
                 ? "border-accent bg-accent-soft text-accent-strong"
                 : "border-border-strong text-off-white hover:border-accent/40"
             )}
           >
             {option.displayName}
-            <span className="block text-xs font-normal text-neutral">{option.targetDurationMin} min</span>
+            <span className="block text-meta text-neutral">{option.targetDurationMin} min</span>
           </button>
         );
       })}
@@ -95,9 +94,17 @@ export function CardioTask({
 
   if (state === "completed" || state === "skipped") {
     return (
-      <TaskShell title={title} icon={<HeartPulse size={17} />} state={state} emphasisOverride={emphasisOverride}>
+      <TaskShell
+        title={title}
+        icon={<HeartPulse size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
         {state === "completed" ? (
-          <p className="text-sm text-neutral">
+          <p className="text-meta text-neutral">
             {appState.cardio.durationMin} min completed · target {selectedOption.targetDurationMin} min
           </p>
         ) : null}
@@ -109,8 +116,16 @@ export function CardioTask({
   // as "skipped." See Phase 4.1's cardio-partial correction.
   if (state === "partially-completed") {
     return (
-      <TaskShell title={title} icon={<HeartPulse size={17} />} state={state} emphasisOverride={emphasisOverride}>
-        <p className="text-sm text-neutral">
+      <TaskShell
+        title={title}
+        icon={<HeartPulse size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
+        <p className="text-meta text-neutral">
           {appState.cardio.durationMin} min logged before stopping · target {selectedOption.targetDurationMin} min
         </p>
       </TaskShell>
@@ -119,8 +134,18 @@ export function CardioTask({
 
   if (state === "upcoming") {
     return (
-      <TaskShell title={title} icon={<HeartPulse size={17} />} state={state} emphasisOverride={emphasisOverride}>
-        <p className="text-sm text-neutral">{selectedOption.protocol}</p>
+      <TaskShell
+        title={title}
+        icon={<HeartPulse size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        scheduleLabel={scheduleLabel}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
+        <p className="text-meta text-neutral">{heartRateLabel}</p>
+        <p className="mt-1 text-body text-neutral">{selectedOption.protocol}</p>
         {optionPicker}
       </TaskShell>
     );
@@ -128,17 +153,8 @@ export function CardioTask({
 
   const isInProgress = state === "in-progress";
 
-  function adjustDuration(deltaMin: number) {
-    dispatch({ type: "SET_CARDIO_DURATION", durationMin: clampDuration(duration + deltaMin) });
-  }
-
-  function commitDurationInput(raw: string) {
-    const parsed = Number(raw);
-    if (raw.trim() === "" || Number.isNaN(parsed)) {
-      setDurationInput(String(duration));
-      return;
-    }
-    dispatch({ type: "SET_CARDIO_DURATION", durationMin: clampDuration(parsed) });
+  function setDuration(minutes: number) {
+    dispatch({ type: "SET_CARDIO_DURATION", durationMin: clampDuration(minutes) });
   }
 
   function handleStart() {
@@ -159,11 +175,21 @@ export function CardioTask({
 
   return (
     <>
-      <TaskShell title={title} icon={<HeartPulse size={17} />} state={state} emphasisOverride={emphasisOverride}>
-        <p className="text-sm text-neutral">{selectedOption.protocol}</p>
+      <TaskShell
+        title={title}
+        icon={<HeartPulse size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        scheduleLabel={scheduleLabel}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
+        <p className="text-meta text-neutral">{heartRateLabel}</p>
+        <p className="mt-1 text-body text-neutral">{selectedOption.protocol}</p>
 
         {wasOutOfTime && hasMultipleOptions && timeSavingOption && !isInProgress ? (
-          <p className="mt-2 text-xs text-warning">
+          <p className="mt-2 text-meta text-warning">
             You mentioned running short on time — {timeSavingOption.displayName} is available below.
           </p>
         ) : null}
@@ -178,42 +204,18 @@ export function CardioTask({
         ) : (
           <div className="mt-3 space-y-3">
             {optionPicker}
-            <div className="flex items-center justify-between rounded-[var(--radius-sm)] bg-off-white/[0.04] px-3 py-2.5">
-              <button
-                type="button"
-                aria-label="Subtract 1 minute"
-                onClick={() => adjustDuration(-DURATION_STEP_MIN)}
-                disabled={duration <= 0}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border-strong text-off-white disabled:opacity-40"
-              >
-                <Minus size={16} />
-              </button>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  aria-label="Cardio duration in minutes"
-                  value={durationInput}
-                  min={0}
-                  max={DURATION_MAX_MIN}
-                  onChange={(e) => setDurationInput(e.target.value)}
-                  onBlur={(e) => commitDurationInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.blur();
-                  }}
-                  className="h-9 w-14 rounded-[var(--radius-sm)] border border-border-strong bg-surface text-center text-sm text-off-white outline-none focus-visible:border-accent"
-                />
-                <span className="text-sm text-off-white">min logged</span>
-              </div>
-              <button
-                type="button"
-                aria-label="Add 1 minute"
-                onClick={() => adjustDuration(DURATION_STEP_MIN)}
-                disabled={duration >= DURATION_MAX_MIN}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border-strong text-off-white disabled:opacity-40"
-              >
-                <Plus size={16} />
-              </button>
+            <div>
+              <p className="mb-1.5 text-label text-neutral">Minutes logged</p>
+              <NumberWheel
+                id="cardio-duration"
+                fieldLabel="Cardio duration in minutes"
+                value={duration}
+                onChange={setDuration}
+                min={0}
+                max={DURATION_MAX_MIN}
+                step={DURATION_STEP_MIN}
+                unit="min"
+              />
             </div>
             <TextArea
               id="cardio-note"

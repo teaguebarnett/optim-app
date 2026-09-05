@@ -7,38 +7,86 @@ import { TaskShell } from "@/components/today/task-shell";
 import { Button } from "@/components/ui/button";
 import { WorkoutDetailsSheet } from "@/components/workout/workout-details-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { PUSH_WORKOUT, trainingWeekEntryForDay } from "@/lib/mock-data";
+import { PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "@/lib/mock-data";
+import { deriveProgramWeek } from "@/lib/scheduling/enrollment";
 import { localDateDayOfWeek } from "@/lib/shared/local-date";
 import type { DailyTaskState } from "@/lib/types";
 
 export function WorkoutTask({
   state,
   emphasisOverride,
+  scheduleLabel,
+  fillWidth,
+  expanded,
+  onToggleExpand,
 }: {
   state: DailyTaskState;
   emphasisOverride?: "primary" | "secondary";
+  scheduleLabel?: string;
+  fillWidth?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }) {
   const { state: appState, dispatch, activeContext } = usePrototypeState();
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [devPreviewOpen, setDevPreviewOpen] = useState(false);
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
 
-  // Phase 4.1 corrective — "locked" for the workout task now means "today's
-  // real schedule prescribes a session with no available detail," not the
-  // old countdown-window concept. The scheduled name comes from the real
-  // training-week catalog (see lib/mock-data.ts's trainingWeekEntryForDay),
-  // never Push Workout's name — the client is never told a different
-  // session is Push Workout just because Push is the only loggable one.
+  // Phase 4.1 corrective, Phase 4.4B-1.1 refinement — "locked" for the
+  // workout task means "today's real schedule prescribes a session with no
+  // available catalog detail," resolved through the one shared
+  // resolveWorkoutAvailabilityForDay (see lib/mock-data.ts) so this can
+  // never disagree with lib/calculations.ts's deriveTaskStates (the
+  // function that actually decided this task's state is "locked") or with
+  // Training's identical resolution. This is strictly a data-availability
+  // fact — reaching this branch has nothing to do with whether a training
+  // time has been selected. The scheduled name comes from that same real
+  // source, never Push Workout's name — the client is never told a
+  // different session is Push Workout just because Push is the only
+  // loggable one. The icon stays the task's own (Dumbbell, dimmed by
+  // TaskShell's locked treatment) rather than a padlock, since nothing here
+  // is actually gated behind an unlock action.
   if (state === "locked") {
-    const todaysEntry = trainingWeekEntryForDay(localDateDayOfWeek(appState.dateIso));
-    const scheduledName = todaysEntry?.workoutName ?? "Today's workout";
+    const availability = resolveWorkoutAvailabilityForDay(
+      localDateDayOfWeek(appState.dateIso),
+      false,
+      appState.assignedProgram,
+      deriveProgramWeek(appState.programEnrollment, appState.dateIso)
+    );
+
+    // TODO: remove temporary workout QA bridge after workout architecture
+    // redesign. Dev-only manual-QA escape hatch, never shown in production
+    // (see the NODE_ENV check below). Phase 4.4B-2 correction: this used to
+    // dispatch START_WORKOUT and immediately start a real session just to
+    // make the locked Friday tile testable — that was never real product
+    // behavior (starting must only ever happen from an explicit "Begin
+    // workout"). It's now a genuinely read-only preview instead: it opens
+    // the exact same WorkoutDetailsSheet "Begin workout" already uses for
+    // its own real preview, passing the real PUSH_WORKOUT data explicitly
+    // (since this day's own catalog is honestly empty) — no dispatch, no
+    // session, no mutation of any kind, purely for looking at the real
+    // guided-flow preview/detail rendering.
+    const isDevBridgeAvailable = process.env.NODE_ENV !== "production";
+
     return (
-      <TaskShell
-        title={scheduledName}
-        icon={<Dumbbell size={17} />}
-        state={state}
-        lockedHint={`${scheduledName} is scheduled today, but full session detail isn't available yet. Check with ${coachName} if you have questions.`}
-      />
+      <div>
+        <TaskShell
+          title={availability.displayName}
+          icon={<Dumbbell size={17} />}
+          state={state}
+          lockedHint={`Workout details unavailable — ${availability.displayName} is scheduled today, but full session detail isn't available yet. Check with ${coachName} if you have questions.`}
+          fillWidth={fillWidth}
+        />
+        {isDevBridgeAvailable ? (
+          <>
+            <Button variant="outline" className="mt-2 w-full" onClick={() => setDevPreviewOpen(true)}>
+              Preview workout
+            </Button>
+            <WorkoutDetailsSheet open={devPreviewOpen} onClose={() => setDevPreviewOpen(false)} workout={PUSH_WORKOUT} />
+          </>
+        ) : null}
+      </div>
     );
   }
 
@@ -57,11 +105,19 @@ export function WorkoutTask({
     const summary = appState.workoutSession.summary;
     const endedEarly = appState.workoutSession.status === "ended-early";
     return (
-      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
-        <p className="text-sm text-off-white">
+      <TaskShell
+        title={PUSH_WORKOUT.name}
+        icon={<Dumbbell size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
+        <p className="text-body text-off-white">
           {endedEarly ? "Ended early — completed sets and RPE are saved." : "Submitted with skipped work."}
         </p>
-        {summary ? <p className="mt-1 text-sm text-neutral">{summary.detail}</p> : null}
+        {summary ? <p className="mt-1 text-meta text-neutral">{summary.detail}</p> : null}
       </TaskShell>
     );
   }
@@ -70,15 +126,23 @@ export function WorkoutTask({
     const summary = appState.workoutSession.summary;
     const endedEarly = appState.workoutSession.status === "ended-early";
     return (
-      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
-        {endedEarly ? <p className="text-sm text-off-white">Ended early — completed sets and RPE are saved.</p> : null}
+      <TaskShell
+        title={PUSH_WORKOUT.name}
+        icon={<Dumbbell size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
+        {endedEarly ? <p className="text-body text-off-white">Ended early — completed sets and RPE are saved.</p> : null}
         {summary ? (
           <div>
-            {!endedEarly ? <p className="text-sm text-off-white">{summary.headline}</p> : null}
-            <p className="mt-1 text-sm text-neutral">{summary.detail}</p>
+            {!endedEarly ? <p className="text-body text-off-white">{summary.headline}</p> : null}
+            <p className="mt-1 text-meta text-neutral">{summary.detail}</p>
           </div>
         ) : null}
-        <p className="mt-3 text-xs text-warning">
+        <p className="mt-3 text-meta text-warning">
           I&apos;ve organized this for {coachName}&apos;s review. {coachName} will make any programming decisions.
         </p>
       </TaskShell>
@@ -86,6 +150,22 @@ export function WorkoutTask({
   }
 
   const isInProgress = state === "in-progress";
+
+  // Not started yet — this is the one state where a real assigned program
+  // (see lib/coach/training.ts) genuinely has content to show, exactly like
+  // components/training/today-session-card.tsx's identical "not started"
+  // branch. Once a session actually exists (in-progress/completed/skipped
+  // above), it stays tied to PUSH_WORKOUT specifically, since the live
+  // workoutSession itself is still only ever modeled against that catalog
+  // entry (see lib/state.ts's createInitialWorkoutSession) — this is a
+  // pre-existing constraint, not something a display fix here can change.
+  const todaysAvailability = resolveWorkoutAvailabilityForDay(
+    localDateDayOfWeek(appState.dateIso),
+    false,
+    appState.assignedProgram,
+    deriveProgramWeek(appState.programEnrollment, appState.dateIso)
+  );
+  const todaysWorkout = todaysAvailability.workout ?? PUSH_WORKOUT;
 
   function handleBeginWorkout() {
     if (!isInProgress) {
@@ -96,19 +176,28 @@ export function WorkoutTask({
 
   return (
     <>
-      <TaskShell title={PUSH_WORKOUT.name} icon={<Dumbbell size={17} />} state={state} emphasisOverride={emphasisOverride}>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-neutral">
-          <span>{PUSH_WORKOUT.estimatedDurationMin} min</span>
+      <TaskShell
+        title={todaysWorkout.name}
+        icon={<Dumbbell size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        scheduleLabel={scheduleLabel}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-meta text-neutral">
+          <span>{todaysWorkout.estimatedDurationMin} min</span>
           <span aria-hidden="true">·</span>
-          <span>{PUSH_WORKOUT.exercises.length} exercises</span>
+          <span>{todaysWorkout.exercises.length} exercises</span>
           <span aria-hidden="true">·</span>
-          <span>{PUSH_WORKOUT.focus}</span>
+          <span>{todaysWorkout.focus}</span>
         </div>
 
         {!isInProgress && (
           <div className="mt-3 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-neutral">Note from {coachName}</p>
-            <p className="mt-1 text-sm text-off-white">{PUSH_WORKOUT.coachNote}</p>
+            <p className="text-label text-neutral">Note from {coachName}</p>
+            <p className="mt-1 text-body text-off-white">{todaysWorkout.coachNote}</p>
           </div>
         )}
 
@@ -123,12 +212,12 @@ export function WorkoutTask({
 
         <button
           onClick={() => router.push("/training")}
-          className="mt-3 w-full text-center text-sm font-medium text-accent-strong hover:underline"
+          className="mt-3 w-full text-center text-action text-accent-strong hover:underline"
         >
           See plan
         </button>
       </TaskShell>
-      <WorkoutDetailsSheet open={detailsOpen} onClose={() => setDetailsOpen(false)} />
+      <WorkoutDetailsSheet open={detailsOpen} onClose={() => setDetailsOpen(false)} workout={todaysWorkout} />
     </>
   );
 }

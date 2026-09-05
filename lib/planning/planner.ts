@@ -12,11 +12,12 @@
 // client didn't actually do — see the adaptability rules in the Phase 3
 // spec this implements.
 
-import { cardioPrescriptionForClient, MEAL_OPTIONS, NUTRITION_TARGETS, PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
+import { cardioPrescriptionForClient, MEAL_OPTIONS, PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
 import { resolvePlannedDateTime } from "./training-plan.ts";
 import { comfortableTrainingWindow, mealTimingProfileForMacros, mealTimingProfileForOption } from "./meal-timing.ts";
 import { buildMealSchedule } from "./meal-schedule.ts";
 import { localDateDayOfWeek } from "../shared/local-date.ts";
+import { deriveProgramWeek } from "../scheduling/enrollment.ts";
 import type { AppState } from "../state";
 import type { MacroValues, MealOption, MealPeriod, MealSelection } from "../types";
 import type { DailyMealSchedule, DailyPlanResult, DailyTrainingPlan, MealScheduleEntry, PlannerItem, PlannerItemStatus } from "./types";
@@ -167,7 +168,12 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   // silently substitutes Push Workout's content under a different name, and
   // this can never disagree with what Today or Training decide for the
   // exact same day.
-  const availability = resolveWorkoutAvailabilityForDay(todayDayOfWeek, clientDeclaredRest);
+  const availability = resolveWorkoutAvailabilityForDay(
+    todayDayOfWeek,
+    clientDeclaredRest,
+    state.assignedProgram,
+    deriveProgramWeek(state.programEnrollment, state.dateIso)
+  );
   const scheduledWithoutDetail = availability.isUnavailable;
   const isRestDay = clientDeclaredRest || (!clientDeclaredRest && !trainingPlan && availability.scheduleEntry?.type === "rest");
   const workoutDisplayName = availability.displayName;
@@ -410,8 +416,9 @@ const SNACK_GAP_THRESHOLD_MIN = 240; // 4 hours
 const MIN_MEANINGFUL_GAP_RATIO = 0.2; // 20% of target remaining
 
 function evaluateSnackRecommendation(state: AppState, totals: MacroValues, now: Date): { show: boolean; reason?: string } {
-  const remainingCalRatio = Math.max(0, NUTRITION_TARGETS.calories - totals.calories) / NUTRITION_TARGETS.calories;
-  const remainingProteinRatio = Math.max(0, NUTRITION_TARGETS.proteinG - totals.proteinG) / NUTRITION_TARGETS.proteinG;
+  const targets = state.nutritionTargets;
+  const remainingCalRatio = Math.max(0, targets.calories - totals.calories) / targets.calories;
+  const remainingProteinRatio = Math.max(0, targets.proteinG - totals.proteinG) / targets.proteinG;
 
   const resolvedMealTimes: number[] = (["breakfast", "postWorkout", "lunch", "dinner"] as MealPeriod[])
     .map((period) => state.meals[period])

@@ -66,7 +66,7 @@ function baseFor(
   return { workspaceId, clientId, dateIso };
 }
 
-function formatTimeLabel(time24: string): string {
+export function formatTimeLabel(time24: string): string {
   const [hourStr, minuteStr] = time24.split(":");
   const hour = Number(hourStr);
   const minute = Number(minuteStr);

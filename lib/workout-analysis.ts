@@ -1,5 +1,6 @@
 import { PUSH_WORKOUT } from "./mock-data.ts";
 import { ALL_CLIENT_PROFILES, ALL_COACH_PROFILES, ALL_WORKSPACES } from "./tenancy/seed.ts";
+import { classifyEffort } from "./workout/effort-policy.ts";
 import type { Exercise, ExerciseLog, WorkoutSession, WorkoutSummary } from "./types";
 
 /** Resolves the business/coach display names for the session's workspace and
@@ -23,12 +24,6 @@ function resolveSessionIdentity(session: WorkoutSession): { businessName: string
 // every message is derived strictly from the sets the client actually
 // submitted. Nothing here may claim a result, comparison, or trend that
 // isn't backed by logged data (see buildWorkoutSummary).
-
-export function rpeFeedback(actualRpe: number, targetRpe: number): string {
-  if (actualRpe < targetRpe - 1) return "This set may have been lighter than intended.";
-  if (actualRpe > targetRpe + 1) return "This set was harder than planned and may need review.";
-  return "You stayed within the programmed effort range.";
-}
 
 export function totalPrescribedWorkingSets(): number {
   return PUSH_WORKOUT.exercises.reduce((n, e) => n + e.workingSets, 0);
@@ -96,8 +91,19 @@ export function buildWorkoutSummary(
         continue;
       }
       rpeValues.push(set.rpe);
-      if (set.rpe > exercise.targetRpe + 1) anyRpeAnomaly = true;
-      if (set.rpe < exercise.targetRpe - 1) anyLighterThanExpected = true;
+      // Phase 4.4B-2.2 — goes through the same shared classifier the
+      // immediate post-set headline and rest recommendation use (see
+      // lib/workout/effort-policy.ts), so this summary can never disagree
+      // with what the client already saw mid-session. Only the SEVERE
+      // above-target tier counts as an anomaly worth flagging for review
+      // here — the milder "near-max effort" tier already gets its own
+      // supporting copy in real time (see buildImmediateSetFeedback) without
+      // itself triggering a coach-review flag, and that distinction is
+      // preserved rather than making every single-point RPE variance flag
+      // the whole session.
+      const effort = classifyEffort(set.rpe, exercise.targetRpe);
+      if (effort.tier === "above-target" && effort.severe) anyRpeAnomaly = true;
+      if (effort.tier === "below-target") anyLighterThanExpected = true;
     }
   }
 
@@ -187,4 +193,23 @@ export function buildWorkoutSummary(
     needsReview,
     fullyCompleted,
   };
+}
+
+/**
+ * Phase 4.4B-2.2 correction — WorkoutSummary.headline ("Workout submitted…",
+ * "Workout completed.") is only ever accurate once COMPLETE_WORKOUT has
+ * actually been dispatched and persisted (see lib/state.ts). The pre-
+ * completion session-summary screen was previously rendering that exact
+ * headline as a live PREVIEW, before the client had pressed "Complete
+ * workout" — claiming the workout had already been submitted while its own
+ * CTA still said "Complete workout." This is the distinct, honestly-tensed
+ * copy for that PREVIEW moment only; the real `summary.headline` (used by
+ * WorkoutCompleteScreen after the dispatch) is untouched. Derived from the
+ * exact same real preview data, never a fifth independent judgment call.
+ */
+export function sessionReviewHeadline(preview: WorkoutSummary): string {
+  if (preview.workingSetsCompleted === 0) return "Review your workout";
+  if (preview.fullyCompleted) return "Workout ready to complete.";
+  if (preview.needsReview) return "Review your workout — some items will be flagged for your coach.";
+  return "Review your workout.";
 }

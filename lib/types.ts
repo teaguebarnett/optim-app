@@ -6,7 +6,7 @@
 // CoachProfile) so every workspace can have its own — this file only
 // re-imports the tenant-attribution types it needs to stamp onto records.
 
-import type { ClientProfileId, WorkspaceId } from "./tenancy/types";
+import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
 
 export type ClientId = ClientProfileId;
 
@@ -191,6 +191,53 @@ export type DayOfWeek =
   | "Friday"
   | "Saturday"
   | "Sunday";
+
+// ---------------------------------------------------------------------------
+// Coach-authored training protocols (Phase 5.2)
+// ---------------------------------------------------------------------------
+
+export interface ProgramDay {
+  dayOfWeek: DayOfWeek;
+  type: "training" | "rest";
+  /** Full real, loggable Workout content — present only when type is
+   * "training". A "training" day with no workout is an authoring gap, not
+   * a valid assignable state — see lib/coach/training.ts's isValidWeek1. */
+  workout?: Workout;
+}
+
+export interface ProgramWeek {
+  weekNumber: number;
+  /** Always exactly 7 entries, one per DayOfWeek, Monday-first — matching
+   * lib/mock-data.ts's TRAINING_WEEK convention. */
+  days: ProgramDay[];
+}
+
+/** A client's own independent copy of a training protocol — built directly
+ * for this one client, or produced by assigning one of the coach's saved
+ * CoachProgramTemplates (see lib/coach/types.ts). Lives on the client's own
+ * AppState (see AppState.assignedProgram) so a later edit to the source
+ * template, or to a different client's program, can never silently change
+ * what this client is actually prescribed — see
+ * lib/coach/training.ts's assignTemplateToClient. */
+export interface ClientAssignedProgram {
+  id: string;
+  workspaceId: WorkspaceId;
+  clientId: ClientProfileId;
+  coachId: CoachProfileId;
+  /** The template this was assigned from, kept only for the coach's own
+   * reference — editing here never writes back to that template. Absent
+   * for a program the coach built directly for this client. */
+  sourceTemplateId?: string;
+  name: string;
+  durationWeeks: number;
+  weeks: ProgramWeek[];
+  /** "draft" is visible to the coach only (preview never implies the client
+   * can see it) — activation requires a valid Week 1 on an "assigned"
+   * program, never a draft. */
+  status: "draft" | "assigned";
+  createdAtIso: string;
+  updatedAtIso: string;
+}
 
 export interface LoggedSet {
   id: string;
@@ -619,10 +666,56 @@ export interface MorningWeightLog {
 
 export type ChatSender = "client" | "assistant" | "coach" | "system";
 
+export type ChatAttachmentKind = "photo" | "video" | "document" | "voice";
+
+/** One attachment on a ChatMessage. `url` is produced by whatever
+ * ChatAttachmentStorage adapter built it (see lib/chat/attachments.ts) — the
+ * default prototype adapter creates a local, in-memory object URL, but every
+ * other field here is storage-agnostic so a future secure-upload adapter can
+ * swap in without touching the message model. */
+export interface ChatAttachment {
+  id: string;
+  kind: ChatAttachmentKind;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  url: string;
+  /** Voice and video only. */
+  durationSeconds?: number;
+}
+
+/** A canonical-state change Chat already actually performed (never merely
+ * claimed) — attached to the confirmation message so both the transcript
+ * and a future coach workspace can see exactly what changed and when. */
+export type ChatActionKind = "training_time_set" | "training_rest_day" | "training_unsure";
+
+export interface ChatActionPerformed {
+  kind: ChatActionKind;
+  /** Human-readable summary of what changed, e.g. "Training moved to 6:30 PM." */
+  detail: string;
+}
+
+/** Whether this message (or the request it produced) is waiting on the
+ * assigned coach. "none" — the default when omitted — never needs to be
+ * written explicitly. */
+export type ChatHandoffState = "pending_coach_review" | "resolved";
+
+/** Local prototype send-state for a client-authored message — there is no
+ * real network layer here, so "sending"/"failed" only ever reflect the
+ * synchronous local dispatch itself, never a real delivery guarantee. */
+export type ChatDeliveryState = "sending" | "sent" | "failed";
+
 export interface ChatMessage {
   id: string;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
+  /** The client's assigned coach at the time this message was sent (see
+   * lib/tenancy/types.ts's ClientProfile.primaryCoachId, resolved through
+   * lib/tenancy/seed.ts's resolveAssignedCoachId) — every coach message,
+   * escalation, notification, attachment, and review request routes through
+   * this, stamped centrally by the reducer exactly like workspaceId/clientId
+   * (see lib/state.ts's ADD_CHAT_MESSAGE). Never a hardcoded coach identity. */
+  assignedCoachId: CoachProfileId;
   /** Set only for sender === "coach", so a coach-authored message keeps its
    * author's identity even in a workspace with multiple coaches later. The
    * assistant is never attributed to a coach — see sender === "assistant". */
@@ -631,12 +724,25 @@ export interface ChatMessage {
   text: string;
   createdAtIso: string;
   isScripted?: boolean;
+  attachments?: ChatAttachment[];
+  actionPerformed?: ChatActionPerformed;
+  /** Present when this message is the subject of (or the status line for) a
+   * coach-review handoff — see lib/state.ts's CREATE_CHAT_REVIEW_REQUEST. */
+  handoffState?: ChatHandoffState;
+  deliveryState?: ChatDeliveryState;
+  /** True only on an assistant message that should render the inline
+   * "Update training time" quick action (opens the same wheel-style
+   * TrainingTimeSheet Today/Training already use) — see app/chat/page.tsx. */
+  promptsSchedulePicker?: boolean;
 }
 
 export interface ScriptedChatTopic {
   id: string;
   prompt: string;
   responseSender: Extract<ChatSender, "assistant" | "coach">;
+  /** May contain the literal placeholder "{{coach}}" — always resolved
+   * through lib/chat/assistant.ts's interpolateCoachName before display,
+   * never the client's assigned coach's name hardcoded here. */
   response: string;
 }
 
@@ -653,14 +759,66 @@ export type ReviewRequestKind =
    * distinct from a routine educational question OPTIM answers itself. See
    * components/workout/live/need-help-sheet.tsx and the FLAG_TECHNIQUE_QUESTION
    * action in lib/state.ts. */
-  | "technique-flag";
+  | "technique-flag"
+  /** An exercise substitution or broader program-change request raised in
+   * Chat — OPTIM never approves or invents this itself (see
+   * lib/chat/assistant.ts); it's always routed to the assigned coach. */
+  | "program-change-request";
+
+/** A review's explicit, persistent place in its resolution lifecycle —
+ * never inferred solely from the `resolved` boolean (kept only for
+ * backward-compatible read sites; see ReviewRequest.resolved). Opening a
+ * review's detail view never changes its status; only a deliberate
+ * "Start review" / "Reviewed — no change needed" / "Resolve review" /
+ * "Reopen" action does — see lib/coach/review-lifecycle.ts. */
+export type ReviewRequestStatus = "needs_review" | "in_progress" | "resolved";
+
+/** The two deliberate final outcomes a coach can choose when resolving a
+ * review — distinct so the resolved history can show which one it was,
+ * never collapsing "nothing needed to change" and "I made a change" into
+ * one undifferentiated "resolved" state. */
+export type ReviewResolutionAction = "reviewed_no_change" | "resolved";
+
+/** How urgently this review needs the coach's attention — "high" is
+ * reserved for pain/injury/health/safety kinds, which also require a
+ * resolution note (see lib/coach/review-lifecycle.ts's
+ * requiresResolutionNote). */
+export type ReviewSeverity = "high" | "normal";
 
 export interface ReviewRequest {
   id: string;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
+  /** The coach this request is routed to — see ChatMessage.assignedCoachId's
+   * doc; the same resolveAssignedCoachId call stamps both. */
+  assignedCoachId: CoachProfileId;
+  /** The ChatMessage (if any) this request originated from — lets a future
+   * coach workspace pull the full conversation context, including any
+   * attachments, straight from the thread rather than duplicating them onto
+   * the request itself. */
+  sourceMessageId?: string;
+  /** Identifies the real underlying event this review is about (a
+   * PainReport's id, a specific workout instance, a chat message id) when
+   * one exists — lets creation stay idempotent: one review per assigned
+   * coach/client/kind/sourceEventId, never a second record for the same
+   * event on a retry, route change, or reload. See
+   * lib/coach/review-lifecycle.ts's findDuplicateReviewRequest. */
+  sourceEventId?: string;
   kind: ReviewRequestKind;
+  severity: ReviewSeverity;
   createdAtIso: string;
+  /** Bumped on every lifecycle transition (start/resolve/reopen), not just
+   * creation — lets the Resolved history and any future "last touched"
+   * display stay accurate without a separate audit log. */
+  updatedAtIso: string;
   summary: string;
+  status: ReviewRequestStatus;
+  /** Kept in sync with status (true iff status === "resolved") — every read
+   * site that predates the full lifecycle only ever checked this boolean,
+   * and continues to work unmodified. */
   resolved: boolean;
+  resolutionAction?: ReviewResolutionAction;
+  resolutionNote?: string;
+  resolvedAtIso?: string;
+  resolvedByCoachId?: CoachProfileId;
 }

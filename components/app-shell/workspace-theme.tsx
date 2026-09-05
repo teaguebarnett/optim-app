@@ -27,6 +27,7 @@ export function WorkspaceTheme() {
     root.setProperty("--pc-accent", primaryColor);
     root.setProperty("--pc-accent-strong", accentColor);
     root.setProperty("--pc-accent-soft", hexToRgba(primaryColor, 0.09));
+    root.setProperty("--pc-selected-bg", hexToRgba(primaryColor, 0.12));
   }, [primaryColor, accentColor]);
 
   return null;

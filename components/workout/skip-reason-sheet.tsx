@@ -36,10 +36,18 @@ export function SkipReasonSheet({ open, onClose, title, description, onConfirm }
     <Sheet open={open} onClose={handleClose} title={title} description={description}>
       <div className="space-y-4">
         <ReasonPicker value={reason} onChange={setReason} name="skip-reason" />
-        <TextArea id="skip-reason-note" label="Optional note" value={note} onChange={(e) => setNote(e.target.value)} />
-        <Button className="w-full" disabled={!reason} onClick={handleConfirm}>
-          Confirm
-        </Button>
+        <TextArea
+          id="skip-reason-note"
+          label="Optional note"
+          rows={2}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+        <div className="border-t border-border pt-4">
+          <Button className="w-full" disabled={!reason} onClick={handleConfirm}>
+            Confirm
+          </Button>
+        </div>
       </div>
     </Sheet>
   );

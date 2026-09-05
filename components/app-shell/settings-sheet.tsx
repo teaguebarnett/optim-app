@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { RotateCcw, Trash2, CheckCircle2, AlertTriangle, History, Eraser, LineChart } from "lucide-react";
 import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { DevPerspectiveSwitcher } from "@/components/app-shell/dev-perspective-switcher";
+import { AppearanceSettingsCard } from "@/components/app-shell/appearance-settings-card";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { clearState } from "@/lib/storage";
 import { buildDemoHistoryFixture } from "@/lib/history/demo-fixture";
@@ -79,6 +81,9 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
       description="These controls exist only to demo different app states — they won't appear in the production experience."
     >
       <div className="space-y-2">
+        <AppearanceSettingsCard />
+        <DevPerspectiveSwitcher />
+
         <button
           onClick={handleResetToday}
           className="flex w-full items-center gap-3 rounded-[var(--radius-md)] border border-border-strong px-4 py-3.5 text-left hover:border-accent/40"

@@ -243,12 +243,20 @@ check("Duration is never a universal constant: two enrollments built in the same
 
 console.log("\n2c. Phase 4.2 correction — v4 -> v5 duration migration\n");
 
-check("Legacy v4 state (durationWeeks 16, the old default) migrates to a 12-week enrollment at v5", () => {
+check("Legacy v4 state (durationWeeks 16, the old default) migrates to a 12-week enrollment, fully advanced to the current schema version", () => {
   const base = createInitialState();
   const legacyV4: Record<string, unknown> = { ...base, version: 4, programEnrollment: { ...base.programEnrollment, durationWeeks: 16 } };
   const migrated = migrateStoredState(legacyV4);
   assert.ok(migrated);
-  assert.equal(migrated!.version, 5);
+  // Phase 4.4B-2 added a v5->v6 step (see migrateV5ToV6), a later pass added
+  // v6->v7 (see migrateV6ToV7), OPTIM Chat V1 added v7->v8 (see
+  // migrateV7ToV8), Phase 5.0B added v8->v9 and v9->v10 (see
+  // migrateV8ToV9/migrateV9ToV10), and Phase 5.2 added v10->v11 (see
+  // migrateV10ToV11) — migrateStoredState always steps a legacy record all
+  // the way to the current version, so a v4 input now lands on 11, not 5.
+  // The v4->v5 duration correction itself (the thing this check actually
+  // exercises) is unaffected either way.
+  assert.equal(migrated!.version, 12);
   assert.equal(migrated!.programEnrollment.durationWeeks, 12);
 });
 

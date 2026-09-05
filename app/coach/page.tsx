@@ -1,0 +1,185 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { ArrowRight, CheckCircle2, ClipboardCheck, Sparkles, UserPlus, Users2 } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { SectionHeader } from "@/components/coach/section-header";
+import { EmptyState } from "@/components/coach/empty-state";
+import { DecisionFocusSurface } from "@/components/coach/decision-focus-surface";
+import { DecisionQueueRows } from "@/components/coach/decision-queue-rows";
+import { RosterPulseCard } from "@/components/coach/roster-pulse-card";
+import { AiAuthorityRailCard } from "@/components/coach/ai-authority-rail-card";
+import { CalibrateOptimBanner } from "@/components/coach/calibrate-optim-banner";
+import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
+import { AddClientSheet } from "@/components/coach/add-client-sheet";
+import { Button } from "@/components/ui/button";
+import { useCoachWorkspace } from "@/hooks/use-coach-data";
+import { useAiAuthority } from "@/hooks/use-ai-authority";
+import { getClientLifecycle } from "@/lib/coach/repository";
+import { resolveProgramTiming, describeProgramTimingForCoach } from "@/lib/scheduling/program-timing";
+import { buildRosterPulse, buildUpcomingWork } from "@/lib/coach/command-center";
+import { resolveEffectiveAiAuthorityLevel, AI_AUTHORITY_LEVEL_LABELS } from "@/lib/coach/ai-authority";
+import { resolveClientLocalDateIso } from "@/lib/shared/local-date";
+
+function greetingForHour(hour: number): string {
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/**
+ * The OPTIM Command Center — a priority-first decision surface, not an
+ * analytics dashboard. Every number here traces to real state (real
+ * ReviewRequests, real HealthReviewRecords, real ClientLifecycleRecords) —
+ * never a fabricated wellness score, automation count, or calendar entry.
+ * Selecting a different queue row updates the expanded focus surface in
+ * place; nothing here navigates away just to look at a decision.
+ */
+export default function CoachOverviewPage() {
+  const workspace = useCoachWorkspace();
+  const { settings: aiSettings, setGlobal } = useAiAuthority();
+  const coachFirstName = workspace.activeContext.coachProfile?.displayName?.split(" ")[0] ?? "there";
+  const coachName = workspace.activeContext.coachProfile?.displayName ?? "Your coach";
+  const today = new Date();
+  const [addClientOpen, setAddClientOpen] = useState(false);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [, forceRerender] = useState(0);
+  const onChanged = () => forceRerender((n) => n + 1);
+
+  const queue = workspace.attentionQueue;
+  const focusItem = queue.find((i) => i.reviewRequestId === selectedId) ?? queue[0] ?? null;
+  const remainingItems = focusItem ? queue.filter((i) => i.reviewRequestId !== focusItem.reviewRequestId) : [];
+
+  const focusClient = focusItem ? workspace.clients.find((c) => c.id === focusItem.clientId) : undefined;
+  const focusProgramLabel = useMemo(() => {
+    if (!focusItem) return null;
+    const appState = workspace.clientAppStates.get(focusItem.clientId);
+    if (!appState) return null;
+    const todayIsoForClient = resolveClientLocalDateIso(new Date(), appState.programEnrollment.timeZone);
+    const timing = resolveProgramTiming(appState.programEnrollment, todayIsoForClient);
+    const startLabel = new Date(`${appState.programEnrollment.startDateIso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return describeProgramTimingForCoach(timing, appState.programEnrollment.durationWeeks, startLabel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusItem?.clientId, workspace.clientAppStates]);
+
+  const clientsWithLifecycle = workspace.clients.map((client) => ({ client, lifecycle: getClientLifecycle(workspace.platform, client.id) }));
+  const lifecycleByClientId = new Map(clientsWithLifecycle.map(({ client, lifecycle }) => [client.id, lifecycle]));
+  const needsCoachClientIds = new Set(queue.map((i) => i.clientId));
+  const rosterPulse = buildRosterPulse(
+    workspace.clients.map((c) => c.id),
+    lifecycleByClientId,
+    needsCoachClientIds
+  );
+  const upcomingWork = buildUpcomingWork(workspace.clients, lifecycleByClientId).slice(0, 5);
+  const globalAiLevel = resolveEffectiveAiAuthorityLevel(aiSettings, null);
+
+  const summaryLine =
+    queue.length === 0
+      ? "Nothing needs you right now. Everything else is moving."
+      : `${queue.length} decision${queue.length === 1 ? "" : "s"} need${queue.length === 1 ? "s" : ""} you. Everything else is moving.`;
+
+  return (
+    <div className="mx-auto w-full max-w-[1440px] space-y-8">
+      {/* System row — honest operational state, never a fabricated automation count. */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border bg-charcoal px-5 py-3">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+          <span className="flex items-center gap-2 text-neutral">
+            <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />
+            Workspace operating normally
+          </span>
+          <span className="text-neutral">
+            AI Authority: <span className="font-semibold text-off-white">{AI_AUTHORITY_LEVEL_LABELS[globalAiLevel]}</span>
+          </span>
+          <span className="text-neutral">No automated actions logged yet</span>
+        </div>
+        <Button size="sm" onClick={() => setAddClientOpen(true)}>
+          <UserPlus size={15} aria-hidden="true" />
+          Add client
+        </Button>
+      </div>
+
+      <CalibrateOptimBanner />
+
+      {/* Greeting + on-track status. */}
+      <div className="flex flex-wrap items-end justify-between gap-6">
+        <div>
+          <p className="text-label text-accent-strong">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
+          <h1 className="mt-1 text-display text-off-white">
+            {greetingForHour(today.getHours())}, {coachFirstName}.
+          </h1>
+          <p className="mt-1.5 text-body text-neutral">{summaryLine}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-metric leading-none text-success">{rosterPulse.onTrack}</p>
+          <p className="mt-1 text-label text-neutral">On track</p>
+        </div>
+      </div>
+
+      <section className="min-w-0 space-y-4">
+        <SectionHeader title="Needs your judgment" />
+        {focusItem ? (
+          <>
+            <div key={focusItem.reviewRequestId} className="pc-row-promote">
+              <DecisionFocusSurface
+                item={focusItem}
+                client={focusClient}
+                coachId={workspace.coachId ?? ""}
+                coachName={coachName}
+                programContextLabel={focusProgramLabel}
+                onChanged={onChanged}
+              />
+            </div>
+            <DecisionQueueRows items={remainingItems} selectedId={selectedId} onSelect={setSelectedId} />
+          </>
+        ) : (
+          <EmptyState icon={CheckCircle2} title="You're caught up" description="Nothing needs your judgment right now." />
+        )}
+      </section>
+
+      {/* Bottom visual modules — horizontally aligned on desktop. */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <section>
+          <SectionHeader title="Roster pulse" />
+          <Card>
+            <RosterPulseCard pulse={rosterPulse} />
+          </Card>
+        </section>
+
+        <section>
+          <SectionHeader
+            title="Next up"
+            action={
+              <Link href="/coach/clients" className="flex items-center gap-1 text-action text-accent-strong hover:underline">
+                All clients <ArrowRight size={13} />
+              </Link>
+            }
+          />
+          {upcomingWork.length === 0 ? (
+            <EmptyState icon={Users2} title="Pipeline is clear" description="No clients currently in onboarding, setup, or awaiting activation." />
+          ) : (
+            <Card className="divide-y divide-border p-0">
+              {upcomingWork.map((row) => (
+                <Link key={row.clientId} href={`/coach/clients/${row.clientId}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-raised first:rounded-t-[var(--radius-lg)] last:rounded-b-[var(--radius-lg)]" style={{ transitionDuration: "var(--motion-fast)" }}>
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${row.readyToActivate ? "bg-warning-soft text-warning" : "bg-accent-soft text-accent-strong"}`}>
+                    {row.readyToActivate ? <Sparkles size={14} aria-hidden="true" /> : <ClipboardCheck size={14} aria-hidden="true" />}
+                  </span>
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium text-off-white">{row.clientName}</p>
+                  <LifecycleBadge lifecycle={row.lifecycle} className="shrink-0" />
+                </Link>
+              ))}
+            </Card>
+          )}
+        </section>
+
+        <section>
+          <SectionHeader title="AI Coaching Authority" />
+          <AiAuthorityRailCard level={globalAiLevel} onChange={(level) => setGlobal({ level, domainOverrides: aiSettings.global.domainOverrides })} />
+        </section>
+      </div>
+
+      <AddClientSheet open={addClientOpen} onClose={() => setAddClientOpen(false)} />
+    </div>
+  );
+}

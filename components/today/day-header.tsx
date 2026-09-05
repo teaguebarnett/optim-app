@@ -20,7 +20,13 @@ function formatDateLabel(dateIso: string): string {
  * Phase 4.1 corrective — the greeting's weekday, "start of week" claim, and
  * time-of-day all now derive from the same client-local date/timezone this
  * header already uses, instead of a hardcoded "Monday" subline or the
- * machine's own clock. See lib/calculations.ts's getGreeting/getTimeOfDay. */
+ * machine's own clock. See lib/calculations.ts's getGreeting/getTimeOfDay.
+ *
+ * Composition refinement — getGreeting() still returns a `subline` (e.g.
+ * "Happy Wednesday. Week 8 is underway.") but it's deliberately not
+ * rendered here anymore: it restated exactly what the day/date/week meta
+ * row directly below already says. The header is the headline plus that
+ * one meta row now — nothing redundant in between. */
 export function DayHeader() {
   const { state, activeContext } = usePrototypeState();
   const dayOfWeek = localDateDayOfWeek(state.dateIso);
@@ -35,11 +41,10 @@ export function DayHeader() {
   });
 
   return (
-    <div className="px-4 pt-5">
-      <h1 className="text-2xl font-semibold leading-tight text-off-white">{greeting.headline}</h1>
-      <p className="mt-1 text-[15px] text-neutral">{greeting.subline}</p>
+    <div className="px-4 pt-4">
+      <h1 className="text-display text-off-white">{greeting.headline}</h1>
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral">
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-neutral">
         <span className="font-medium text-off-white">{dayOfWeek}</span>
         <span aria-hidden="true">·</span>
         <span>{formatDateLabel(state.dateIso)}</span>

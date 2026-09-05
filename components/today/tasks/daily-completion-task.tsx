@@ -6,7 +6,7 @@ import { TaskShell } from "@/components/today/task-shell";
 import { Button } from "@/components/ui/button";
 import { ReviewTodaySheet } from "@/components/today/review-today-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { NUTRITION_TARGETS, trainingWeekEntryForDay } from "@/lib/mock-data";
+import { trainingWeekEntryForDay } from "@/lib/mock-data";
 import { addDaysToLocalDate, localDateDayOfWeek } from "@/lib/shared/local-date";
 import type { DailyTaskState } from "@/lib/types";
 
@@ -31,10 +31,9 @@ export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
     );
   }
 
+  const proteinTarget = appState.nutritionTargets.proteinG;
   const proteinStatus =
-    nutritionTotals.proteinG >= NUTRITION_TARGETS.proteinG
-      ? "Target reached"
-      : `${Math.round((nutritionTotals.proteinG / NUTRITION_TARGETS.proteinG) * 100)}% of target`;
+    nutritionTotals.proteinG >= proteinTarget ? "Target reached" : `${Math.round((nutritionTotals.proteinG / proteinTarget) * 100)}% of target`;
 
   // Phase 4.1 corrective — "today" and "tomorrow" resolve from the real
   // client-local effective date rather than being hardcoded to Monday/
@@ -52,9 +51,9 @@ export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
         state={state}
         emphasisOverride="primary"
       >
-        <p className="text-sm text-off-white">Nice work staying consistent today.</p>
+        <p className="text-body text-off-white">Nice work staying consistent today.</p>
 
-        <ul className="mt-3 space-y-1.5 text-sm text-neutral">
+        <ul className="mt-3 space-y-1.5 text-meta text-neutral">
           <li>
             Workout —{" "}
             <span className="text-off-white">
@@ -79,12 +78,12 @@ export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
         </ul>
 
         <div className="mt-4 rounded-[var(--radius-sm)] bg-off-white/[0.04] p-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-neutral">Prepare for tomorrow</p>
-          <p className="mt-1 text-sm text-off-white">
+          <p className="text-label text-neutral">Prepare for tomorrow</p>
+          <p className="mt-1 text-body text-off-white">
             Set out tomorrow&apos;s training clothes and make sure breakfast ingredients are ready.
           </p>
           {tomorrow ? (
-            <p className="mt-2 text-xs text-neutral">
+            <p className="mt-2 text-meta text-neutral">
               {tomorrowDayOfWeek}: {tomorrow.type === "rest" ? "Rest day" : `${tomorrow.workoutName} — ${tomorrow.focus}`}
             </p>
           ) : null}

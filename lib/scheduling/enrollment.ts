@@ -10,6 +10,7 @@ import {
   startOfLocalWeek,
   DEFAULT_WEEK_STARTS_ON,
 } from "../shared/local-date.ts";
+import type { ClientProfileId, WorkspaceId } from "../tenancy/types";
 import type { ProgramEnrollment, ProgramPhase } from "./types";
 
 function rawWeekIndex(enrollment: ProgramEnrollment, effectiveDateIso: string): number {
@@ -75,15 +76,71 @@ export function deriveStartDatePreservingCurrentWeek(
 const CURRENT_PROTOTYPE_PROGRAM_DURATION_WEEKS = 12;
 
 /**
- * The one enrollment this demo ever needs — mirrors lib/state.ts's existing
- * "this app only ever runs as CLIENT_PROFILE_DEMO in WORKSPACE_OPTIM_ID"
- * convention. Anchors the start date so evaluating it against `now` reports
- * exactly CLIENT_PROFILE_DEMO.programWeek (today's existing hand-set
- * display value), so first-run and freshly migrated state both show the
- * same week the rest of the app (e.g. lib/mock-data.ts's catalog) was
- * authored around, then advances normally from there as real days pass.
- * Never depends on a hardcoded calendar date — always resolved against the
- * real current instant at call time.
+ * The general-purpose enrollment constructor behind both
+ * buildDemoDefaultProgramEnrollment (below) and the coach setup flow's real
+ * program assignment (see lib/coach/setup.ts) — a real ProgramEnrollment
+ * for ANY client, at whatever start date/duration the coach has actually
+ * chosen, always pointing at the one shared program catalog this prototype
+ * has (see lib/mock-data.ts's module doc: "program-demo" names the catalog
+ * content, not any one client's copy of it — see this function's own
+ * client/workspace ids for what actually makes an enrollment belong to one
+ * client). Never fabricates a start date the caller didn't provide.
+ */
+export function buildProgramEnrollmentForClient(params: {
+  workspaceId: WorkspaceId;
+  clientId: ClientProfileId;
+  startDateIso: string;
+  durationWeeks: number;
+  timeZone?: string;
+  now?: Date;
+}): ProgramEnrollment {
+  const now = params.now ?? new Date();
+  const nowIso = now.toISOString();
+  const timeZone = params.timeZone ?? resolveBrowserTimeZone();
+  return {
+    id: `enrollment-${params.workspaceId}-${params.clientId}-${now.getTime()}`,
+    schemaVersion: 1,
+    workspaceId: params.workspaceId,
+    clientId: params.clientId,
+    programId: "program-demo",
+    startDateIso: params.startDateIso,
+    durationWeeks: params.durationWeeks,
+    timeZone,
+    weekStartsOn: DEFAULT_WEEK_STARTS_ON,
+    createdAtIso: nowIso,
+    updatedAtIso: nowIso,
+  };
+}
+
+/** A safe, generic placeholder enrollment for a client whose AppState must
+ * exist before any real coach-assigned program does (a defensive fallback
+ * only — the normal path always has coach setup create a real enrollment
+ * before this client can ever reach /today; see
+ * lib/tenancy/client-state-store.ts). Starts "today," at the same 12-week
+ * default duration new clients are invited toward. */
+export function buildDefaultProgramEnrollmentFor(workspaceId: WorkspaceId, clientId: ClientProfileId, now: Date = new Date()): ProgramEnrollment {
+  const timeZone = resolveBrowserTimeZone();
+  const startDateIso = resolveClientLocalDateIso(now, timeZone);
+  return buildProgramEnrollmentForClient({
+    workspaceId,
+    clientId,
+    startDateIso,
+    durationWeeks: CURRENT_PROTOTYPE_PROGRAM_DURATION_WEEKS,
+    timeZone,
+    now,
+  });
+}
+
+/**
+ * The one enrollment the seeded demo client ever needs — mirrors
+ * lib/state.ts's existing "this app only ever runs as CLIENT_PROFILE_DEMO
+ * in WORKSPACE_OPTIM_ID" convention. Anchors the start date so evaluating
+ * it against `now` reports exactly CLIENT_PROFILE_DEMO.programWeek (today's
+ * existing hand-set display value), so first-run and freshly migrated
+ * state both show the same week the rest of the app (e.g. lib/mock-data.ts's
+ * catalog) was authored around, then advances normally from there as real
+ * days pass. Never depends on a hardcoded calendar date — always resolved
+ * against the real current instant at call time.
  */
 export function buildDemoDefaultProgramEnrollment(now: Date = new Date()): ProgramEnrollment {
   const timeZone = resolveBrowserTimeZone();

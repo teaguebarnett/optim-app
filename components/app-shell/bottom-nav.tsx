@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Sunrise, Dumbbell, UtensilsCrossed, LineChart, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 
 const NAV_ITEMS = [
   { href: "/today", label: "Today", icon: Sunrise },
@@ -13,13 +14,24 @@ const NAV_ITEMS = [
   { href: "/chat", label: "Chat", icon: MessageCircle },
 ];
 
+/** Phase 4.4B-2 — hidden only while the live workout route is showing an
+ * actually in-progress session (see app/training/workout/page.tsx's
+ * ActiveSessionShell). Every other route, and this same route once the
+ * session is resolved (completed/skipped/ended-early) or not yet started,
+ * shows the normal global nav exactly as before — this is the one, narrow
+ * condition, not a redesign of navigation elsewhere. */
 export function BottomNav() {
   const pathname = usePathname();
+  const { isHydrated, state } = usePrototypeState();
+  const hideForActiveWorkout =
+    isHydrated && pathname === "/training/workout" && state.workoutSession.status === "in-progress";
+
+  if (hideForActiveWorkout) return null;
 
   return (
     <nav
       aria-label="Primary"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-near-black/90 pc-safe-bottom backdrop-blur-md"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-near-black/90 pc-safe-bottom backdrop-blur-md lg:absolute"
     >
       <div className="mx-auto flex max-w-lg items-stretch justify-between px-1">
         {NAV_ITEMS.map((item) => {
@@ -34,7 +46,7 @@ export function BottomNav() {
             >
               <span
                 className={cn(
-                  "flex h-8 w-11 items-center justify-center rounded-full transition-colors",
+                  "flex h-8 w-11 items-center justify-center rounded-full transition-colors duration-200",
                   isActive && "bg-accent-soft"
                 )}
               >

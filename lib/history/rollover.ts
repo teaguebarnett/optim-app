@@ -78,7 +78,18 @@ export function resolveRollover(stored: AppState, todayIso: string, store: Histo
     return { nextState: stored, archived: false, diagnostic };
   }
 
-  const fresh = createInitialState();
-  const nextState: AppState = { ...fresh, dateIso: todayIso, programEnrollment: stored.programEnrollment };
+  // Every per-client config field a coach can now set (program enrollment,
+  // nutrition targets, check-in schedule) must survive a day rollover
+  // unchanged — a coach's explicit configuration is never silently reset
+  // just because the calendar day advanced. Only the day's own daily
+  // fields (meals, workout, morning weight, cardio) actually start fresh.
+  const fresh = createInitialState({ workspaceId: stored.workspaceId, clientId: stored.clientId, primaryCoachId: stored.primaryCoachId });
+  const nextState: AppState = {
+    ...fresh,
+    dateIso: todayIso,
+    programEnrollment: stored.programEnrollment,
+    nutritionTargets: stored.nutritionTargets,
+    checkInSchedule: stored.checkInSchedule,
+  };
   return { nextState, archived: true };
 }
