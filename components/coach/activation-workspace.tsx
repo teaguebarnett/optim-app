@@ -112,7 +112,7 @@ export function ActivationWorkspace({ view, onActivateClick }: { view: CoachClie
           </Button>
           {canGeneratePlan ? (
             <Button variant="outline" size="sm" onClick={() => router.push(`/coach/clients/${client.id}/activate`)}>
-              <Sparkles size={14} aria-hidden="true" /> Open Activation Studio
+              <Sparkles size={14} aria-hidden="true" /> Open Program Composer
             </Button>
           ) : null}
         </div>

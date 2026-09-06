@@ -786,6 +786,15 @@ export type ReviewRequestKind =
    * in the same window: two independent signals deteriorating together,
    * synthesized as one combined item instead of two separate ones. */
   | "recovery-deterioration"
+  /** Phase 5.5 — a real ProgramAdaptationProposal (see
+   * lib/coach/program-adaptation.ts) generated from a client's actual
+   * logged execution (RPE, adherence, recovery, pain) against their real,
+   * assigned program. Surfaces through this SAME attention queue rather
+   * than a second notification system; the richer proposal record itself
+   * (affected weeks, proposed change, authority classification) lives
+   * coach-side (see PlatformState.adaptationProposals) and is linked back
+   * via sourceEventId. */
+  | "adaptation-proposal"
   /** Phase 5.4B — OPTIM reached the edge of its configured AI Coaching
    * Authority (see lib/coach/ai-authority.ts) or produced a low-confidence
    * output it will not act on alone — e.g. a Daily Briefing held for

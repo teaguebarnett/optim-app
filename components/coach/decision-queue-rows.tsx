@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, TrendingDown, ShieldAlert, Trophy, CalendarX } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ATTENTION_KIND_LABELS } from "@/lib/coach/labels";
 import type { AttentionQueueItem } from "@/lib/coach/types";
@@ -15,6 +15,7 @@ const KIND_ICON: Record<AttentionQueueItem["kind"], typeof AlertTriangle> = {
   "adherence-pattern": CalendarX,
   "recovery-deterioration": TrendingDown,
   "ai-authority-boundary": ShieldAlert,
+  "adaptation-proposal": Wand2,
   milestone: Trophy,
 };
 

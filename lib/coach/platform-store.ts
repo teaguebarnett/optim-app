@@ -28,6 +28,7 @@ import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 import type { ClientCommunicationPolicy } from "./communication-policy.ts";
 import { defaultCoachBriefingSettings, type BriefingAutomationSetting, type CoachBriefingSettings, type DailyBriefingRecord } from "./daily-briefing.ts";
 import type { CoachBriefRecord } from "./coach-brief-record.ts";
+import type { ProgramAdaptationProposal } from "./program-adaptation.ts";
 import type {
   ClientIntendedProgram,
   ClientInvitation,
@@ -43,7 +44,7 @@ import type {
 } from "./types";
 
 export interface PlatformState {
-  version: 8;
+  version: 9;
   clients: ClientProfile[];
   lifecycles: ClientLifecycleRecord[];
   invitations: ClientInvitation[];
@@ -105,11 +106,16 @@ export interface PlatformState {
    * snapshot, not a history log; resolution receipts/history already cover
    * the audit trail). */
   coachBriefs: CoachBriefRecord[];
+  /** Phase 5.5 — every real adaptation proposal ever generated for every
+   * client (see program-adaptation.ts), kept (never deleted) so approval/
+   * dismissal history stays fully auditable, exactly like
+   * activationGenerations above. */
+  adaptationProposals: ProgramAdaptationProposal[];
 }
 
 export function createInitialPlatformState(): PlatformState {
   return {
-    version: 8,
+    version: 9,
     clients: [],
     lifecycles: [],
     invitations: [],
@@ -126,6 +132,7 @@ export function createInitialPlatformState(): PlatformState {
     dailyBriefings: [],
     briefingSettings: [],
     coachBriefs: [],
+    adaptationProposals: [],
   };
 }
 
@@ -181,7 +188,8 @@ export type PlatformAction =
   | { type: "SAVE_DAILY_BRIEFING"; record: DailyBriefingRecord }
   | { type: "SET_BRIEFING_GLOBAL_AUTOMATION"; coachId: CoachProfileId; workspaceId: WorkspaceId; automation: BriefingAutomationSetting; nowIso: string }
   | { type: "SET_BRIEFING_CLIENT_OVERRIDE"; coachId: CoachProfileId; workspaceId: WorkspaceId; clientId: ClientProfileId; automation: BriefingAutomationSetting | null; nowIso: string }
-  | { type: "SAVE_COACH_BRIEF"; record: CoachBriefRecord };
+  | { type: "SAVE_COACH_BRIEF"; record: CoachBriefRecord }
+  | { type: "SAVE_ADAPTATION_PROPOSAL"; proposal: ProgramAdaptationProposal };
 
 function upsertLifecycle(
   lifecycles: ClientLifecycleRecord[],
@@ -502,6 +510,13 @@ export function platformReducer(state: PlatformState, action: PlatformAction): P
       return { ...state, coachBriefs };
     }
 
+    case "SAVE_ADAPTATION_PROPOSAL": {
+      const existingIndex = state.adaptationProposals.findIndex((p) => p.id === action.proposal.id);
+      const adaptationProposals =
+        existingIndex === -1 ? [...state.adaptationProposals, action.proposal] : state.adaptationProposals.map((p, i) => (i === existingIndex ? action.proposal : p));
+      return { ...state, adaptationProposals };
+    }
+
     default:
       return state;
   }
@@ -570,6 +585,10 @@ function isV8Shape(w: Record<string, unknown>): boolean {
   return isV7Shape({ ...w, version: 7 }) && w.version === 8 && Array.isArray(w.coachBriefs);
 }
 
+function isV9Shape(w: Record<string, unknown>): boolean {
+  return isV8Shape({ ...w, version: 8 }) && w.version === 9 && Array.isArray(w.adaptationProposals);
+}
+
 /**
  * Version-gated migration chain (same discipline as
  * lib/tenancy/migrate.ts's migrateStoredState) — a v1 store (the only
@@ -613,6 +632,10 @@ export function migratePlatformState(stored: unknown): PlatformState | null {
   }
 
   if (isV8Shape(working)) {
+    working = { ...working, version: 9, adaptationProposals: [] };
+  }
+
+  if (isV9Shape(working)) {
     return working as unknown as PlatformState;
   }
   return null;

@@ -26,6 +26,7 @@ export const REVIEW_KIND_LABELS: Record<ReviewRequestKind, string> = {
   "adherence-pattern": "Repeated missed sessions",
   "recovery-deterioration": "Recovery/adherence declining",
   "ai-authority-boundary": "OPTIM held for your review",
+  "adaptation-proposal": "Program adjustment proposed",
   milestone: "Worth a personal touch",
 };
 
@@ -52,6 +53,7 @@ export const ATTENTION_KIND_QUESTIONS: Record<AttentionItemKind, string> = {
   "adherence-pattern": "Does {name} need a real check-in about consistency?",
   "recovery-deterioration": "Does {name}'s plan still fit their current capacity?",
   "ai-authority-boundary": "What should OPTIM tell {name}?",
+  "adaptation-proposal": "Should {name}'s upcoming training change based on how they're actually performing?",
   milestone: "Want to send {name} a quick note?",
 };
 

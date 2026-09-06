@@ -20,7 +20,8 @@ export function requiresResolutionNote(kind: ReviewRequestKind): boolean {
     kind === "performance-pattern" ||
     kind === "adherence-pattern" ||
     kind === "recovery-deterioration" ||
-    kind === "ai-authority-boundary"
+    kind === "ai-authority-boundary" ||
+    kind === "adaptation-proposal"
   );
 }
 

@@ -584,7 +584,7 @@ check("A freshly created platform state migrates through unchanged (nothing to u
   const fresh = createInitialPlatformState();
   const migrated = migratePlatformState(JSON.parse(JSON.stringify(fresh)));
   assert.ok(migrated);
-  assert.equal(migrated!.version, 8);
+  assert.equal(migrated!.version, 9);
   assert.deepEqual(migrated, fresh);
 });
 
@@ -614,7 +614,7 @@ check("Phase 5.1 — a pre-existing v1 stored shape (no healthReviews array yet)
   };
   const migrated = migratePlatformState(JSON.parse(JSON.stringify(v1Stored)));
   assert.ok(migrated);
-  assert.equal(migrated!.version, 8);
+  assert.equal(migrated!.version, 9);
   assert.deepEqual(migrated!.healthReviews, []);
   assert.deepEqual(migrated!.programTemplates, []);
   assert.deepEqual(migrated!.mealRecommendations, []);
@@ -630,6 +630,8 @@ check("Phase 5.1 — a pre-existing v1 stored shape (no healthReviews array yet)
   assert.deepEqual(migrated!.dailyBriefings, []);
   assert.deepEqual(migrated!.briefingSettings, []);
   assert.deepEqual(migrated!.coachBriefs, []);
+  // Phase 5.5 — added at the v8->v9 step.
+  assert.deepEqual(migrated!.adaptationProposals, []);
   assert.equal(migrated!.clients.length, 1);
   assert.equal(migrated!.onboarding[0]!.answers.basics!.fullName, "Legacy Client");
   assert.equal(migrated!.onboarding[0]!.answers.health_readiness!.hasInjuryHistory, false);
@@ -710,7 +712,7 @@ check("Reset Demo State's canonical targets are the same fresh AppState/Platform
 
   const freshPlatform = createInitialPlatformState();
   assert.deepEqual(freshPlatform, {
-    version: 8,
+    version: 9,
     clients: [],
     lifecycles: [],
     invitations: [],
@@ -727,6 +729,7 @@ check("Reset Demo State's canonical targets are the same fresh AppState/Platform
     dailyBriefings: [],
     briefingSettings: [],
     coachBriefs: [],
+    adaptationProposals: [],
   });
 });
 

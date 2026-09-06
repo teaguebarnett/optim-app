@@ -201,7 +201,7 @@ check("A stored v4 platform state (predating this feature) migrates cleanly thro
   delete v4.aiAuthoritySettings;
   const migrated = migratePlatformState(v4);
   assert.ok(migrated);
-  assert.equal((migrated as PlatformState).version, 8);
+  assert.equal((migrated as PlatformState).version, 9);
   assert.deepEqual((migrated as PlatformState).aiAuthoritySettings, []);
 });
 

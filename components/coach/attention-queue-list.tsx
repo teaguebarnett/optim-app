@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, TrendingDown, ShieldAlert, Trophy, CalendarX } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/coach/empty-state";
 import { CheckCircle2 } from "lucide-react";
@@ -18,6 +18,7 @@ const KIND_ICON: Record<AttentionQueueItem["kind"], typeof AlertTriangle> = {
   "adherence-pattern": CalendarX,
   "recovery-deterioration": TrendingDown,
   "ai-authority-boundary": ShieldAlert,
+  "adaptation-proposal": Wand2,
   milestone: Trophy,
 };
 

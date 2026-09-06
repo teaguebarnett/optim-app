@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { MessageSquare, ClipboardList, ChevronDown, ChevronUp } from "lucide-react";
+import { MessageSquare, ClipboardList, ChevronDown, ChevronUp, Wand2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/progress/status-badge";
@@ -77,6 +77,9 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
           <StatusBadge label={CLIENT_STATUS_LABELS[statusLabel]} tone={STATUS_TONE[statusLabel]} />
           <Button variant="outline" size="sm" onClick={() => router.push("/coach/messages")}>
             <MessageSquare size={14} aria-hidden="true" /> Message
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => router.push(`/coach/clients/${client.id}/activate`)}>
+            <Wand2 size={14} aria-hidden="true" /> Program Composer
           </Button>
           <Button variant="outline" size="sm" onClick={() => router.push(`/coach/clients/${client.id}/setup/training`)}>
             <ClipboardList size={14} aria-hidden="true" /> View Program

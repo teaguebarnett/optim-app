@@ -208,7 +208,7 @@ export function validateTrainingHardConstraints(program: ClientAssignedProgram, 
   return { passed: checks.every((c) => c.passed), checks };
 }
 
-function equipmentTagForExerciseName(name: string): EquipmentTag | undefined {
+export function equipmentTagForExerciseName(name: string): EquipmentTag | undefined {
   return EXERCISE_LIBRARY.find((e) => e.name === name)?.equipment;
 }
 
@@ -258,13 +258,13 @@ export const OPTION_KIND_LABELS: Record<OptionKind, string> = {
   wildcard: "Strategic wildcard",
 };
 
-interface SplitPlan {
+export interface SplitPlan {
   splitName: string;
   /** One pattern set per training day, in order. */
   dayPatterns: MovementPattern[][];
 }
 
-const SPLIT_LIBRARY: Record<string, (days: number) => SplitPlan | null> = {
+export const SPLIT_LIBRARY: Record<string, (days: number) => SplitPlan | null> = {
   full_body: (days) => (days >= 2 && days <= 4 ? { splitName: "Full body", dayPatterns: Array.from({ length: days }, () => ["squat", "hinge", "push_horizontal", "pull_horizontal", "push_vertical", "core"]) } : null),
   upper_lower: (days) =>
     days >= 4
@@ -308,7 +308,7 @@ const SPLIT_LIBRARY: Record<string, (days: number) => SplitPlan | null> = {
     days >= 3 ? { splitName: "High-frequency full body", dayPatterns: Array.from({ length: days }, () => ["squat", "hinge", "push_horizontal", "pull_horizontal", "isolation"]) } : null,
 };
 
-function candidateSplits(days: number, preferred: string[]): { key: string; plan: SplitPlan }[] {
+export function candidateSplits(days: number, preferred: string[]): { key: string; plan: SplitPlan }[] {
   const ordered = [...preferred, ...Object.keys(SPLIT_LIBRARY).filter((k) => !preferred.includes(k))];
   const out: { key: string; plan: SplitPlan }[] = [];
   for (const key of ordered) {
@@ -318,7 +318,7 @@ function candidateSplits(days: number, preferred: string[]): { key: string; plan
   return out;
 }
 
-function chooseSplitForKind(days: number, com: CoachOperatingModel, kind: OptionKind): { key: string; plan: SplitPlan } {
+export function chooseSplitForKind(days: number, com: CoachOperatingModel, kind: OptionKind): { key: string; plan: SplitPlan } {
   const candidates = candidateSplits(days, com.programArchitecture.preferredSplits);
   if (candidates.length === 0) {
     // Honest, universally valid fallback — full body always accepts any day count 1+.
@@ -334,20 +334,20 @@ function chooseSplitForKind(days: number, com: CoachOperatingModel, kind: Option
   return nonPreferred ?? candidates[candidates.length - 1];
 }
 
-function pickExercise(pattern: MovementPattern, equipment: EquipmentTag[], avoided: string[], used: Set<string>): LibraryExercise | null {
+export function pickExercise(pattern: MovementPattern, equipment: EquipmentTag[], avoided: string[], used: Set<string>): LibraryExercise | null {
   const equipmentSet = new Set(equipment);
   const options = EXERCISE_LIBRARY.filter((e) => e.pattern === pattern && equipmentSet.has(e.equipment) && !avoided.some((a) => e.name.toLowerCase().includes(a.toLowerCase())));
   const fresh = options.find((e) => !used.has(e.name));
   return fresh ?? options[0] ?? null;
 }
 
-function repRangeForPhilosophy(philosophy: string): [number, number] {
+export function repRangeForPhilosophy(philosophy: string): [number, number] {
   if (philosophy === "strength_low_3_6") return [3, 6];
   if (philosophy === "higher_12_20") return [12, 20];
   return [8, 12];
 }
 
-function rpeForProximity(proximity: string, weekProgress: number): RpeValue {
+export function rpeForProximity(proximity: string, weekProgress: number): RpeValue {
   const base = proximity === "0_1_reps_in_reserve" ? 9 : proximity === "2_4_reps_in_reserve" ? 7 : 8;
   const bumped = base + (weekProgress > 0.6 ? 1 : 0);
   return Math.max(6, Math.min(10, bumped)) as RpeValue;
@@ -361,9 +361,9 @@ function rpeForProximity(proximity: string, weekProgress: number): RpeValue {
  * client's real 30-minute max) would silently generate a 6-exercise
  * full-body day that no one could finish in time — a real gap found via
  * live testing with an intentionally short session length. */
-const MINUTES_PER_EXERCISE_BUDGET = 15;
+export const MINUTES_PER_EXERCISE_BUDGET = 15;
 
-function buildWorkoutForDay(
+export function buildWorkoutForDay(
   workspaceId: WorkspaceId,
   dayOfWeek: DayOfWeek,
   patterns: MovementPattern[],
@@ -426,7 +426,7 @@ function buildWorkoutForDay(
   };
 }
 
-function buildProgramForOption(input: {
+export function buildProgramForOption(input: {
   clientId: ClientProfileId;
   workspaceId: WorkspaceId;
   coachId: CoachProfileId;
@@ -494,7 +494,7 @@ export interface GeneratedTrainingOption {
   constraints: ConstraintValidation;
 }
 
-function scoreTrainingOption(kind: OptionKind, snapshot: ClientOnboardingSnapshot, com: CoachOperatingModel, splitKey: string): ScoreBreakdown {
+export function scoreTrainingOption(kind: OptionKind, snapshot: ClientOnboardingSnapshot, com: CoachOperatingModel, splitKey: string): ScoreBreakdown {
   const tier = experienceTier(snapshot);
   const preferredIndex = com.programArchitecture.preferredSplits.indexOf(splitKey);
   const methodologyFit = preferredIndex === -1 ? 55 : clampScore(90 - preferredIndex * 12);
@@ -506,7 +506,7 @@ function scoreTrainingOption(kind: OptionKind, snapshot: ClientOnboardingSnapsho
   return { total, goalFit, methodologyFit, experienceFit, scheduleFit, adherenceLikelihood };
 }
 
-function buildTrainingExplanation(kind: OptionKind, snapshot: ClientOnboardingSnapshot, com: CoachOperatingModel, splitName: string): TrainingOptionExplanation {
+export function buildTrainingExplanation(kind: OptionKind, snapshot: ClientOnboardingSnapshot, com: CoachOperatingModel, splitName: string): TrainingOptionExplanation {
   const tier = experienceTier(snapshot);
   const clientFacts = [
     `${snapshot.availableDays.length} available training days/week`,

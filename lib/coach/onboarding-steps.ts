@@ -315,7 +315,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     description: "So your plan fits your real life, not an ideal one.",
     // Phase 5.3C — none of these six are conditional on each other, so each
     // gets its own real decision screen.
-    moments: [["availableDays"], ["maxSessionLength"], ["preferredTrainingTime"], ["schedulePredictability"], ["trainingEnvironment"], ["scheduleContext"]],
+    moments: [["availableDays"], ["maxSessionLength"], ["preferredTrainingTime"], ["schedulePredictability"], ["trainingEnvironment"], ["dailyActivityLevel"], ["scheduleContext"]],
     fields: [
       { key: "availableDays", label: "Days available to train", type: "day_selector", required: true, options: DAYS_OF_WEEK, icon: Calendar },
       {
@@ -372,6 +372,25 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
           { value: "home_gym", label: "Home gym", icon: Home },
           { value: "limited_equipment", label: "Limited equipment", icon: Backpack },
           { value: "multiple_locations", label: "Multiple locations", icon: Building2 },
+        ],
+      },
+      {
+        // Phase 5.5 — the program composer's TDEE/activity-multiplier
+        // estimate (see lib/coach/activation-generation.ts's
+        // activityMultiplier) previously assumed activity purely from
+        // training-days count, an honest but real gap flagged in that
+        // file's own assumptions text. This is the one real daily-context
+        // fact that materially changes both the nutrition estimate and how
+        // much extra fatigue OPTIM should budget for outside the gym.
+        key: "dailyActivityLevel",
+        label: "Outside of training, how active is your day? (optional)",
+        type: "single_select",
+        required: false,
+        icon: Activity,
+        options: [
+          { value: "mostly_sedentary", label: "Mostly sitting (desk job, low daily movement)" },
+          { value: "lightly_active", label: "On my feet sometimes" },
+          { value: "very_active", label: "On my feet most of the day / physically demanding job" },
         ],
       },
       {
@@ -454,6 +473,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
       ["nutritionApproach"],
       ["hasDietaryRestrictions", "dietaryRestrictionsDetail"],
       ["typicalSleep"],
+      ["cardioPreference"],
       ["consistencyObstacles"],
       ["coachSupportStyle"],
     ],
@@ -499,6 +519,23 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
           { value: "6_7", label: "6–7 hours" },
           { value: "7_8", label: "7–8 hours" },
           { value: "more_than_8", label: "More than 8 hours" },
+        ],
+      },
+      {
+        // Phase 5.5 — the program composer needs a real signal for whether
+        // to integrate dedicated cardio prescriptions at all, and how much
+        // — never inferred from goal alone (e.g. a fat-loss client who
+        // hates cardio still needs an honest, real answer, not an assumed
+        // one).
+        key: "cardioPreference",
+        label: "How do you feel about cardio? (optional)",
+        type: "single_select",
+        required: false,
+        icon: Flame,
+        options: [
+          { value: "enjoys_cardio", label: "I enjoy it" },
+          { value: "neutral_on_cardio", label: "I don't mind it" },
+          { value: "avoids_cardio", label: "I try to avoid it" },
         ],
       },
       {

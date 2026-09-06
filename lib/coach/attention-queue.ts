@@ -42,6 +42,7 @@ const ATTENTION_PRIORITY: Record<AttentionItemKind, number> = {
   "recovery-deterioration": 0.5,
   "ai-authority-boundary": 0.75,
   "program-change-request": 1,
+  "adaptation-proposal": 1.25,
   "performance-pattern": 1.5,
   "adherence-pattern": 1.5,
   "rpe-anomaly": 2,

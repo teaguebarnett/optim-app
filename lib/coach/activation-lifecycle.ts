@@ -20,21 +20,34 @@ import { saveClientProgram } from "./program-assignment.ts";
 import { getHealthReview } from "./repository.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES } from "./types.ts";
 import { extractClientSnapshot, generateThreeNutritionStrategies, generateThreeTrainingOptions, type GeneratedNutritionStrategy, type GeneratedTrainingOption } from "./activation-generation.ts";
+import { extractClientProgrammingProfile, resolveProgrammingProfileReadiness, type ClientProgrammingProfile } from "./programming-profile.ts";
+import { generateProgramDirectionSummaries, buildFullProgramForDirection, combineDirections, type ProgramDirectionSummary } from "./program-directions.ts";
+import { sendRelayedCoachDecisionMessage } from "./coach-messaging.ts";
 import { buildInitialCommunicationPolicy, type ClientCommunicationPolicy } from "./communication-policy.ts";
 import type { CoachOperatingModel } from "./operating-model.ts";
 import type { CoachAiAuthoritySettings } from "./ai-authority.ts";
 import type { PlatformState } from "./platform-store.ts";
+import type { ProgramRevisionRecord } from "./program-revision.ts";
+import type { ClientAssignedProgram } from "../types";
 import type { ClientProfile, ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 import type { OnboardingProgress } from "./types";
 
 export const ACTIVATION_GENERATOR_VERSION = "5.4A-deterministic-1";
+export const PROGRAM_COMPOSER_VERSION = "5.5-deterministic-1";
 
 export type ActivationLifecycleState =
   | "awaiting_coach_calibration"
   | "awaiting_client_onboarding"
   | "ready_to_generate"
   | "generating"
+  /** Phase 5.5 — three lightweight directions exist; no full program has
+   * been built yet (spec Part 2). */
+  | "directions_ready"
   | "ready_for_review"
+  /** Phase 5.5 — a conversational revision has been computed and is
+   * awaiting the coach's explicit confirmation (spec Part 5) — never
+   * applied to the record the coach is viewing until confirmed. */
+  | "revision_prepared"
   | "blocked"
   | "approved"
   | "activated"
@@ -71,6 +84,27 @@ export interface ActivationGenerationRecord {
   regenerationInstruction?: string;
   approval?: ActivationApprovalRecord;
   failureReason?: string;
+
+  // -- Phase 5.5: two-stage direction generation + revision history --------
+  /** Stage A output (spec Part 2) — three concise, structurally distinct
+   * directions with no full weeks built yet. Always populated together
+   * with nutritionOptions at "directions_ready"; trainingOptions stays
+   * empty until a direction is actually chosen and fully generated. */
+  directions?: ProgramDirectionSummary[];
+  selectedDirectionId?: string;
+  /** Set only when the coach combined two directions (spec Part 2's
+   * "combine useful elements") — the id of the second, contributing
+   * direction; selectedDirectionId stays the primary one. */
+  combinedWithDirectionId?: string;
+  /** The real Client Programming Profile this generation run used — stored
+   * for provenance (spec's "retain provenance linking to... the client-
+   * onboarding snapshot") without needing to re-extract it later to explain
+   * a past decision. */
+  programmingProfile?: ClientProgrammingProfile;
+  /** Append-only conversational-revision history (spec Part 5) — never
+   * overwritten; restoring an earlier revision creates a new entry that
+   * copies its program rather than deleting anything after it. */
+  revisions?: ProgramRevisionRecord[];
 }
 
 export function computeIdempotencyKey(input: { clientId: ClientProfileId; onboardingCompletedAtIso: string; coachModelVersion: number; regenerationInstruction?: string }): string {
@@ -382,4 +416,208 @@ export function canAutoActivateWithoutApproval(input: {
   const selected = input.record.trainingOptions.find((o) => o.id === input.record.selectedTrainingOptionId);
   if (!selected || !selected.constraints.passed) return false;
   return input.authoritySettings.clientOverrides[input.clientId]?.level === "review_only" || input.authoritySettings.global.level === "review_only";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5.5 — two-stage Program Composer orchestration
+// ---------------------------------------------------------------------------
+
+export interface GenerateDirectionsInput {
+  clientId: ClientProfileId;
+  workspaceId: WorkspaceId;
+  coachId: CoachProfileId;
+  onboarding: OnboardingProgress | null;
+  activeCoachOperatingModel: CoachOperatingModel | null;
+  healthReview: ReturnType<typeof getHealthReview>;
+  healthReviewResolved: boolean | "no_review_needed";
+  existingRecords: ActivationGenerationRecord[];
+  durationWeeks?: number;
+  nowIso: string;
+}
+
+/**
+ * Stage A (spec Part 2): produces three concise, structurally distinct
+ * directions — never full weeks. Shares determinePreGenerationState's exact
+ * pre-checks with the legacy generateActivation so the two can never
+ * disagree about whether a client is genuinely ready. Idempotent the same
+ * way: retrying with identical real inputs returns the existing record.
+ */
+export function generateProgramDirections(input: GenerateDirectionsInput): GenerateActivationResult {
+  const preState = determinePreGenerationState({ onboarding: input.onboarding, activeCoachOperatingModel: input.activeCoachOperatingModel, healthReviewResolved: input.healthReviewResolved });
+
+  if (preState !== "ready_to_generate") {
+    const reasons =
+      preState === "awaiting_coach_calibration"
+        ? ["This coach hasn't completed coach onboarding yet — no active Coaching Method for OPTIM to generate from."]
+        : preState === "awaiting_client_onboarding"
+          ? ["This client hasn't completed onboarding yet."]
+          : ["The client's intake flagged something that needs coach review before generation can proceed."];
+    return {
+      reused: false,
+      record: {
+        id: `program-gen-${input.clientId}-${Date.now()}`,
+        clientId: input.clientId,
+        workspaceId: input.workspaceId,
+        coachId: input.coachId,
+        coachModelVersion: input.activeCoachOperatingModel?.version ?? 0,
+        generatorVersion: PROGRAM_COMPOSER_VERSION,
+        idempotencyKey: `${input.clientId}::${preState}`,
+        state: preState,
+        createdAtIso: input.nowIso,
+        updatedAtIso: input.nowIso,
+        trainingOptions: [],
+        nutritionOptions: [],
+        blockedReasons: reasons,
+      },
+    };
+  }
+
+  const idempotencyKey = `${computeIdempotencyKey({ clientId: input.clientId, onboardingCompletedAtIso: input.onboarding!.completedAtIso!, coachModelVersion: input.activeCoachOperatingModel!.version })}::directions`;
+  const existing = findExistingGeneration(input.existingRecords, idempotencyKey);
+  if (existing && existing.state !== "generation_failed" && existing.state !== "blocked") return { record: existing, reused: true };
+
+  const profileResult = extractClientProgrammingProfile(input.onboarding, input.healthReview);
+  const readiness = resolveProgrammingProfileReadiness(profileResult);
+
+  if (readiness.status === "blocked" || readiness.status === "needs_coach_review") {
+    return {
+      reused: false,
+      record: {
+        id: `program-gen-${input.clientId}-${Date.now()}`,
+        clientId: input.clientId,
+        workspaceId: input.workspaceId,
+        coachId: input.coachId,
+        coachModelVersion: input.activeCoachOperatingModel!.version,
+        generatorVersion: PROGRAM_COMPOSER_VERSION,
+        idempotencyKey,
+        state: "blocked",
+        createdAtIso: input.nowIso,
+        updatedAtIso: input.nowIso,
+        trainingOptions: [],
+        nutritionOptions: [],
+        blockedReasons: readiness.status === "blocked" ? (readiness.missing ?? [readiness.blockingQuestion ?? "Missing required information."]) : [readiness.reviewReason ?? "Needs coach review."],
+      },
+    };
+  }
+
+  try {
+    const durationWeeks = input.durationWeeks ?? input.activeCoachOperatingModel!.practice.typicalProgramLengthWeeks ?? 12;
+    const profile = (profileResult as { profile: ClientProgrammingProfile }).profile;
+    const directions = generateProgramDirectionSummaries({ profile, com: input.activeCoachOperatingModel!, durationWeeks });
+    const nutritionOptions = generateThreeNutritionStrategies({ snapshot: profile, com: input.activeCoachOperatingModel!, nowIso: input.nowIso });
+
+    const record: ActivationGenerationRecord = {
+      id: `program-gen-${input.clientId}-${Date.now()}`,
+      clientId: input.clientId,
+      workspaceId: input.workspaceId,
+      coachId: input.coachId,
+      coachModelVersion: input.activeCoachOperatingModel!.version,
+      generatorVersion: PROGRAM_COMPOSER_VERSION,
+      idempotencyKey,
+      state: "directions_ready",
+      createdAtIso: input.nowIso,
+      updatedAtIso: input.nowIso,
+      trainingOptions: [],
+      nutritionOptions,
+      directions,
+      programmingProfile: profile,
+    };
+    return { record, reused: false };
+  } catch (err) {
+    return {
+      reused: false,
+      record: {
+        id: `program-gen-${input.clientId}-${Date.now()}`,
+        clientId: input.clientId,
+        workspaceId: input.workspaceId,
+        coachId: input.coachId,
+        coachModelVersion: input.activeCoachOperatingModel!.version,
+        generatorVersion: PROGRAM_COMPOSER_VERSION,
+        idempotencyKey,
+        state: "generation_failed",
+        createdAtIso: input.nowIso,
+        updatedAtIso: input.nowIso,
+        trainingOptions: [],
+        nutritionOptions: [],
+        failureReason: err instanceof Error ? err.message : "Unknown generation error.",
+      },
+    };
+  }
+}
+
+/**
+ * Stage B (spec Part 2/3): called once the coach has selected (or combined)
+ * a direction — builds the real, complete, periodized program for exactly
+ * that direction and moves the record to "ready_for_review." Never builds
+ * more than the one chosen direction's full program.
+ */
+export function generateFullProgramFromDirection(input: {
+  record: ActivationGenerationRecord;
+  directionId: string;
+  combineWithDirectionId?: string;
+  clientId: ClientProfileId;
+  workspaceId: WorkspaceId;
+  coachId: CoachProfileId;
+  com: CoachOperatingModel;
+  durationWeeks?: number;
+  nowIso: string;
+}): ActivationGenerationRecord {
+  const { record } = input;
+  const primary = record.directions?.find((d) => d.id === input.directionId);
+  if (!primary || !record.programmingProfile) throw new Error("No matching direction (or programming profile) found — cannot generate the full program.");
+
+  const direction = input.combineWithDirectionId
+    ? combineDirections(primary, record.directions!.find((d) => d.id === input.combineWithDirectionId) ?? primary)
+    : primary;
+
+  const durationWeeks = input.durationWeeks ?? input.com.practice.typicalProgramLengthWeeks ?? 12;
+  const option = buildFullProgramForDirection(direction, {
+    clientId: input.clientId,
+    workspaceId: input.workspaceId,
+    coachId: input.coachId,
+    profile: record.programmingProfile,
+    com: input.com,
+    durationWeeks,
+    nowIso: input.nowIso,
+  });
+
+  return {
+    ...record,
+    state: option.constraints.passed ? "ready_for_review" : "blocked",
+    updatedAtIso: input.nowIso,
+    trainingOptions: [option],
+    selectedTrainingOptionId: option.id,
+    selectedDirectionId: primary.id,
+    combinedWithDirectionId: input.combineWithDirectionId,
+    blockedReasons: option.constraints.passed ? undefined : option.constraints.checks.filter((c) => !c.passed).map((c) => c.reason ?? c.label),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5.5 — revision approval for an ALREADY-ACTIVE client (spec Part 6).
+// Deliberately narrower than approveActivation: never touches
+// programEnrollment/lifecycle — an active client's start date, week
+// derivation, and history must never reset just because their upcoming
+// training changed.
+// ---------------------------------------------------------------------------
+
+export interface ApplyProgramRevisionApprovalInput {
+  client: ClientProfile;
+  revisedProgram: ClientAssignedProgram;
+  approvedByCoachId: CoachProfileId;
+  coachName: string;
+  clientMessage: string;
+}
+
+export function applyProgramRevisionApproval(input: ApplyProgramRevisionApprovalInput): void {
+  saveClientProgram(input.client.id, input.client.workspaceId, input.approvedByCoachId, input.revisedProgram);
+  sendRelayedCoachDecisionMessage(
+    input.client.id,
+    input.client.workspaceId,
+    input.approvedByCoachId,
+    input.coachName,
+    input.clientMessage,
+    input.revisedProgram.id,
+    new Date().toISOString()
+  );
 }
