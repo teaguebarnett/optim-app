@@ -27,6 +27,7 @@ import type { CoachOnboardingProgress } from "./coach-onboarding-engine.ts";
 import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 import type { ClientCommunicationPolicy } from "./communication-policy.ts";
 import { defaultCoachBriefingSettings, type BriefingAutomationSetting, type CoachBriefingSettings, type DailyBriefingRecord } from "./daily-briefing.ts";
+import type { CoachBriefRecord } from "./coach-brief-record.ts";
 import type {
   ClientIntendedProgram,
   ClientInvitation,
@@ -42,7 +43,7 @@ import type {
 } from "./types";
 
 export interface PlatformState {
-  version: 7;
+  version: 8;
   clients: ClientProfile[];
   lifecycles: ClientLifecycleRecord[];
   invitations: ClientInvitation[];
@@ -98,11 +99,17 @@ export interface PlatformState {
   /** Phase 5.4B — each coach's own Daily Briefing automation configuration,
    * owned/isolated by coachId exactly like aiAuthoritySettings. */
   briefingSettings: CoachBriefingSettings[];
+  /** Phase 5.4B completion pass — the real, stored/refreshed OPTIM Coach
+   * Brief (see coach-brief-record.ts), one per client, overwritten in place
+   * on each real regeneration (never append-only — a brief is a current
+   * snapshot, not a history log; resolution receipts/history already cover
+   * the audit trail). */
+  coachBriefs: CoachBriefRecord[];
 }
 
 export function createInitialPlatformState(): PlatformState {
   return {
-    version: 7,
+    version: 8,
     clients: [],
     lifecycles: [],
     invitations: [],
@@ -118,6 +125,7 @@ export function createInitialPlatformState(): PlatformState {
     communicationPolicies: [],
     dailyBriefings: [],
     briefingSettings: [],
+    coachBriefs: [],
   };
 }
 
@@ -172,7 +180,8 @@ export type PlatformAction =
   | { type: "SAVE_COMMUNICATION_POLICY"; policy: ClientCommunicationPolicy }
   | { type: "SAVE_DAILY_BRIEFING"; record: DailyBriefingRecord }
   | { type: "SET_BRIEFING_GLOBAL_AUTOMATION"; coachId: CoachProfileId; workspaceId: WorkspaceId; automation: BriefingAutomationSetting; nowIso: string }
-  | { type: "SET_BRIEFING_CLIENT_OVERRIDE"; coachId: CoachProfileId; workspaceId: WorkspaceId; clientId: ClientProfileId; automation: BriefingAutomationSetting | null; nowIso: string };
+  | { type: "SET_BRIEFING_CLIENT_OVERRIDE"; coachId: CoachProfileId; workspaceId: WorkspaceId; clientId: ClientProfileId; automation: BriefingAutomationSetting | null; nowIso: string }
+  | { type: "SAVE_COACH_BRIEF"; record: CoachBriefRecord };
 
 function upsertLifecycle(
   lifecycles: ClientLifecycleRecord[],
@@ -487,6 +496,12 @@ export function platformReducer(state: PlatformState, action: PlatformAction): P
       return { ...state, briefingSettings };
     }
 
+    case "SAVE_COACH_BRIEF": {
+      const existingIndex = state.coachBriefs.findIndex((b) => b.clientId === action.record.clientId);
+      const coachBriefs = existingIndex === -1 ? [...state.coachBriefs, action.record] : state.coachBriefs.map((b, i) => (i === existingIndex ? action.record : b));
+      return { ...state, coachBriefs };
+    }
+
     default:
       return state;
   }
@@ -551,6 +566,10 @@ function isV7Shape(w: Record<string, unknown>): boolean {
   return isV6Shape({ ...w, version: 6 }) && w.version === 7 && Array.isArray(w.dailyBriefings) && Array.isArray(w.briefingSettings);
 }
 
+function isV8Shape(w: Record<string, unknown>): boolean {
+  return isV7Shape({ ...w, version: 7 }) && w.version === 8 && Array.isArray(w.coachBriefs);
+}
+
 /**
  * Version-gated migration chain (same discipline as
  * lib/tenancy/migrate.ts's migrateStoredState) — a v1 store (the only
@@ -590,6 +609,10 @@ export function migratePlatformState(stored: unknown): PlatformState | null {
   }
 
   if (isV7Shape(working)) {
+    working = { ...working, version: 8, coachBriefs: [] };
+  }
+
+  if (isV8Shape(working)) {
     return working as unknown as PlatformState;
   }
   return null;

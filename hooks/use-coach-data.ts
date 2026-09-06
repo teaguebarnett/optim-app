@@ -82,15 +82,22 @@ export function useCoachWorkspace() {
   const unresolvedHealthReviews = platform.healthReviews.filter(
     (r) => !RESOLVED_HEALTH_REVIEW_STATUSES.has(r.status) && r.workspaceId === workspaceId && thisCoachsClientIds.has(r.clientId)
   );
+  // Phase 5.4B completion pass — the one piece of live context
+  // resolveNotificationTier needs: which clients have a workout actually
+  // in progress RIGHT NOW, so a pain report only ever classifies as
+  // "immediate" while it's a genuinely live situation (spec §7).
+  const workoutInProgressClientIds = new Set(
+    allClients.filter((c) => clientAppStates.get(c.id)?.workoutSession.status === "in-progress").map((c) => c.id)
+  );
   const attentionQueue = coachId
-    ? buildAttentionQueue({ workspaceId, coachId, reviewRequests: allReviewRequests, clients: allClients, healthReviews: unresolvedHealthReviews })
+    ? buildAttentionQueue({ workspaceId, coachId, reviewRequests: allReviewRequests, clients: allClients, healthReviews: unresolvedHealthReviews, workoutInProgressClientIds })
     : [];
   // Every status, not just unresolved — the Reviews page's Needs review /
   // In progress / Resolved tabs (see app/coach/reviews/page.tsx) need the
   // full history, while every other screen keeps using attentionQueue
   // above (unresolved-only, unchanged badge/dashboard behavior).
   const reviewQueueItems = coachId
-    ? buildReviewQueueItems({ workspaceId, coachId, reviewRequests: allReviewRequests, clients: allClients, healthReviews: unresolvedHealthReviews })
+    ? buildReviewQueueItems({ workspaceId, coachId, reviewRequests: allReviewRequests, clients: allClients, healthReviews: unresolvedHealthReviews, workoutInProgressClientIds })
     : [];
 
   // Phase 5.4B — every briefing this coach owns, across every client, for

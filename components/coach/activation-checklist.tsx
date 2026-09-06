@@ -24,15 +24,25 @@ export function ActivationChecklist({
   alreadyActive,
   onActivate,
   checkInAssigned,
+  compact,
 }: {
   readiness: ActivationReadiness;
   alreadyActive: boolean;
   onActivate: () => void;
   /** undefined when there's no program yet to attach a check-in to at all. */
   checkInAssigned?: boolean;
+  /** Phase 5.4B completion pass — true on the Activation Workspace, where
+   * BlockerList (see components/coach/blocker-list.tsx) already shows each
+   * unmet requirement's full reason and direct action prominently above
+   * this card. Compact mode shows only label + Blocking/Complete here, so
+   * the same issue is never explained twice on one screen — this becomes
+   * purely the overall gate + the Activate action, not a second blocker
+   * list. */
+  compact?: boolean;
 }) {
   const metCount = readiness.requirements.filter((r) => r.met).length;
   const total = readiness.requirements.length;
+  const firstUnmet = readiness.requirements.find((r) => !r.met);
 
   return (
     <Card>
@@ -49,7 +59,7 @@ export function ActivationChecklist({
             key={req.id}
             className={cn(
               "flex items-start gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-2",
-              req.met ? "" : "bg-error-soft/60"
+              req.met || compact ? "" : "bg-error-soft/60"
             )}
           >
             {req.met ? (
@@ -59,7 +69,7 @@ export function ActivationChecklist({
             )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-off-white">{req.label}</p>
+                <p className={cn("text-sm", req.met ? "font-medium text-off-white" : compact ? "text-off-white" : "font-medium text-off-white")}>{req.label}</p>
                 <span
                   className={cn(
                     "shrink-0 text-[10px] font-semibold uppercase tracking-wide",
@@ -69,8 +79,8 @@ export function ActivationChecklist({
                   {req.met ? "Complete" : "Blocking"}
                 </span>
               </div>
-              {!req.met && req.reason ? <p className="mt-0.5 text-meta text-neutral">{req.reason}</p> : null}
-              {!req.met && req.actionHref ? (
+              {!compact && !req.met && req.reason ? <p className="mt-0.5 text-meta text-neutral">{req.reason}</p> : null}
+              {!compact && !req.met && req.actionHref ? (
                 <Link href={req.actionHref} className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-accent-strong hover:underline">
                   {req.actionLabel ?? "Complete it"} <ArrowRight size={13} />
                 </Link>
@@ -96,6 +106,9 @@ export function ActivationChecklist({
       <Button className="mt-4 w-full" size="lg" disabled={!readiness.ready || alreadyActive} onClick={onActivate}>
         {alreadyActive ? "Already active" : "Activate client"}
       </Button>
+      {!readiness.ready && !alreadyActive && firstUnmet ? (
+        <p className="mt-2 text-center text-meta text-neutral">Blocked by: {firstUnmet.label}</p>
+      ) : null}
     </Card>
   );
 }

@@ -8,9 +8,28 @@
 // recency) matching the Phase 5.0A brief's decision-boundary ordering, then
 // by recency within the same priority.
 
-import type { ClientProfile, CoachProfileId, WorkspaceId } from "../tenancy/types";
+import type { ClientProfile, ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 import type { ReviewRequest } from "../types";
-import type { AttentionItemKind, AttentionQueueItem, HealthReviewRecord } from "./types";
+import type { AttentionItemKind, AttentionQueueItem, HealthReviewRecord, NotificationTier } from "./types";
+
+/**
+ * Phase 5.4B completion pass (spec §7) — the three-tier classification.
+ * Pure and total: every kind maps to a real tier, no "uncategorized"
+ * fallback. `workoutInProgress` is the one piece of live context that can
+ * move a pain-report from "immediate" to "action_required" independently
+ * of the review record itself — a pain report is only ever a truly live
+ * situation while the client's workout session is still actually running;
+ * once the session ends (or never started), the exact same report is a
+ * real but non-live decision for the next appropriate review, never an
+ * automatic after-hours emergency (spec §4).
+ */
+export function resolveNotificationTier(kind: AttentionItemKind, opts: { workoutInProgress: boolean }): NotificationTier {
+  if (kind === "pain-report") return opts.workoutInProgress ? "immediate" : "action_required";
+  if (kind === "milestone") return "awareness";
+  return "action_required";
+}
+
+const NOTIFICATION_TIER_ORDER: Record<NotificationTier, number> = { immediate: 0, action_required: 1, awareness: 2 };
 
 /** Lower = more urgent. Matches the Phase 5.0A decision-boundary ordering:
  * pain/injury always escalates first, then a program/exercise decision
@@ -44,6 +63,12 @@ export interface BuildAttentionQueueInput {
    * see hooks/use-coach-data.ts, since a HealthReviewRecord carries no
    * assignedCoachId of its own to filter on the way a ReviewRequest does. */
   healthReviews?: HealthReviewRecord[];
+  /** Every client whose workoutSession.status is currently "in-progress" —
+   * see resolveNotificationTier's own doc for why this matters. Omitted
+   * (or a client absent from it) is always treated as "not in progress,"
+   * never as "unknown -> immediate" — an unknown/missing signal must never
+   * default toward the more urgent classification. */
+  workoutInProgressClientIds?: Set<ClientProfileId>;
 }
 
 /**
@@ -72,6 +97,7 @@ export function buildReviewQueueItems(input: BuildAttentionQueueInput): Attentio
       updatedAtIso: r.updatedAtIso,
       priority: ATTENTION_PRIORITY[r.kind],
       severity: r.severity,
+      notificationTier: resolveNotificationTier(r.kind, { workoutInProgress: input.workoutInProgressClientIds?.has(r.clientId) ?? false }),
       status: r.status,
       resolutionAction: r.resolutionAction,
       resolutionNote: r.resolutionNote,
@@ -108,10 +134,16 @@ export function buildReviewQueueItems(input: BuildAttentionQueueInput): Attentio
     updatedAtIso: r.createdAtIso,
     priority: ATTENTION_PRIORITY.health_review,
     severity: "high",
+    notificationTier: resolveNotificationTier("health_review", { workoutInProgress: false }),
     status: "needs_review",
   }));
 
-  return [...healthReviewItems, ...reviewItems].sort((a, b) => a.priority - b.priority || (a.createdAtIso < b.createdAtIso ? 1 : -1));
+  return [...healthReviewItems, ...reviewItems].sort(
+    (a, b) =>
+      NOTIFICATION_TIER_ORDER[a.notificationTier] - NOTIFICATION_TIER_ORDER[b.notificationTier] ||
+      a.priority - b.priority ||
+      (a.createdAtIso < b.createdAtIso ? 1 : -1)
+  );
 }
 
 /** The coach's "Needs attention" queue — everything from

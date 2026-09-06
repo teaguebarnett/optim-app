@@ -279,6 +279,28 @@ export interface ActivationReadiness {
 // Coach attention queue
 // ---------------------------------------------------------------------------
 
+/**
+ * Phase 5.4B completion pass (spec §7) — the three-tier in-app
+ * notification/escalation classification, computed fresh from each item's
+ * real kind/context (see lib/coach/attention-queue.ts's
+ * resolveNotificationTier) rather than stored on the raw ReviewRequest:
+ * whether something is "immediate" depends on whether the client's workout
+ * is CURRENTLY in progress, which can change independently of the review
+ * itself.
+ *
+ * - "immediate": an active-workout pain/limitation requiring a current
+ *   programming decision, or a live safety situation OPTIM can't handle
+ *   safely.
+ * - "action_required": a future-programming-impact item — an exercise/
+ *   program change request, a repeated RPE/performance or adherence
+ *   pattern, an unresolved coach decision, an AI authority boundary, or
+ *   pain reported outside an active training window.
+ * - "awareness": Daily Briefings, PRs/milestones/personal-touch
+ *   opportunities, routine summaries — never styled or sorted like an
+ *   emergency.
+ */
+export type NotificationTier = "immediate" | "action_required" | "awareness";
+
 /** "health_review" is the one AttentionItemKind not backed by a real
  * ReviewRequest (see lib/types.ts) — it's synthesized directly from a
  * HealthReviewRecord by lib/coach/attention-queue.ts, still only ever for
@@ -303,6 +325,10 @@ export interface AttentionQueueItem {
    * recency; see lib/coach/attention-queue.ts's ATTENTION_PRIORITY. */
   priority: number;
   severity: ReviewSeverity;
+  /** Phase 5.4B completion pass — see NotificationTier's own doc. Sorted
+   * ahead of `priority` (see buildReviewQueueItems), so an "immediate" item
+   * always sorts above an "action_required" one regardless of kind. */
+  notificationTier: NotificationTier;
   /** A synthesized "health_review" item (see lib/coach/attention-queue.ts)
    * is only ever surfaced while unresolved, so it always reads
    * "needs_review" here — its own real lifecycle lives on the

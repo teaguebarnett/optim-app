@@ -30,6 +30,7 @@ import type { CoachOnboardingProgress } from "./coach-onboarding-engine.ts";
 import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 import type { ClientCommunicationPolicy } from "./communication-policy.ts";
 import { defaultCoachBriefingSettings, type CoachBriefingSettings, type DailyBriefingRecord } from "./daily-briefing.ts";
+import type { CoachBriefRecord } from "./coach-brief-record.ts";
 
 /** Every client this workspace/prototype knows about — the compile-time
  * seed roster plus any coach-created clients from the platform store.
@@ -149,6 +150,12 @@ export function getDailyBriefing(platform: PlatformState, clientId: ClientProfil
  * by the Command Center's Daily Briefings section (spec §2). */
 export function getBriefingsForCoach(platform: PlatformState, coachId: CoachProfileId): DailyBriefingRecord[] {
   return platform.dailyBriefings.filter((b) => b.coachId === coachId).sort((a, b) => (a.forDateIso < b.forDateIso ? 1 : -1));
+}
+
+/** The one current OPTIM Coach Brief for this client, or null if none has
+ * ever been generated — see lib/coach/coach-brief-record.ts. */
+export function getCoachBrief(platform: PlatformState, clientId: ClientProfileId): CoachBriefRecord | null {
+  return platform.coachBriefs.find((b) => b.clientId === clientId) ?? null;
 }
 
 /**

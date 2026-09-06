@@ -35,7 +35,10 @@
     "verify:command-center-v2": "node --experimental-strip-types lib/coach/verify-command-center-v2.mts",
     "verify:daily-briefing": "node --experimental-strip-types lib/coach/verify-daily-briefing.mts",
     "verify:daily-entrance": "node --experimental-strip-types lib/verify-daily-entrance.mts",
-    "verify:briefing-escalation": "node --experimental-strip-types lib/coach/verify-briefing-escalation.mts"
+    "verify:briefing-escalation": "node --experimental-strip-types lib/coach/verify-briefing-escalation.mts",
+    "verify:coach-brief-record": "node --experimental-strip-types lib/coach/verify-coach-brief-record.mts",
+    "verify:notification-tier": "node --experimental-strip-types lib/coach/verify-notification-tier.mts",
+    "verify:client-status": "node --experimental-strip-types lib/coach/verify-client-status.mts"
   },
   "dependencies": {
     "lucide-react": "^1.27.0",
