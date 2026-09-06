@@ -7,16 +7,55 @@
 import type { ReviewRequest, ReviewRequestKind } from "../types";
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 
-/** Pain/injury/health/safety reviews are the one kind a coach must never
- * wave through with silence — resolving one always requires a concise note
- * (enforced by the Reviews page UI; this is the single source of truth for
- * which kinds that applies to). */
+/** Kinds serious enough that a coach must never wave them through with
+ * silence — resolving one always requires a concise note (enforced by the
+ * Reviews page UI and the Command Center focus surface; this is the single
+ * source of truth for which kinds that applies to). Phase 5.4B extends this
+ * from pain-report alone to every kind that represents a real pattern or
+ * decision, not a routine, self-explanatory event. */
 export function requiresResolutionNote(kind: ReviewRequestKind): boolean {
-  return kind === "pain-report";
+  return (
+    kind === "pain-report" ||
+    kind === "program-change-request" ||
+    kind === "performance-pattern" ||
+    kind === "adherence-pattern" ||
+    kind === "recovery-deterioration" ||
+    kind === "ai-authority-boundary"
+  );
+}
+
+/** Phase 5.4B — kinds where resolving is a real decision that affects the
+ * client, so the item can never move to "resolved" until the client has
+ * actually been told something (spec §3's "resolution receipt" gate). A
+ * coach can still act and move the item to "waiting" without this — see
+ * lib/coach/review-lifecycle.ts's moveReviewToWaiting — but resolving
+ * outright requires the notification. Routine/self-contained kinds
+ * (technique-flag, schedule-change) and "milestone" (its own prepared-
+ * message flow, not a risk decision) are deliberately excluded.
+ * "ai-authority-boundary" is also excluded: its one real source today (a
+ * Daily Briefing held for review — see lib/coach/briefing-escalation.ts)
+ * already has its own real client-facing notification path — publishing
+ * the briefing itself — so requiring a SECOND, separate chat message here
+ * would just be busywork, not a genuine safety gate. */
+export function requiresClientNotificationBeforeResolution(kind: ReviewRequestKind): boolean {
+  return (
+    kind === "pain-report" ||
+    kind === "program-change-request" ||
+    kind === "performance-pattern" ||
+    kind === "adherence-pattern" ||
+    kind === "recovery-deterioration"
+  );
 }
 
 export function severityForKind(kind: ReviewRequestKind): "high" | "normal" {
-  return kind === "pain-report" ? "high" : "normal";
+  return kind === "pain-report" ||
+    kind === "program-change-request" ||
+    kind === "performance-pattern" ||
+    kind === "adherence-pattern" ||
+    kind === "recovery-deterioration" ||
+    kind === "ai-authority-boundary"
+    ? "high"
+    : "normal";
 }
 
 /**

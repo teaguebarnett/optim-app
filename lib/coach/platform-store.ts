@@ -26,6 +26,7 @@ import type { CoachOperatingModel } from "./operating-model.ts";
 import type { CoachOnboardingProgress } from "./coach-onboarding-engine.ts";
 import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 import type { ClientCommunicationPolicy } from "./communication-policy.ts";
+import { defaultCoachBriefingSettings, type BriefingAutomationSetting, type CoachBriefingSettings, type DailyBriefingRecord } from "./daily-briefing.ts";
 import type {
   ClientIntendedProgram,
   ClientInvitation,
@@ -41,7 +42,7 @@ import type {
 } from "./types";
 
 export interface PlatformState {
-  version: 6;
+  version: 7;
   clients: ClientProfile[];
   lifecycles: ClientLifecycleRecord[];
   invitations: ClientInvitation[];
@@ -90,11 +91,18 @@ export interface PlatformState {
    * no real delivery provider exists in this prototype (see this phase's
    * final report §16). */
   communicationPolicies: ClientCommunicationPolicy[];
+  /** Phase 5.4B — every Daily Briefing ever generated, one per
+   * client+forDateIso (see daily-briefing.ts), kept (never deleted) so a
+   * client's "recent decisions" history stays real and auditable. */
+  dailyBriefings: DailyBriefingRecord[];
+  /** Phase 5.4B — each coach's own Daily Briefing automation configuration,
+   * owned/isolated by coachId exactly like aiAuthoritySettings. */
+  briefingSettings: CoachBriefingSettings[];
 }
 
 export function createInitialPlatformState(): PlatformState {
   return {
-    version: 6,
+    version: 7,
     clients: [],
     lifecycles: [],
     invitations: [],
@@ -108,6 +116,8 @@ export function createInitialPlatformState(): PlatformState {
     coachOnboardingProgress: [],
     activationGenerations: [],
     communicationPolicies: [],
+    dailyBriefings: [],
+    briefingSettings: [],
   };
 }
 
@@ -159,7 +169,10 @@ export type PlatformAction =
   | { type: "SAVE_COACH_ONBOARDING_PROGRESS"; progress: CoachOnboardingProgress }
   | { type: "SAVE_COACH_OPERATING_MODEL"; model: CoachOperatingModel }
   | { type: "SAVE_ACTIVATION_GENERATION"; record: ActivationGenerationRecord }
-  | { type: "SAVE_COMMUNICATION_POLICY"; policy: ClientCommunicationPolicy };
+  | { type: "SAVE_COMMUNICATION_POLICY"; policy: ClientCommunicationPolicy }
+  | { type: "SAVE_DAILY_BRIEFING"; record: DailyBriefingRecord }
+  | { type: "SET_BRIEFING_GLOBAL_AUTOMATION"; coachId: CoachProfileId; workspaceId: WorkspaceId; automation: BriefingAutomationSetting; nowIso: string }
+  | { type: "SET_BRIEFING_CLIENT_OVERRIDE"; coachId: CoachProfileId; workspaceId: WorkspaceId; clientId: ClientProfileId; automation: BriefingAutomationSetting | null; nowIso: string };
 
 function upsertLifecycle(
   lifecycles: ClientLifecycleRecord[],
@@ -439,6 +452,41 @@ export function platformReducer(state: PlatformState, action: PlatformAction): P
       return { ...state, communicationPolicies };
     }
 
+    case "SAVE_DAILY_BRIEFING": {
+      const existingIndex = state.dailyBriefings.findIndex((b) => b.id === action.record.id);
+      const dailyBriefings =
+        existingIndex === -1 ? [...state.dailyBriefings, action.record] : state.dailyBriefings.map((b, i) => (i === existingIndex ? action.record : b));
+      return { ...state, dailyBriefings };
+    }
+
+    case "SET_BRIEFING_GLOBAL_AUTOMATION": {
+      const existingIndex = state.briefingSettings.findIndex((s) => s.coachId === action.coachId);
+      const existing = state.briefingSettings[existingIndex];
+      const next: CoachBriefingSettings = {
+        coachId: action.coachId,
+        workspaceId: action.workspaceId,
+        globalAutomation: action.automation,
+        clientOverrides: existing?.clientOverrides ?? {},
+        updatedAtIso: action.nowIso,
+      };
+      const briefingSettings = existingIndex === -1 ? [...state.briefingSettings, next] : state.briefingSettings.map((s, i) => (i === existingIndex ? next : s));
+      return { ...state, briefingSettings };
+    }
+
+    case "SET_BRIEFING_CLIENT_OVERRIDE": {
+      const existingIndex = state.briefingSettings.findIndex((s) => s.coachId === action.coachId);
+      const existing = existingIndex === -1 ? defaultCoachBriefingSettings(action.coachId, action.workspaceId, action.nowIso) : state.briefingSettings[existingIndex];
+      const clientOverrides = { ...existing.clientOverrides };
+      if (action.automation === null) {
+        delete clientOverrides[action.clientId];
+      } else {
+        clientOverrides[action.clientId] = action.automation;
+      }
+      const next: CoachBriefingSettings = { ...existing, clientOverrides, updatedAtIso: action.nowIso };
+      const briefingSettings = existingIndex === -1 ? [...state.briefingSettings, next] : state.briefingSettings.map((s, i) => (i === existingIndex ? next : s));
+      return { ...state, briefingSettings };
+    }
+
     default:
       return state;
   }
@@ -499,6 +547,10 @@ function isV6Shape(w: Record<string, unknown>): boolean {
   );
 }
 
+function isV7Shape(w: Record<string, unknown>): boolean {
+  return isV6Shape({ ...w, version: 6 }) && w.version === 7 && Array.isArray(w.dailyBriefings) && Array.isArray(w.briefingSettings);
+}
+
 /**
  * Version-gated migration chain (same discipline as
  * lib/tenancy/migrate.ts's migrateStoredState) — a v1 store (the only
@@ -534,6 +586,10 @@ export function migratePlatformState(stored: unknown): PlatformState | null {
   }
 
   if (isV6Shape(working)) {
+    working = { ...working, version: 7, dailyBriefings: [], briefingSettings: [] };
+  }
+
+  if (isV7Shape(working)) {
     return working as unknown as PlatformState;
   }
   return null;

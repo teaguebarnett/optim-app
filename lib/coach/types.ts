@@ -12,7 +12,17 @@
 
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 import type { ProgramEnrollmentId } from "../scheduling/types";
-import type { MacroValues, MealPeriod, ProgramWeek, ReviewRequestKind, ReviewRequestStatus, ReviewResolutionAction, ReviewSeverity } from "../types";
+import type {
+  AttentionHistoryEntry,
+  MacroValues,
+  MealPeriod,
+  ProgramWeek,
+  ResolutionReceipt,
+  ReviewRequestKind,
+  ReviewRequestStatus,
+  ReviewResolutionAction,
+  ReviewSeverity,
+} from "../types";
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -307,6 +317,22 @@ export interface AttentionQueueItem {
    * flagged this client, rendered as individual evidence chips rather than
    * folded into one sentence. Undefined for every other kind. */
   reasons?: string[];
+
+  // -- Phase 5.4B: escalation context, waiting lifecycle, receipts --------
+  // Passed straight through from the underlying ReviewRequest (see
+  // lib/coach/attention-queue.ts's buildReviewQueueItems) — see
+  // lib/types.ts's ReviewRequest for each field's own doc.
+  escalationReason?: string;
+  optimActionsTaken?: string[];
+  recommendedNextAction?: string;
+  preparedClientMessage?: string;
+  waitingOn?: string;
+  resurfaceAtIso?: string;
+  clientNotificationRequired?: boolean;
+  clientNotifiedAtIso?: string;
+  responseRequiredFromClient?: boolean;
+  history?: AttentionHistoryEntry[];
+  resolutionReceipt?: ResolutionReceipt;
 }
 
 // ---------------------------------------------------------------------------

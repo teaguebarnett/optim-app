@@ -25,9 +25,11 @@ import assert from "node:assert/strict";
 import { createInitialState } from "../state.ts";
 import { loadClientAppState, saveClientAppState } from "../tenancy/client-state-store.ts";
 import { WORKSPACE_OPTIM_ID, COACH_PROFILE_TEAGUE, COACH_PROFILE_ALEX, CLIENT_PROFILE_DEMO } from "../tenancy/seed.ts";
-import { buildAttentionQueue, buildReviewQueueItems } from "./attention-queue.ts";
+import { buildAttentionQueue, buildReviewQueueItems, attentionBucketForItem } from "./attention-queue.ts";
 import {
   findDuplicateReviewRequest,
+  moveReviewToWaiting,
+  requiresClientNotificationBeforeResolution,
   requiresResolutionNote,
   reopenReviewRequest,
   resolveReviewRequest,
@@ -35,6 +37,7 @@ import {
   startReviewRequest,
 } from "./review-lifecycle.ts";
 import type { ReviewRequest } from "../types";
+import type { AttentionQueueItem } from "./types.ts";
 
 let passed = 0;
 let failed = 0;
@@ -75,11 +78,32 @@ check("pain-report is high severity and requires a resolution note", () => {
   assert.equal(requiresResolutionNote("pain-report"), true);
 });
 
-check("every other review kind is normal severity and never requires a note", () => {
-  for (const kind of ["rpe-anomaly", "workout-skipped", "schedule-change", "technique-flag", "program-change-request"] as const) {
+check("routine, self-contained kinds are normal severity and never require a note", () => {
+  for (const kind of ["rpe-anomaly", "workout-skipped", "schedule-change", "technique-flag"] as const) {
     assert.equal(severityForKind(kind), "normal");
     assert.equal(requiresResolutionNote(kind), false);
   }
+});
+
+// Phase 5.4B — a proposed program/exercise change and every synthesized
+// pattern/boundary kind are real decisions affecting the client, so they
+// carry the same rigor as pain-report: high severity, and a note is
+// required before they can resolve (see lib/coach/review-support.ts).
+check("significant decision kinds are high severity and require a note", () => {
+  for (const kind of ["program-change-request", "performance-pattern", "adherence-pattern", "recovery-deterioration", "ai-authority-boundary"] as const) {
+    assert.equal(severityForKind(kind), "high");
+    assert.equal(requiresResolutionNote(kind), true);
+  }
+});
+
+check("milestone is normal severity and never requires a note — its own prepared-message flow, not a risk decision", () => {
+  assert.equal(severityForKind("milestone"), "normal");
+  assert.equal(requiresResolutionNote("milestone"), false);
+});
+
+check("ai-authority-boundary requires a note but not a separate client message — a held briefing's own publish step already is the notification", () => {
+  assert.equal(requiresResolutionNote("ai-authority-boundary"), true);
+  assert.equal(requiresClientNotificationBeforeResolution("ai-authority-boundary"), false);
 });
 
 console.log("\n2. Idempotent creation — findDuplicateReviewRequest\n");
@@ -154,14 +178,16 @@ check("startReviewRequest is a no-op once already past needs_review — never mo
 
 check("resolveReviewRequest with 'reviewed_no_change' sets status/resolved/outcome/coach/timestamp together", () => {
   seedClientWithReview(makeReview({ id: "r-resolve-no-change", status: "in_progress" }));
-  const ok = resolveReviewRequest({
+  const result = resolveReviewRequest({
     clientId: LIFECYCLE_CLIENT_ID,
     reviewId: "r-resolve-no-change",
     resolutionAction: "reviewed_no_change",
     resolvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    resolvedByCoachName: "Teague Barnett",
+    clientMessage: "Nothing to change — keep training as planned.",
     nowIso: "2026-01-03T00:00:00.000Z",
   });
-  assert.equal(ok, true);
+  assert.equal(result.ok, true);
   const review = loadClientAppState(LIFECYCLE_CLIENT_ID)!.reviewRequests.find((r) => r.id === "r-resolve-no-change")!;
   assert.equal(review.status, "resolved");
   assert.equal(review.resolved, true);
@@ -178,10 +204,87 @@ check("resolveReviewRequest carries a resolution note through to storage", () =>
     resolutionAction: "resolved",
     resolutionNote: "Client says it's fully healed; cleared to resume overhead pressing.",
     resolvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    resolvedByCoachName: "Teague Barnett",
+    clientMessage: "You're cleared to resume overhead pressing.",
     nowIso: "2026-01-03T00:00:00.000Z",
   });
   const review = loadClientAppState(LIFECYCLE_CLIENT_ID)!.reviewRequests.find((r) => r.id === "r-resolve-note")!;
   assert.equal(review.resolutionNote, "Client says it's fully healed; cleared to resume overhead pressing.");
+});
+
+console.log("\n3b. Resolution notification gate, waiting lifecycle, and resolution receipts (Phase 5.4B)\n");
+
+check("resolving a significant kind without a client message is blocked and changes nothing", () => {
+  seedClientWithReview(makeReview({ id: "r-blocked", status: "needs_review", kind: "pain-report" }));
+  const result = resolveReviewRequest({
+    clientId: LIFECYCLE_CLIENT_ID,
+    reviewId: "r-blocked",
+    resolutionAction: "resolved",
+    resolvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    resolvedByCoachName: "Teague Barnett",
+    nowIso: "2026-01-03T00:00:00.000Z",
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "notification_required");
+  const review = loadClientAppState(LIFECYCLE_CLIENT_ID)!.reviewRequests.find((r) => r.id === "r-blocked")!;
+  assert.equal(review.status, "needs_review");
+});
+
+check("resolving a significant kind with a client message relays a real, provenance-tagged chat message and a resolution receipt", () => {
+  seedClientWithReview(makeReview({ id: "r-with-message", status: "needs_review", kind: "pain-report" }));
+  const before = loadClientAppState(LIFECYCLE_CLIENT_ID)!.chatMessages.length;
+  const result = resolveReviewRequest({
+    clientId: LIFECYCLE_CLIENT_ID,
+    reviewId: "r-with-message",
+    resolutionAction: "resolved",
+    resolvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    resolvedByCoachName: "Teague Barnett",
+    clientMessage: "Keep incline pressing paused today.",
+    nowIso: "2026-01-03T00:00:00.000Z",
+  });
+  assert.equal(result.ok, true);
+  const state = loadClientAppState(LIFECYCLE_CLIENT_ID)!;
+  const review = state.reviewRequests.find((r) => r.id === "r-with-message")!;
+  assert.equal(review.status, "resolved");
+  assert.ok(review.resolutionReceipt);
+  assert.equal(review.resolutionReceipt!.approvedByCoachName, "Teague Barnett");
+  assert.equal(review.resolutionReceipt!.clientCommunicated, "Keep incline pressing paused today.");
+  assert.equal(state.chatMessages.length, before + 1);
+  const relayed = state.chatMessages[state.chatMessages.length - 1];
+  assert.equal(relayed.sender, "assistant");
+  assert.equal(relayed.relayedCoachDecision?.coachDisplayName, "Teague Barnett");
+  assert.equal(relayed.text, "Teague reviewed this and wants you to know: Keep incline pressing paused today.");
+});
+
+check("moveReviewToWaiting records what's being waited on and never resolves the review", () => {
+  seedClientWithReview(makeReview({ id: "r-waiting", status: "needs_review", kind: "pain-report" }));
+  const ok = moveReviewToWaiting({
+    clientId: LIFECYCLE_CLIENT_ID,
+    reviewId: "r-waiting",
+    waitingOn: "Client's reply about tomorrow's session",
+    resurfaceAtIso: "2026-01-05T00:00:00.000Z",
+    actorLabel: "Teague Barnett",
+    nowIso: "2026-01-04T00:00:00.000Z",
+  });
+  assert.equal(ok, true);
+  const review = loadClientAppState(LIFECYCLE_CLIENT_ID)!.reviewRequests.find((r) => r.id === "r-waiting")!;
+  assert.equal(review.status, "waiting");
+  assert.equal(review.waitingOn, "Client's reply about tomorrow's session");
+  assert.equal(review.resolved, false);
+  assert.equal(review.history?.some((h) => h.action.includes("Moved to waiting")), true);
+});
+
+check("a waiting item only re-enters 'needs_attention' once its own resurface time has arrived", () => {
+  const item = { kind: "pain-report", status: "waiting", resurfaceAtIso: "2026-01-05T00:00:00.000Z" } as unknown as AttentionQueueItem;
+  assert.equal(attentionBucketForItem(item, "2026-01-04T00:00:00.000Z"), "waiting");
+  assert.equal(attentionBucketForItem(item, "2026-01-05T00:00:00.000Z"), "needs_attention");
+  assert.equal(attentionBucketForItem(item, "2026-01-06T00:00:00.000Z"), "needs_attention");
+});
+
+check("a milestone item never mixes into the needs_attention bucket, and never requires client notification", () => {
+  assert.equal(requiresClientNotificationBeforeResolution("milestone"), false);
+  const item = { kind: "milestone", status: "needs_review" } as unknown as AttentionQueueItem;
+  assert.equal(attentionBucketForItem(item, "2026-01-04T00:00:00.000Z"), "worth_personal_touch");
 });
 
 check("reopenReviewRequest moves resolved -> needs_review and clears every resolution field", () => {

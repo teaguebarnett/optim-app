@@ -412,10 +412,12 @@ check("A legacy (pre-4.4B-2) persisted session migrates to a stable-id pointer t
   assert.ok(migrated);
   // Later passes added v6->v7 (see migrateV6ToV7), v7->v8 (see
   // migrateV7ToV8), v8->v9 (see migrateV8ToV9), v9->v10 (see
-  // migrateV9ToV10), and v10->v11 (see migrateV10ToV11) steps — a v5 input
-  // now lands on 11, not 6. The v5->v6 exercise-pointer migration itself
-  // (the thing this check actually exercises) is unaffected either way.
-  assert.equal(migrated!.version, 12);
+  // migrateV9ToV10), v10->v11 (see migrateV10ToV11), and Phase 5.4B added
+  // v11->v12 and v12->v13 (see migrateV11ToV12/migrateV12ToV13) steps — a v5
+  // input now lands on 13, not 6. The v5->v6 exercise-pointer migration
+  // itself (the thing this check actually exercises) is unaffected either
+  // way.
+  assert.equal(migrated!.version, 13);
   assert.equal(migrated!.workoutSession.currentExerciseId, PUSH_WORKOUT.exercises[2].id);
   assert.equal("currentExerciseIndex" in migrated!.workoutSession, false);
   assert.equal(Object.keys(migrated!.workoutSession.exerciseWarmups).length, PUSH_WORKOUT.exercises.length);

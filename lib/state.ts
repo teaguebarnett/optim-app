@@ -17,6 +17,7 @@ import {
 import { resolveExerciseWarmupConfig, resolveSessionWarmupConfig } from "./workout/warmup.ts";
 import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
+import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
   CardioLog,
   ChatMessage,
@@ -51,8 +52,19 @@ import type {
 const DEMO_WORKSPACE_ID: WorkspaceId = WORKSPACE_OPTIM_ID;
 const DEMO_CLIENT_ID: ClientProfileId = CLIENT_PROFILE_DEMO.id;
 
+/** Phase 5.4B — client-local-date tracking for the once-per-day entrance
+ * sequence (spec §8). `lastSeenLocalDateIso` is deliberately a plain daily
+ * field (not preserved config) — lib/history/rollover.ts's forward rollover
+ * already resets every daily field to a fresh createInitialState() while
+ * explicitly preserving only programEnrollment/nutritionTargets/
+ * checkInSchedule, so a new calendar day naturally starts with this null
+ * again with zero extra rollover code. */
+export interface DailyEntranceState {
+  lastSeenLocalDateIso: string | null;
+}
+
 export interface AppState {
-  version: 12;
+  version: 13;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   /** This client's assigned coach, resolved ONCE when this state is first
@@ -104,6 +116,15 @@ export interface AppState {
    * falls back to the global demo catalog exactly as it always has, so the
    * seeded demo client is completely unaffected by this field's addition. */
   assignedProgram?: ClientAssignedProgram;
+  /** Phase 5.4B — see DailyEntranceState's doc. */
+  dailyEntrance: DailyEntranceState;
+  /** Phase 5.4B — consecutive COMPLETE_WORKOUT dispatches with no skipped
+   * work and no RPE anomaly (summary.needsReview === false), reset to 0 by
+   * any SKIP_WORKOUT or needs-review completion. Purely a real, derived
+   * counter — never inferred after the fact — used only to detect a genuine
+   * "worth a personal touch" streak (see lib/coach/attention-escalation.ts's
+   * detectMilestoneEscalation). */
+  consecutiveCleanWorkouts: number;
 }
 
 /** Not-started per-exercise warm-up outcomes for every exercise in a
@@ -181,11 +202,13 @@ export function createInitialState(options: CreateInitialStateOptions = {}): App
       ? buildDemoDefaultProgramEnrollment(now)
       : buildDefaultProgramEnrollmentFor(workspaceId, clientId, now);
   return {
-    version: 12,
+    version: 13,
     workspaceId,
     clientId,
     primaryCoachId,
     dateIso: resolveClientLocalDateIso(now, programEnrollment.timeZone),
+    dailyEntrance: { lastSeenLocalDateIso: null },
+    consecutiveCleanWorkouts: 0,
     morningWeight: { weightLb: null, skipped: false },
     meals: {},
     cardio: { status: "not-started", durationMin: 0 },
@@ -342,6 +365,11 @@ export type Action =
    * future coach workspace never has to duplicate that content onto the
    * request itself. See lib/chat/assistant.ts for what routes here. */
   | { type: "CREATE_CHAT_REVIEW_REQUEST"; kind: ReviewRequestKind; summary: string; sourceMessageId?: string }
+  /** Phase 5.4B — dispatched once the client-side daily entrance sequence
+   * (spec §8) finishes for today, so a second same-day open skips straight
+   * to Today. See DailyEntranceState's doc for why this needs no rollover
+   * handling of its own. */
+  | { type: "MARK_DAILY_ENTRANCE_SEEN" }
   | { type: "RESET_TODAY" }
   | { type: "LOAD_PRESET"; preset: "completed-day" | "awaiting-review" };
 
@@ -1113,6 +1141,28 @@ export function reducer(state: AppState, action: Action): AppState {
           });
         }
       }
+
+      // Phase 5.4B — repeated-pattern escalation runs on the review list as
+      // it stands AFTER this event's own routine review (if any) was pushed
+      // above, so a pattern-crossing event is itself counted. Never mutates
+      // or removes any individual review — only ever adds a distinct,
+      // higher-visibility one on top.
+      const patternContext = {
+        workspaceId: state.workspaceId,
+        clientId: state.clientId,
+        assignedCoachId: state.primaryCoachId,
+        reviewRequests,
+        nowIso: completeWorkoutNowIso,
+        nextId: () => nextId("review"),
+      };
+      reviewRequests.push(...detectPatternEscalations(patternContext));
+
+      const consecutiveCleanWorkouts = action.summary.needsReview ? 0 : state.consecutiveCleanWorkouts + 1;
+      if (!action.summary.needsReview) {
+        const milestone = detectMilestoneEscalation(patternContext, { consecutiveCleanWorkouts });
+        if (milestone) reviewRequests.push(milestone);
+      }
+
       const nowIso = completeWorkoutNowIso;
       return {
         ...state,
@@ -1127,6 +1177,7 @@ export function reducer(state: AppState, action: Action): AppState {
           activePainInterruption: null,
         },
         reviewRequests,
+        consecutiveCleanWorkouts,
       };
     }
 
@@ -1166,6 +1217,15 @@ export function reducer(state: AppState, action: Action): AppState {
       const summary = endedEarly
         ? buildWorkoutSummary(state.workoutSession, state.workoutSession.startedAtIso ?? nowIso, nowIso)
         : undefined;
+      const reviewRequestsAfterSkip = reviewRequest ? [...state.reviewRequests, reviewRequest] : state.reviewRequests;
+      const patternEscalations = detectPatternEscalations({
+        workspaceId: state.workspaceId,
+        clientId: state.clientId,
+        assignedCoachId: state.primaryCoachId,
+        reviewRequests: reviewRequestsAfterSkip,
+        nowIso,
+        nextId: () => nextId("review"),
+      });
       return {
         ...state,
         workoutSession: {
@@ -1178,7 +1238,8 @@ export function reducer(state: AppState, action: Action): AppState {
           events: [...state.workoutSession.events, { type: "completed", atIso: nowIso }],
           activePainInterruption: null,
         },
-        reviewRequests: reviewRequest ? [...state.reviewRequests, reviewRequest] : state.reviewRequests,
+        reviewRequests: [...reviewRequestsAfterSkip, ...patternEscalations],
+        consecutiveCleanWorkouts: 0,
       };
     }
 
@@ -1221,6 +1282,10 @@ export function reducer(state: AppState, action: Action): AppState {
       };
       return { ...state, reviewRequests: [...state.reviewRequests, reviewRequest] };
     }
+
+    case "MARK_DAILY_ENTRANCE_SEEN":
+      if (state.dailyEntrance.lastSeenLocalDateIso === state.dateIso) return state;
+      return { ...state, dailyEntrance: { lastSeenLocalDateIso: state.dateIso } };
 
     case "RESET_TODAY":
       // Preserves whichever client (and their real assigned coach) this

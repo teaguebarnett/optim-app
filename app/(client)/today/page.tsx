@@ -7,6 +7,7 @@ import { TrainingTimeCard } from "@/components/today/training-time-card";
 import { TodayBento } from "@/components/today/today-bento";
 import { CoachNote } from "@/components/today/coach-note";
 import { PreStartToday } from "@/components/today/pre-start-today";
+import { DailyEntranceSequence } from "@/components/today/daily-entrance-sequence";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { PUSH_WORKOUT } from "@/lib/mock-data";
@@ -29,7 +30,7 @@ import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 //   every remaining item as a 1-column tile that only claims a full row
 //   once tapped. See today-bento.tsx.
 export default function TodayPage() {
-  const { isHydrated, state, dailyTrainingPlan, dailyPlan } = usePrototypeState();
+  const { isHydrated, state, dispatch, dailyTrainingPlan, dailyPlan } = usePrototypeState();
   const [trainingTimeSheetOpen, setTrainingTimeSheetOpen] = useState(false);
 
   if (!isHydrated) {
@@ -46,6 +47,16 @@ export default function TodayPage() {
   const timing = resolveProgramTiming(state.programEnrollment, state.dateIso);
   if (timing.phase === "pre_program") {
     return <PreStartToday timing={timing} state={state} />;
+  }
+
+  // Phase 5.4B, spec §8 — shown only once per client-local calendar date;
+  // a second same-day open (dailyEntrance.lastSeenLocalDateIso already
+  // matches today's real dateIso) skips straight to the normal experience
+  // below. See lib/state.ts's MARK_DAILY_ENTRANCE_SEEN and
+  // DailyEntranceState's doc for why a new calendar day needs no extra
+  // rollover handling of its own.
+  if (state.dailyEntrance.lastSeenLocalDateIso !== state.dateIso) {
+    return <DailyEntranceSequence onDone={() => dispatch({ type: "MARK_DAILY_ENTRANCE_SEEN" })} />;
   }
 
   return (

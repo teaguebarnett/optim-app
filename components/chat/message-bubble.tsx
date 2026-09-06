@@ -93,7 +93,12 @@ export function MessageBubble({
   }
 
   // assistant — always labeled with the workspace's assistant name, and
-  // never rendered as if it came from the coach.
+  // never rendered as if it came from the coach. Phase 5.4B: when this
+  // specific message relays a coach's own reviewed decision (see
+  // lib/coach/review-lifecycle.ts's resolveReviewRequest), an explicit
+  // provenance line names the real coach — never a technical system label
+  // like "relayed" or "system" — matching spec §6's "never claim OPTIM
+  // independently made a coach-only decision."
   return (
     <div className="flex items-start gap-2 py-1">
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-off-white/[0.06] text-neutral">
@@ -105,6 +110,9 @@ export function MessageBubble({
           {hasText ? <p className="text-[15px] leading-relaxed text-off-white/90">{message.text}</p> : null}
           <AttachmentList attachments={message.attachments} />
         </div>
+        {message.relayedCoachDecision ? (
+          <p className="mt-1 text-[11px] text-neutral">{message.relayedCoachDecision.coachDisplayName} reviewed this</p>
+        ) : null}
         {message.promptsSchedulePicker && onOpenSchedulePicker ? (
           <button
             type="button"

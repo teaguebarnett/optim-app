@@ -30,7 +30,12 @@
     "verify:coach-onboarding": "node --experimental-strip-types lib/coach/verify-coach-onboarding.mts",
     "verify:activation-generation": "node --experimental-strip-types lib/coach/verify-activation-generation.mts",
     "verify:activation-lifecycle": "node --experimental-strip-types lib/coach/verify-activation-lifecycle.mts",
-    "verify:coach-calibration": "node --experimental-strip-types lib/coach/verify-coach-calibration.mts"
+    "verify:coach-calibration": "node --experimental-strip-types lib/coach/verify-coach-calibration.mts",
+    "verify:attention-escalation": "node --experimental-strip-types lib/coach/verify-attention-escalation.mts",
+    "verify:command-center-v2": "node --experimental-strip-types lib/coach/verify-command-center-v2.mts",
+    "verify:daily-briefing": "node --experimental-strip-types lib/coach/verify-daily-briefing.mts",
+    "verify:daily-entrance": "node --experimental-strip-types lib/verify-daily-entrance.mts",
+    "verify:briefing-escalation": "node --experimental-strip-types lib/coach/verify-briefing-escalation.mts"
   },
   "dependencies": {
     "lucide-react": "^1.27.0",

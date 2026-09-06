@@ -734,6 +734,15 @@ export interface ChatMessage {
    * "Update training time" quick action (opens the same wheel-style
    * TrainingTimeSheet Today/Training already use) — see app/chat/page.tsx. */
   promptsSchedulePicker?: boolean;
+  /** Phase 5.4B — set only on an assistant-sent message that relays a
+   * coach's own reviewed/approved decision (see
+   * lib/coach/review-lifecycle.ts's resolveReviewRequest and
+   * lib/coach/coach-messaging.ts's sendRelayedCoachDecisionMessage) — never
+   * set on OPTIM's own independent reply. `coachDisplayName` is always the
+   * real authenticated coach's name at send time, never a hardcoded
+   * "Teague." Used to render explicit coach-involvement provenance without
+   * exposing internal system labels (spec §6). */
+  relayedCoachDecision?: { coachDisplayName: string; reviewRequestId: string };
 }
 
 export interface ScriptedChatTopic {
@@ -763,15 +772,42 @@ export type ReviewRequestKind =
   /** An exercise substitution or broader program-change request raised in
    * Chat — OPTIM never approves or invents this itself (see
    * lib/chat/assistant.ts); it's always routed to the assigned coach. */
-  | "program-change-request";
+  | "program-change-request"
+  /** Phase 5.4B — three or more "rpe-anomaly" events for the same client
+   * inside a trailing window (see lib/coach/attention-escalation.ts):
+   * a repeated, materially abnormal pattern, never a single routine
+   * deviation (those stay as individual "rpe-anomaly" reviews). */
+  | "performance-pattern"
+  /** Phase 5.4B — three or more "workout-skipped" events for the same
+   * client inside a trailing window — a real disengagement pattern, never
+   * an isolated missed session. */
+  | "adherence-pattern"
+  /** Phase 5.4B — an adherence pattern and a performance pattern surfacing
+   * in the same window: two independent signals deteriorating together,
+   * synthesized as one combined item instead of two separate ones. */
+  | "recovery-deterioration"
+  /** Phase 5.4B — OPTIM reached the edge of its configured AI Coaching
+   * Authority (see lib/coach/ai-authority.ts) or produced a low-confidence
+   * output it will not act on alone — e.g. a Daily Briefing held for
+   * review. Never a claim that OPTIM attempted the action anyway. */
+  | "ai-authority-boundary"
+  /** Phase 5.4B — a genuinely positive signal (a clean-completion streak,
+   * a milestone) routed to "Worth a personal touch," never mixed with a
+   * risk/decision alert. Carries a real, ready-to-send draft message (see
+   * ReviewRequest.preparedClientMessage) rather than an invented one. */
+  | "milestone";
 
 /** A review's explicit, persistent place in its resolution lifecycle —
  * never inferred solely from the `resolved` boolean (kept only for
  * backward-compatible read sites; see ReviewRequest.resolved). Opening a
  * review's detail view never changes its status; only a deliberate
  * "Start review" / "Reviewed — no change needed" / "Resolve review" /
- * "Reopen" action does — see lib/coach/review-lifecycle.ts. */
-export type ReviewRequestStatus = "needs_review" | "in_progress" | "resolved";
+ * "Move to waiting" / "Reopen" action does — see
+ * lib/coach/review-lifecycle.ts. "waiting" (Phase 5.4B) means the coach has
+ * already acted and is waiting on something specific (see
+ * ReviewRequest.waitingOn/resurfaceAtIso) — distinct from "in_progress"
+ * (still being worked) and "resolved" (done, receipt attached). */
+export type ReviewRequestStatus = "needs_review" | "in_progress" | "waiting" | "resolved";
 
 /** The two deliberate final outcomes a coach can choose when resolving a
  * review — distinct so the resolved history can show which one it was,
@@ -784,6 +820,39 @@ export type ReviewResolutionAction = "reviewed_no_change" | "resolved";
  * resolution note (see lib/coach/review-lifecycle.ts's
  * requiresResolutionNote). */
 export type ReviewSeverity = "high" | "normal";
+
+/** One entry in a review's append-only audit trail (Phase 5.4B) — every
+ * lifecycle transition adds one rather than overwriting anything, so the
+ * client workspace's "recent decisions" history (spec §5.6) can render a
+ * real chronological record instead of just the latest snapshot. */
+export interface AttentionHistoryEntry {
+  id: string;
+  atIso: string;
+  actorType: "coach" | "optim" | "client";
+  /** The real acting coach's display name, or "OPTIM" — never a hardcoded
+   * "Teague" (see lib/coach/review-lifecycle.ts's module doc). */
+  actorLabel: string;
+  action: string;
+  note?: string;
+}
+
+/** What actually happened when a "significant" review (see
+ * lib/coach/review-support.ts's requiresClientNotificationBeforeResolution)
+ * was resolved — a real receipt, never a bare status flip. Kept on the
+ * ReviewRequest itself so it survives in client history after resolution. */
+export interface ResolutionReceipt {
+  decision: string;
+  approvedByCoachId: CoachProfileId;
+  /** The real authenticated coach's display name at resolution time — never
+   * a hardcoded name; see lib/coach/review-lifecycle.ts. */
+  approvedByCoachName: string;
+  whatChanged: string;
+  /** What OPTIM actually told the client, verbatim — empty string only when
+   * `responseRequired` is false and nothing needed to be sent. */
+  clientCommunicated: string;
+  clientNotifiedAtIso?: string;
+  responseRequired: boolean;
+}
 
 export interface ReviewRequest {
   id: string;
@@ -821,4 +890,43 @@ export interface ReviewRequest {
   resolutionNote?: string;
   resolvedAtIso?: string;
   resolvedByCoachId?: CoachProfileId;
+
+  // -- Phase 5.4B: escalation context, waiting lifecycle, receipts --------
+
+  /** Why OPTIM escalated this specific item — distinct from `summary` (what
+   * happened): this is the reasoning, shown on the Command Center's focus
+   * surface. */
+  escalationReason?: string;
+  /** Real, concrete actions OPTIM already took before routing this to the
+   * coach (e.g. "Logged each occurrence," "Held the affected exercise") —
+   * never a fabricated automation claim. */
+  optimActionsTaken?: string[];
+  /** The one concrete next action OPTIM recommends the coach take. */
+  recommendedNextAction?: string;
+  /** A ready-to-send draft message for this item — used by "milestone"
+   * items (a real prepared congratulatory message) and by significant
+   * items awaiting the coach's own decision text. */
+  preparedClientMessage?: string;
+  /** Set when status is "waiting" — a short description of what's being
+   * waited on (e.g. "Client's reply to your check-in"). */
+  waitingOn?: string;
+  /** When status is "waiting," the promised time OPTIM will resurface this
+   * item as needing attention again — see
+   * lib/coach/attention-queue.ts's attentionBucketForItem. */
+  resurfaceAtIso?: string;
+  /** True for a "significant" item (see
+   * requiresClientNotificationBeforeResolution) that cannot move to
+   * "resolved" until the client has actually been told something. */
+  clientNotificationRequired?: boolean;
+  clientNotifiedAtIso?: string;
+  /** True while a client response is still needed before this can be
+   * considered fully closed — an item with this true never resolves; it
+   * stays "waiting" instead (spec §3). */
+  responseRequiredFromClient?: boolean;
+  /** Append-only audit trail — every lifecycle transition adds an entry,
+   * never rewrites a previous one. */
+  history?: AttentionHistoryEntry[];
+  /** Present only once status is "resolved" for a "significant" kind — the
+   * full receipt of what was decided, approved, changed, and communicated. */
+  resolutionReceipt?: ResolutionReceipt;
 }

@@ -5,15 +5,19 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { usePlatformState } from "@/hooks/use-platform-state";
 import {
   getAllClientProfiles,
+  getBriefingSettings,
+  getBriefingsForCoach,
   getClientLifecycle,
   getClientProfileForCoach,
   getClientsForCoach,
+  getDailyBriefing,
   getHealthReview,
   getIntendedProgram,
   getInvitationForClient,
   getOnboardingProgress,
   resolveProgramAssignmentRef,
 } from "@/lib/coach/repository";
+import { resolveEffectiveBriefingAutomation } from "@/lib/coach/daily-briefing";
 import { loadClientAppState, subscribeToClientAppStateChanges } from "@/lib/tenancy/client-state-store";
 import { buildAttentionQueue, buildReviewQueueItems } from "@/lib/coach/attention-queue";
 import { checkActivationReadiness } from "@/lib/coach/activation";
@@ -89,6 +93,11 @@ export function useCoachWorkspace() {
     ? buildReviewQueueItems({ workspaceId, coachId, reviewRequests: allReviewRequests, clients: allClients, healthReviews: unresolvedHealthReviews })
     : [];
 
+  // Phase 5.4B — every briefing this coach owns, across every client, for
+  // the Command Center's Daily Briefings section (spec §2).
+  const briefingSettings = coachId ? getBriefingSettings(platform, coachId, workspaceId) : null;
+  const briefings = coachId ? getBriefingsForCoach(platform, coachId) : [];
+
   return {
     activeContext,
     platform,
@@ -101,6 +110,8 @@ export function useCoachWorkspace() {
     clientAppStates,
     attentionQueue,
     reviewQueueItems,
+    briefingSettings,
+    briefings,
   };
 }
 
@@ -166,6 +177,14 @@ export function useCoachClientView(clientId: ClientProfileId) {
   const clientReviewRequests = clientAppState ? clientAppState.reviewRequests.filter((r) => !r.resolved) : [];
   const chatMessages = clientAppState?.chatMessages ?? [];
 
+  // Phase 5.4B — this client's Daily Briefing for their own current local
+  // date (never "today" in the coach's timezone — see AppState.dateIso's
+  // doc), and the automation setting that actually governs them (per-client
+  // override if one exists, else the coach's global default).
+  const briefingSettings = workspace.coachId ? getBriefingSettings(workspace.platform, workspace.coachId, workspace.workspaceId) : null;
+  const dailyBriefing = clientAppState ? getDailyBriefing(workspace.platform, clientId, clientAppState.dateIso) : null;
+  const effectiveBriefingAutomation = briefingSettings ? resolveEffectiveBriefingAutomation(briefingSettings, clientId) : "review_first";
+
   return {
     ...workspace,
     client,
@@ -180,5 +199,8 @@ export function useCoachClientView(clientId: ClientProfileId) {
     healthReview,
     clientReviewRequests,
     chatMessages,
+    briefingSettings,
+    dailyBriefing,
+    effectiveBriefingAutomation,
   };
 }

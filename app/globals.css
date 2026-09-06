@@ -609,6 +609,13 @@ input[type="number"] {
   position: relative;
   z-index: 1;
 }
+/* Phase 5.4B — "Worth a personal touch" (milestone) items reuse the exact
+ * same signature surface, swapping only the glow's tint to success — the
+ * one visual cue that this is a positive item, never mixed with a risk/
+ * decision item's accent+violet glow (spec §4's Positive attention rule). */
+.pc-signature-surface-positive::before {
+  background: radial-gradient(120% 100% at 0% 0%, var(--pc-success-soft) 0%, transparent 55%), radial-gradient(90% 80% at 100% 100%, var(--pc-success-soft) 0%, transparent 60%);
+}
 
 /* -----------------------------------------------------------------------
  * Phase 5.3C — kinetic queue/decision motion. A row promoting into the

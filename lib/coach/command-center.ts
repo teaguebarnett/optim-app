@@ -99,3 +99,28 @@ export function buildUpcomingWork(clients: { id: ClientProfileId; name: string }
 
   return items.sort((a, b) => Number(b.readyToActivate) - Number(a.readyToActivate));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5.4B — time-of-day adaptivity for the Command Center's secondary
+// sections (spec §2: "morning emphasizes prepared briefings; active
+// training windows emphasize live flags/activity; later in day emphasizes
+// unresolved work"). "Needs Your Attention" (see app/coach/page.tsx) always
+// dominates ahead of all of this when it's non-empty — this only ever
+// reorders the sections that come after it.
+// ---------------------------------------------------------------------------
+
+export type TimeOfDay = "morning" | "midday" | "evening";
+
+export function timeOfDayForHour(hour: number): TimeOfDay {
+  if (hour < 11) return "morning";
+  if (hour < 17) return "midday";
+  return "evening";
+}
+
+export type SecondarySectionId = "briefings" | "personal_touch" | "waiting";
+
+export const SECONDARY_SECTION_ORDER: Record<TimeOfDay, SecondarySectionId[]> = {
+  morning: ["briefings", "personal_touch", "waiting"],
+  midday: ["personal_touch", "briefings", "waiting"],
+  evening: ["waiting", "briefings", "personal_touch"],
+};

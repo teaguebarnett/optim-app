@@ -303,6 +303,16 @@ function migrateV11ToV12(stored: Record<string, unknown>): Record<string, unknow
   return { ...stored, version: 12 };
 }
 
+/** v12 -> v13 (Phase 5.4B): adds the once-per-day entrance-sequence tracker
+ * and the consecutive-clean-workout streak counter — both brand-new daily
+ * fields with no prior equivalent, so every existing stored day starts
+ * fresh (never having "seen" the entrance sequence for whatever date is
+ * already stored, and with a zero streak) rather than needing any real data
+ * carried forward. */
+function migrateV12ToV13(stored: Record<string, unknown>): Record<string, unknown> {
+  return { ...stored, version: 13, dailyEntrance: { lastSeenLocalDateIso: null }, consecutiveCleanWorkouts: 0 };
+}
+
 /**
  * Upgrades raw localStorage content (of unknown/any prior shape) to the
  * current AppState (version 10), stepping through every intermediate
@@ -403,6 +413,17 @@ export function migrateStoredState(stored: unknown): AppState | null {
 
   if (
     working.version === 12 &&
+    typeof working.workspaceId === "string" &&
+    typeof working.clientId === "string" &&
+    typeof working.primaryCoachId === "string" &&
+    isRecord(working.programEnrollment) &&
+    isRecord(working.nutritionTargets)
+  ) {
+    working = migrateV12ToV13(working);
+  }
+
+  if (
+    working.version === 13 &&
     typeof working.workspaceId === "string" &&
     typeof working.clientId === "string" &&
     typeof working.primaryCoachId === "string" &&

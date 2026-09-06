@@ -22,6 +22,11 @@ export const REVIEW_KIND_LABELS: Record<ReviewRequestKind, string> = {
   "workout-skipped": "Workout skipped",
   "technique-flag": "Technique question flagged",
   "schedule-change": "Schedule changed",
+  "performance-pattern": "Repeated RPE mismatch",
+  "adherence-pattern": "Repeated missed sessions",
+  "recovery-deterioration": "Recovery/adherence declining",
+  "ai-authority-boundary": "OPTIM held for your review",
+  milestone: "Worth a personal touch",
 };
 
 /** Every AttentionQueueItem's kind, including the one ("health_review")
@@ -43,6 +48,11 @@ export const ATTENTION_KIND_QUESTIONS: Record<AttentionItemKind, string> = {
   "workout-skipped": "Does {name} need a check-in about missed training?",
   "technique-flag": "Does {name} need coaching on this movement before their next session?",
   "schedule-change": "Does {name}'s plan need to adjust for their new schedule?",
+  "performance-pattern": "Is {name}'s current training load still right for them?",
+  "adherence-pattern": "Does {name} need a real check-in about consistency?",
+  "recovery-deterioration": "Does {name}'s plan still fit their current capacity?",
+  "ai-authority-boundary": "What should OPTIM tell {name}?",
+  milestone: "Want to send {name} a quick note?",
 };
 
 export const HEALTH_REVIEW_STATUS_LABELS: Record<HealthReviewStatus, string> = {

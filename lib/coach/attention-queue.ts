@@ -20,11 +20,19 @@ import type { AttentionItemKind, AttentionQueueItem, HealthReviewRecord } from "
 const ATTENTION_PRIORITY: Record<AttentionItemKind, number> = {
   health_review: -1,
   "pain-report": 0,
+  "recovery-deterioration": 0.5,
+  "ai-authority-boundary": 0.75,
   "program-change-request": 1,
+  "performance-pattern": 1.5,
+  "adherence-pattern": 1.5,
   "rpe-anomaly": 2,
   "workout-skipped": 2,
   "technique-flag": 3,
   "schedule-change": 4,
+  // Never competes with a real decision — rendered in its own "Worth a
+  // personal touch" bucket regardless of numeric priority (see
+  // attentionBucketForItem below).
+  milestone: 10,
 };
 
 export interface BuildAttentionQueueInput {
@@ -69,6 +77,17 @@ export function buildReviewQueueItems(input: BuildAttentionQueueInput): Attentio
       resolutionNote: r.resolutionNote,
       resolvedAtIso: r.resolvedAtIso,
       resolvedByCoachId: r.resolvedByCoachId,
+      escalationReason: r.escalationReason,
+      optimActionsTaken: r.optimActionsTaken,
+      recommendedNextAction: r.recommendedNextAction,
+      preparedClientMessage: r.preparedClientMessage,
+      waitingOn: r.waitingOn,
+      resurfaceAtIso: r.resurfaceAtIso,
+      clientNotificationRequired: r.clientNotificationRequired,
+      clientNotifiedAtIso: r.clientNotifiedAtIso,
+      responseRequiredFromClient: r.responseRequiredFromClient,
+      history: r.history,
+      resolutionReceipt: r.resolutionReceipt,
     }));
 
   // Only ever surfaced while unresolved (see use-coach-data.ts's
@@ -101,4 +120,27 @@ export function buildReviewQueueItems(input: BuildAttentionQueueInput): Attentio
  * items. */
 export function buildAttentionQueue(input: BuildAttentionQueueInput): AttentionQueueItem[] {
   return buildReviewQueueItems(input).filter((item) => item.status !== "resolved");
+}
+
+/**
+ * Phase 5.4B — the Command Center's required five-section hierarchy (spec
+ * §2) collapses to three real, derivable buckets over this same queue (the
+ * other two sections — Daily Briefings, Clients On Track — read from
+ * different data entirely, see lib/coach/command-center.ts): a genuinely
+ * positive item never mixes with a risk/decision alert (spec §4's Positive
+ * attention rule), and a "waiting" item only re-enters the decision surface
+ * once its own promised resurface time has actually arrived — reading
+ * `resurfaceAtIso` live rather than needing a background job to flip it,
+ * since dashboard lifecycle state must stay the one source of truth (spec
+ * §9).
+ */
+export type AttentionBucket = "needs_attention" | "worth_personal_touch" | "waiting";
+
+export function attentionBucketForItem(item: AttentionQueueItem, nowIso: string): AttentionBucket {
+  if (item.kind === "milestone") return "worth_personal_touch";
+  if (item.status === "waiting") {
+    if (item.resurfaceAtIso && item.resurfaceAtIso <= nowIso) return "needs_attention";
+    return "waiting";
+  }
+  return "needs_attention";
 }

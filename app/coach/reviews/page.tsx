@@ -7,17 +7,19 @@ import { ReviewDetailSheet } from "@/components/coach/review-detail-sheet";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
 import { cn } from "@/lib/cn";
 
-type ReviewTab = "needs_review" | "in_progress" | "resolved";
+type ReviewTab = "needs_review" | "in_progress" | "waiting" | "resolved";
 
 const TABS: { id: ReviewTab; label: string }[] = [
   { id: "needs_review", label: "Needs review" },
   { id: "in_progress", label: "In progress" },
+  { id: "waiting", label: "Waiting" },
   { id: "resolved", label: "Resolved" },
 ];
 
 const EMPTY_MESSAGE: Record<ReviewTab, string> = {
   needs_review: "No open reviews — you're caught up.",
   in_progress: "Nothing currently in progress.",
+  waiting: "Nothing waiting right now.",
   resolved: "No resolved reviews yet.",
 };
 
@@ -40,6 +42,7 @@ export default function CoachReviewsPage() {
   const countByTab: Record<ReviewTab, number> = {
     needs_review: workspace.reviewQueueItems.filter((item) => item.status === "needs_review").length,
     in_progress: workspace.reviewQueueItems.filter((item) => item.status === "in_progress").length,
+    waiting: workspace.reviewQueueItems.filter((item) => item.status === "waiting").length,
     resolved: workspace.reviewQueueItems.filter((item) => item.status === "resolved").length,
   };
 
@@ -77,7 +80,13 @@ export default function CoachReviewsPage() {
       </div>
 
       {workspace.coachId ? (
-        <ReviewDetailSheet item={selected} coachId={workspace.coachId} onClose={() => setSelectedId(null)} onChanged={handleChanged} />
+        <ReviewDetailSheet
+          item={selected}
+          coachId={workspace.coachId}
+          coachName={workspace.activeContext.coachProfile?.displayName ?? "Your coach"}
+          onClose={() => setSelectedId(null)}
+          onChanged={handleChanged}
+        />
       ) : null}
     </div>
   );

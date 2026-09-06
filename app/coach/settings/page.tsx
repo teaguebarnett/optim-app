@@ -1,6 +1,6 @@
 "use client";
 
-import { ShieldCheck, Sparkles, AlertTriangle, MessageCircle, Wrench } from "lucide-react";
+import { ShieldCheck, Sparkles, AlertTriangle, MessageCircle, Wrench, Newspaper } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/coach/page-header";
 import { DevPerspectiveSwitcher } from "@/components/app-shell/dev-perspective-switcher";
@@ -8,6 +8,9 @@ import { AiAuthorityPanel } from "@/components/coach/ai-authority-panel";
 import { YourCoachingMethodCard } from "@/components/coach/your-coaching-method-card";
 import { AppearanceSettingsCard } from "@/components/app-shell/appearance-settings-card";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { useCoachWorkspace } from "@/hooks/use-coach-data";
+import { defaultCoachBriefingSettings, type BriefingAutomationSetting } from "@/lib/coach/daily-briefing";
+import { cn } from "@/lib/cn";
 
 const DEV_TOOLS_AVAILABLE = process.env.NODE_ENV !== "production";
 
@@ -21,7 +24,23 @@ const DEV_TOOLS_AVAILABLE = process.env.NODE_ENV !== "production";
  */
 export default function CoachSettingsPage() {
   const { activeContext } = usePrototypeState();
+  const workspace = useCoachWorkspace();
   const policy = activeContext.aiPolicy;
+
+  const briefingSettings = workspace.coachId
+    ? (workspace.briefingSettings ?? defaultCoachBriefingSettings(workspace.coachId, workspace.workspaceId, "1970-01-01T00:00:00.000Z"))
+    : null;
+
+  function setGlobalAutomation(automation: BriefingAutomationSetting) {
+    if (!workspace.coachId) return;
+    workspace.dispatchPlatform({
+      type: "SET_BRIEFING_GLOBAL_AUTOMATION",
+      coachId: workspace.coachId,
+      workspaceId: workspace.workspaceId,
+      automation,
+      nowIso: new Date().toISOString(),
+    });
+  }
 
   return (
     <div className="space-y-8">
@@ -82,6 +101,39 @@ export default function CoachSettingsPage() {
         <Card>
           <p className="text-sm text-off-white">{activeContext.assistantDisplayName}&apos;s tone</p>
           <p className="mt-1 text-meta text-neutral">{policy.tone}</p>
+        </Card>
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Newspaper size={16} className="text-brass-strong" aria-hidden="true" />
+          <h2 className="text-subheading text-off-white">Daily Briefings</h2>
+        </div>
+        <Card>
+          <p className="text-sm text-off-white">Default publishing behavior</p>
+          <p className="mt-1 text-meta text-neutral">
+            Review-first holds every day&apos;s briefing for your approval before a client sees it. Auto-publish sends it the
+            moment it&apos;s generated — unless the day has a pain flag, an unapproved program change, or a low-confidence
+            output, which always holds for your review regardless of this setting. Override per client from their own page.
+          </p>
+          {briefingSettings ? (
+            <div className="mt-3 inline-flex rounded-[var(--radius-md)] border border-border-strong p-1">
+              {(["review_first", "auto_publish"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setGlobalAutomation(option)}
+                  className={cn(
+                    "rounded-[var(--radius-sm)] px-3 py-1.5 text-sm font-medium transition-colors",
+                    briefingSettings.globalAutomation === option ? "bg-accent text-on-accent" : "text-neutral hover:text-off-white"
+                  )}
+                  style={{ transitionDuration: "var(--motion-fast)" }}
+                >
+                  {option === "review_first" ? "Review first" : "Auto-publish"}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </Card>
       </section>
 

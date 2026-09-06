@@ -251,12 +251,13 @@ check("Legacy v4 state (durationWeeks 16, the old default) migrates to a 12-week
   // Phase 4.4B-2 added a v5->v6 step (see migrateV5ToV6), a later pass added
   // v6->v7 (see migrateV6ToV7), OPTIM Chat V1 added v7->v8 (see
   // migrateV7ToV8), Phase 5.0B added v8->v9 and v9->v10 (see
-  // migrateV8ToV9/migrateV9ToV10), and Phase 5.2 added v10->v11 (see
-  // migrateV10ToV11) — migrateStoredState always steps a legacy record all
-  // the way to the current version, so a v4 input now lands on 11, not 5.
-  // The v4->v5 duration correction itself (the thing this check actually
-  // exercises) is unaffected either way.
-  assert.equal(migrated!.version, 12);
+  // migrateV8ToV9/migrateV9ToV10), Phase 5.2 added v10->v11 (see
+  // migrateV10ToV11), and Phase 5.4B added v11->v12 and v12->v13 (see
+  // migrateV11ToV12/migrateV12ToV13) — migrateStoredState always steps a
+  // legacy record all the way to the current version, so a v4 input now
+  // lands on 13, not 5. The v4->v5 duration correction itself (the thing
+  // this check actually exercises) is unaffected either way.
+  assert.equal(migrated!.version, 13);
   assert.equal(migrated!.programEnrollment.durationWeeks, 12);
 });
 

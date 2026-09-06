@@ -8,6 +8,10 @@ import { SectionHeader } from "@/components/coach/section-header";
 import { EmptyState } from "@/components/coach/empty-state";
 import { DecisionFocusSurface } from "@/components/coach/decision-focus-surface";
 import { DecisionQueueRows } from "@/components/coach/decision-queue-rows";
+import { PersonalTouchList } from "@/components/coach/personal-touch-list";
+import { WaitingList } from "@/components/coach/waiting-list";
+import { ReviewDetailSheet } from "@/components/coach/review-detail-sheet";
+import { DailyBriefingsSummaryList } from "@/components/coach/daily-briefings-summary-list";
 import { RosterPulseCard } from "@/components/coach/roster-pulse-card";
 import { AiAuthorityRailCard } from "@/components/coach/ai-authority-rail-card";
 import { CalibrateOptimBanner } from "@/components/coach/calibrate-optim-banner";
@@ -18,9 +22,11 @@ import { useCoachWorkspace } from "@/hooks/use-coach-data";
 import { useAiAuthority } from "@/hooks/use-ai-authority";
 import { getClientLifecycle } from "@/lib/coach/repository";
 import { resolveProgramTiming, describeProgramTimingForCoach } from "@/lib/scheduling/program-timing";
-import { buildRosterPulse, buildUpcomingWork } from "@/lib/coach/command-center";
+import { buildRosterPulse, buildUpcomingWork, timeOfDayForHour, SECONDARY_SECTION_ORDER } from "@/lib/coach/command-center";
+import { attentionBucketForItem } from "@/lib/coach/attention-queue";
 import { resolveEffectiveAiAuthorityLevel, AI_AUTHORITY_LEVEL_LABELS } from "@/lib/coach/ai-authority";
 import { resolveClientLocalDateIso } from "@/lib/shared/local-date";
+import type { AttentionQueueItem } from "@/lib/coach/types";
 
 function greetingForHour(hour: number): string {
   if (hour < 12) return "Good morning";
@@ -28,27 +34,38 @@ function greetingForHour(hour: number): string {
   return "Good evening";
 }
 
-/**
- * The OPTIM Command Center — a priority-first decision surface, not an
- * analytics dashboard. Every number here traces to real state (real
- * ReviewRequests, real HealthReviewRecords, real ClientLifecycleRecords) —
- * never a fabricated wellness score, automation count, or calendar entry.
- * Selecting a different queue row updates the expanded focus surface in
- * place; nothing here navigates away just to look at a decision.
- */
 export default function CoachOverviewPage() {
   const workspace = useCoachWorkspace();
   const { settings: aiSettings, setGlobal } = useAiAuthority();
   const coachFirstName = workspace.activeContext.coachProfile?.displayName?.split(" ")[0] ?? "there";
   const coachName = workspace.activeContext.coachProfile?.displayName ?? "Your coach";
   const today = new Date();
+  const nowIso = today.toISOString();
+  const timeOfDay = timeOfDayForHour(today.getHours());
   const [addClientOpen, setAddClientOpen] = useState(false);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [waitingSelectedId, setWaitingSelectedId] = useState<string | null>(null);
   const [, forceRerender] = useState(0);
   const onChanged = () => forceRerender((n) => n + 1);
 
-  const queue = workspace.attentionQueue;
+  // Spec §2/§3 — the same real attentionQueue, split into the buckets the
+  // five-section hierarchy needs. A "waiting" item whose own resurface time
+  // has arrived reads as needs_attention here automatically (see
+  // attentionBucketForItem) — no separate resurfacing job required.
+  const buckets = new Map<string, AttentionQueueItem[]>([
+    ["needs_attention", []],
+    ["worth_personal_touch", []],
+    ["waiting", []],
+  ]);
+  for (const item of workspace.attentionQueue) {
+    buckets.get(attentionBucketForItem(item, nowIso))!.push(item);
+  }
+  const queue = buckets.get("needs_attention")!;
+  const personalTouchItems = buckets.get("worth_personal_touch")!;
+  const waitingItems = buckets.get("waiting")!;
+  const waitingSelected = waitingSelectedId ? (workspace.reviewQueueItems.find((i) => i.reviewRequestId === waitingSelectedId) ?? null) : null;
+
   const focusItem = queue.find((i) => i.reviewRequestId === selectedId) ?? queue[0] ?? null;
   const remainingItems = focusItem ? queue.filter((i) => i.reviewRequestId !== focusItem.reviewRequestId) : [];
 
@@ -66,7 +83,7 @@ export default function CoachOverviewPage() {
 
   const clientsWithLifecycle = workspace.clients.map((client) => ({ client, lifecycle: getClientLifecycle(workspace.platform, client.id) }));
   const lifecycleByClientId = new Map(clientsWithLifecycle.map(({ client, lifecycle }) => [client.id, lifecycle]));
-  const needsCoachClientIds = new Set(queue.map((i) => i.clientId));
+  const needsCoachClientIds = new Set(workspace.attentionQueue.map((i) => i.clientId));
   const rosterPulse = buildRosterPulse(
     workspace.clients.map((c) => c.id),
     lifecycleByClientId,
@@ -74,11 +91,51 @@ export default function CoachOverviewPage() {
   );
   const upcomingWork = buildUpcomingWork(workspace.clients, lifecycleByClientId).slice(0, 5);
   const globalAiLevel = resolveEffectiveAiAuthorityLevel(aiSettings, null);
+  const clientNameById = new Map(workspace.clients.map((c) => [c.id, c.name]));
 
   const summaryLine =
     queue.length === 0
-      ? "Nothing needs you right now. Everything else is moving."
+      ? "Everything's on track."
       : `${queue.length} decision${queue.length === 1 ? "" : "s"} need${queue.length === 1 ? "s" : ""} you. Everything else is moving.`;
+
+  const sections = {
+    briefings: (
+      <section key="briefings" className="space-y-3">
+        <SectionHeader
+          title="Daily Briefings"
+          action={
+            <Link href="/coach/settings" className="flex items-center gap-1 text-action text-accent-strong hover:underline">
+              Automation settings <ArrowRight size={13} />
+            </Link>
+          }
+        />
+        <DailyBriefingsSummaryList briefings={workspace.briefings} clientNameById={clientNameById} />
+        {workspace.briefings.filter((b) => b.status === "draft" || b.status === "held_for_review").length === 0 ? (
+          <p className="px-1 text-meta text-neutral">No briefings currently need your review.</p>
+        ) : null}
+      </section>
+    ),
+    personal_touch: (
+      <section key="personal_touch" className="space-y-3">
+        <SectionHeader title="Worth a Personal Touch" />
+        {personalTouchItems.length === 0 ? (
+          <p className="px-1 text-meta text-neutral">Nothing to celebrate yet today — check back after training windows close.</p>
+        ) : (
+          <PersonalTouchList items={personalTouchItems} coachId={workspace.coachId ?? ""} coachName={coachName} workspaceId={workspace.workspaceId} onChanged={onChanged} />
+        )}
+      </section>
+    ),
+    waiting: (
+      <section key="waiting" className="space-y-3">
+        <SectionHeader title="Waiting" />
+        {waitingItems.length === 0 ? (
+          <p className="px-1 text-meta text-neutral">Nothing waiting on someone else right now.</p>
+        ) : (
+          <WaitingList items={waitingItems} onSelect={(item) => setWaitingSelectedId(item.reviewRequestId)} />
+        )}
+      </section>
+    ),
+  };
 
   return (
     <div className="mx-auto w-full max-w-[1440px] space-y-8">
@@ -117,8 +174,11 @@ export default function CoachOverviewPage() {
         </div>
       </div>
 
+      {/* 1. Needs Your Attention — dominates whenever anything is actionable
+          (spec §2); a calm, compact all-clear otherwise, never a giant empty
+          alert container. */}
       <section className="min-w-0 space-y-4">
-        <SectionHeader title="Needs your judgment" />
+        <SectionHeader title="Needs Your Attention" />
         {focusItem ? (
           <>
             <div key={focusItem.reviewRequestId} className="pc-row-promote">
@@ -127,6 +187,7 @@ export default function CoachOverviewPage() {
                 client={focusClient}
                 coachId={workspace.coachId ?? ""}
                 coachName={coachName}
+                workspaceId={workspace.workspaceId}
                 programContextLabel={focusProgramLabel}
                 onChanged={onChanged}
               />
@@ -134,14 +195,21 @@ export default function CoachOverviewPage() {
             <DecisionQueueRows items={remainingItems} selectedId={selectedId} onSelect={setSelectedId} />
           </>
         ) : (
-          <EmptyState icon={CheckCircle2} title="You're caught up" description="Nothing needs your judgment right now." />
+          <Card className="flex items-center gap-2.5 py-4">
+            <CheckCircle2 size={16} className="shrink-0 text-success" aria-hidden="true" />
+            <p className="text-sm text-neutral">All clear. No clients currently require your decision.</p>
+          </Card>
         )}
       </section>
 
-      {/* Bottom visual modules — horizontally aligned on desktop. */}
+      {/* 2-4. Daily Briefings / Worth a Personal Touch / Waiting, reordered
+          by real time of day (spec §2). */}
+      <div className="grid gap-6 lg:grid-cols-3">{SECONDARY_SECTION_ORDER[timeOfDay].map((id) => sections[id])}</div>
+
+      {/* 5. Clients On Track — quiet, condensed, still reachable. */}
       <div className="grid gap-6 lg:grid-cols-3">
         <section>
-          <SectionHeader title="Roster pulse" />
+          <SectionHeader title="Clients On Track" />
           <Card>
             <RosterPulseCard pulse={rosterPulse} />
           </Card>
@@ -180,6 +248,10 @@ export default function CoachOverviewPage() {
       </div>
 
       <AddClientSheet open={addClientOpen} onClose={() => setAddClientOpen(false)} />
+
+      {workspace.coachId ? (
+        <ReviewDetailSheet item={waitingSelected} coachId={workspace.coachId} coachName={coachName} onClose={() => setWaitingSelectedId(null)} onChanged={onChanged} />
+      ) : null}
     </div>
   );
 }

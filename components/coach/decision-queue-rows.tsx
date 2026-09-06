@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, TrendingDown, ShieldAlert, Trophy, CalendarX } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ATTENTION_KIND_LABELS } from "@/lib/coach/labels";
 import type { AttentionQueueItem } from "@/lib/coach/types";
@@ -11,11 +11,25 @@ const KIND_ICON: Record<AttentionQueueItem["kind"], typeof AlertTriangle> = {
   "workout-skipped": SkipForward,
   "technique-flag": Flag,
   "schedule-change": RefreshCcw,
+  "performance-pattern": Activity,
+  "adherence-pattern": CalendarX,
+  "recovery-deterioration": TrendingDown,
+  "ai-authority-boundary": ShieldAlert,
+  milestone: Trophy,
 };
 
 function toneClassesForKind(kind: AttentionQueueItem["kind"]): { icon: string } {
-  if (kind === "health_review" || kind === "pain-report") return { icon: "text-error" };
-  if (kind === "program-change-request" || kind === "rpe-anomaly" || kind === "workout-skipped") return { icon: "text-warning" };
+  if (kind === "health_review" || kind === "pain-report" || kind === "recovery-deterioration") return { icon: "text-error" };
+  if (
+    kind === "program-change-request" ||
+    kind === "rpe-anomaly" ||
+    kind === "workout-skipped" ||
+    kind === "performance-pattern" ||
+    kind === "adherence-pattern" ||
+    kind === "ai-authority-boundary"
+  )
+    return { icon: "text-warning" };
+  if (kind === "milestone") return { icon: "text-success" };
   return { icon: "text-accent-strong" };
 }
 

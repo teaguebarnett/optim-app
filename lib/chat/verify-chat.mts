@@ -374,10 +374,11 @@ check("A pre-v8 stored state backfills assignedCoachId and deliveryState on ever
 
   const migrated = migrateStoredState(legacy);
   assert.ok(migrated);
-  // Phase 5.0B added v8->v9 and v9->v10 steps, and Phase 5.2 added v10->v11
-  // (see migrateV10ToV11), after this one — a v7 input now lands on 11, not
-  // 8. The v7->v8 backfill itself is unaffected either way.
-  assert.equal(migrated!.version, 12);
+  // Phase 5.0B added v8->v9 and v9->v10 steps, Phase 5.2 added v10->v11 (see
+  // migrateV10ToV11), and Phase 5.4B added v11->v12 and v12->v13 (see
+  // migrateV11ToV12/migrateV12ToV13), after this one — a v7 input now lands
+  // on 13, not 8. The v7->v8 backfill itself is unaffected either way.
+  assert.equal(migrated!.version, 13);
   assert.equal(migrated!.chatMessages[0].assignedCoachId, COACH_PROFILE_TEAGUE.id);
   assert.equal(migrated!.chatMessages[0].deliveryState, "sent");
   assert.equal(migrated!.reviewRequests[0].assignedCoachId, COACH_PROFILE_TEAGUE.id);
@@ -397,7 +398,7 @@ check("A very old (v1) stored state still migrates all the way to the current ch
   };
   const migrated = migrateStoredState(legacy);
   assert.ok(migrated);
-  assert.equal(migrated!.version, 12);
+  assert.equal(migrated!.version, 13);
   assert.equal(migrated!.chatMessages[0].assignedCoachId, COACH_PROFILE_TEAGUE.id);
 });
 

@@ -9,6 +9,7 @@ import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { InvitationLinkCard } from "@/components/coach/invitation-link-card";
 import { CoachBrief } from "@/components/coach/coach-brief";
+import { DailyBriefingCard } from "@/components/coach/daily-briefing-card";
 import { HealthReviewCard } from "@/components/coach/health-review-card";
 import { MealRecommendationAssignmentCard } from "@/components/coach/meal-recommendation-assignment";
 import { AiAuthorityClientOverrideCard } from "@/components/coach/ai-authority-client-override-card";
@@ -42,7 +43,23 @@ export default function CoachClientWorkspacePage() {
     );
   }
 
-  const { client, lifecycle, hasClientAppState, clientAppState, intendedProgram, invitation, readiness, healthReview, clientReviewRequests, chatMessages, dispatchPlatform, workspaceId, coachId } = view;
+  const {
+    client,
+    lifecycle,
+    hasClientAppState,
+    clientAppState,
+    intendedProgram,
+    invitation,
+    readiness,
+    healthReview,
+    clientReviewRequests,
+    chatMessages,
+    dispatchPlatform,
+    workspaceId,
+    coachId,
+    dailyBriefing,
+    effectiveBriefingAutomation,
+  } = view;
 
   // Every unmet requirement gets a direct action rather than leaving the
   // coach staring at a disabled "Activate" button with nowhere to go — see
@@ -207,6 +224,17 @@ export default function CoachClientWorkspacePage() {
               </dd>
             </dl>
           </Card>
+
+          {lifecycle === "active" && coachId ? (
+            <DailyBriefingCard
+              clientAppState={clientAppState}
+              briefing={dailyBriefing}
+              coachId={coachId}
+              coachName={view.activeContext.coachProfile?.displayName ?? "Your coach"}
+              automation={effectiveBriefingAutomation}
+              onSave={(record) => dispatchPlatform({ type: "SAVE_DAILY_BRIEFING", record })}
+            />
+          ) : null}
 
           <CoachBrief onboarding={view.onboarding} healthReview={healthReview} />
 

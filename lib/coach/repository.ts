@@ -29,6 +29,7 @@ import type { CoachOperatingModel } from "./operating-model.ts";
 import type { CoachOnboardingProgress } from "./coach-onboarding-engine.ts";
 import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 import type { ClientCommunicationPolicy } from "./communication-policy.ts";
+import { defaultCoachBriefingSettings, type CoachBriefingSettings, type DailyBriefingRecord } from "./daily-briefing.ts";
 
 /** Every client this workspace/prototype knows about — the compile-time
  * seed roster plus any coach-created clients from the platform store.
@@ -129,6 +130,25 @@ export function getActivationGenerationsForClient(platform: PlatformState, clien
 
 export function getCommunicationPolicy(platform: PlatformState, clientId: ClientProfileId): ClientCommunicationPolicy | null {
   return platform.communicationPolicies.find((p) => p.clientId === clientId) ?? null;
+}
+
+/** This coach's Daily Briefing automation settings — always a real,
+ * complete record (see defaultCoachBriefingSettings), never
+ * null/undefined, exactly like getAiAuthoritySettings above. */
+export function getBriefingSettings(platform: PlatformState, coachId: CoachProfileId, workspaceId: WorkspaceId): CoachBriefingSettings {
+  return platform.briefingSettings.find((s) => s.coachId === coachId) ?? defaultCoachBriefingSettings(coachId, workspaceId, "1970-01-01T00:00:00.000Z");
+}
+
+/** The one Daily Briefing record for this client on this exact local date,
+ * or null if none has been generated yet. */
+export function getDailyBriefing(platform: PlatformState, clientId: ClientProfileId, forDateIso: string): DailyBriefingRecord | null {
+  return platform.dailyBriefings.find((b) => b.clientId === clientId && b.forDateIso === forDateIso) ?? null;
+}
+
+/** Every briefing this coach owns across every client, newest first — used
+ * by the Command Center's Daily Briefings section (spec §2). */
+export function getBriefingsForCoach(platform: PlatformState, coachId: CoachProfileId): DailyBriefingRecord[] {
+  return platform.dailyBriefings.filter((b) => b.coachId === coachId).sort((a, b) => (a.forDateIso < b.forDateIso ? 1 : -1));
 }
 
 /**

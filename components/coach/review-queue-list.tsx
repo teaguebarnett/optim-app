@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, CheckCircle2, TrendingDown, ShieldAlert, Trophy, CalendarX } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/coach/empty-state";
 import { ATTENTION_KIND_LABELS } from "@/lib/coach/labels";
@@ -14,25 +14,42 @@ const KIND_ICON: Record<AttentionQueueItem["kind"], typeof AlertTriangle> = {
   "workout-skipped": SkipForward,
   "technique-flag": Flag,
   "schedule-change": RefreshCcw,
+  "performance-pattern": Activity,
+  "adherence-pattern": CalendarX,
+  "recovery-deterioration": TrendingDown,
+  "ai-authority-boundary": ShieldAlert,
+  milestone: Trophy,
 };
 
 function toneClassesForKind(kind: AttentionQueueItem["kind"]): { icon: string; bg: string; accentBorder: string } {
-  if (kind === "health_review" || kind === "pain-report") return { icon: "text-error", bg: "bg-error-soft", accentBorder: "border-l-error" };
-  if (kind === "program-change-request" || kind === "rpe-anomaly" || kind === "workout-skipped") {
+  if (kind === "health_review" || kind === "pain-report" || kind === "recovery-deterioration") {
+    return { icon: "text-error", bg: "bg-error-soft", accentBorder: "border-l-error" };
+  }
+  if (
+    kind === "program-change-request" ||
+    kind === "rpe-anomaly" ||
+    kind === "workout-skipped" ||
+    kind === "performance-pattern" ||
+    kind === "adherence-pattern" ||
+    kind === "ai-authority-boundary"
+  ) {
     return { icon: "text-warning", bg: "bg-warning-soft", accentBorder: "border-l-warning" };
   }
+  if (kind === "milestone") return { icon: "text-success", bg: "bg-success-soft", accentBorder: "border-l-success" };
   return { icon: "text-accent-strong", bg: "bg-accent-soft", accentBorder: "border-l-accent" };
 }
 
 const STATUS_PILL_CLASSES: Record<AttentionQueueItem["status"], string> = {
   needs_review: "bg-warning-soft text-warning",
   in_progress: "bg-accent-soft text-accent-strong",
+  waiting: "bg-brass-soft text-brass-strong",
   resolved: "bg-success-soft text-success",
 };
 
 const STATUS_PILL_LABELS: Record<AttentionQueueItem["status"], string> = {
   needs_review: "Needs review",
   in_progress: "In progress",
+  waiting: "Waiting",
   resolved: "Resolved",
 };
 
