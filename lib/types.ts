@@ -84,6 +84,38 @@ export interface NutritionTargets {
   fatG: number;
 }
 
+/** Phase 5.5A — the complete, real nutrition prescription a coach approved
+ * and assigned (see lib/coach/nutrition-directions.ts's
+ * buildCompleteNutritionPrescription/applyNutritionRevision, which produce
+ * this shape before it's persisted here) — a strict superset of the flat
+ * `targets` every existing nutrition screen already reads, kept in sync
+ * with `AppState.nutritionTargets` on every write so nothing regresses.
+ * Undefined means this client has never had an OPTIM-generated nutrition
+ * plan approved (e.g. manually configured, or pre-Phase-5.5A). */
+export interface AssignedNutritionPlan {
+  id: string;
+  targets: NutritionTargets;
+  usesTrainingRestSplit: boolean;
+  trainingDayTargets?: NutritionTargets;
+  restDayTargets?: NutritionTargets;
+  mealsPerDay: number;
+  mealStructureDescription: string;
+  preTrainingGuidance: string;
+  postTrainingGuidance: string;
+  hydrationOzPerDay: number;
+  fiberGramsPerDay: number;
+  substitutionGuidance: string;
+  supplementGuidance: string;
+  adherenceStrategy: string;
+  metricsToMonitor: string[];
+  weeklyAdjustmentRule: string;
+  /** The direction this plan was generated from (e.g. "Best fit") — kept
+   * for the coach's own provenance trail, never shown to the client as a
+   * ranking. */
+  sourceStrategyLabel: string;
+  approvedAtIso: string;
+}
+
 // ---------------------------------------------------------------------------
 // Training
 // ---------------------------------------------------------------------------

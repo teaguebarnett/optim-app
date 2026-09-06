@@ -14,6 +14,7 @@
 
 import {
   buildTrainingExplanation,
+  candidateSplits,
   chooseSplitForKind,
   equipmentForClient,
   equipmentTagForExerciseName,
@@ -88,6 +89,18 @@ const CARDIO_INTEGRATION_BY_PREFERENCE: Record<ClientProgrammingProfile["cardioP
 // Stage A — lightweight direction summaries
 // ---------------------------------------------------------------------------
 
+/** A real, distinct description of how each split concentrates work — the
+ * primary lever (alongside progression/volume framing) that makes three
+ * directions genuinely different structures rather than three labels on
+ * the same underlying plan (Phase 5.5A spec Part 5). */
+const SPECIALIZATION_EMPHASIS_BY_SPLIT: Record<string, string> = {
+  full_body: "Even weekly exposure to every major movement pattern in each session — breadth over specialization.",
+  upper_lower: "Concentrated upper- or lower-body emphasis each session, doubling exposure to each half of the body per week.",
+  push_pull_legs: "High per-session specialization by movement role (push, pull, or legs) — more volume per pattern, less breadth per day.",
+  body_part_split: "Maximum single-muscle-group specialization per session — the most concentrated, least broad structure available.",
+  full_body_high_frequency: "Full-body exposure at a higher weekly frequency — more total touches per pattern than a standard full-body split.",
+};
+
 export interface ProgramDirectionSummary {
   id: string;
   kind: OptionKind;
@@ -99,6 +112,10 @@ export interface ProgramDirectionSummary {
   approxVolumeDescription: string;
   approxIntensityDescription: string;
   progressionMethodDescription: string;
+  /** Phase 5.5A — how this split concentrates weekly work; the primary,
+   * real structural differentiator between the three directions (see
+   * computeStructuralSignature). */
+  specializationEmphasis: string;
   cardioIntegration: string;
   estimatedSessionLengthMin: number;
   whyItFits: string;
@@ -106,6 +123,10 @@ export interface ProgramDirectionSummary {
   tradeoff: string;
   constraintsHonored: string[];
   confidenceNote: string;
+  /** Phase 5.5A — a short, comparison-aware sentence explaining this
+   * direction's rank relative to the other two (see rankingRationaleFor) —
+   * never a generic template that could apply to any client. */
+  rankingRationale: string;
   score: ScoreBreakdown;
   explanation: TrainingOptionExplanation;
 }
@@ -132,49 +153,135 @@ function constraintsHonoredFor(profile: ClientProgrammingProfile, com: CoachOper
   return honored;
 }
 
+/** Phase 5.5A — the real basis for judging whether two directions are
+ * "effectively duplicates" (spec Part 5): split (which determines
+ * specialization/volume distribution) plus periodization/progression
+ * framing and cardio integration. Frequency is deliberately excluded —
+ * it's a hard client constraint (available days), not a lever OPTIM
+ * should vary between directions, so all three sharing it is correct, not
+ * a collision. */
+export function computeStructuralSignature(summary: Pick<ProgramDirectionSummary, "splitKey" | "specializationEmphasis" | "progressionMethodDescription" | "cardioIntegration">): string {
+  return [summary.splitKey, summary.specializationEmphasis, summary.progressionMethodDescription, summary.cardioIntegration].join("::");
+}
+
+/** Returns the index pair of the first two directions whose structural
+ * signatures collide, or null when all are genuinely distinct. */
+export function findDistinctnessCollision(summaries: ProgramDirectionSummary[]): [number, number] | null {
+  for (let i = 0; i < summaries.length; i++) {
+    for (let j = i + 1; j < summaries.length; j++) {
+      if (computeStructuralSignature(summaries[i]) === computeStructuralSignature(summaries[j])) return [i, j];
+    }
+  }
+  return null;
+}
+
+function rankingRationaleFor(kind: OptionKind, summary: Pick<ProgramDirectionSummary, "score">, all: Pick<ProgramDirectionSummary, "kind" | "score">[]): string {
+  const sorted = [...all].sort((a, b) => b.score.total - a.score.total);
+  const rank = sorted.findIndex((s) => s.kind === kind) + 1;
+  if (rank === 1) {
+    const runnerUp = sorted[1];
+    const gap = summary.score.total - (runnerUp?.score.total ?? summary.score.total);
+    return `Ranked #1 — the strongest overall match on methodology fit, schedule fit, and adherence likelihood combined (${gap >= 5 ? `a clear margin over the next option` : `a narrow edge over the next option`}).`;
+  }
+  const leader = sorted[0];
+  const gap = leader.score.total - summary.score.total;
+  if (kind === "wildcard") return `Ranked #${rank} — an intentional outlier by design, ${gap} points behind the top option on this client's specific profile, worth considering as a deliberate change of approach rather than a default.`;
+  return `Ranked #${rank} — a credible option, ${gap} point${gap === 1 ? "" : "s"} behind the top pick, mainly on methodology and schedule fit.`;
+}
+
+/**
+ * Builds one direction summary for an already-resolved split — the shared
+ * step both the initial pass and the distinctness-repair retry (below) use,
+ * so a regenerated wildcard is built through the exact same logic as the
+ * original three, never a special-cased shortcut.
+ */
+function buildDirectionSummary(kind: OptionKind, splitKey: string, plan: { splitName: string }, input: GenerateDirectionsInput, foundationParams: WeekParameters, peakParams: WeekParameters): ProgramDirectionSummary {
+  const { profile, com } = input;
+  const days = profile.availableDays.length;
+  const exercisesPerDay = Math.max(1, Math.floor(profile.maxSessionLengthMinutes / MINUTES_PER_EXERCISE_BUDGET));
+  const estimatedSessionLengthMin = estimateSessionLength(exercisesPerDay, profile);
+  const [repLow, repHigh] = repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
+
+  const approxVolumeDescription = `${com.programArchitecture.setsPerExerciseMin}-${com.programArchitecture.setsPerExerciseMax} working sets/exercise, scaling ${Math.round(foundationParams.volumeMultiplier * 100)}% → ${Math.round(peakParams.volumeMultiplier * 100)}% across the program.`;
+  const approxIntensityDescription = `Rep range ${repLow}-${repHigh}, RPE easing in around the foundation and building toward the peak phase.`;
+  const explanation = buildTrainingExplanation(kind, profile, com, plan.splitName);
+
+  return {
+    id: `direction-${kind}-${splitKey}`,
+    kind,
+    label: OPTION_KIND_LABELS[kind],
+    splitKey,
+    splitName: plan.splitName,
+    frequencyPerWeek: days,
+    periodizationApproach: PERIODIZATION_METHOD_LABELS[com.programArchitecture.progressionMethod] ?? "Progressive overload across three phases.",
+    approxVolumeDescription,
+    approxIntensityDescription,
+    progressionMethodDescription: com.programArchitecture.progressionMethod.replace(/_/g, " "),
+    specializationEmphasis: SPECIALIZATION_EMPHASIS_BY_SPLIT[splitKey] ?? "A distinct weekly work distribution from the other two directions.",
+    cardioIntegration: CARDIO_INTEGRATION_BY_PREFERENCE[profile.cardioPreference],
+    estimatedSessionLengthMin,
+    whyItFits: explanation.whyItFits,
+    howItReflectsCoach: explanation.coachingRulesUsed.join(" "),
+    tradeoff: explanation.tradeoff,
+    constraintsHonored: constraintsHonoredFor(profile, com),
+    confidenceNote: profile.dailyActivityLevelIsAssumed || profile.cardioPreferenceIsAssumed ? "Some inputs were assumed — see the client's programming readiness note." : "Every input below was directly reported by the client.",
+    rankingRationale: "", // filled in once all three are known — see below.
+    score: scoreTrainingOption(kind, profile, com, splitKey),
+    explanation,
+  };
+}
+
 export function generateProgramDirectionSummaries(input: GenerateDirectionsInput): ProgramDirectionSummary[] {
   const { profile, com, durationWeeks } = input;
   const days = profile.availableDays.length;
   const phases = computeProgramPhases(durationWeeks);
-  const kinds: OptionKind[] = ["best_fit", "strong_alternative", "wildcard"];
+  const foundationParams = computeWeekParameters(phases[0].endWeek, durationWeeks, phases, com);
+  const peakParams = computeWeekParameters(phases[phases.length - 1].startWeek, durationWeeks, phases, com);
 
-  return kinds.map((kind) => {
-    const { key: splitKey, plan } = chooseSplitForKind(days, com, kind);
-    const exercisesPerDay = Math.max(1, Math.floor(profile.maxSessionLengthMinutes / MINUTES_PER_EXERCISE_BUDGET));
-    const estimatedSessionLengthMin = estimateSessionLength(exercisesPerDay, profile);
+  // Sequential, exclusion-aware split selection (Phase 5.5A fix) — each
+  // kind sees every split already claimed by an earlier one, so
+  // strong_alternative and wildcard can never independently land on the
+  // same split the way two isolated lookups previously could.
+  const bestFitSplit = chooseSplitForKind(days, com, "best_fit");
+  const strongAltSplit = chooseSplitForKind(days, com, "strong_alternative", [bestFitSplit.key]);
+  const wildcardSplit = chooseSplitForKind(days, com, "wildcard", [bestFitSplit.key, strongAltSplit.key]);
 
-    const foundationParams = computeWeekParameters(phases[0].endWeek, durationWeeks, phases, com);
-    const peakParams = computeWeekParameters(phases[phases.length - 1].startWeek, durationWeeks, phases, com);
-    const [repLow, repHigh] = repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
+  const summaries: ProgramDirectionSummary[] = [
+    buildDirectionSummary("best_fit", bestFitSplit.key, bestFitSplit.plan, input, foundationParams, peakParams),
+    buildDirectionSummary("strong_alternative", strongAltSplit.key, strongAltSplit.plan, input, foundationParams, peakParams),
+    buildDirectionSummary("wildcard", wildcardSplit.key, wildcardSplit.plan, input, foundationParams, peakParams),
+  ];
 
-    const approxVolumeDescription = `${com.programArchitecture.setsPerExerciseMin}-${com.programArchitecture.setsPerExerciseMax} working sets/exercise, scaling ${Math.round(foundationParams.volumeMultiplier * 100)}% → ${Math.round(peakParams.volumeMultiplier * 100)}% across the program.`;
-    const approxIntensityDescription = `Rep range ${repLow}-${repHigh}, RPE easing in around the foundation and building toward the peak phase.`;
+  // Defense in depth + graceful degradation (spec Part 5: "never display
+  // both simply to satisfy a count of three") — the sequential exclusion
+  // above should already prevent a collision, but repair one if it still
+  // occurs (e.g. a very low day count where the split library only offers
+  // one or two genuinely valid structures — a real constraint of the split
+  // library, not a bug): retry the later of the two colliding directions
+  // against every other real split in the library. When no alternate split
+  // exists at all, drop the duplicate outright rather than fabricate a
+  // third option — an honest two (or, at the extreme, one) real directions
+  // beats a false three every time.
+  let collision = findDistinctnessCollision(summaries);
+  let guard = 0;
+  while (collision && guard < 10) {
+    guard++;
+    const [, duplicateIndex] = collision;
+    const claimedKeys = summaries.map((s) => s.splitKey);
+    const alternate = candidateSplits(days, []).find((c) => !claimedKeys.includes(c.key));
+    if (alternate) {
+      summaries[duplicateIndex] = buildDirectionSummary(summaries[duplicateIndex].kind, alternate.key, alternate.plan, input, foundationParams, peakParams);
+    } else {
+      summaries.splice(duplicateIndex, 1);
+    }
+    collision = findDistinctnessCollision(summaries);
+  }
 
-    const explanation = buildTrainingExplanation(kind, profile, com, plan.splitName);
+  for (const summary of summaries) {
+    summary.rankingRationale = rankingRationaleFor(summary.kind, summary, summaries);
+  }
 
-    const summary: ProgramDirectionSummary = {
-      id: `direction-${kind}-${splitKey}`,
-      kind,
-      label: OPTION_KIND_LABELS[kind],
-      splitKey,
-      splitName: plan.splitName,
-      frequencyPerWeek: days,
-      periodizationApproach: PERIODIZATION_METHOD_LABELS[com.programArchitecture.progressionMethod] ?? "Progressive overload across three phases.",
-      approxVolumeDescription,
-      approxIntensityDescription,
-      progressionMethodDescription: com.programArchitecture.progressionMethod.replace(/_/g, " "),
-      cardioIntegration: CARDIO_INTEGRATION_BY_PREFERENCE[profile.cardioPreference],
-      estimatedSessionLengthMin,
-      whyItFits: explanation.whyItFits,
-      howItReflectsCoach: explanation.coachingRulesUsed.join(" "),
-      tradeoff: explanation.tradeoff,
-      constraintsHonored: constraintsHonoredFor(profile, com),
-      confidenceNote: profile.dailyActivityLevelIsAssumed || profile.cardioPreferenceIsAssumed ? "Some inputs were assumed — see the client's programming readiness note." : "Every input below was directly reported by the client.",
-      score: scoreTrainingOption(kind, profile, com, splitKey),
-      explanation,
-    };
-    return summary;
-  });
+  return summaries;
 }
 
 /**
@@ -193,6 +300,7 @@ export function combineDirections(primary: ProgramDirectionSummary, secondary: P
     approxIntensityDescription: secondary.approxIntensityDescription,
     whyItFits: `${primary.whyItFits} Combined with ${secondary.label.toLowerCase()}'s volume/intensity emphasis: ${secondary.whyItFits}`,
     tradeoff: `Blends two directions — ${primary.tradeoff} ${secondary.tradeoff}`,
+    rankingRationale: `A coach-directed combination of the ${primary.label.toLowerCase()} and ${secondary.label.toLowerCase()} directions — not independently ranked.`,
   };
 }
 

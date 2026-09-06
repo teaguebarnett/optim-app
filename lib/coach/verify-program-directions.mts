@@ -6,9 +6,17 @@
 
 import assert from "node:assert/strict";
 import { createDefaultCoachOperatingModel } from "./operating-model.ts";
-import { generateProgramDirectionSummaries, buildFullProgramForDirection, combineDirections, validateFullProgramHardConstraints } from "./program-directions.ts";
+import {
+  generateProgramDirectionSummaries,
+  buildFullProgramForDirection,
+  combineDirections,
+  validateFullProgramHardConstraints,
+  computeStructuralSignature,
+  findDistinctnessCollision,
+} from "./program-directions.ts";
 import { COACH_PROFILE_TEAGUE, WORKSPACE_OPTIM_ID, CLIENT_PROFILE_DEMO } from "../tenancy/seed.ts";
 import type { CoachOperatingModel } from "./operating-model.ts";
+import type { DayOfWeek } from "../types";
 import type { ClientProgrammingProfile } from "./programming-profile.ts";
 
 let passed = 0;
@@ -82,10 +90,64 @@ check("generates exactly three directions, each with a real, non-empty structura
   }
 });
 
-check("directions differ structurally, not just by title — at least two distinct split keys across the three", () => {
+check("directions differ structurally, not just by title — all three splits are distinct (spec Part 5's exact 'never twice' requirement)", () => {
   const directions = generateProgramDirectionSummaries({ profile: baseProfile(), com: baseCom(), durationWeeks: 12 });
   const splitKeys = new Set(directions.map((d) => d.splitKey));
-  assert.ok(splitKeys.size >= 2, `expected structurally distinct splits, got ${[...splitKeys].join(", ")}`);
+  assert.equal(splitKeys.size, 3, `expected three distinct splits, got ${directions.map((d) => d.splitKey).join(", ")}`);
+});
+
+check("REGRESSION: strong_alternative and wildcard never resolve to the same split (the exact reported Push/Pull/Legs-twice bug)", () => {
+  // A coach who explicitly prefers only two splits is the exact scenario
+  // that used to let two independent lookups land on the same "one real
+  // non-preferred candidate" for both strong_alternative and wildcard.
+  const com = baseCom();
+  const comWithNarrowPreferences: typeof com = { ...com, programArchitecture: { ...com.programArchitecture, preferredSplits: ["full_body", "push_pull_legs"] } };
+  const dayScenarios: DayOfWeek[][] = [
+    ["Monday", "Wednesday", "Friday"],
+    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+  ];
+  for (const days of dayScenarios) {
+    const directions = generateProgramDirectionSummaries({ profile: baseProfile({ availableDays: days }), com: comWithNarrowPreferences, durationWeeks: 12 });
+    const [, strongAlt, wildcard] = directions;
+    assert.notEqual(strongAlt.splitKey, wildcard.splitKey, `strong_alternative and wildcard both resolved to ${wildcard.splitKey} for ${days.length} days`);
+  }
+});
+
+console.log("\n1b. Structural-signature distinctness enforcement (spec Part 5)\n");
+
+check("computeStructuralSignature produces a different signature for two directions with different splits", () => {
+  const directions = generateProgramDirectionSummaries({ profile: baseProfile(), com: baseCom(), durationWeeks: 12 });
+  const signatures = directions.map(computeStructuralSignature);
+  assert.equal(new Set(signatures).size, 3, "expected three unique structural signatures");
+});
+
+check("findDistinctnessCollision detects two directions sharing every signature dimension", () => {
+  const directions = generateProgramDirectionSummaries({ profile: baseProfile(), com: baseCom(), durationWeeks: 12 });
+  const duplicated = [directions[0], directions[1], { ...directions[2], splitKey: directions[0].splitKey, specializationEmphasis: directions[0].specializationEmphasis, progressionMethodDescription: directions[0].progressionMethodDescription, cardioIntegration: directions[0].cardioIntegration }];
+  const collision = findDistinctnessCollision(duplicated);
+  assert.ok(collision, "expected a collision to be detected between the two artificially-duplicated directions");
+  assert.deepEqual(collision, [0, 2]);
+});
+
+check("findDistinctnessCollision reports no collision for the real generated set", () => {
+  const directions = generateProgramDirectionSummaries({ profile: baseProfile(), com: baseCom(), durationWeeks: 12 });
+  assert.equal(findDistinctnessCollision(directions), null);
+});
+
+check("every direction carries a real, comparison-aware ranking rationale — never a generic template", () => {
+  const directions = generateProgramDirectionSummaries({ profile: baseProfile(), com: baseCom(), durationWeeks: 12 });
+  for (const d of directions) {
+    assert.ok(d.rankingRationale.length > 0);
+  }
+  // The #1-ranked direction's rationale must actually say so, and the
+  // wildcard's must honestly frame itself as an outlier rather than
+  // reusing the same sentence as the top pick.
+  const byScore = [...directions].sort((a, b) => b.score.total - a.score.total);
+  assert.match(byScore[0].rankingRationale, /Ranked #1/);
+  const wildcard = directions.find((d) => d.kind === "wildcard")!;
+  if (wildcard.score.total < byScore[0].score.total) {
+    assert.notEqual(wildcard.rankingRationale, byScore[0].rankingRationale);
+  }
 });
 
 check("direction generation never builds full weeks (stage A stays lightweight)", () => {
@@ -232,6 +294,54 @@ check("validateFullProgramHardConstraints checks every week, not just week 1", (
   const corrupted = { ...option.program, weeks: option.program.weeks.map((w) => (w.weekNumber === 6 ? { ...w, days: w.days.map((d) => (d.type === "training" ? { ...d, workout: undefined } : d)) } : w)) };
   const result = validateFullProgramHardConstraints(corrupted, profile, com);
   assert.equal(result.passed, false);
+});
+
+console.log("\n6. Recommendation quality across materially different profiles (Phase 5.5A required verification)\n");
+
+const threeDaysLimitedEquipmentKnee = baseProfile({ availableDays: ["Monday", "Wednesday", "Friday"], maxSessionLengthMinutes: 60, trainingEnvironment: ["limited_equipment"], trainingExperience: "comfortable_common", hasCurrentInjury: true, injuryBodyAreas: ["knee"] });
+const fiveDaysAdvancedCommercialGym = baseProfile({ availableDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], maxSessionLengthMinutes: 90, trainingEnvironment: ["commercial_gym"], trainingExperience: "experienced_consistent" });
+const twoDaysBeginnerShortSessions = baseProfile({ availableDays: ["Tuesday", "Thursday"], maxSessionLengthMinutes: 30, trainingEnvironment: ["home_gym"], trainingExperience: "new" });
+
+const profiles = [
+  { name: "3-day intermediate, limited equipment, knee limitation", profile: threeDaysLimitedEquipmentKnee },
+  { name: "5-day advanced, commercial gym", profile: fiveDaysAdvancedCommercialGym },
+  { name: "2-day beginner, short sessions", profile: twoDaysBeginnerShortSessions },
+];
+
+for (const { name, profile } of profiles) {
+  check(`${name} — every returned direction is internally distinct with no structural collision`, () => {
+    const directions = generateProgramDirectionSummaries({ profile, com: baseCom(), durationWeeks: 12 });
+    assert.ok(directions.length >= 1);
+    assert.equal(findDistinctnessCollision(directions), null, `collision found for profile: ${name}`);
+  });
+}
+
+check("a 2-day/week schedule (where the split library genuinely offers only one valid structure) honestly returns fewer than three directions rather than fabricating false distinctness", () => {
+  const directions = generateProgramDirectionSummaries({ profile: twoDaysBeginnerShortSessions, com: baseCom(), durationWeeks: 12 });
+  assert.ok(directions.length < 3, "expected graceful degradation below three for a 2-day schedule");
+  assert.equal(findDistinctnessCollision(directions), null);
+});
+
+check("the 3-day knee-limited profile and the 5-day advanced profile produce meaningfully different best-fit directions (not just different day counts)", () => {
+  const a = generateProgramDirectionSummaries({ profile: threeDaysLimitedEquipmentKnee, com: baseCom(), durationWeeks: 12 })[0];
+  const b = generateProgramDirectionSummaries({ profile: fiveDaysAdvancedCommercialGym, com: baseCom(), durationWeeks: 12 })[0];
+  assert.notEqual(a.splitKey, b.splitKey);
+  assert.notEqual(a.estimatedSessionLengthMin, b.estimatedSessionLengthMin);
+  assert.ok(a.constraintsHonored.some((c) => c.toLowerCase().includes("knee")));
+});
+
+check("the 2-day beginner's session length never exceeds their real 30-minute ceiling across any direction", () => {
+  const directions = generateProgramDirectionSummaries({ profile: twoDaysBeginnerShortSessions, com: baseCom(), durationWeeks: 12 });
+  for (const d of directions) assert.ok(d.estimatedSessionLengthMin <= 30, `${d.kind} estimated ${d.estimatedSessionLengthMin}min, exceeding the 30min ceiling`);
+});
+
+check("two meaningfully different Coach Operating Models produce different best-fit directions for the identical advanced 5-day client", () => {
+  const comA = baseCom({ preferredSplits: ["upper_lower", "push_pull_legs"], repRangePhilosophy: "strength_low_3_6", proximityToFailure: "2_4_reps_in_reserve" });
+  const comB = baseCom({ preferredSplits: ["body_part_split", "full_body_high_frequency"], repRangePhilosophy: "higher_12_20", proximityToFailure: "0_1_reps_in_reserve" });
+  const directionsA = generateProgramDirectionSummaries({ profile: fiveDaysAdvancedCommercialGym, com: comA, durationWeeks: 12 });
+  const directionsB = generateProgramDirectionSummaries({ profile: fiveDaysAdvancedCommercialGym, com: comB, durationWeeks: 12 });
+  assert.notEqual(directionsA[0].splitKey, directionsB[0].splitKey);
+  assert.notEqual(directionsA[0].approxIntensityDescription, directionsB[0].approxIntensityDescription);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

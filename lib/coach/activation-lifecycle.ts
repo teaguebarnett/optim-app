@@ -22,6 +22,8 @@ import { RESOLVED_HEALTH_REVIEW_STATUSES } from "./types.ts";
 import { extractClientSnapshot, generateThreeNutritionStrategies, generateThreeTrainingOptions, type GeneratedNutritionStrategy, type GeneratedTrainingOption } from "./activation-generation.ts";
 import { extractClientProgrammingProfile, resolveProgrammingProfileReadiness, type ClientProgrammingProfile } from "./programming-profile.ts";
 import { generateProgramDirectionSummaries, buildFullProgramForDirection, combineDirections, type ProgramDirectionSummary } from "./program-directions.ts";
+import { buildCompleteNutritionPrescription, type CompleteNutritionPrescription, type NutritionRevisionRecord } from "./nutrition-directions.ts";
+import { saveClientNutritionPlan, toAssignedNutritionPlan } from "./nutrition-assignment.ts";
 import { sendRelayedCoachDecisionMessage } from "./coach-messaging.ts";
 import { buildInitialCommunicationPolicy, type ClientCommunicationPolicy } from "./communication-policy.ts";
 import type { CoachOperatingModel } from "./operating-model.ts";
@@ -105,6 +107,17 @@ export interface ActivationGenerationRecord {
    * overwritten; restoring an earlier revision creates a new entry that
    * copies its program rather than deleting anything after it. */
   revisions?: ProgramRevisionRecord[];
+
+  // -- Phase 5.5A: the nutrition side of the unified OPTIM Plan ------------
+  /** The complete, enriched prescription built from whichever
+   * nutritionOptions entry the coach selected (see
+   * buildCompleteNutritionPrescription) — the nutrition equivalent of
+   * trainingOptions[0].program. Undefined until the coach picks one. */
+  selectedNutritionPrescription?: CompleteNutritionPrescription;
+  /** Append-only nutrition revision history, exactly mirroring
+   * `revisions` above but for nutrition's own real levers (protein,
+   * calories, meal count, training/rest split). */
+  nutritionRevisions?: NutritionRevisionRecord[];
 }
 
 export function computeIdempotencyKey(input: { clientId: ClientProfileId; onboardingCompletedAtIso: string; coachModelVersion: number; regenerationInstruction?: string }): string {
@@ -363,6 +376,21 @@ export function approveActivation(input: ApproveActivationInput): ApproveActivat
     now: new Date(input.nowIso),
   });
 
+  // Real write #3 (Phase 5.5A, optional) — the complete, richer nutrition
+  // prescription (meal count, pre/post-training guidance, substitutions,
+  // hydration/fiber) when one was actually generated and selected. Runs
+  // AFTER applyCoachSetup above so its own nutritionTargets write (the
+  // identical numbers, derived from the same prescription) is the one that
+  // persists — never a conflicting pair of writes.
+  if (input.record.selectedNutritionPrescription) {
+    saveClientNutritionPlan(
+      input.client.id,
+      input.client.workspaceId,
+      input.approvedByCoachId,
+      toAssignedNutritionPlan(input.record.selectedNutritionPrescription, `nutrition-plan-${input.client.id}-${Date.now()}`, input.nowIso)
+    );
+  }
+
   const communicationPolicy = buildInitialCommunicationPolicy({
     clientId: input.client.id,
     workspaceId: input.client.workspaceId,
@@ -593,6 +621,22 @@ export function generateFullProgramFromDirection(input: {
   };
 }
 
+/**
+ * The nutrition equivalent of generateFullProgramFromDirection — builds the
+ * complete prescription for whichever of the three real nutritionOptions
+ * the coach selected (spec Part 8). Unlike training there's no separate
+ * heavy "Stage B" build (a nutrition prescription has no weeks/exercises to
+ * generate), so this just enriches the chosen strategy and stores it.
+ */
+export function selectNutritionPrescription(input: { record: ActivationGenerationRecord; nutritionOptionId: string; com: CoachOperatingModel; nowIso: string }): ActivationGenerationRecord {
+  const { record } = input;
+  const strategy = record.nutritionOptions.find((o) => o.id === input.nutritionOptionId);
+  if (!strategy || !record.programmingProfile) throw new Error("No matching nutrition strategy (or programming profile) found — cannot build the complete prescription.");
+
+  const prescription = buildCompleteNutritionPrescription(strategy, record.programmingProfile, input.com);
+  return { ...record, updatedAtIso: input.nowIso, selectedNutritionOptionId: strategy.id, selectedNutritionPrescription: prescription };
+}
+
 // ---------------------------------------------------------------------------
 // Phase 5.5 — revision approval for an ALREADY-ACTIVE client (spec Part 6).
 // Deliberately narrower than approveActivation: never touches
@@ -620,4 +664,21 @@ export function applyProgramRevisionApproval(input: ApplyProgramRevisionApproval
     input.revisedProgram.id,
     new Date().toISOString()
   );
+}
+
+/** The nutrition equivalent of applyProgramRevisionApproval — writes only
+ * the client's real nutrition plan (never programEnrollment/lifecycle). */
+export interface ApplyNutritionRevisionApprovalInput {
+  client: ClientProfile;
+  revisedPrescription: CompleteNutritionPrescription;
+  approvedByCoachId: CoachProfileId;
+  coachName: string;
+  clientMessage: string;
+}
+
+export function applyNutritionRevisionApproval(input: ApplyNutritionRevisionApprovalInput): void {
+  const nowIso = new Date().toISOString();
+  const plan = toAssignedNutritionPlan(input.revisedPrescription, `nutrition-plan-${input.client.id}-${Date.now()}`, nowIso);
+  saveClientNutritionPlan(input.client.id, input.client.workspaceId, input.approvedByCoachId, plan);
+  sendRelayedCoachDecisionMessage(input.client.id, input.client.workspaceId, input.approvedByCoachId, input.coachName, input.clientMessage, plan.id, nowIso);
 }

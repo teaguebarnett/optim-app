@@ -19,6 +19,7 @@ import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
+  AssignedNutritionPlan,
   CardioLog,
   ChatMessage,
   ClientAssignedProgram,
@@ -64,7 +65,7 @@ export interface DailyEntranceState {
 }
 
 export interface AppState {
-  version: 13;
+  version: 14;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   /** This client's assigned coach, resolved ONCE when this state is first
@@ -116,6 +117,13 @@ export interface AppState {
    * falls back to the global demo catalog exactly as it always has, so the
    * seeded demo client is completely unaffected by this field's addition. */
   assignedProgram?: ClientAssignedProgram;
+  /** Phase 5.5A — this client's real, complete, coach-approved nutrition
+   * prescription (see lib/coach/nutrition-directions.ts). Kept in sync
+   * with `nutritionTargets` above (same numbers, richer detail) — never
+   * the source of truth on its own, so every existing nutrition screen
+   * that only ever reads `nutritionTargets` keeps working unmodified.
+   * Undefined for a client with no OPTIM-generated plan yet. */
+  assignedNutritionPlan?: AssignedNutritionPlan;
   /** Phase 5.4B — see DailyEntranceState's doc. */
   dailyEntrance: DailyEntranceState;
   /** Phase 5.4B — consecutive COMPLETE_WORKOUT dispatches with no skipped
@@ -202,7 +210,7 @@ export function createInitialState(options: CreateInitialStateOptions = {}): App
       ? buildDemoDefaultProgramEnrollment(now)
       : buildDefaultProgramEnrollmentFor(workspaceId, clientId, now);
   return {
-    version: 13,
+    version: 14,
     workspaceId,
     clientId,
     primaryCoachId,

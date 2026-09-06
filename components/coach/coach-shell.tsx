@@ -3,7 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutGrid, Users, AlertCircle, MessageSquare, Settings, ClipboardList, UtensilsCrossed } from "lucide-react";
+import { LayoutGrid, Users, AlertCircle, MessageSquare, Settings, BookOpen } from "lucide-react";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
 import { useCoachOperatingModel } from "@/hooks/use-coach-operating-model";
@@ -14,12 +14,18 @@ import { Avatar } from "@/components/ui/avatar";
 import { CoachBottomNav } from "@/components/coach/coach-bottom-nav";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
 
+// Phase 5.5A — OPTIM is AI-first: training and nutrition are no longer
+// standalone top-level departments here. Each client's real
+// recommendations/plan live inside their own unified OPTIM Plan (see
+// app/coach/clients/[clientId]/activate/page.tsx); the reusable
+// template/food-source LIBRARIES those engines draw from (still real,
+// still fully functional) moved to the "Library" entry point below,
+// exactly mirroring how CoachMoreSheet already treats them as secondary on
+// mobile — see coach-more-sheet.tsx.
 const NAV_ITEMS = [
   { href: "/coach", label: "Command Center", icon: LayoutGrid, exact: true },
   { href: "/coach/clients", label: "Clients", icon: Users, exact: false },
   { href: "/coach/reviews", label: "Decisions", icon: AlertCircle, exact: false },
-  { href: "/coach/programs", label: "Programming", icon: ClipboardList, exact: false },
-  { href: "/coach/meals", label: "Nutrition", icon: UtensilsCrossed, exact: false },
   { href: "/coach/messages", label: "Messages", icon: MessageSquare, exact: false },
 ] as const;
 
@@ -108,6 +114,20 @@ export function CoachShell({ children }: { children: ReactNode }) {
             </nav>
 
             <div className="flex shrink-0 items-center gap-2">
+              <Link
+                href="/coach/library"
+                title="Coach Library — training templates &amp; meal recommendations"
+                aria-label="Coach Library"
+                className={cn(
+                  "flex h-9 w-9 items-center justify-center rounded-full transition-colors",
+                  pathname.startsWith("/coach/library") || pathname.startsWith("/coach/programs") || pathname.startsWith("/coach/meals")
+                    ? "bg-accent-soft text-accent-strong"
+                    : "text-neutral hover:bg-surface-raised hover:text-off-white"
+                )}
+                style={{ transitionDuration: "var(--motion-fast)" }}
+              >
+                <BookOpen size={17} aria-hidden="true" />
+              </Link>
               <Link
                 href="/coach/settings"
                 title="Playbook & Settings"

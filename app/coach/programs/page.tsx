@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ClipboardList, Plus } from "lucide-react";
+import { ChevronLeft, ClipboardList, Plus } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/coach/page-header";
@@ -40,6 +40,9 @@ export default function CoachProgramsPage() {
 
   return (
     <div className="space-y-6">
+      <Link href="/coach/library" className="flex items-center gap-1 text-sm text-neutral hover:text-off-white">
+        <ChevronLeft size={16} /> Back to Library
+      </Link>
       <PageHeader
         title="Programs"
         description="Your own reusable training templates — assign a copy to any client from their setup page."

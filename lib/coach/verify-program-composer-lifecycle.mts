@@ -26,6 +26,9 @@ import {
   generateProgramDirections,
   generateFullProgramFromDirection,
   applyProgramRevisionApproval,
+  selectNutritionPrescription,
+  applyNutritionRevisionApproval,
+  approveActivation,
   PROGRAM_COMPOSER_VERSION,
 } from "./activation-lifecycle.ts";
 import { createDefaultCoachOperatingModel } from "./operating-model.ts";
@@ -224,6 +227,112 @@ check("Approving a revision writes the real assignedProgram and sends a real cli
   assert.deepEqual(afterState.programEnrollment, enrollmentBefore);
   assert.equal(afterState.chatMessages.length, chatCountBefore + 1);
   assert.equal(afterState.chatMessages.at(-1)?.text, "Teague approved an update to your upcoming training.");
+});
+
+console.log("\n4. Nutrition side of the unified OPTIM Plan (Phase 5.5A spec Part 8)\n");
+
+check("selectNutritionPrescription builds a complete, richer prescription from the chosen strategy", () => {
+  const chosenDirection = directionsResult.record.directions![0];
+  const withProgram = generateFullProgramFromDirection({
+    record: directionsResult.record,
+    directionId: chosenDirection.id,
+    clientId: CLIENT_ID,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    com: com(),
+    nowIso: "2026-01-01T00:10:00.000Z",
+  });
+  assert.ok(withProgram.nutritionOptions.length > 0, "expected real nutrition options from a coach who provides nutrition coaching");
+  const chosenNutrition = withProgram.nutritionOptions[0];
+  const withNutrition = selectNutritionPrescription({ record: withProgram, nutritionOptionId: chosenNutrition.id, com: com(), nowIso: "2026-01-01T00:11:00.000Z" });
+  assert.equal(withNutrition.selectedNutritionOptionId, chosenNutrition.id);
+  assert.ok(withNutrition.selectedNutritionPrescription);
+  assert.equal(withNutrition.selectedNutritionPrescription!.targets.calories, chosenNutrition.targets.calories);
+  assert.ok(withNutrition.selectedNutritionPrescription!.mealsPerDay > 0);
+});
+
+check("approveActivation persists the real, complete assignedNutritionPlan when one was selected, alongside the flat nutritionTargets", () => {
+  const chosenDirection = directionsResult.record.directions![0];
+  const withProgram = generateFullProgramFromDirection({
+    record: directionsResult.record,
+    directionId: chosenDirection.id,
+    clientId: CLIENT_ID,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    com: com(),
+    nowIso: "2026-01-01T00:10:00.000Z",
+  });
+  const chosenNutrition = withProgram.nutritionOptions[0];
+  const withNutrition = selectNutritionPrescription({ record: withProgram, nutritionOptionId: chosenNutrition.id, com: com(), nowIso: "2026-01-01T00:11:00.000Z" });
+
+  const { updatedRecord } = approveActivation({
+    record: withNutrition,
+    client,
+    approvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    aiAuthorityLevelAtApproval: "copilot",
+    clientFirstName: "Composer",
+    coachName: "Teague",
+    businessName: "OPTIM",
+    com: com(),
+    aiMayRespondDirectlyForRoutine: false,
+    assignWeeklyCheckIn: true,
+    startDateIso: "2026-01-06T00:00:00.000Z",
+    nowIso: "2026-01-05T00:00:00.000Z",
+  });
+  assert.equal(updatedRecord.state, "activated");
+
+  const afterState = loadClientAppState(CLIENT_ID)!;
+  assert.ok(afterState.assignedNutritionPlan, "expected a real assignedNutritionPlan to be persisted");
+  assert.deepEqual(afterState.assignedNutritionPlan!.targets, afterState.nutritionTargets, "flat nutritionTargets and the rich plan's targets must never diverge");
+  assert.ok(afterState.assignedNutritionPlan!.mealsPerDay > 0);
+});
+
+check("applyNutritionRevisionApproval writes only the client's nutrition plan, sends a real relayed message, and never touches programEnrollment", () => {
+  const beforeState = loadClientAppState(CLIENT_ID)!;
+  const enrollmentBefore = beforeState.programEnrollment;
+  const chatCountBefore = beforeState.chatMessages.length;
+  const existingPlan = beforeState.assignedNutritionPlan!;
+
+  const revisedPrescription = {
+    sourceStrategyKind: "best_fit" as const,
+    label: existingPlan.sourceStrategyLabel,
+    targets: { calories: existingPlan.targets.calories + 100, proteinG: existingPlan.targets.proteinG + 20, carbsG: existingPlan.targets.carbsG, fatG: existingPlan.targets.fatG },
+    usesTrainingRestSplit: existingPlan.usesTrainingRestSplit,
+    trainingDayTargets: existingPlan.trainingDayTargets,
+    restDayTargets: existingPlan.restDayTargets,
+    mealsPerDay: existingPlan.mealsPerDay,
+    mealStructureDescription: existingPlan.mealStructureDescription,
+    preTrainingGuidance: existingPlan.preTrainingGuidance,
+    postTrainingGuidance: existingPlan.postTrainingGuidance,
+    hydrationOzPerDay: existingPlan.hydrationOzPerDay,
+    fiberGramsPerDay: existingPlan.fiberGramsPerDay,
+    substitutionGuidance: existingPlan.substitutionGuidance,
+    supplementGuidance: existingPlan.supplementGuidance,
+    adherenceStrategy: existingPlan.adherenceStrategy,
+    metricsToMonitor: existingPlan.metricsToMonitor,
+    weeklyAdjustmentRule: existingPlan.weeklyAdjustmentRule,
+    conditionsPreventingAutoAdjustment: [],
+    requiresCoachApproval: false,
+    assumptions: [],
+    whyItFits: "test",
+    tradeoff: "test",
+    clientFactsUsed: [],
+    coachingRulesUsed: [],
+  };
+
+  applyNutritionRevisionApproval({
+    client,
+    revisedPrescription,
+    approvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    coachName: "Teague",
+    clientMessage: "Teague approved an update to your nutrition targets.",
+  });
+
+  const afterState = loadClientAppState(CLIENT_ID)!;
+  assert.equal(afterState.assignedNutritionPlan!.targets.calories, existingPlan.targets.calories + 100);
+  assert.deepEqual(afterState.programEnrollment, enrollmentBefore);
+  assert.equal(afterState.chatMessages.length, chatCountBefore + 1);
+  assert.equal(afterState.chatMessages.at(-1)?.text, "Teague approved an update to your nutrition targets.");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

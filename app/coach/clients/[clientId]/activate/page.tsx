@@ -2,25 +2,32 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { AlertTriangle, ArrowLeft, Bookmark, Check, Sparkles, Wand2, CheckCircle2, XCircle, PenLine, Layers } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bookmark, Check, Sparkles, Wand2, CheckCircle2, XCircle, PenLine, Layers, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { TextArea } from "@/components/ui/textarea";
 import { ProgramWeekPreviewSheet } from "@/components/coach/program-preview-sheet";
+import { HealthReviewGate } from "@/components/coach/program-composer/health-review-gate";
+import { DirectionCard } from "@/components/coach/program-composer/direction-card";
+import { NutritionDirectionCard } from "@/components/coach/program-composer/nutrition-direction-card";
+import { ClientIntelligencePanel } from "@/components/coach/program-composer/client-intelligence-panel";
 import { useProgramComposer } from "@/hooks/use-program-composer";
 import { AI_AUTHORITY_LEVEL_DESCRIPTIONS, type AiAuthorityLevel } from "@/lib/coach/ai-authority";
-import type { ProgramDirectionSummary } from "@/lib/coach/program-directions";
 import type { RevisionChange, RevisionPlan } from "@/lib/coach/program-revision";
+import type { CompleteNutritionPrescription, NutritionRevisionChange, NutritionRevisionPlan } from "@/lib/coach/nutrition-directions";
+import type { ActivationGenerationRecord } from "@/lib/coach/activation-lifecycle";
 import type { ClientAssignedProgram } from "@/lib/types";
 
 /**
- * Phase 5.5 — the OPTIM Program Composer (spec Part 4): the two-stage
- * direction-then-full-program flow for a not-yet-active client, and
- * conversational revision + adaptation proposals for an already-active
- * one. Replaces the old "generate three full programs immediately" flow —
- * see hooks/use-program-composer.ts's Stage A/B split.
+ * Phase 5.5A — the unified OPTIM Plan (spec Parts 2-4, 7-9): one client
+ * entry point covering both training and nutrition, always reachable even
+ * while a health concern is unresolved (Part 3), with concise recommendation
+ * cards, structural distinctness enforced upstream (program-directions.ts),
+ * and manual tools kept available but subordinate. Replaces the old
+ * "Program Composer" naming/placement this phase's brief calls out as
+ * buried and training-only.
  */
-export default function ProgramComposerPage() {
+export default function OptimPlanPage() {
   const params = useParams<{ clientId: string }>();
   const router = useRouter();
   const composer = useProgramComposer(params.clientId);
@@ -44,7 +51,7 @@ export default function ProgramComposerPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-display text-off-white">Program Composer — {client.name}</h1>
+          <h1 className="text-display text-off-white">OPTIM Plan — {client.name}</h1>
           <p className="mt-1 text-body text-neutral">
             {client.goal} · {composer.effectiveLevelLabel} authority
           </p>
@@ -57,7 +64,7 @@ export default function ProgramComposerPage() {
       {!composer.activeModel ? (
         <BlockedState
           icon={Sparkles}
-          title="Calibrate OPTIM before composing a program"
+          title="Calibrate OPTIM before composing a plan"
           body="This workspace hasn't completed coach onboarding yet — there's no active Coaching Method for OPTIM to generate from."
           actionLabel="Go to coach onboarding"
           onAction={() => router.push("/coach-onboarding")}
@@ -66,14 +73,6 @@ export default function ProgramComposerPage() {
         <ActiveClientComposer composer={composer} clientId={client.id} clientName={client.name} onBack={() => router.push(`/coach/clients/${client.id}`)} />
       ) : !composer.onboarding?.completedAtIso ? (
         <BlockedState icon={AlertTriangle} title="Waiting on client onboarding" body={`${client.name} hasn't completed their intake yet.`} />
-      ) : composer.healthReviewResolved === false ? (
-        <BlockedState
-          icon={AlertTriangle}
-          title="Blocked by an unresolved health review"
-          body="This client's intake flagged something that needs your review before OPTIM can generate or activate anything."
-          actionLabel="Review on client page"
-          onAction={() => router.push(`/coach/clients/${client.id}`)}
-        />
       ) : (
         <InitialComposer composer={composer} clientId={client.id} clientName={client.name} onBack={() => router.push(`/coach/clients/${client.id}`)} />
       )}
@@ -112,66 +111,119 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
   const router = useRouter();
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
   const [combineWithId, setCombineWithId] = useState<string | null>(null);
+  const [selectedNutritionId, setSelectedNutritionId] = useState<string | null>(null);
   const [justApproved, setJustApproved] = useState(false);
   const [previewWeekNumber, setPreviewWeekNumber] = useState<number | null>(null);
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionPreview, setRevisionPreview] = useState<{ plan: RevisionPlan; revisedProgram: ClientAssignedProgram; changes: RevisionChange[] } | null>(null);
+  const [nutritionRevisionInstruction, setNutritionRevisionInstruction] = useState("");
+  const [nutritionRevisionPreview, setNutritionRevisionPreview] = useState<{ plan: NutritionRevisionPlan; revisedPrescription: CompleteNutritionPrescription; changes: NutritionRevisionChange[] } | null>(null);
 
   const latest = composer.latest;
+  const manualFirst = composer.effectiveLevel === "advisor";
+  const autonomous = composer.effectiveLevel === "ai_led" || composer.effectiveLevel === "review_only";
 
   useEffect(() => {
     const t = setTimeout(() => {
       if (latest?.directions?.length && !selectedDirectionId) {
         setSelectedDirectionId(latest.selectedDirectionId ?? latest.directions.find((d) => d.kind === "best_fit")?.id ?? latest.directions[0].id);
       }
+      if (latest?.nutritionOptions?.length && !selectedNutritionId) {
+        setSelectedNutritionId(latest.selectedNutritionOptionId ?? latest.nutritionOptions.find((o) => o.kind === "best_fit")?.id ?? latest.nutritionOptions[0].id);
+      }
     }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latest?.id]);
 
+  const healthGate =
+    composer.healthReviewResolved === false && composer.healthReview ? (
+      <HealthReviewGate
+        clientFirstName={clientName.split(" ")[0]}
+        healthReview={composer.healthReview}
+        onChangeStatus={(status) => composer.dispatchPlatform({ type: "SET_HEALTH_REVIEW_STATUS", clientId, workspaceId: composer.workspaceId, status, nowIso: new Date().toISOString() })}
+      />
+    ) : null;
+
   if (justApproved || latest?.state === "activated") {
     return (
-      <Card className="border-l-2 border-l-success">
-        <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-success-soft text-success">
-            <Check size={18} aria-hidden="true" />
-          </span>
-          <div>
-            <p className="text-body font-semibold text-off-white">Activated — {clientName}&apos;s real Today, Training, and Nutrition experience is live.</p>
-            <p className="mt-1 text-meta text-neutral">
-              Program: {latest?.approval?.resultingProgramId} · Approved at {latest?.approval?.approvedAtIso ? new Date(latest.approval.approvedAtIso).toLocaleString() : "—"}
-            </p>
-            <Button variant="secondary" size="sm" className="mt-3" onClick={onBack}>
-              Back to client page
-            </Button>
+      <div className="space-y-5">
+        {healthGate}
+        <Card className="border-l-2 border-l-success">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-success-soft text-success">
+              <Check size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-body font-semibold text-off-white">Activated — {clientName}&apos;s real Today, Training, and Nutrition experience is live.</p>
+              <p className="mt-1 text-meta text-neutral">
+                Program: {latest?.approval?.resultingProgramId} · Approved at {latest?.approval?.approvedAtIso ? new Date(latest.approval.approvedAtIso).toLocaleString() : "—"}
+              </p>
+              <Button variant="secondary" size="sm" className="mt-3" onClick={onBack}>
+                Back to client page
+              </Button>
+            </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      </div>
     );
   }
 
+  function handleAutoGenerate() {
+    const directionsRecord = composer.runDirections();
+    if (!directionsRecord?.directions?.length) return;
+    const bestFit = directionsRecord.directions.find((d) => d.kind === "best_fit") ?? directionsRecord.directions[0];
+    const withProgram = composer.buildFullProgram(directionsRecord, bestFit.id);
+    if (withProgram?.nutritionOptions.length) {
+      const bestFitNutrition = withProgram.nutritionOptions.find((o) => o.kind === "best_fit") ?? withProgram.nutritionOptions[0];
+      composer.selectNutrition(withProgram, bestFitNutrition.id);
+    }
+  }
+
   if (!latest || latest.state === "generation_failed" || latest.state === "blocked") {
+    const isDataBlocked = latest?.state === "blocked" && !latest.trainingOptions?.length;
     return (
-      <Card className="text-center">
-        <Sparkles size={24} className="mx-auto mb-3 text-accent-strong" aria-hidden="true" />
-        <p className="text-body text-off-white">Understand {clientName}, then compare OPTIM&apos;s ranked program directions.</p>
-        {latest?.failureReason ? <p className="mt-2 text-meta text-error-strong">Last attempt failed: {latest.failureReason}</p> : null}
-        {latest?.state === "blocked" && latest.blockedReasons?.length ? (
-          <p className="mt-2 text-meta text-warning-strong">Last attempt was blocked: {latest.blockedReasons.join(" ")}</p>
-        ) : null}
-        <Button size="lg" className="mt-4" onClick={() => composer.runDirections()}>
-          {latest ? "Try again" : "Generate program directions"}
-        </Button>
-      </Card>
+      <div className="space-y-5">
+        {healthGate}
+        <Card className="text-center">
+          <Sparkles size={24} className="mx-auto mb-3 text-accent-strong" aria-hidden="true" />
+          <p className="text-body text-off-white">Understand {clientName}, then compare OPTIM&apos;s ranked training and nutrition directions.</p>
+          {latest?.failureReason ? <p className="mt-2 text-meta text-error-strong">Last attempt failed: {latest.failureReason}</p> : null}
+          {latest?.state === "blocked" && latest.blockedReasons?.length ? <p className="mt-2 text-meta text-warning-strong">Last attempt was blocked: {latest.blockedReasons.join(" ")}</p> : null}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            {!manualFirst ? (
+              <Button size="lg" onClick={autonomous ? handleAutoGenerate : () => composer.runDirections()} disabled={composer.healthReviewResolved === false}>
+                {autonomous ? <Zap size={16} aria-hidden="true" /> : <Wand2 size={16} aria-hidden="true" />}
+                {autonomous ? "Generate my recommended plan" : latest ? "Try again" : "Generate program directions"}
+              </Button>
+            ) : (
+              <>
+                <Button size="lg" variant="secondary" onClick={() => composer.runDirections()} disabled={composer.healthReviewResolved === false}>
+                  <Wand2 size={16} aria-hidden="true" /> See OPTIM&apos;s analysis
+                </Button>
+                <Button size="lg" onClick={() => router.push(`/coach/clients/${clientId}/setup/training`)}>
+                  <Layers size={16} aria-hidden="true" /> Build manually
+                </Button>
+              </>
+            )}
+            {isDataBlocked ? (
+              <Button size="lg" variant="secondary" onClick={() => router.push(`/coach/clients/${clientId}/setup`)}>
+                Complete programming profile
+              </Button>
+            ) : null}
+          </div>
+        </Card>
+      </div>
     );
   }
 
   if (latest.state === "directions_ready" && latest.directions) {
     return (
       <div className="space-y-5">
-        <ClientIntelligenceSummary composer={composer} />
+        {healthGate}
+        <ClientIntelligenceSection latest={latest} />
         <div>
-          <h2 className="text-heading text-off-white">Ranked program directions</h2>
+          <h2 className="text-heading text-off-white">Ranked training directions</h2>
           <p className="mt-1 text-meta text-neutral">Three concise, structurally distinct directions — pick one, or combine two before generating the full program.</p>
           <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-3">
             {latest.directions.map((direction) => (
@@ -198,13 +250,16 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
               <Wand2 size={16} aria-hidden="true" /> Generate the full program
             </Button>
             {combineWithId ? <span className="text-meta text-accent-strong">Combining with a second direction</span> : null}
+            <Button variant="outline" size="lg" onClick={() => router.push(`/coach/clients/${clientId}/setup/training`)}>
+              <Layers size={16} aria-hidden="true" /> Build manually instead
+            </Button>
           </div>
         </Card>
       </div>
     );
   }
 
-  // ready_for_review — exactly one full, periodized program.
+  // ready_for_review — exactly one full, periodized training program.
   const option = latest.trainingOptions[0];
   const direction = latest.directions?.find((d) => d.id === latest.selectedDirectionId) ?? null;
   if (!option) return null;
@@ -221,13 +276,28 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
     setRevisionInstruction("");
   }
 
+  function applyNutritionDraftPreview() {
+    if (!nutritionRevisionInstruction.trim() || !latest?.selectedNutritionPrescription) return;
+    const weightLb = composer.onboarding?.answers.about_you?.weightLb;
+    const baseProteinGPerLb = composer.activeModel?.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight ?? 1;
+    setNutritionRevisionPreview(composer.previewDraftNutritionRevision(latest.selectedNutritionPrescription, nutritionRevisionInstruction, typeof weightLb === "number" ? weightLb : 180, baseProteinGPerLb));
+  }
+
+  function confirmNutritionDraftPreview() {
+    if (!nutritionRevisionPreview || !latest) return;
+    composer.confirmDraftNutritionRevision(latest, nutritionRevisionInstruction, nutritionRevisionPreview.plan, nutritionRevisionPreview.revisedPrescription, nutritionRevisionPreview.changes);
+    setNutritionRevisionPreview(null);
+    setNutritionRevisionInstruction("");
+  }
+
   return (
     <div className="space-y-5">
-      <ClientIntelligenceSummary composer={composer} />
+      {healthGate}
+      <ClientIntelligenceSection latest={latest} />
 
       {direction ? (
         <Card>
-          <p className="text-subheading text-off-white">Selected strategy — {direction.label}</p>
+          <p className="text-subheading text-off-white">Selected training strategy — {direction.label}</p>
           <p className="mt-1 text-sm text-neutral">{direction.whyItFits}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {direction.constraintsHonored.map((c) => (
@@ -243,14 +313,12 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
 
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-subheading text-off-white">{option.program.durationWeeks}-week program — {option.program.weeks.length} weeks generated</p>
+          <p className="text-subheading text-off-white">
+            {option.program.durationWeeks}-week program — {option.program.weeks.length} weeks generated
+          </p>
           <div className="flex flex-wrap items-center gap-2">
             {option.program.weeks.map((w) => (
-              <button
-                key={w.weekNumber}
-                onClick={() => setPreviewWeekNumber(w.weekNumber)}
-                className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-2.5 py-1 text-xs font-medium text-off-white hover:bg-surface-input"
-              >
+              <button key={w.weekNumber} onClick={() => setPreviewWeekNumber(w.weekNumber)} className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-2.5 py-1 text-xs font-medium text-off-white hover:bg-surface-input">
                 Wk {w.weekNumber}
               </button>
             ))}
@@ -259,7 +327,7 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
       </Card>
 
       <Card>
-        <p className="text-subheading text-off-white">Revise before approving</p>
+        <p className="text-subheading text-off-white">Revise training before approving</p>
         <p className="mt-1 text-meta text-neutral">Describe a change in plain language — e.g. &quot;Keep all workouts under 60 minutes.&quot;</p>
         <div className="mt-3 max-w-xl">
           <TextArea id="draft-revision" label="What should change?" value={revisionInstruction} onChange={(e) => setRevisionInstruction(e.target.value)} rows={2} />
@@ -270,11 +338,61 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
         {revisionPreview ? <RevisionPreviewPanel preview={revisionPreview} onConfirm={confirmDraftPreview} onDiscard={() => setRevisionPreview(null)} /> : null}
       </Card>
 
+      {latest.nutritionOptions.length > 0 ? (
+        <>
+          <div>
+            <h2 className="text-heading text-off-white">Ranked nutrition directions</h2>
+            <p className="mt-1 text-meta text-neutral">Three concise, genuinely different nutrition approaches, computed from this client&apos;s real stats and your nutrition philosophy.</p>
+            <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-3">
+              {latest.nutritionOptions.map((strategy) => (
+                <NutritionDirectionCard
+                  key={strategy.id}
+                  strategy={strategy}
+                  selected={selectedNutritionId === strategy.id}
+                  onSelect={() => {
+                    setSelectedNutritionId(strategy.id);
+                    composer.selectNutrition(latest, strategy.id);
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+
+          {latest.selectedNutritionPrescription ? (
+            <Card>
+              <p className="text-subheading text-off-white">Complete nutrition prescription — {latest.selectedNutritionPrescription.label}</p>
+              <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
+                <NutritionStat label="Calories" value={`${latest.selectedNutritionPrescription.targets.calories} kcal`} />
+                <NutritionStat label="Protein" value={`${latest.selectedNutritionPrescription.targets.proteinG}g`} />
+                <NutritionStat label="Carbs" value={`${latest.selectedNutritionPrescription.targets.carbsG}g`} />
+                <NutritionStat label="Fat" value={`${latest.selectedNutritionPrescription.targets.fatG}g`} />
+                <NutritionStat label="Meals/day" value={String(latest.selectedNutritionPrescription.mealsPerDay)} />
+                <NutritionStat label="Hydration" value={`${latest.selectedNutritionPrescription.hydrationOzPerDay} oz`} />
+                <NutritionStat label="Fiber" value={`${latest.selectedNutritionPrescription.fiberGramsPerDay}g`} />
+                <NutritionStat label="Training/rest split" value={latest.selectedNutritionPrescription.usesTrainingRestSplit ? "Split" : "Flat"} />
+              </div>
+              <p className="mt-3 text-meta text-neutral">{latest.selectedNutritionPrescription.preTrainingGuidance}</p>
+              <p className="mt-1 text-meta text-neutral">{latest.selectedNutritionPrescription.postTrainingGuidance}</p>
+              <p className="mt-1 text-meta text-neutral">{latest.selectedNutritionPrescription.substitutionGuidance}</p>
+
+              <div className="mt-4 border-t border-border pt-3">
+                <p className="text-sm font-medium text-off-white">Revise nutrition before approving</p>
+                <div className="mt-2 max-w-xl">
+                  <TextArea id="nutrition-draft-revision" label="What should change?" value={nutritionRevisionInstruction} onChange={(e) => setNutritionRevisionInstruction(e.target.value)} rows={2} placeholder="e.g. Increase protein a bit." />
+                  <Button size="sm" variant="secondary" className="mt-2" onClick={applyNutritionDraftPreview} disabled={!nutritionRevisionInstruction.trim()}>
+                    <PenLine size={14} aria-hidden="true" /> Preview change
+                  </Button>
+                </div>
+                {nutritionRevisionPreview ? <NutritionRevisionPreviewPanel preview={nutritionRevisionPreview} onConfirm={confirmNutritionDraftPreview} onDiscard={() => setNutritionRevisionPreview(null)} /> : null}
+              </div>
+            </Card>
+          ) : null}
+        </>
+      ) : null}
+
       <Card>
         <p className="text-subheading text-off-white">Approval</p>
-        <p className="mt-1 text-meta text-neutral">
-          Approving assigns this program (every week, every exercise) and nutrition targets directly to {clientName}&apos;s real account.
-        </p>
+        <p className="mt-1 text-meta text-neutral">Approving assigns this training program (every week, every exercise) and nutrition plan directly to {clientName}&apos;s real account.</p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <Button
             size="lg"
@@ -305,6 +423,8 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
   const [previewWeekNumber, setPreviewWeekNumber] = useState<number | null>(null);
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionPreview, setRevisionPreview] = useState<{ plan: RevisionPlan; revisedProgram: ClientAssignedProgram; changes: RevisionChange[] } | null>(null);
+  const [nutritionRevisionInstruction, setNutritionRevisionInstruction] = useState("");
+  const [nutritionRevisionPreview, setNutritionRevisionPreview] = useState<{ plan: NutritionRevisionPlan; revisedPrescription: CompleteNutritionPrescription; changes: NutritionRevisionChange[] } | null>(null);
   const [checked, setChecked] = useState(false);
 
   const program = composer.assignedProgram;
@@ -332,6 +452,18 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
     setRevisionInstruction("");
   }
 
+  function applyNutritionPreview() {
+    if (!nutritionRevisionInstruction.trim()) return;
+    setNutritionRevisionPreview(composer.previewNutritionRevision(nutritionRevisionInstruction));
+  }
+
+  function confirmNutritionPreview() {
+    if (!nutritionRevisionPreview) return;
+    composer.confirmNutritionRevision(nutritionRevisionPreview.revisedPrescription);
+    setNutritionRevisionPreview(null);
+    setNutritionRevisionInstruction("");
+  }
+
   return (
     <div className="space-y-5">
       <Card>
@@ -341,11 +473,7 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {program.weeks.map((w) => (
-            <button
-              key={w.weekNumber}
-              onClick={() => setPreviewWeekNumber(w.weekNumber)}
-              className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-2.5 py-1 text-xs font-medium text-off-white hover:bg-surface-input"
-            >
+            <button key={w.weekNumber} onClick={() => setPreviewWeekNumber(w.weekNumber)} className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-2.5 py-1 text-xs font-medium text-off-white hover:bg-surface-input">
               Wk {w.weekNumber}
             </button>
           ))}
@@ -365,6 +493,28 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
         </div>
         {revisionPreview ? <RevisionPreviewPanel preview={revisionPreview} onConfirm={confirmPreview} onDiscard={() => setRevisionPreview(null)} confirmLabel="Approve & assign this revision" /> : null}
       </Card>
+
+      {composer.assignedNutritionPlan ? (
+        <Card>
+          <p className="text-subheading text-off-white">Nutrition plan — {composer.assignedNutritionPlan.sourceStrategyLabel}</p>
+          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
+            <NutritionStat label="Calories" value={`${composer.assignedNutritionPlan.targets.calories} kcal`} />
+            <NutritionStat label="Protein" value={`${composer.assignedNutritionPlan.targets.proteinG}g`} />
+            <NutritionStat label="Carbs" value={`${composer.assignedNutritionPlan.targets.carbsG}g`} />
+            <NutritionStat label="Fat" value={`${composer.assignedNutritionPlan.targets.fatG}g`} />
+          </div>
+          <div className="mt-4 border-t border-border pt-3">
+            <p className="text-sm font-medium text-off-white">Revise nutrition</p>
+            <div className="mt-2 max-w-xl">
+              <TextArea id="active-nutrition-revision" label="What should change?" value={nutritionRevisionInstruction} onChange={(e) => setNutritionRevisionInstruction(e.target.value)} rows={2} placeholder="e.g. Reduce calories slightly." />
+              <Button size="sm" variant="secondary" className="mt-2" onClick={applyNutritionPreview} disabled={!nutritionRevisionInstruction.trim()}>
+                <PenLine size={14} aria-hidden="true" /> Preview change
+              </Button>
+            </div>
+            {nutritionRevisionPreview ? <NutritionRevisionPreviewPanel preview={nutritionRevisionPreview} onConfirm={confirmNutritionPreview} onDiscard={() => setNutritionRevisionPreview(null)} confirmLabel="Approve & assign this revision" /> : null}
+          </div>
+        </Card>
+      ) : null}
 
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -431,38 +581,10 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
 // Shared pieces
 // ---------------------------------------------------------------------------
 
-function DirectionCard({
-  direction,
-  selectedPrimary,
-  selectedSecondary,
-  onSelectPrimary,
-  onToggleCombine,
-}: {
-  direction: ProgramDirectionSummary;
-  selectedPrimary: boolean;
-  selectedSecondary: boolean;
-  onSelectPrimary: () => void;
-  onToggleCombine: () => void;
-}) {
-  return (
-    <Card className={selectedPrimary ? "border-l-2 border-l-accent" : selectedSecondary ? "border-l-2 border-l-accent-soft" : ""}>
-      <p className="text-xs font-semibold uppercase tracking-wide text-accent-strong">{direction.kind.replace(/_/g, " ")}</p>
-      <p className="mt-1 text-subheading text-off-white">{direction.label}</p>
-      <p className="mt-1 text-sm text-neutral">{direction.splitName} · {direction.frequencyPerWeek}x/week · ~{direction.estimatedSessionLengthMin} min</p>
-      <p className="mt-2 text-sm text-off-white">{direction.whyItFits}</p>
-      <p className="mt-2 text-meta text-neutral">Tradeoff: {direction.tradeoff}</p>
-      <p className="mt-2 text-meta text-neutral">{direction.periodizationApproach} · {direction.approxVolumeDescription} · {direction.approxIntensityDescription}</p>
-      <p className="mt-2 text-meta text-neutral">{direction.confidenceNote}</p>
-      <div className="mt-3 flex gap-2">
-        <Button size="sm" variant={selectedPrimary ? "primary" : "secondary"} onClick={onSelectPrimary}>
-          {selectedPrimary ? "Selected" : "Select"}
-        </Button>
-        <Button size="sm" variant={selectedSecondary ? "primary" : "outline"} onClick={onToggleCombine} disabled={selectedPrimary}>
-          {selectedSecondary ? "Combining" : "Combine"}
-        </Button>
-      </div>
-    </Card>
-  );
+function ClientIntelligenceSection({ latest }: { latest: ActivationGenerationRecord }) {
+  if (!latest.programmingProfile) return null;
+  const completeness = latest.programmingProfile.dailyActivityLevelIsAssumed || latest.programmingProfile.cardioPreferenceIsAssumed ? "Some inputs assumed" : "Fully reported";
+  return <ClientIntelligencePanel profile={latest.programmingProfile} coachModelVersion={latest.coachModelVersion} dataCompleteness={completeness} />;
 }
 
 function ConstraintSummary({ option }: { option: { constraints: { passed: boolean; checks: { id: string; label: string; passed: boolean; reason?: string }[] } } }) {
@@ -471,11 +593,7 @@ function ConstraintSummary({ option }: { option: { constraints: { passed: boolea
       <p className="text-subheading text-off-white">Constraints {option.constraints.passed ? "honored" : "— attention needed"}</p>
       <div className="mt-2 flex flex-wrap gap-2">
         {option.constraints.checks.map((c) => (
-          <span
-            key={c.id}
-            className={`rounded-full px-2.5 py-1 text-xs font-medium ${c.passed ? "bg-success-soft text-success" : "bg-error-soft text-error-strong"}`}
-            title={c.reason}
-          >
+          <span key={c.id} className={`rounded-full px-2.5 py-1 text-xs font-medium ${c.passed ? "bg-success-soft text-success" : "bg-error-soft text-error-strong"}`} title={c.reason}>
             {c.label}
           </span>
         ))}
@@ -524,37 +642,51 @@ function RevisionPreviewPanel({
   );
 }
 
-function ClientIntelligenceSummary({ composer }: { composer: ReturnType<typeof useProgramComposer> }) {
-  const about = composer.onboarding?.answers.about_you;
-  const week = composer.onboarding?.answers.your_week;
-  const goals = composer.onboarding?.answers.what_you_want;
-  const fuel = composer.onboarding?.answers.fuel_recovery;
-
+function NutritionRevisionPreviewPanel({
+  preview,
+  onConfirm,
+  onDiscard,
+  confirmLabel,
+}: {
+  preview: { plan: NutritionRevisionPlan; revisedPrescription: CompleteNutritionPrescription; changes: NutritionRevisionChange[] };
+  onConfirm: () => void;
+  onDiscard: () => void;
+  confirmLabel?: string;
+}) {
+  if (preview.plan.kind === "unrecognized") {
+    return <p className="mt-3 text-sm text-warning-strong">{preview.plan.summary}</p>;
+  }
   return (
-    <Card>
-      <p className="text-subheading text-off-white">Client intelligence</p>
-      <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
-        <SummaryStat label="Goal" value={typeof goals?.primaryGoal === "string" ? goals.primaryGoal.replace(/_/g, " ") : "—"} />
-        <SummaryStat label="Availability" value={Array.isArray(week?.availableDays) ? `${week.availableDays.length} days/week` : "—"} />
-        <SummaryStat label="Session length" value={typeof week?.maxSessionLength === "string" ? `${week.maxSessionLength} min` : "—"} />
-        <SummaryStat label="Experience" value={typeof composer.onboarding?.answers.starting_point?.trainingExperience === "string" ? composer.onboarding.answers.starting_point.trainingExperience.replace(/_/g, " ") : "—"} />
-        <SummaryStat label="Age" value={typeof about?.age === "number" ? String(about.age) : "—"} />
-        <SummaryStat
-          label="Dietary restrictions"
-          value={fuel?.hasDietaryRestrictions === "yes" ? (typeof fuel.dietaryRestrictionsDetail === "string" && fuel.dietaryRestrictionsDetail ? fuel.dietaryRestrictionsDetail : "Reported, no detail") : "None reported"}
-        />
-        <SummaryStat label="Health review" value={composer.healthReviewResolved === "no_review_needed" ? "None needed" : composer.healthReviewResolved ? "Resolved" : "Unresolved"} />
-        <SummaryStat label="Coach model" value={`v${composer.activeModel?.version ?? "—"}`} />
+    <div className="mt-3 rounded-[var(--radius-md)] border border-border-strong bg-surface-raised p-3.5">
+      <p className="text-sm font-medium text-off-white">{preview.plan.summary}</p>
+      {preview.changes.length === 0 ? (
+        <p className="mt-2 text-sm text-neutral">No concrete change resulted — nothing to apply.</p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {preview.changes.map((c, i) => (
+            <li key={i} className="text-meta text-neutral">
+              {c.field}: <span className="text-off-white">{c.before}</span> → <span className="text-success">{c.after}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" onClick={onConfirm} disabled={preview.changes.length === 0}>
+          <Bookmark size={14} aria-hidden="true" /> {confirmLabel ?? "Confirm change"}
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onDiscard}>
+          Discard
+        </Button>
       </div>
-    </Card>
+    </div>
   );
 }
 
-function SummaryStat({ label, value }: { label: string; value: string }) {
+function NutritionStat({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <p className="text-meta text-neutral">{label}</p>
-      <p className="font-medium capitalize text-off-white">{value}</p>
+      <p className="font-medium text-off-white">{value}</p>
     </div>
   );
 }

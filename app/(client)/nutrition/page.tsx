@@ -7,6 +7,7 @@ import { MacroDetailSheet } from "@/components/nutrition/macro-detail-sheet";
 import { MealTimeline } from "@/components/nutrition/meal-timeline";
 import { PhotoMealSheet } from "@/components/nutrition/photo/photo-meal-sheet";
 import { MealRecommendationCard } from "@/components/coach/meal-recommendation-card";
+import { NutritionGuidanceCard } from "@/components/nutrition/nutrition-guidance-card";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { usePlatformState } from "@/hooks/use-platform-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
@@ -83,6 +84,8 @@ export default function NutritionPage() {
           <ChevronRight size={18} className="shrink-0 text-on-accent/70" aria-hidden="true" />
         </button>
       </div>
+
+      {state.assignedNutritionPlan ? <NutritionGuidanceCard plan={state.assignedNutritionPlan} coachName={coachName} /> : null}
 
       <h2 className="mx-4 mb-2 mt-6 text-label text-neutral">Today&apos;s meals</h2>
       <div className="px-4">

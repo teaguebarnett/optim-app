@@ -318,8 +318,18 @@ export function candidateSplits(days: number, preferred: string[]): { key: strin
   return out;
 }
 
-export function chooseSplitForKind(days: number, com: CoachOperatingModel, kind: OptionKind): { key: string; plan: SplitPlan } {
-  const candidates = candidateSplits(days, com.programArchitecture.preferredSplits);
+/**
+ * `excludeKeys` (Phase 5.5A) — real split keys already claimed by another
+ * option in this same generation run. Without this, "strong_alternative"
+ * and "wildcard" could independently land on the identical split (the
+ * exact duplicate-Push/Pull/Legs bug this phase's brief calls out) since
+ * each was previously resolved in isolation. Passing prior picks in closes
+ * that gap at the source rather than only detecting it after the fact.
+ * Purely additive — every existing call site omits it and behaves exactly
+ * as before.
+ */
+export function chooseSplitForKind(days: number, com: CoachOperatingModel, kind: OptionKind, excludeKeys: string[] = []): { key: string; plan: SplitPlan } {
+  const candidates = candidateSplits(days, com.programArchitecture.preferredSplits).filter((c) => !excludeKeys.includes(c.key));
   if (candidates.length === 0) {
     // Honest, universally valid fallback — full body always accepts any day count 1+.
     return { key: "full_body", plan: { splitName: "Full body", dayPatterns: Array.from({ length: days }, () => ["squat", "hinge", "push_horizontal", "pull_horizontal", "core"]) } };
@@ -329,8 +339,9 @@ export function chooseSplitForKind(days: number, com: CoachOperatingModel, kind:
   // Wildcard: a legitimate, different-in-kind approach — the one candidate
   // NOT drawn from the coach's own stated preferences, if one validly
   // exists for this day count; otherwise the last preferred candidate
-  // (still different from best_fit whenever more than one exists).
-  const nonPreferred = candidateSplits(days, []).find((c) => !com.programArchitecture.preferredSplits.includes(c.key) && c.key !== candidates[0].key);
+  // (still different from best_fit/excluded picks whenever more than one
+  // exists).
+  const nonPreferred = candidateSplits(days, []).find((c) => !com.programArchitecture.preferredSplits.includes(c.key) && !excludeKeys.includes(c.key) && c.key !== candidates[0].key);
   return nonPreferred ?? candidates[candidates.length - 1];
 }
 

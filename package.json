@@ -44,7 +44,9 @@
     "verify:program-directions": "node --experimental-strip-types lib/coach/verify-program-directions.mts",
     "verify:program-revision": "node --experimental-strip-types lib/coach/verify-program-revision.mts",
     "verify:program-composer-lifecycle": "node --experimental-strip-types lib/coach/verify-program-composer-lifecycle.mts",
-    "verify:program-adaptation": "node --experimental-strip-types lib/coach/verify-program-adaptation.mts"
+    "verify:program-adaptation": "node --experimental-strip-types lib/coach/verify-program-adaptation.mts",
+    "verify:nutrition-directions": "node --experimental-strip-types lib/coach/verify-nutrition-directions.mts",
+    "verify:plan-status": "node --experimental-strip-types lib/coach/verify-plan-status.mts"
   },
   "dependencies": {
     "lucide-react": "^1.27.0",

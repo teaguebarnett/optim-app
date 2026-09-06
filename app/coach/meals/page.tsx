@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Archive, ArchiveRestore, Copy, Pencil, Plus, UtensilsCrossed } from "lucide-react";
+import Link from "next/link";
+import { Archive, ArchiveRestore, ChevronLeft, Copy, Pencil, Plus, UtensilsCrossed } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/coach/page-header";
 import { EmptyState } from "@/components/coach/empty-state";
@@ -82,6 +83,9 @@ export default function CoachMealsPage() {
 
   return (
     <div className="space-y-6">
+      <Link href="/coach/library" className="flex items-center gap-1 text-sm text-neutral hover:text-off-white">
+        <ChevronLeft size={16} /> Back to Library
+      </Link>
       <PageHeader
         title="Meals"
         description="Your own meal recommendations — assign them to any client from their profile."

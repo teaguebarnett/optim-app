@@ -79,7 +79,7 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
             <MessageSquare size={14} aria-hidden="true" /> Message
           </Button>
           <Button variant="outline" size="sm" onClick={() => router.push(`/coach/clients/${client.id}/activate`)}>
-            <Wand2 size={14} aria-hidden="true" /> Program Composer
+            <Wand2 size={14} aria-hidden="true" /> OPTIM Plan
           </Button>
           <Button variant="outline" size="sm" onClick={() => router.push(`/coach/clients/${client.id}/setup/training`)}>
             <ClipboardList size={14} aria-hidden="true" /> View Program

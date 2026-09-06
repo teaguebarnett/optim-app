@@ -313,6 +313,16 @@ function migrateV12ToV13(stored: Record<string, unknown>): Record<string, unknow
   return { ...stored, version: 13, dailyEntrance: { lastSeenLocalDateIso: null }, consecutiveCleanWorkouts: 0 };
 }
 
+/** v13 -> v14 (Phase 5.5A): adds the optional real, complete
+ * assignedNutritionPlan (see AppState's own doc) — undefined/omitted for
+ * every already-stored client, exactly matching how assignedProgram was
+ * introduced as an omitted optional field rather than a required one with
+ * an invented default. `nutritionTargets` itself is untouched, so every
+ * existing client's real numbers survive this migration unchanged. */
+function migrateV13ToV14(stored: Record<string, unknown>): Record<string, unknown> {
+  return { ...stored, version: 14 };
+}
+
 /**
  * Upgrades raw localStorage content (of unknown/any prior shape) to the
  * current AppState (version 10), stepping through every intermediate
@@ -424,6 +434,17 @@ export function migrateStoredState(stored: unknown): AppState | null {
 
   if (
     working.version === 13 &&
+    typeof working.workspaceId === "string" &&
+    typeof working.clientId === "string" &&
+    typeof working.primaryCoachId === "string" &&
+    isRecord(working.programEnrollment) &&
+    isRecord(working.nutritionTargets)
+  ) {
+    working = migrateV13ToV14(working);
+  }
+
+  if (
+    working.version === 14 &&
     typeof working.workspaceId === "string" &&
     typeof working.clientId === "string" &&
     typeof working.primaryCoachId === "string" &&

@@ -417,7 +417,7 @@ check("A legacy (pre-4.4B-2) persisted session migrates to a stable-id pointer t
   // input now lands on 13, not 6. The v5->v6 exercise-pointer migration
   // itself (the thing this check actually exercises) is unaffected either
   // way.
-  assert.equal(migrated!.version, 13);
+  assert.equal(migrated!.version, 14);
   assert.equal(migrated!.workoutSession.currentExerciseId, PUSH_WORKOUT.exercises[2].id);
   assert.equal("currentExerciseIndex" in migrated!.workoutSession, false);
   assert.equal(Object.keys(migrated!.workoutSession.exerciseWarmups).length, PUSH_WORKOUT.exercises.length);

@@ -12,11 +12,20 @@ import {
   generateProgramDirections,
   generateFullProgramFromDirection,
   applyProgramRevisionApproval,
+  selectNutritionPrescription as selectNutritionPrescriptionForRecord,
+  applyNutritionRevisionApproval,
   healthReviewPermitsActivation,
   latestGenerationForClient,
   type ActivationGenerationRecord,
 } from "@/lib/coach/activation-lifecycle";
 import { interpretRevisionInstruction, applyProgramRevision, type ProgramRevisionRecord, type RevisionPlan } from "@/lib/coach/program-revision";
+import {
+  interpretNutritionRevisionInstruction,
+  applyNutritionRevision,
+  type CompleteNutritionPrescription,
+  type NutritionRevisionPlan,
+  type NutritionRevisionRecord,
+} from "@/lib/coach/nutrition-directions";
 import { detectAdaptationProposals, applyAdaptationProposal, persistAdaptationProposalReview, type ProgramAdaptationProposal } from "@/lib/coach/program-adaptation";
 import { resolveReviewRequest } from "@/lib/coach/review-lifecycle";
 import { deriveProgramWeek } from "@/lib/scheduling/enrollment";
@@ -168,6 +177,110 @@ export function useProgramComposer(clientId: ClientProfileId) {
       return updated;
     },
     [clientView, clientId]
+  );
+
+  // -- Nutrition side of the unified OPTIM Plan (Phase 5.5A Part 8) --------
+
+  const selectNutrition = useCallback(
+    (record: ActivationGenerationRecord, nutritionOptionId: string) => {
+      if (!com.activeModel) return null;
+      const nowIso = new Date().toISOString();
+      const updated = selectNutritionPrescriptionForRecord({ record, nutritionOptionId, com: com.activeModel, nowIso });
+      clientView.dispatchPlatform({ type: "SAVE_ACTIVATION_GENERATION", record: updated });
+      return updated;
+    },
+    [clientView, com.activeModel]
+  );
+
+  const previewDraftNutritionRevision = useCallback((prescription: CompleteNutritionPrescription, instruction: string, weightLb: number, baseProteinGPerLb: number) => {
+    const plan = interpretNutritionRevisionInstruction(instruction);
+    const { revisedPrescription, changes } = applyNutritionRevision(prescription, plan, weightLb, baseProteinGPerLb);
+    return { plan, revisedPrescription, changes };
+  }, []);
+
+  const confirmDraftNutritionRevision = useCallback(
+    (record: ActivationGenerationRecord, instruction: string, plan: NutritionRevisionPlan, revisedPrescription: CompleteNutritionPrescription, changes: NutritionRevisionRecord["changes"]) => {
+      if (!clientView.coachId || !record.selectedNutritionPrescription) return null;
+      const nowIso = new Date().toISOString();
+      const revisionRecord: NutritionRevisionRecord = {
+        id: nextPlatformId("nutrition-revision"),
+        clientId,
+        workspaceId: clientView.workspaceId,
+        coachId: clientView.coachId,
+        instruction,
+        plan,
+        changes,
+        prescriptionBeforeRevision: record.selectedNutritionPrescription,
+        prescriptionAfterRevision: revisedPrescription,
+        createdAtIso: nowIso,
+        confirmedAtIso: nowIso,
+      };
+      const updated: ActivationGenerationRecord = {
+        ...record,
+        selectedNutritionPrescription: revisedPrescription,
+        nutritionRevisions: [...(record.nutritionRevisions ?? []), revisionRecord],
+        updatedAtIso: nowIso,
+      };
+      clientView.dispatchPlatform({ type: "SAVE_ACTIVATION_GENERATION", record: updated });
+      return updated;
+    },
+    [clientView, clientId]
+  );
+
+  const assignedNutritionPlan = clientView.clientAppState?.assignedNutritionPlan ?? null;
+
+  const previewNutritionRevision = useCallback(
+    (instruction: string) => {
+      if (!assignedNutritionPlan) return null;
+      const plan = interpretNutritionRevisionInstruction(instruction);
+      const prescription: CompleteNutritionPrescription = {
+        sourceStrategyKind: "best_fit",
+        label: assignedNutritionPlan.sourceStrategyLabel,
+        targets: assignedNutritionPlan.targets,
+        usesTrainingRestSplit: assignedNutritionPlan.usesTrainingRestSplit,
+        trainingDayTargets: assignedNutritionPlan.trainingDayTargets,
+        restDayTargets: assignedNutritionPlan.restDayTargets,
+        mealsPerDay: assignedNutritionPlan.mealsPerDay,
+        mealStructureDescription: assignedNutritionPlan.mealStructureDescription,
+        preTrainingGuidance: assignedNutritionPlan.preTrainingGuidance,
+        postTrainingGuidance: assignedNutritionPlan.postTrainingGuidance,
+        hydrationOzPerDay: assignedNutritionPlan.hydrationOzPerDay,
+        fiberGramsPerDay: assignedNutritionPlan.fiberGramsPerDay,
+        substitutionGuidance: assignedNutritionPlan.substitutionGuidance,
+        supplementGuidance: assignedNutritionPlan.supplementGuidance,
+        adherenceStrategy: assignedNutritionPlan.adherenceStrategy,
+        metricsToMonitor: assignedNutritionPlan.metricsToMonitor,
+        weeklyAdjustmentRule: assignedNutritionPlan.weeklyAdjustmentRule,
+        conditionsPreventingAutoAdjustment: [],
+        requiresCoachApproval: false,
+        assumptions: [],
+        whyItFits: "",
+        tradeoff: "",
+        clientFactsUsed: [],
+        coachingRulesUsed: [],
+      };
+      const weightLb = clientView.onboarding?.answers.about_you?.weightLb;
+      const baseProteinGPerLb = com.activeModel?.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight ?? 1;
+      const { revisedPrescription, changes } = applyNutritionRevision(prescription, plan, typeof weightLb === "number" ? weightLb : 180, baseProteinGPerLb);
+      return { plan, revisedPrescription, changes };
+    },
+    [assignedNutritionPlan, clientView.onboarding, com.activeModel]
+  );
+
+  const confirmNutritionRevision = useCallback(
+    (revisedPrescription: CompleteNutritionPrescription) => {
+      if (!clientView.client || !clientView.coachId) return null;
+      const coachName = clientView.activeContext.coachProfile?.displayName ?? "Your coach";
+      applyNutritionRevisionApproval({
+        client: clientView.client,
+        revisedPrescription,
+        approvedByCoachId: clientView.coachId,
+        coachName,
+        clientMessage: `${coachName} approved an update to your nutrition targets.`,
+      });
+      return true;
+    },
+    [clientView]
   );
 
   // -- Active-client conversational revision (spec Part 5/6) ---------------
@@ -329,6 +442,12 @@ export function useProgramComposer(clientId: ClientProfileId) {
     confirmDraftRevision,
     previewRevision,
     confirmRevision,
+    selectNutrition,
+    previewDraftNutritionRevision,
+    confirmDraftNutritionRevision,
+    assignedNutritionPlan,
+    previewNutritionRevision,
+    confirmNutritionRevision,
     existingProposals,
     activeProposalReviews,
     checkForAdaptationProposals,
