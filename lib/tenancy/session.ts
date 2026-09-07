@@ -65,7 +65,10 @@ function isStorageAvailable(): boolean {
 /** Defaults to "client" — a fresh browser (or one with storage blocked)
  * always lands on the existing client experience, never the coach
  * workspace, so nothing about default behavior changes for an existing
- * user. */
+ * user. Callers deciding what a session with NO stored preference at all
+ * should default to (see hasStoredDevPerspective) use
+ * lib/coach/routing.ts's resolveDefaultDevPerspective instead — this
+ * function alone can't distinguish "never chosen" from "explicitly client". */
 export function loadDevPerspective(): DevPerspective {
   if (!isStorageAvailable()) return "client";
   try {
@@ -73,6 +76,23 @@ export function loadDevPerspective(): DevPerspective {
     return raw === "coach" ? "coach" : "client";
   } catch {
     return "client";
+  }
+}
+
+/** True once a perspective has been explicitly persisted — by the
+ * developer via DevPerspectiveSwitcher, or by the one-time route-aware
+ * default (see lib/coach/routing.ts's resolveDefaultDevPerspective and its
+ * one caller in hooks/use-prototype-state.tsx) — false only for a browser
+ * that has never stored one at all. Kept separate from loadDevPerspective
+ * because "nothing stored yet" and "explicitly stored as client" must be
+ * distinguishable to fix Phase 5.5B's /coach redirect trap without
+ * changing what an already-explicit client session does. */
+export function hasStoredDevPerspective(): boolean {
+  if (!isStorageAvailable()) return false;
+  try {
+    return window.localStorage.getItem(PERSPECTIVE_STORAGE_KEY) !== null;
+  } catch {
+    return false;
   }
 }
 

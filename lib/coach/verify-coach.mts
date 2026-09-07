@@ -29,7 +29,13 @@ import {
 import { checkActivationReadiness } from "./activation.ts";
 import { createEmptyClientProgram, createEmptyExercise, createEmptyWorkout } from "./training.ts";
 import { buildAttentionQueue } from "./attention-queue.ts";
-import { classifyPathname, isGenuinelyNewCoach, isRouteAllowed, resolveHomeRoute } from "./routing.ts";
+import {
+  classifyPathname,
+  isGenuinelyNewCoach,
+  isRouteAllowed,
+  resolveDefaultDevPerspective,
+  resolveHomeRoute,
+} from "./routing.ts";
 import { resolveNextCoachAction } from "./next-action.ts";
 import { DEV_ENTRY_ACTIONS, DEV_PENDING_LIFECYCLE_STATUS, DEV_TARGET_CLIENT_ID, DEV_TARGET_WORKSPACE_ID } from "./dev-actions.ts";
 import { createInitialState } from "../state.ts";
@@ -135,6 +141,26 @@ check("resolveHomeRoute routes a client by lifecycle: active -> /today, pre-acti
   assert.equal(resolveHomeRoute("client", "ready_to_activate", "client-1"), "/setup-status/client-1");
   assert.equal(resolveHomeRoute("client", "paused", "client-1"), "/setup-status/client-1");
   assert.equal(resolveHomeRoute("client", "completed", "client-1"), "/setup-status/client-1");
+});
+
+check("Phase 5.5B: resolveDefaultDevPerspective infers coach only for coach-area routes, client everywhere else", () => {
+  assert.equal(resolveDefaultDevPerspective("/coach"), "coach");
+  assert.equal(resolveDefaultDevPerspective("/coach/clients/abc"), "coach");
+  assert.equal(resolveDefaultDevPerspective("/coach-onboarding"), "coach");
+  assert.equal(resolveDefaultDevPerspective("/today"), "client");
+  assert.equal(resolveDefaultDevPerspective("/training/workout"), "client");
+  assert.equal(resolveDefaultDevPerspective("/onboarding/client-1"), "client");
+  assert.equal(resolveDefaultDevPerspective("/setup-status/client-1"), "client");
+  assert.equal(resolveDefaultDevPerspective("/"), "client");
+});
+
+check("Phase 5.5B: a session inferred as coach via resolveDefaultDevPerspective actually satisfies isRouteAllowed for /coach", () => {
+  const inferred = resolveDefaultDevPerspective("/coach");
+  // isRouteAllowed's role parameter is the resolved membership role, not the
+  // dev-perspective string itself — this proves the FULL chain (infer ->
+  // getDemoCoachSession -> resolveActiveContext -> role) ends up
+  // coach-capable, not just that the raw string happens to equal "coach".
+  assert.equal(isRouteAllowed("/coach", inferred === "coach" ? "workspace_owner" : "client", null), true);
 });
 
 console.log("\n2. Client lifecycle transitions\n");

@@ -19,6 +19,15 @@ import { getFixtureHistoryStore } from "@/lib/history/local-storage-history-stor
 // control has no effect for a real client even if somehow reached.
 const DEMO_PROGRESS_AVAILABLE = process.env.NODE_ENV !== "production";
 
+// Phase 5.5B — DevPerspectiveSwitcher includes a one-tap "Coach view"
+// control. This sheet is shown to every client session alike (the seeded
+// demo client, a coach previewing a client, and any real activated
+// coach-created client), so without this gate a genuinely real client could
+// self-escalate straight into the coach workspace. app/coach/settings/page.tsx
+// already gates its own copy of this switcher the same way — this mirrors
+// that exact precedent rather than inventing a new one.
+const DEV_PERSPECTIVE_SWITCHER_AVAILABLE = process.env.NODE_ENV !== "production";
+
 interface SettingsSheetProps {
   open: boolean;
   onClose: () => void;
@@ -82,7 +91,7 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
     >
       <div className="space-y-2">
         <AppearanceSettingsCard />
-        <DevPerspectiveSwitcher />
+        {DEV_PERSPECTIVE_SWITCHER_AVAILABLE ? <DevPerspectiveSwitcher /> : null}
 
         <button
           onClick={handleResetToday}

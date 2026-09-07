@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { usePathname } from "next/navigation";
 import {
   computeDailyCompletionPercent,
   computeNutritionTotals,
@@ -27,8 +28,10 @@ import {
 } from "@/lib/tenancy/client-state-store";
 import { getDemoClientSession, resolveActiveContext } from "@/lib/tenancy/context";
 import { resolveCoachCreatedClientContext } from "@/lib/coach/repository";
+import { resolveDefaultDevPerspective } from "@/lib/coach/routing";
 import {
   getDemoCoachSession,
+  hasStoredDevPerspective,
   loadActiveClientId,
   loadActiveCoachUserId,
   loadDevPerspective,
@@ -130,6 +133,7 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
   const [perspective, setPerspectiveState] = useState<DevPerspective>("client");
   const [activeClientId, setActiveClientIdState] = useState<ClientProfileId>(CLIENT_PROFILE_DEMO.id);
   const [activeCoachUserId, setActiveCoachUserIdState] = useState<string>(TEAGUE_USER.id);
+  const initialPathname = usePathname();
 
   // One combined bootstrap — reads perspective, which client is currently
   // active, and that client's own AppState together, so there is never an
@@ -143,7 +147,19 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isPlatformHydrated) return;
     const timeout = setTimeout(() => {
-      const loadedPerspective = loadDevPerspective();
+      // Phase 5.5B — a session that has NEVER explicitly chosen a
+      // perspective (a fresh browser/Incognito window) infers one from the
+      // very first route it opened rather than always defaulting to
+      // "client" — see lib/coach/routing.ts's resolveDefaultDevPerspective
+      // for why: that old blanket default made /coach permanently
+      // unreachable on a first visit (a client identity can never pass
+      // isRouteAllowed's coach-area check, so the boundary redirected it
+      // straight back to a client destination). The inferred choice is
+      // persisted immediately so it behaves exactly like an explicit
+      // choice from then on — refreshes, other tabs, and later navigation
+      // never re-infer a different answer.
+      const loadedPerspective = hasStoredDevPerspective() ? loadDevPerspective() : resolveDefaultDevPerspective(initialPathname ?? "/");
+      if (!hasStoredDevPerspective()) saveDevPerspective(loadedPerspective);
       const loadedClientId = loadActiveClientId();
       const nextState = hydrateClientState(loadedClientId, WORKSPACE_OPTIM_ID, platform);
       setPerspectiveState(loadedPerspective);

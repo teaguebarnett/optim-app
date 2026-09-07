@@ -69,6 +69,27 @@ export function isRouteAllowed(pathname: string, role: Role, lifecycle: ClientLi
 }
 
 /**
+ * Phase 5.5B — the local dev-only session's identity (see
+ * lib/tenancy/session.ts) when nothing has ever been explicitly chosen in
+ * this browser. Before this, an untouched session always defaulted to the
+ * seeded client identity regardless of which route was actually opened —
+ * so a direct visit to /coach (itself correctly gated coach-capable-only by
+ * isRouteAllowed above) was judged against a client identity that could
+ * never satisfy it, and got redirected straight back out to a client
+ * destination. This makes exactly that one first-ever decision route-aware
+ * — every other route keeps resolving to the client default exactly as
+ * before, so an untouched session opening any client-app or public route
+ * (/today, /onboarding/..., etc.) behaves identically to today. Only used
+ * for a session with no stored preference at all (see
+ * hasStoredDevPerspective) — an explicit choice, whether made by the
+ * developer via DevPerspectiveSwitcher or inferred once here and persisted,
+ * always wins from then on.
+ */
+export function resolveDefaultDevPerspective(pathname: string): "coach" | "client" {
+  return classifyPathname(pathname) === "coach" ? "coach" : "client";
+}
+
+/**
  * Phase 5.4A corrective pass — new-coach first-run lifecycle (see
  * components/coach/coach-shell.tsx, the one caller). A coach is routed
  * into Coach Calibration BEFORE ever landing on an empty Command Center
