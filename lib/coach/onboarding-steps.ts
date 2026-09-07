@@ -246,10 +246,12 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     // primaryGoalOther only ever renders alongside secondaryGoals for the
     // rare "something else" answer (visibleFieldsForStep already hides it
     // otherwise) — every other independent fact gets its own screen.
-    // eventOrDeadline/targetWeight stay paired: both are optional "any
-    // extra detail?" facts, and targetWeight alone would sometimes be a
-    // blank moment (it's hidden for every goal except build-muscle/lose-fat).
-    moments: [["primaryGoal"], ["primaryGoalOther", "secondaryGoals"], ["successDefinition"], ["eventOrDeadline", "targetWeight"]],
+    // targetWeight (optional, and only relevant for build-muscle/lose-fat)
+    // stays paired with successDefinition rather than its own trailing
+    // moment — goal and start-date already give OPTIM what it needs to
+    // plan around, so this is never the client's only reason to see this
+    // screen.
+    moments: [["primaryGoal"], ["primaryGoalOther", "secondaryGoals"], ["successDefinition", "targetWeight"]],
     fields: [
       {
         key: "primaryGoal",
@@ -281,14 +283,6 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
         label: "What would make this coaching feel successful to you?",
         type: "textarea",
         required: true,
-      },
-      {
-        key: "eventOrDeadline",
-        label: "Event or deadline (optional)",
-        type: "text",
-        required: false,
-        placeholder: "e.g. wedding in June — leave blank if none",
-        icon: CalendarRange,
       },
       {
         key: "targetWeight",
@@ -701,6 +695,40 @@ export function visibleFieldsForStep(step: OnboardingStepDef, answers: Onboardin
  * (e.g. Review), so callers never need to branch on whether moments exist. */
 export function momentsForStep(step: OnboardingStepDef): string[][] {
   return step.moments && step.moments.length > 0 ? step.moments : [step.fields.map((f) => f.key)];
+}
+
+/** Whether a moment (a group of field keys — see OnboardingStepDef.moments)
+ * has at least one field that's currently visible given the step's
+ * in-progress answers. A moment can end up with NONE — e.g. every field in
+ * it is conditional on an earlier answer the client gave that turned out
+ * not to apply (health_finish's injury-detail moments when
+ * hasInjuryHistory is false) — and that moment must never actually be
+ * shown; see findVisibleMomentIndex below, the fix for exactly that. */
+export function momentHasVisibleField(step: OnboardingStepDef, momentFieldKeys: string[], answers: OnboardingStepAnswers): boolean {
+  return momentFieldKeys.some((key) => {
+    const field = step.fields.find((f) => f.key === key);
+    return field ? !field.visibleIf || field.visibleIf(answers) : false;
+  });
+}
+
+/** Root-cause fix for the "blank onboarding screen" defect: some moments
+ * (see momentHasVisibleField's doc) legitimately have zero applicable
+ * questions for a given client's answers so far — e.g. every follow-up in
+ * health_finish's injury cascade once hasInjuryHistory is answered false.
+ * Navigation must skip straight past a run of such moments in whichever
+ * direction it's moving, landing on the next moment that actually has
+ * something to answer, rather than ever rendering one that doesn't. Returns
+ * -1 (never loops, never throws) when nothing visible exists further in
+ * that direction within this step — the caller falls through to normal
+ * step-to-step navigation in that case. */
+export function findVisibleMomentIndex(step: OnboardingStepDef, answers: OnboardingStepAnswers, fromIndex: number, direction: 1 | -1): number {
+  const moments = momentsForStep(step);
+  let i = fromIndex;
+  while (i >= 0 && i < moments.length) {
+    if (momentHasVisibleField(step, moments[i], answers)) return i;
+    i += direction;
+  }
+  return -1;
 }
 
 /** Which moment (0-based) a given field key actually lives in right now —

@@ -19,6 +19,7 @@ import {
   ONBOARDING_STEPS,
   ONBOARDING_CHAPTER_ICONS,
   applyStepFieldUpdate,
+  findVisibleMomentIndex,
   isFieldAnswered,
   momentIndexForField,
   momentsForStep,
@@ -112,8 +113,8 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
   const currentAnswers = draftAnswers[step.id] ?? {};
   const isReviewStep = step.id === "review";
   const moments = momentsForStep(step);
-  const isLastMomentOfStep = momentIndex >= moments.length - 1;
-  const currentMomentKeys = new Set(moments[Math.min(momentIndex, moments.length - 1)]);
+  const safeMomentIndex = Math.min(momentIndex, moments.length - 1);
+  const currentMomentKeys = new Set(moments[safeMomentIndex]);
 
   // A number_wheel (and height_feet_inches, two of them) visually shows a
   // centered value the instant it mounts, but only ever calls onChange
@@ -150,9 +151,15 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
   }
 
   function handleNext() {
-    if (!isLastMomentOfStep) {
+    // Skip straight past any run of moments that have nothing applicable to
+    // answer (e.g. health_finish's injury-detail moments once
+    // hasInjuryHistory is false) — see findVisibleMomentIndex's own doc for
+    // why this is the actual fix for the "blank onboarding screen" defect,
+    // not just a cosmetic one.
+    const next = findVisibleMomentIndex(step, effectiveAnswers, safeMomentIndex + 1, 1);
+    if (next !== -1) {
       setDirection("forward");
-      setMomentIndex((i) => i + 1);
+      setMomentIndex(next);
       return;
     }
 
@@ -175,20 +182,27 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
     });
     setDirection("forward");
     setStepIndex(nextIndex);
-    setMomentIndex(0);
+    const nextStep = ONBOARDING_STEPS[nextIndex];
+    const nextStepAnswers = draftAnswers[nextStep.id] ?? {};
+    const entryMoment = findVisibleMomentIndex(nextStep, nextStepAnswers, 0, 1);
+    setMomentIndex(entryMoment === -1 ? 0 : entryMoment);
   }
 
   function handleBack() {
-    if (momentIndex > 0) {
+    const prev = findVisibleMomentIndex(step, effectiveAnswers, safeMomentIndex - 1, -1);
+    if (prev !== -1) {
       setDirection("back");
-      setMomentIndex((i) => i - 1);
+      setMomentIndex(prev);
       return;
     }
     if (stepIndex > 0) {
       setDirection("back");
       const prevIndex = stepIndex - 1;
+      const prevStep = ONBOARDING_STEPS[prevIndex];
+      const prevStepAnswers = draftAnswers[prevStep.id] ?? {};
+      const lastVisible = findVisibleMomentIndex(prevStep, prevStepAnswers, momentsForStep(prevStep).length - 1, -1);
       setStepIndex(prevIndex);
-      setMomentIndex(momentsForStep(ONBOARDING_STEPS[prevIndex]).length - 1);
+      setMomentIndex(lastVisible === -1 ? 0 : lastVisible);
     }
   }
 
@@ -206,16 +220,9 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
   const isVeryFirstScreen = stepIndex === 0 && momentIndex === 0;
 
   const actions = (
-    <div className="flex gap-2">
-      {!isVeryFirstScreen ? (
-        <Button variant="outline" size="lg" onClick={handleBack}>
-          Back
-        </Button>
-      ) : null}
-      <Button className="flex-1" size="lg" onClick={handleNext} disabled={!canContinue}>
-        {isReviewStep ? `Send to ${coachName}` : "Continue"}
-      </Button>
-    </div>
+    <Button className="w-full" size="lg" onClick={handleNext} disabled={!canContinue}>
+      {isReviewStep ? `Send to ${coachName}` : "Continue"}
+    </Button>
   );
 
   return (
@@ -223,6 +230,7 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
     <OnboardingStage
       coachName={coach?.displayName}
       coachInitials={coach?.avatarInitials}
+      onBack={!isVeryFirstScreen ? handleBack : undefined}
       progress={
         isReviewStep
           ? { sectionName: "Review", stepNumber: totalChapters, totalSteps: totalChapters, percentComplete: 100 }
@@ -347,7 +355,7 @@ function StepFields({
         </Collapse>
         );
       })}
-      {step.fields.length === 0 ? <p className="text-sm text-neutral">Nothing to answer on this step.</p> : null}
+      {fields.length === 0 ? <p className="text-sm text-neutral">Nothing more to answer here — continue when you&apos;re ready.</p> : null}
     </>
   );
 }

@@ -20,8 +20,10 @@ import {
   MIN_ONBOARDING_AGE,
   applyStepFieldUpdate,
   clampOnboardingAge,
+  findVisibleMomentIndex,
   isFieldAnswered,
   isMultiSelectOptionDisabled,
+  momentHasVisibleField,
   momentIndexForField,
   momentsForStep,
   optionsForField,
@@ -686,6 +688,54 @@ check("formatFieldValue still resolves an old single_select option label from a 
   const fakeLegacyField = { key: "primaryGoal", label: "Primary goal", type: "single_select" as const, required: true, options: [{ value: "build_muscle", label: "Build muscle" }] };
   assert.equal(formatFieldValue(fakeLegacyField, "build_muscle"), "Build muscle");
   assert.equal(formatFieldValue(fakeLegacyField, undefined), NOT_PROVIDED);
+});
+
+// ---------------------------------------------------------------------------
+
+console.log("\n15. Phase 5.6A — a moment with zero applicable questions is always skipped, never shown blank\n");
+
+check("The wedding/event/deadline question is gone from 'What you want', and never replaced by another event question", () => {
+  const goalsStep = step("what_you_want");
+  assert.equal(goalsStep.fields.find((f) => f.key === "eventOrDeadline"), undefined);
+  assert.ok(!goalsStep.fields.some((f) => /event|deadline|wedding/i.test(f.label)), "no field should reintroduce event/deadline framing");
+});
+
+check("health_finish: answering 'no injury' leaves every injury-detail moment with zero visible fields", () => {
+  const healthStep = step("health_finish");
+  const noInjuryAnswers: OnboardingStepAnswers = { hasInjuryHistory: false };
+  for (const moment of momentsForStep(healthStep)) {
+    if (moment.includes("hasInjuryHistory") || moment.includes("safetyScreen")) continue;
+    assert.equal(momentHasVisibleField(healthStep, moment, noInjuryAnswers), false, `moment [${moment.join(", ")}] should have nothing visible when there's no injury`);
+  }
+});
+
+check("health_finish: findVisibleMomentIndex skips straight from 'no injury' past every empty injury-detail moment to safetyScreen", () => {
+  const healthStep = step("health_finish");
+  const moments = momentsForStep(healthStep);
+  const hasInjuryIndex = moments.findIndex((m) => m.includes("hasInjuryHistory"));
+  const safetyScreenIndex = moments.findIndex((m) => m.includes("safetyScreen"));
+  const noInjuryAnswers: OnboardingStepAnswers = { hasInjuryHistory: false };
+  assert.equal(findVisibleMomentIndex(healthStep, noInjuryAnswers, hasInjuryIndex + 1, 1), safetyScreenIndex);
+  // And the reverse direction, landing back on hasInjuryHistory.
+  assert.equal(findVisibleMomentIndex(healthStep, noInjuryAnswers, safetyScreenIndex - 1, -1), hasInjuryIndex);
+});
+
+check("health_finish: answering 'has injury' makes every injury-detail moment visible again, one real decision at a time", () => {
+  const healthStep = step("health_finish");
+  const hasInjuryAnswers: OnboardingStepAnswers = { hasInjuryHistory: true, injuryBodyAreas: ["knee"] };
+  const moments = momentsForStep(healthStep);
+  const hasInjuryIndex = moments.findIndex((m) => m.includes("hasInjuryHistory"));
+  const next = findVisibleMomentIndex(healthStep, hasInjuryAnswers, hasInjuryIndex + 1, 1);
+  assert.deepEqual(moments[next], ["injuryBodyAreas", "injuryBodyAreaOther"]);
+  assert.equal(momentHasVisibleField(healthStep, ["injuryAggravatingFactors"], hasInjuryAnswers), true);
+  assert.equal(momentHasVisibleField(healthStep, ["injuryWorkingWithProfessional"], hasInjuryAnswers), true);
+});
+
+check("findVisibleMomentIndex returns -1 (never loops or throws) once it runs off the end of a step in either direction", () => {
+  const healthStep = step("health_finish");
+  const moments = momentsForStep(healthStep);
+  assert.equal(findVisibleMomentIndex(healthStep, { hasInjuryHistory: false }, moments.length, 1), -1);
+  assert.equal(findVisibleMomentIndex(healthStep, { hasInjuryHistory: false }, -1, -1), -1);
 });
 
 // ---------------------------------------------------------------------------

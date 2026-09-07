@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, CalendarClock } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { ActivationWorkspace } from "@/components/coach/activation-workspace";
 import { ClientWorkspace } from "@/components/coach/client-workspace";
 import { ActivateConfirmationSheet } from "@/components/coach/activate-confirmation-sheet";
 import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
-import { useCoachClientView } from "@/hooks/use-coach-data";
+import { useProgramComposer } from "@/hooks/use-program-composer";
 import { resolveProgramTiming, describeProgramTimingForCoach } from "@/lib/scheduling/program-timing";
 
 /**
@@ -19,14 +19,56 @@ import { resolveProgramTiming, describeProgramTimingForCoach } from "@/lib/sched
  * (components/coach/client-workspace.tsx). Neither experience is forced
  * onto the other's screen. See each component's own doc for its section
  * hierarchy.
+ *
+ * Phase 5.6A — this is also the ONE place a not-yet-active client's OPTIM
+ * draft starts preparing itself: the moment onboarding is complete (and no
+ * health-review concern is blocking it), the effect below calls the same
+ * auto-pilot pipeline the autonomous "Generate my recommended plan" button
+ * uses (see useProgramComposer's runAutoGeneration) so a coach opening — or
+ * returning to — this page never has to discover a separate "Generate"
+ * screen themselves. Idempotent by construction (see runAutoGeneration's own
+ * doc), so re-running this effect on every render/focus/cross-tab resync is
+ * always safe.
  */
 export default function CoachClientWorkspacePage() {
   const params = useParams<{ clientId: string }>();
   const router = useRouter();
-  const view = useCoachClientView(params.clientId);
+  const view = useProgramComposer(params.clientId);
   const [confirmingActivation, setConfirmingActivation] = useState(false);
   const [, forceRerender] = useState(0);
   const onChanged = () => forceRerender((n) => n + 1);
+
+  const { onboarding, healthReviewResolved, latest, activeModel, coachId, lifecycle: currentLifecycle, runAutoGeneration } = view;
+  // Guards against a real duplicate-generation bug, not just a cosmetic
+  // re-run: React (in development, under StrictMode) intentionally invokes
+  // an effect's setup function TWICE in immediate succession on mount,
+  // sharing the same closure/render — so `latest` is still stale (pre-
+  // dispatch) on the second call, and without this ref BOTH calls pass
+  // every guard above and each independently calls runDirections/
+  // buildFullProgram, producing two distinct activation-generation records
+  // instead of one. A plain ref (not React state) is required here
+  // specifically because it's read/written synchronously within the same
+  // tick, before either dispatch has had a chance to re-render this
+  // component with the real, updated `latest`. Keyed by clientId (not a
+  // plain boolean) because Next.js reuses this same page instance — and its
+  // refs — when the coach navigates from one client's page straight to
+  // another's; a plain boolean would wrongly suppress the very first real
+  // attempt for the second client.
+  const autoGenerationAttemptedForClientRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (currentLifecycle === "active" || !coachId || !activeModel) return;
+    if (!onboarding?.completedAtIso) return;
+    if (healthReviewResolved === false) return;
+    // Never auto-retries a failed/blocked attempt — that's a real problem
+    // the coach must consciously retry (see ActivationWorkspace's "Retry
+    // generation" action), never something silently re-attempted forever.
+    if (latest?.state === "generation_failed" || latest?.state === "blocked") return;
+    // Already has a real, complete draft (or further along) — nothing to do.
+    if (latest?.trainingOptions.length) return;
+    if (autoGenerationAttemptedForClientRef.current === params.clientId) return;
+    autoGenerationAttemptedForClientRef.current = params.clientId;
+    runAutoGeneration();
+  }, [currentLifecycle, coachId, activeModel, onboarding?.completedAtIso, healthReviewResolved, latest, runAutoGeneration, params.clientId]);
 
   if (!view.client) {
     return (

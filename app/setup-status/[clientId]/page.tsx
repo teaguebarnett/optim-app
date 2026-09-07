@@ -8,7 +8,8 @@ import { PhoneCanvas } from "@/components/app-shell/phone-canvas";
 import { OnboardingStage } from "@/components/onboarding/onboarding-stage";
 import { usePlatformState } from "@/hooks/use-platform-state";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { getClientLifecycle, getClientProfile, getIntendedProgram } from "@/lib/coach/repository";
+import { getActivationGenerationsForClient, getClientLifecycle, getClientProfile, getIntendedProgram } from "@/lib/coach/repository";
+import { latestGenerationForClient } from "@/lib/coach/activation-lifecycle";
 import { ALL_COACH_PROFILES } from "@/lib/tenancy/seed";
 
 function formatStartDate(iso: string): string {
@@ -33,6 +34,8 @@ export default function SetupStatusPage() {
   const coach = client ? ALL_COACH_PROFILES.find((c) => c.id === client.primaryCoachId) : null;
   const coachName = coach?.displayName ?? "your coach";
   const intendedProgram = client ? getIntendedProgram(platform, client.id) : null;
+  const latestGeneration = client ? latestGenerationForClient(getActivationGenerationsForClient(platform, client.id), client.id) : null;
+  const draftReadyForCoach = latestGeneration?.state === "ready_for_review" || latestGeneration?.state === "revision_prepared";
 
   useEffect(() => {
     if (!isPlatformHydrated || !client) return;
@@ -71,10 +74,22 @@ export default function SetupStatusPage() {
     // "Enter OPTIM" button here: nothing on this screen can move a client
     // into the app early, and pretending otherwise would be dishonest
     // about what "ready_to_activate" actually means.
+    //
+    // Phase 5.6A — for "coach_setup" this used to claim "{coachName} is
+    // reviewing your answers and building your program" the instant a
+    // client submitted, even though OPTIM's own draft generation hadn't
+    // run yet — a real coach hadn't done anything at that moment. This now
+    // attributes drafting to OPTIM (honest about what's actually
+    // happening) and the coach's role to reviewing/approving it, and
+    // distinguishes "still preparing" from "draft ready" using the same
+    // real activation-generation record the coach's own client-detail page
+    // reads (see lib/coach/plan-status.ts).
     const statusLine =
       lifecycle === "ready_to_activate"
         ? `Your program is built. ${coachName} just needs to start it.`
-        : `${coachName} is reviewing your answers and building your program.`;
+        : draftReadyForCoach
+          ? `OPTIM has prepared your training and nutrition draft — ${coachName} is reviewing it now.`
+          : `OPTIM is preparing your training and nutrition draft for ${coachName} to review.`;
 
     return (
       <OnboardingStage coachName={coachName}>
@@ -95,6 +110,10 @@ export default function SetupStatusPage() {
                   </div>
                 </dl>
               </Card>
+            ) : null}
+
+            {lifecycle !== "ready_to_activate" ? (
+              <p className="mt-4 text-sm text-neutral">Nothing becomes active for you until {coachName} approves it — feel free to close this page.</p>
             ) : null}
 
             <p className="mt-6 flex items-center justify-center gap-2 text-meta text-neutral">

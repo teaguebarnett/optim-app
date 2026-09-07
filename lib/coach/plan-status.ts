@@ -11,7 +11,7 @@
 
 import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 
-export type PlanStatus = "not_started" | "blocked_by_health_review" | "recommendations_ready" | "coach_approval_needed" | "approved";
+export type PlanStatus = "not_started" | "blocked_by_health_review" | "recommendations_ready" | "coach_approval_needed" | "generation_failed" | "approved";
 
 export interface PlanStatusResult {
   status: PlanStatus;
@@ -23,6 +23,7 @@ const LABELS: Record<PlanStatus, string> = {
   blocked_by_health_review: "Training plan — blocked by health review",
   recommendations_ready: "Training plan — recommendations ready",
   coach_approval_needed: "Training plan — coach approval needed",
+  generation_failed: "Training plan — generation failed",
   approved: "Training plan — approved",
 };
 
@@ -43,6 +44,40 @@ export function resolveTrainingPlanStatus(input: { latestGeneration: ActivationG
   // to act on, not just directions to choose between.
   if (state === "ready_for_review" || state === "revision_prepared") return { status: "coach_approval_needed", label: LABELS.coach_approval_needed };
   if (state === "directions_ready") return { status: "recommendations_ready", label: LABELS.recommendations_ready };
+  // Phase 5.6A — an attempt that produced nothing usable (every option
+  // failed a hard constraint, or generation threw) must never silently
+  // collapse back into "not_started": that's exactly the "coach is left
+  // thinking nothing was ever tried" bug this phase's brief calls out.
+  if (state === "generation_failed" || state === "blocked") return { status: "generation_failed", label: LABELS.generation_failed };
 
   return { status: "not_started", label: LABELS.not_started };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5.6A — the client-detail page's single unified journey stage.
+// ---------------------------------------------------------------------------
+
+/** Every stage the pre-active Activation Workspace can honestly show —
+ * "approved"/activated clients never render this page at all (see
+ * app/coach/clients/[clientId]/page.tsx's lifecycle switch, which shows the
+ * Client Workspace instead the moment lifecycle becomes "active"), so this
+ * only ever needs to describe what comes before that. */
+export type ClientJourneyStage = "awaiting_onboarding" | PlanStatus;
+
+/**
+ * The ONE status the client-detail page's primary card is built from —
+ * folds "has the client even finished their intake yet" in ahead of the
+ * training-plan status above, since a coach must never see a plan-shaped
+ * status (even "not started") before there's a client to generate one for
+ * (spec's State 1: "Do not show 'Review OPTIM Plan'... or imply that a plan
+ * exists"). Every other stage delegates straight to resolveTrainingPlanStatus
+ * so the two can never disagree about a client who HAS finished onboarding.
+ */
+export function resolveClientJourneyStage(input: {
+  onboardingCompleted: boolean;
+  latestGeneration: ActivationGenerationRecord | null;
+  healthReviewResolved: boolean | "no_review_needed";
+}): ClientJourneyStage {
+  if (!input.onboardingCompleted) return "awaiting_onboarding";
+  return resolveTrainingPlanStatus({ latestGeneration: input.latestGeneration, healthReviewResolved: input.healthReviewResolved }).status;
 }

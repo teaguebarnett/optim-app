@@ -5,7 +5,7 @@
 // winning as the one safety override.
 
 import assert from "node:assert/strict";
-import { resolveTrainingPlanStatus } from "./plan-status.ts";
+import { resolveTrainingPlanStatus, resolveClientJourneyStage } from "./plan-status.ts";
 import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 
 let passed = 0;
@@ -72,6 +72,27 @@ check("every status carries a real, non-empty label", () => {
     const result = resolveTrainingPlanStatus({ latestGeneration: record(s), healthReviewResolved: "no_review_needed" });
     assert.ok(result.label.length > 0);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5.6A additions
+// ---------------------------------------------------------------------------
+
+check("a failed generation attempt is a real, distinct status — never silently collapses back to 'not_started'", () => {
+  assert.equal(resolveTrainingPlanStatus({ latestGeneration: record("generation_failed"), healthReviewResolved: "no_review_needed" }).status, "generation_failed");
+  assert.equal(resolveTrainingPlanStatus({ latestGeneration: record("blocked"), healthReviewResolved: "no_review_needed" }).status, "generation_failed");
+});
+
+check("resolveClientJourneyStage: onboarding incomplete always wins, even over an unresolved health review or a ready plan", () => {
+  assert.equal(resolveClientJourneyStage({ onboardingCompleted: false, latestGeneration: null, healthReviewResolved: "no_review_needed" }), "awaiting_onboarding");
+  assert.equal(resolveClientJourneyStage({ onboardingCompleted: false, latestGeneration: record("ready_for_review"), healthReviewResolved: false }), "awaiting_onboarding");
+});
+
+check("resolveClientJourneyStage: once onboarding is complete, it defers to resolveTrainingPlanStatus exactly", () => {
+  assert.equal(resolveClientJourneyStage({ onboardingCompleted: true, latestGeneration: null, healthReviewResolved: false }), "blocked_by_health_review");
+  assert.equal(resolveClientJourneyStage({ onboardingCompleted: true, latestGeneration: null, healthReviewResolved: "no_review_needed" }), "not_started");
+  assert.equal(resolveClientJourneyStage({ onboardingCompleted: true, latestGeneration: record("ready_for_review"), healthReviewResolved: "no_review_needed" }), "coach_approval_needed");
+  assert.equal(resolveClientJourneyStage({ onboardingCompleted: true, latestGeneration: record("generation_failed"), healthReviewResolved: "no_review_needed" }), "generation_failed");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

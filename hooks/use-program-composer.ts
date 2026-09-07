@@ -192,6 +192,32 @@ export function useProgramComposer(clientId: ClientProfileId) {
     [clientView, com.activeModel]
   );
 
+  /**
+   * The one auto-pilot pipeline: directions -> best-fit full program ->
+   * best-fit nutrition, in one call. Phase 5.5A's autonomous-authority
+   * "Generate my recommended plan" button and Phase 5.6A's automatic
+   * post-intake draft preparation both call this SAME function rather than
+   * keeping two parallel implementations that could drift — see this
+   * phase's brief: "Reuse the existing Phase 5.5A generation engine...
+   * Generation must be idempotent and must not create duplicate plans."
+   * Safe to call more than once for the same client: runDirections/
+   * buildFullProgram are both idempotent (same idempotency key, or same
+   * record id on rebuild), so a redundant call just re-confirms the same
+   * record rather than creating a second one.
+   */
+  const runAutoGeneration = useCallback((): ActivationGenerationRecord | null => {
+    const directionsRecord = runDirections();
+    if (!directionsRecord?.directions?.length) return directionsRecord;
+    if (directionsRecord.trainingOptions.length > 0) return directionsRecord;
+    const bestFit = directionsRecord.directions.find((d) => d.kind === "best_fit") ?? directionsRecord.directions[0];
+    const withProgram = buildFullProgram(directionsRecord, bestFit.id);
+    if (withProgram?.state === "ready_for_review" && withProgram.nutritionOptions.length && !withProgram.selectedNutritionOptionId) {
+      const bestFitNutrition = withProgram.nutritionOptions.find((o) => o.kind === "best_fit") ?? withProgram.nutritionOptions[0];
+      return selectNutrition(withProgram, bestFitNutrition.id) ?? withProgram;
+    }
+    return withProgram;
+  }, [runDirections, buildFullProgram, selectNutrition]);
+
   const previewDraftNutritionRevision = useCallback((prescription: CompleteNutritionPrescription, instruction: string, weightLb: number, baseProteinGPerLb: number) => {
     const plan = interpretNutritionRevisionInstruction(instruction);
     const { revisedPrescription, changes } = applyNutritionRevision(prescription, plan, weightLb, baseProteinGPerLb);
@@ -437,6 +463,7 @@ export function useProgramComposer(clientId: ClientProfileId) {
     equipment,
     runDirections,
     buildFullProgram,
+    runAutoGeneration,
     approveInitial,
     previewDraftRevision,
     confirmDraftRevision,

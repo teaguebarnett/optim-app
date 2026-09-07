@@ -170,14 +170,7 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
   }
 
   function handleAutoGenerate() {
-    const directionsRecord = composer.runDirections();
-    if (!directionsRecord?.directions?.length) return;
-    const bestFit = directionsRecord.directions.find((d) => d.kind === "best_fit") ?? directionsRecord.directions[0];
-    const withProgram = composer.buildFullProgram(directionsRecord, bestFit.id);
-    if (withProgram?.nutritionOptions.length) {
-      const bestFitNutrition = withProgram.nutritionOptions.find((o) => o.kind === "best_fit") ?? withProgram.nutritionOptions[0];
-      composer.selectNutrition(withProgram, bestFitNutrition.id);
-    }
+    composer.runAutoGeneration();
   }
 
   if (!latest || latest.state === "generation_failed" || latest.state === "blocked") {

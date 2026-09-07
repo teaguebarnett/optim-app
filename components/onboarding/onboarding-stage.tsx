@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { PhoneCanvas } from "@/components/app-shell/phone-canvas";
 import { cn } from "@/lib/cn";
@@ -46,6 +47,7 @@ export function OnboardingStage({
   moment,
   recap,
   footer,
+  onBack,
 }: {
   children: ReactNode;
   coachName?: string;
@@ -59,6 +61,14 @@ export function OnboardingStage({
    * phone, and to the phone canvas's own bottom (never the browser
    * window's) at desktop widths. */
   footer?: ReactNode;
+  /** Phase 5.6A — a circular back-arrow button beside the chapter title,
+   * matching the coach onboarding wizard's own back-navigation pattern
+   * (components/coach-onboarding/coach-onboarding-wizard.tsx's
+   * ChapterFrame) exactly, so backward navigation lives in ONE consistent,
+   * visually obvious place rather than a second control buried in the
+   * bottom footer that manual review found easy to miss entirely. Omitted
+   * (never rendered) on the very first screen a client can't back out of. */
+  onBack?: () => void;
 }) {
   const showMomentDots = !!moment && moment.total > 1;
 
@@ -79,11 +89,24 @@ export function OnboardingStage({
 
           {progress ? (
             <div className="mt-4">
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="text-sm font-medium text-off-white">{progress.sectionName}</p>
-                <p className="text-meta text-neutral">
-                  {progress.stepNumber} of {progress.totalSteps}
-                </p>
+              <div className="flex items-center gap-2.5">
+                {onBack ? (
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    aria-label="Back"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-neutral transition-colors hover:bg-accent-soft hover:text-accent-strong"
+                    style={{ transitionDuration: "var(--motion-fast)" }}
+                  >
+                    <ArrowLeft size={16} aria-hidden="true" />
+                  </button>
+                ) : null}
+                <div className="flex min-w-0 flex-1 items-baseline justify-between gap-2">
+                  <p className="text-sm font-medium text-off-white">{progress.sectionName}</p>
+                  <p className="text-meta text-neutral">
+                    {progress.stepNumber} of {progress.totalSteps}
+                  </p>
+                </div>
               </div>
               <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-off-white/10">
                 <div
