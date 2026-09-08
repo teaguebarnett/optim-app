@@ -1,7 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Sparkles,
+  Check,
+  Users2,
+  Dumbbell,
+  Activity,
+  Utensils,
+  UtensilsCrossed,
+  MessageCircle,
+  ShieldCheck,
+  History,
+  ClipboardCheck,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCoachOperatingModel } from "@/hooks/use-coach-operating-model";
 import {
@@ -19,6 +34,22 @@ import { ReviewChapter } from "@/components/coach-onboarding/review-chapter";
 import { CoachOnboardingWelcome } from "@/components/coach-onboarding/coach-onboarding-welcome";
 
 const CHAPTER_META = new Map(COACH_ONBOARDING_CHAPTERS.map((c) => [c.id, c]));
+
+/** One consistent, recognizable icon per chapter — used in the chapter
+ * rail below so the whole shape of the calibration is scannable at a
+ * glance, not just the current question's own icon-less text block. */
+const CHAPTER_ICONS: Record<CoachOnboardingChapterId, LucideIcon> = {
+  practice: Users2,
+  program_architecture: Dumbbell,
+  training_adjustment: Activity,
+  nutrition_philosophy: Utensils,
+  nutrition_adjustment: UtensilsCrossed,
+  communication: MessageCircle,
+  safety: ShieldCheck,
+  ai_authority: Sparkles,
+  existing_work: History,
+  review: ClipboardCheck,
+};
 
 export function CoachOnboardingWizard({ businessName }: { businessName: string }) {
   const com = useCoachOperatingModel();
@@ -80,7 +111,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
 
   if (chapterId === "ai_authority") {
     return (
-      <ChapterFrame meta={meta} chapterNumber={chapterIndex + 1} totalChapters={chapters.length} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
+      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
         <AiAuthorityChapter onContinue={goToNextChapter} />
       </ChapterFrame>
     );
@@ -88,7 +119,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
 
   if (chapterId === "existing_work") {
     return (
-      <ChapterFrame meta={meta} chapterNumber={chapterIndex + 1} totalChapters={chapters.length} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
+      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
         <ExistingWorkChapter onContinue={goToNextChapter} />
       </ChapterFrame>
     );
@@ -96,7 +127,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
 
   if (chapterId === "review") {
     return (
-      <ChapterFrame meta={meta} chapterNumber={chapterIndex + 1} totalChapters={chapters.length} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
+      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
         <ReviewChapter
           onEditChapter={(id) => {
             if (chapters.includes(id)) {
@@ -140,16 +171,16 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
     (question.type === "multi_select" || question.type === "scenario" ? Array.isArray(currentValue) && currentValue.length > 0 : question.type === "boolean" ? typeof currentValue === "boolean" : currentValue !== undefined && currentValue !== "");
 
   return (
-    <ChapterFrame meta={meta} chapterNumber={chapterIndex + 1} totalChapters={chapters.length} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0}>
+    <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0}>
       {question ? (
         <div>
-          <div className="mb-1.5 flex items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-strong">
-            <span>{questionIndex + 1}</span>
+          <div className="mb-2 flex items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-strong">
+            <span>Question {questionIndex + 1}</span>
             <span className="text-neutral">of {questions.length}</span>
           </div>
-          <h2 className="max-w-3xl text-display text-off-white">{question.prompt}</h2>
-          {question.explanation ? <p className="mt-2 max-w-2xl text-body text-neutral">{question.explanation}</p> : null}
-          <div className="mt-6">
+          <h2 className="max-w-2xl text-heading text-off-white">{question.prompt}</h2>
+          {question.explanation ? <p className="mt-2 max-w-xl text-body text-neutral">{question.explanation}</p> : null}
+          <div className="mt-7">
             <QuestionField question={question} answers={com.answers} onChange={handleChange} />
           </div>
           <div className="mt-8 flex gap-3">
@@ -186,62 +217,97 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
 
 function ChapterFrame({
   meta,
+  chapterId,
+  chapters,
   chapterNumber,
-  totalChapters,
   children,
   onBack,
   canGoBack,
 }: {
   meta: { title: string; description: string };
+  chapterId: CoachOnboardingChapterId;
+  chapters: CoachOnboardingChapterId[];
   chapterNumber: number;
-  totalChapters: number;
   children: React.ReactNode;
   onBack: () => void;
   canGoBack: boolean;
 }) {
   return (
-    <div className="mx-auto grid min-h-screen max-w-[1440px] grid-cols-[1fr_320px] gap-10 px-12 py-10">
-      <div>
-        <div className="mb-8 flex items-center gap-4">
-          {canGoBack ? (
-            <button type="button" onClick={onBack} className="flex h-9 w-9 items-center justify-center rounded-full text-neutral hover:bg-accent-soft hover:text-accent-strong">
-              <ArrowLeft size={16} aria-hidden="true" />
-            </button>
-          ) : null}
-          <div>
-            <p className="text-label text-accent-strong">
-              {meta.title} · {chapterNumber} of {totalChapters}
-            </p>
-            <div className="mt-1.5 flex gap-1">
-              {Array.from({ length: totalChapters }, (_, i) => (
-                <span key={i} className={`h-1 flex-1 rounded-full ${i < chapterNumber ? "bg-accent" : "bg-border"}`} />
-              ))}
+    <div className="min-h-screen bg-canvas">
+      <div className="mx-auto grid max-w-[1240px] grid-cols-[280px_1fr] gap-8 px-10 py-12">
+        <ChapterRail chapterId={chapterId} chapters={chapters} />
+        <div className="min-w-0">
+          <div className="mb-6 flex items-center gap-3">
+            {canGoBack ? (
+              <button type="button" onClick={onBack} aria-label="Back" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral hover:bg-accent-soft hover:text-accent-strong">
+                <ArrowLeft size={16} aria-hidden="true" />
+              </button>
+            ) : null}
+            <div>
+              <p className="text-label text-accent-strong">
+                {meta.title} · {chapterNumber} of {chapters.length}
+              </p>
+              <p className="mt-0.5 text-meta text-neutral">{meta.description}</p>
             </div>
           </div>
+          <div className="rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-8 shadow-[var(--shadow-subtle)]">{children}</div>
         </div>
-        {children}
       </div>
-      <LearningPanel />
     </div>
   );
 }
 
-function LearningPanel() {
+/** The categories-at-a-glance rail — replaces a bare percent stat with the
+ * actual shape of this coach's calibration: every chapter that genuinely
+ * applies to them (already filtered by applicableChapters), each marked
+ * done / current / upcoming. A coach mid-flow can see exactly how much is
+ * behind them and what's still ahead without leaving the question. */
+function ChapterRail({ chapterId, chapters }: { chapterId: CoachOnboardingChapterId; chapters: CoachOnboardingChapterId[] }) {
   const com = useCoachOperatingModel();
   const summary = computeProgressSummary(com.answers);
+  const currentIndex = chapters.indexOf(chapterId);
+
   return (
-    <aside className="sticky top-10 h-fit rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-5">
-      <div className="flex items-center gap-2 text-label text-neutral">
-        <Sparkles size={14} className="text-accent-strong" aria-hidden="true" />
-        WHAT OPTIM IS LEARNING
+    <aside className="sticky top-12 h-fit space-y-5">
+      <div className="rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-5">
+        <div className="flex items-center gap-2 text-label text-neutral">
+          <Sparkles size={14} className="text-accent-strong" aria-hidden="true" />
+          WHAT OPTIM IS LEARNING
+        </div>
+        <p className="mt-2.5 text-subheading text-off-white">{summary.percentComplete}% complete</p>
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">
+          <div className="pc-segment h-full rounded-full bg-accent" style={{ width: `${summary.percentComplete}%` }} />
+        </div>
+        <p className="mt-2.5 text-meta text-neutral">{summary.answeredQuestions} of {summary.totalApplicableQuestions} applicable questions answered.</p>
       </div>
-      <p className="mt-3 text-heading text-off-white">{summary.percentComplete}% of applicable questions answered</p>
-      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">
-        <div className="pc-segment h-full rounded-full bg-accent" style={{ width: `${summary.percentComplete}%` }} />
-      </div>
-      <p className="mt-3 text-meta text-neutral">
-        {summary.answeredQuestions} of {summary.totalApplicableQuestions} questions apply to you — {ALL_CHAPTER_IDS_IN_ORDER.length} chapters total, some skip automatically based on your answers.
-      </p>
+
+      <nav aria-label="Calibration chapters" className="space-y-1">
+        {chapters.map((id, index) => {
+          const chapterMeta = CHAPTER_META.get(id)!;
+          const Icon = CHAPTER_ICONS[id];
+          const isCurrent = index === currentIndex;
+          const isDone = index < currentIndex;
+          return (
+            <div
+              key={id}
+              className={`flex items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 transition-colors ${
+                isCurrent ? "bg-accent-soft" : ""
+              }`}
+            >
+              <span
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                  isDone ? "bg-accent text-on-accent" : isCurrent ? "bg-accent text-on-accent" : "bg-surface-raised text-neutral"
+                }`}
+              >
+                {isDone ? <Check size={14} aria-hidden="true" /> : <Icon size={14} aria-hidden="true" />}
+              </span>
+              <span className={`text-meta font-medium leading-tight ${isCurrent ? "text-off-white" : isDone ? "text-neutral" : "text-neutral/70"}`}>
+                {chapterMeta.title}
+              </span>
+            </div>
+          );
+        })}
+      </nav>
     </aside>
   );
 }

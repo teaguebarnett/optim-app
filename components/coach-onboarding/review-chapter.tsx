@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, ArrowRight, Check, Pencil } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, Pencil, Users2, Dumbbell, TrendingUp, Utensils, MessageCircle, ShieldCheck, ShieldAlert, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCoachOperatingModel } from "@/hooks/use-coach-operating-model";
 import { generateThreeNutritionStrategies, generateThreeTrainingOptions, type ClientOnboardingSnapshot } from "@/lib/coach/activation-generation";
@@ -101,39 +101,65 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
   }
 
   return (
-    <div className="max-w-3xl">
-      <h2 className="text-display text-off-white">Here&apos;s how OPTIM understands you</h2>
-      <p className="mt-2 text-body text-neutral">Review each area below. Nothing becomes active until you confirm at the bottom.</p>
+    <div>
+      {activated ? (
+        <div className="flex flex-wrap items-start justify-between gap-6 rounded-[var(--radius-lg)] border border-success/30 bg-success/10 p-6">
+          <div className="flex items-start gap-4">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-success text-on-accent">
+              <Check size={22} aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-heading text-off-white">{unansweredRequired.length > 0 ? "Onboarding complete — playbook review pending" : "Calibration complete"}</p>
+              <p className="mt-1.5 max-w-xl text-body text-neutral">
+                {unansweredRequired.length > 0
+                  ? `Your coaching model is active with ${unansweredRequired.length} honest OPTIM default${unansweredRequired.length === 1 ? "" : "s"} standing in for unanswered required questions — worth reviewing when you have a moment, from ${isRevision ? "the Playbook" : "Settings → Coach Playbook"}.`
+                  : isRevision
+                    ? "Your updated coaching model is active — new client generations will use it."
+                    : "Your coaching model is active — OPTIM will use it for every new client."}
+              </p>
+            </div>
+          </div>
+          <Button size="lg" onClick={() => router.push("/coach")}>
+            Return to dashboard <ArrowRight size={16} aria-hidden="true" />
+          </Button>
+        </div>
+      ) : (
+        <>
+          <h2 className="text-heading text-off-white">Here&apos;s how OPTIM understands you</h2>
+          <p className="mt-2 text-body text-neutral">Review each area below. Nothing becomes active until you confirm at the bottom.</p>
+        </>
+      )}
 
-      {unansweredRequired.length > 0 ? (
+      {!activated && unansweredRequired.length > 0 ? (
         <div className="mt-5 flex items-start gap-2 rounded-[var(--radius-sm)] bg-warning-soft px-3.5 py-3 text-sm text-warning-strong">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
           <span>{unansweredRequired.length} required question{unansweredRequired.length === 1 ? "" : "s"} still need an answer — OPTIM is using an honest default for now.</span>
         </div>
       ) : null}
 
-      <div className="mt-6 space-y-4">
-        <SummarySection title="Who you coach" onEdit={() => onEditChapter("practice")}>
+      {activated ? <p className="mb-3 mt-8 text-label text-neutral">Your coaching model, at a glance</p> : null}
+      <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${activated ? "" : "mt-6"}`}>
+        <SummarySection icon={Users2} title="Who you coach" onEdit={() => onEditChapter("practice")}>
           <p>{labelForList("practice_common_goals", model.practice.commonGoals) || "No goals specified"} · {labelForList("practice_experience_levels", model.practice.experienceLevelsServed) || "any experience level"}</p>
-          <p className="mt-1 text-neutral">{model.practice.successDefinition || "No success definition provided yet."}</p>
+          <p className="mt-1.5 text-neutral">{model.practice.successDefinition || "No success definition provided yet."}</p>
         </SummarySection>
 
-        <SummarySection title="How you program" onEdit={() => onEditChapter("program_architecture")}>
+        <SummarySection icon={Dumbbell} title="How you program" onEdit={() => onEditChapter("program_architecture")}>
           <p>
             {labelForList("program_splits", model.programArchitecture.preferredSplits) || "no split preference set"} · {model.programArchitecture.setsPerExerciseMin}–{model.programArchitecture.setsPerExerciseMax} sets ·{" "}
             {labelFor("program_rep_philosophy", model.programArchitecture.repRangePhilosophy)}
           </p>
         </SummarySection>
 
-        <SummarySection title="How you progress clients & handle fatigue" onEdit={() => onEditChapter("program_architecture")}>
+        <SummarySection icon={TrendingUp} title="How you progress clients & handle fatigue" onEdit={() => onEditChapter("program_architecture")}>
           <p>
             {labelFor("program_progression", model.programArchitecture.progressionMethod)} · deload every {model.programArchitecture.deloadFrequencyWeeks ?? "as-needed"} weeks · proximity to failure:{" "}
             {labelFor("program_proximity_to_failure", model.programArchitecture.proximityToFailure)}
           </p>
-          <p className="mt-1 text-neutral">{model.trainingAdjustmentPolicies.length} real adjustment scenarios configured.</p>
+          <p className="mt-1.5 text-neutral">{model.trainingAdjustmentPolicies.length} real adjustment scenarios configured.</p>
         </SummarySection>
 
-        <SummarySection title="How you coach nutrition" onEdit={() => onEditChapter("nutrition_philosophy")}>
+        <SummarySection icon={Utensils} title="How you coach nutrition" onEdit={() => onEditChapter("nutrition_philosophy")}>
           {model.nutritionPhilosophy.providesNutritionCoaching ? (
             <>
               <p>
@@ -147,31 +173,31 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
                 )}{" "}
                 · {labelFor("nutrition_plan_vs_framework", model.nutritionPhilosophy.planVsFrameworkPreference)} · {model.nutritionPhilosophy.rateOfLossPercentPerWeek}%/week loss rate
               </p>
-              <p className="mt-1 text-neutral">{model.nutritionAdjustmentPolicies.length} real adjustment scenarios configured.</p>
+              <p className="mt-1.5 text-neutral">{model.nutritionAdjustmentPolicies.length} real adjustment scenarios configured.</p>
             </>
           ) : (
             <p className="text-neutral">Not part of your service — OPTIM won&apos;t generate nutrition strategies for your clients.</p>
           )}
         </SummarySection>
 
-        <SummarySection title="How you communicate" onEdit={() => onEditChapter("communication")}>
+        <SummarySection icon={MessageCircle} title="How you communicate" onEdit={() => onEditChapter("communication")}>
           <p>
             {humanize(model.communication.tone)} · directness {model.communication.directness}/5 · warmth {model.communication.warmth}/5 · {model.communication.messageLength} messages
           </p>
         </SummarySection>
 
-        <SummarySection title="Safety boundaries" onEdit={() => onEditChapter("safety")}>
+        <SummarySection icon={ShieldCheck} title="Safety boundaries" onEdit={() => onEditChapter("safety")}>
           <p>Pain: {labelFor("scn_pain", model.safety.painResponsePolicy)}</p>
           <p>Possible injury: {labelFor("scn_possible_injury", model.safety.injuryResponsePolicy)}</p>
-          {model.safety.absoluteOverrideRules.length > 0 ? <p className="mt-1 text-neutral">Your rules: {model.safety.absoluteOverrideRules.join("; ")}</p> : null}
+          {model.safety.absoluteOverrideRules.length > 0 ? <p className="mt-1.5 text-neutral">Your rules: {model.safety.absoluteOverrideRules.join("; ")}</p> : null}
         </SummarySection>
 
-        <SummarySection title="What always requires you" onEdit={() => onEditChapter("safety")}>
+        <SummarySection icon={ShieldAlert} title="What always requires you" onEdit={() => onEditChapter("safety")} span2>
           <p className="text-neutral">Pain or injury reports, medical concerns, disordered-eating signals, and any major goal change always reach you — regardless of your AI Authority level.</p>
         </SummarySection>
 
         {lowConfidence.length > 0 ? (
-          <SummarySection title="Unknown or low-confidence areas" tone="warning">
+          <SummarySection title="Unknown or low-confidence areas" tone="warning" span2>
             <p className="text-neutral">{lowConfidence.length} area{lowConfidence.length === 1 ? "" : "s"} are still using an OPTIM default because you haven&apos;t reviewed them yet — you can always refine these later.</p>
           </SummarySection>
         ) : null}
@@ -182,19 +208,19 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
         <p className="mt-1 text-body text-neutral">A real run of the generation engine using your current model, against two hypothetical clients.</p>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           {previews.map((p) => (
-            <div key={p.title} className="rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-5">
-              <p className="text-sm font-semibold text-off-white">{p.title}</p>
+            <div key={p.title} className="rounded-[var(--radius-lg)] border border-border-strong bg-surface-raised p-5">
+              <p className="text-subheading text-off-white">{p.title}</p>
               {p.bestTraining ? (
                 <div className="mt-3">
                   <p className="text-meta font-semibold uppercase tracking-wide text-accent-strong">OPTIM would recommend</p>
-                  <p className="mt-1 text-sm text-off-white">{p.bestTraining.splitName}</p>
+                  <p className="mt-1 text-body text-off-white">{p.bestTraining.splitName}</p>
                   <p className="text-meta text-neutral">{p.bestTraining.explanation.whyItFits}</p>
                 </div>
               ) : null}
               {p.bestNutrition ? (
                 <div className="mt-3">
                   <p className="text-meta font-semibold uppercase tracking-wide text-accent-strong">Nutrition</p>
-                  <p className="mt-1 text-sm text-off-white">
+                  <p className="mt-1 text-body text-off-white">
                     {p.bestNutrition.targets.calories} kcal · {p.bestNutrition.targets.proteinG}p / {p.bestNutrition.targets.carbsG}c / {p.bestNutrition.targets.fatG}f
                   </p>
                 </div>
@@ -206,65 +232,68 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
         </div>
       </div>
 
-      <div className="mt-10 border-t border-border pt-6">
-        {activated ? (
-          <div>
-            <p className="flex items-center gap-2 text-heading font-semibold text-success">
-              <Check size={20} aria-hidden="true" /> {unansweredRequired.length > 0 ? "Onboarding complete — playbook review pending" : "Calibration complete"}
-            </p>
-            <p className="mt-1.5 text-body text-neutral">
-              {unansweredRequired.length > 0
-                ? `Your coaching model is active with ${unansweredRequired.length} honest OPTIM default${unansweredRequired.length === 1 ? "" : "s"} standing in for unanswered required questions — worth reviewing when you have a moment, from ${isRevision ? "the Playbook" : "Settings → Coach Playbook"}.`
-                : isRevision
-                  ? "Your updated coaching model is active — new client generations will use it."
-                  : "Your coaching model is active — OPTIM will use it for every new client."}
-            </p>
-            <Button size="lg" className="mt-4" onClick={() => router.push("/coach")}>
-              Return to dashboard <ArrowRight size={16} aria-hidden="true" />
-            </Button>
-          </div>
-        ) : (
-          <>
-            {isRevision ? (
-              <div className="mb-4 rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-5">
-                <p className="text-sm font-semibold text-off-white">What&apos;s changing (v{previousActive!.version} → v{previousActive!.version + 1})</p>
-                {changedAreas.length > 0 ? (
-                  <ul className="mt-2 list-inside list-disc text-sm text-off-white">
-                    {changedAreas.map((area) => (
-                      <li key={area}>{area}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-sm text-neutral">No changes since your last confirmed model.</p>
-                )}
-                <p className="mt-3 text-meta text-neutral">
-                  Confirming creates a new model version. Future client generations use it — clients you&apos;ve already activated keep their current program and nutrition targets until you explicitly
-                  regenerate or approve a change for them.
-                </p>
-              </div>
-            ) : null}
-            <Button size="lg" onClick={handleActivate}>
-              {isRevision ? "Save updated coaching model" : "Confirm and activate my coaching model"} <ArrowRight size={16} aria-hidden="true" />
-            </Button>
-          </>
-        )}
-      </div>
+      {activated ? null : (
+        <div className="mt-10 border-t border-border pt-6">
+          {isRevision ? (
+            <div className="mb-4 rounded-[var(--radius-lg)] border border-border-strong bg-surface-raised p-5">
+              <p className="text-subheading text-off-white">What&apos;s changing (v{previousActive!.version} → v{previousActive!.version + 1})</p>
+              {changedAreas.length > 0 ? (
+                <ul className="mt-2 list-inside list-disc text-sm text-off-white">
+                  {changedAreas.map((area) => (
+                    <li key={area}>{area}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-neutral">No changes since your last confirmed model.</p>
+              )}
+              <p className="mt-3 text-meta text-neutral">
+                Confirming creates a new model version. Future client generations use it — clients you&apos;ve already activated keep their current program and nutrition targets until you explicitly
+                regenerate or approve a change for them.
+              </p>
+            </div>
+          ) : null}
+          <Button size="lg" onClick={handleActivate}>
+            {isRevision ? "Save updated coaching model" : "Confirm and activate my coaching model"} <ArrowRight size={16} aria-hidden="true" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
 
-function SummarySection({ title, children, onEdit, tone }: { title: string; children: React.ReactNode; onEdit?: () => void; tone?: "warning" }) {
+function SummarySection({
+  icon: Icon,
+  title,
+  children,
+  onEdit,
+  tone,
+  span2,
+}: {
+  icon?: LucideIcon;
+  title: string;
+  children: React.ReactNode;
+  onEdit?: () => void;
+  tone?: "warning";
+  span2?: boolean;
+}) {
   return (
-    <div className={`rounded-[var(--radius-lg)] border p-5 ${tone === "warning" ? "border-warning/30 bg-warning-soft" : "border-border-strong bg-charcoal"}`}>
+    <div className={`rounded-[var(--radius-lg)] border p-5 ${tone === "warning" ? "border-warning/30 bg-warning-soft" : "border-border-strong bg-surface-raised"} ${span2 ? "md:col-span-2" : ""}`}>
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-semibold text-off-white">{title}</p>
+        <div className="flex items-center gap-2.5">
+          {Icon ? (
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+              <Icon size={15} aria-hidden="true" />
+            </span>
+          ) : null}
+          <p className="text-subheading text-off-white">{title}</p>
+        </div>
         {onEdit ? (
-          <button type="button" onClick={onEdit} className="flex items-center gap-1 text-meta text-accent-strong hover:underline">
+          <button type="button" onClick={onEdit} className="flex shrink-0 items-center gap-1 text-meta text-accent-strong hover:underline">
             <Pencil size={12} aria-hidden="true" /> Edit
           </button>
         ) : null}
       </div>
-      <div className="mt-2 text-sm text-off-white">{children}</div>
+      <div className="mt-3 text-body leading-relaxed text-off-white">{children}</div>
     </div>
   );
 }
