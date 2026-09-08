@@ -15,7 +15,7 @@
 
 import { resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
 import { deriveProgramWeek } from "../scheduling/enrollment.ts";
-import { localDateDayOfWeek } from "../shared/local-date.ts";
+import { localDateDayOfWeek, resolveClientLocalDateIso } from "../shared/local-date.ts";
 import type { AppState } from "../state";
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 
@@ -224,9 +224,20 @@ export function resolveBriefingGenerationInput(
   automation: BriefingAutomationSetting,
   nowIso: string
 ): GenerateDailyBriefingInput {
+  // Acceptance-recovery pass — the client's own real current local date,
+  // computed fresh from the real clock, never the coach-side's possibly-
+  // stale clientAppState.dateIso (which only advances when that specific
+  // client's own browser session actually hydrates — see hooks/
+  // use-prototype-state.tsx's hydrateClientState/resolveRollover). A coach
+  // preparing a briefing before a client has opened the app yet today must
+  // never key it to a stale prior day: the client's own /today lookup
+  // (getDailyBriefing) always looks under ITS real current date, so a
+  // date-key mismatch here would silently make an approved briefing
+  // unreachable — the same class of false "Live" claim this pass repairs.
+  const todayIso = resolveClientLocalDateIso(new Date(nowIso), clientAppState.programEnrollment.timeZone);
   const clientDeclaredRest = clientAppState.dailyTrainingPlan?.status === "rest_day";
-  const dayOfWeek = localDateDayOfWeek(clientAppState.dateIso);
-  const weekNumber = deriveProgramWeek(clientAppState.programEnrollment, clientAppState.dateIso);
+  const dayOfWeek = localDateDayOfWeek(todayIso);
+  const weekNumber = deriveProgramWeek(clientAppState.programEnrollment, todayIso);
   const availability = resolveWorkoutAvailabilityForDay(dayOfWeek, clientDeclaredRest, clientAppState.assignedProgram, weekNumber);
   const isTrainingDay = !clientDeclaredRest && availability.scheduleEntry?.type === "training";
 
@@ -238,7 +249,7 @@ export function resolveBriefingGenerationInput(
     clientId: clientAppState.clientId,
     workspaceId: clientAppState.workspaceId,
     coachId,
-    forDateIso: clientAppState.dateIso,
+    forDateIso: todayIso,
     isTrainingDay,
     workoutDisplayName: isTrainingDay ? availability.displayName : undefined,
     workoutFocus: isTrainingDay ? availability.focus : undefined,

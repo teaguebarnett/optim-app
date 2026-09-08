@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { MessageSquare, ClipboardList, ChevronDown, ChevronUp, Wand2 } from "lucide-react";
+import { MessageSquare, ClipboardList, ChevronDown, ChevronUp, Wand2, Eye } from "lucide-react";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/progress/status-badge";
@@ -38,6 +39,7 @@ const STATUS_TONE: Record<string, BadgeTone> = { scheduled: "brass", on_track: "
  */
 export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; onChanged: () => void }) {
   const router = useRouter();
+  const { setActiveClientId } = usePrototypeState();
   const [moreOpen, setMoreOpen] = useState(false);
   const { client, clientAppState, chatMessages, attentionQueue, coachId, workspaceId, platform } = view;
 
@@ -91,6 +93,23 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <StatusBadge label={CLIENT_STATUS_LABELS[statusLabel]} tone={STATUS_TONE[statusLabel]} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // Acceptance-recovery pass — the one explicit, deterministic
+              // way a coach previews THIS exact client's real /today, tied
+              // to this client's own real id (never a silent fallback to
+              // whichever client this browser happened to be "acting as"
+              // before). setActiveClientId hydrates that client's own real
+              // AppState synchronously before we navigate, so /today never
+              // has a stale/wrong client's data to render.
+              setActiveClientId(client.id);
+              router.push("/today");
+            }}
+          >
+            <Eye size={14} aria-hidden="true" /> Preview Today
+          </Button>
           <Button variant="outline" size="sm" onClick={() => router.push("/coach/messages")}>
             <MessageSquare size={14} aria-hidden="true" /> Message
           </Button>

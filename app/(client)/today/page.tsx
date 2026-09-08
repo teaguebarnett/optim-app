@@ -40,6 +40,28 @@ export default function TodayPage() {
     return <ScreenSkeleton />;
   }
 
+  const timing = resolveProgramTiming(state.programEnrollment, state.dateIso);
+
+  // Phase 5.6A.2 — the one place the client actually sees a coach-approved
+  // Today's Edge for the rest of the day, not just in the one-time entrance
+  // sequence below (which a client who already opened the app today never
+  // sees again). Scoped to this exact client + this exact local date via
+  // getDailyBriefing (see lib/coach/repository.ts) — never another client's,
+  // never a stale day's. Renders nothing at all when there's no approved
+  // message yet, per spec: no empty card, no fabricated placeholder text.
+  //
+  // Acceptance-recovery pass — computed BEFORE the pre-program branch
+  // below, and threaded into PreStartToday: coach communication must still
+  // reach a client whose program hasn't started yet (training/nutrition
+  // stay locked pre-start, but Today's Edge is a message, not a training
+  // artifact). Previously this lookup ran only after the pre-program
+  // return, so a coach who approved a briefing for a not-yet-started
+  // client saw "Live on the client's Today" while the client's own /today
+  // could structurally never reach the code that would have shown it —
+  // a false-success state, not a storage bug.
+  const todaysEdge = getDailyBriefing(platform, state.clientId, state.dateIso);
+  const todaysEdgeVisible = todaysEdge && isBriefingVisibleToClient(todaysEdge.status);
+
   // A client is only ever "active" once a real program has been assigned
   // (see lib/coach/setup.ts) — but the assigned start date can still be in
   // the future relative to this client's own local calendar date. Showing
@@ -47,9 +69,8 @@ export default function TodayPage() {
   // meaningless (and previously showed a blank week label) — see
   // components/today/pre-start-today.tsx and the Phase 5.0C brief's
   // pre-start requirement.
-  const timing = resolveProgramTiming(state.programEnrollment, state.dateIso);
   if (timing.phase === "pre_program") {
-    return <PreStartToday timing={timing} state={state} />;
+    return <PreStartToday timing={timing} state={state} todaysEdgeText={todaysEdgeVisible ? todaysEdge!.todaysEdgeText : null} />;
   }
 
   // Phase 5.4B, spec §8 — shown only once per client-local calendar date;
@@ -61,16 +82,6 @@ export default function TodayPage() {
   if (state.dailyEntrance.lastSeenLocalDateIso !== state.dateIso) {
     return <DailyEntranceSequence onDone={() => dispatch({ type: "MARK_DAILY_ENTRANCE_SEEN" })} />;
   }
-
-  // Phase 5.6A.2 — the one place the client actually sees a coach-approved
-  // Today's Edge for the rest of the day, not just in the one-time entrance
-  // sequence above (which a client who already opened the app today never
-  // sees again). Scoped to this exact client + this exact local date via
-  // getDailyBriefing (see lib/coach/repository.ts) — never another client's,
-  // never a stale day's. Renders nothing at all when there's no approved
-  // message yet, per spec: no empty card, no fabricated placeholder text.
-  const todaysEdge = getDailyBriefing(platform, state.clientId, state.dateIso);
-  const todaysEdgeVisible = todaysEdge && isBriefingVisibleToClient(todaysEdge.status);
 
   return (
     <div className="pb-4">

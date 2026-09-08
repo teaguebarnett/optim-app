@@ -22,9 +22,11 @@ import { AdaptiveStatusArea } from "@/components/coach/program-composer/adaptive
 import { PlanChangeHistory } from "@/components/coach/program-composer/plan-change-history";
 import { useProgramComposer } from "@/hooks/use-program-composer";
 import { materialNutritionAssumptions, meaningfulTrainingDirectionName, meaningfulNutritionStrategyName, resolveAdaptiveCheckState } from "@/lib/coach/plan-presentation";
+import { resolveProteinTargetGramsPerLb } from "@/lib/coach/activation-generation";
 import { AI_AUTHORITY_LEVEL_DESCRIPTIONS, type AiAuthorityLevel } from "@/lib/coach/ai-authority";
 import { formatLongDateLabel, isLocalDateBefore, localDateDayOfWeek, resolveBrowserTimeZone, resolveClientLocalDateIso } from "@/lib/shared/local-date";
 import type { RevisionChange, RevisionPlan } from "@/lib/coach/program-revision";
+import type { ClientOnboardingSnapshot } from "@/lib/coach/activation-generation";
 import type { CompleteNutritionPrescription, NutritionRevisionChange, NutritionRevisionPlan } from "@/lib/coach/nutrition-directions";
 import type { ActivationGenerationRecord } from "@/lib/coach/activation-lifecycle";
 import type { ClientAssignedProgram } from "@/lib/types";
@@ -325,7 +327,11 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
     }
     if ((reviseScope === "nutrition" || reviseScope === "both") && latest.selectedNutritionPrescription) {
       const weightLb = composer.onboarding?.answers.about_you?.weightLb;
-      const baseProteinGPerLb = composer.activeModel?.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight ?? 1;
+      const primaryGoal = typeof composer.onboarding?.answers.what_you_want?.primaryGoal === "string" ? composer.onboarding.answers.what_you_want.primaryGoal : "";
+      const secondaryGoals = Array.isArray(composer.onboarding?.answers.what_you_want?.secondaryGoals) ? (composer.onboarding.answers.what_you_want.secondaryGoals as string[]) : [];
+      const baseProteinGPerLb = composer.activeModel
+        ? resolveProteinTargetGramsPerLb(composer.activeModel, { primaryGoal, secondaryGoals } as ClientOnboardingSnapshot)
+        : 0.8;
       setNutritionRevisionPreview(composer.previewDraftNutritionRevision(latest.selectedNutritionPrescription, revisionInstruction, typeof weightLb === "number" ? weightLb : 180, baseProteinGPerLb));
     } else {
       setNutritionRevisionPreview(null);

@@ -2,6 +2,7 @@ import { CalendarClock, MessageCircle } from "lucide-react";
 import Link from "next/link";
 import { Avatar } from "@/components/ui/avatar";
 import { Card } from "@/components/ui/card";
+import { CoachNote } from "@/components/today/coach-note";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import type { ProgramTiming } from "@/lib/scheduling/program-timing";
 import type { AppState } from "@/lib/state";
@@ -21,8 +22,14 @@ function formatFriendlyDate(dateIso: string): string {
  * the client's local date reaches the start date, the same derivation
  * naturally resolves to "active_program" and this component simply stops
  * rendering — no separate transition logic needed.
+ *
+ * Acceptance-recovery pass — `todaysEdgeText` is a coach-approved Today's
+ * Edge message, when one exists for this exact client/date (see
+ * app/(client)/today/page.tsx's getDailyBriefing lookup). Training and
+ * nutrition stay locked until the real start date, but coach communication
+ * is not a training artifact — it must still reach the client here.
  */
-export function PreStartToday({ timing, state }: { timing: ProgramTiming; state: AppState }) {
+export function PreStartToday({ timing, state, todaysEdgeText }: { timing: ProgramTiming; state: AppState; todaysEdgeText?: string | null }) {
   const { activeContext } = usePrototypeState();
   const coach = activeContext.primaryCoach;
   const days = timing.daysUntilStart ?? 0;
@@ -34,6 +41,12 @@ export function PreStartToday({ timing, state }: { timing: ProgramTiming; state:
     <div className="px-4 pb-6 pt-5">
       <p className="text-label text-brass-strong">Setup complete</p>
       <h1 className="mt-1 text-display text-off-white">You&apos;re all set, {activeContext.clientProfile?.name?.split(" ")[0] ?? "there"}.</h1>
+
+      {todaysEdgeText ? (
+        <div className="mt-4">
+          <CoachNote note={todaysEdgeText} label="Today's Edge" />
+        </div>
+      ) : null}
 
       <Card className="mt-5 border-l-2 border-l-brass">
         <div className="flex items-start gap-3">

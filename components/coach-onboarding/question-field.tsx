@@ -90,6 +90,8 @@ export function QuestionField({
   const selected = Array.isArray(value) ? (value as string[]) : [];
   const capped = question.maxSelections !== undefined && selected.length >= question.maxSelections;
 
+  const exclusiveValues = new Set((question.options ?? []).filter((o) => o.exclusive).map((o) => o.value));
+
   function toggle(optValue: string) {
     if (selected.includes(optValue)) {
       onChange(
@@ -99,7 +101,11 @@ export function QuestionField({
       return;
     }
     if (question.maxSelections !== undefined && selected.length >= question.maxSelections) return;
-    onChange(question.id, [...selected, optValue]);
+    // An exclusive option ("None"/"Never") can never coexist with any real
+    // selection, in either direction: picking it clears everything else,
+    // and picking anything else clears it.
+    const next = exclusiveValues.has(optValue) ? [optValue] : [...selected.filter((v) => !exclusiveValues.has(v)), optValue];
+    onChange(question.id, next);
   }
 
   const depends = selected.includes(SCENARIO_DEPENDS_VALUE);

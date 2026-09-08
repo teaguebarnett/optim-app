@@ -5,7 +5,11 @@
 // storage dependency — see lib/coach/daily-briefing.ts.
 
 import assert from "node:assert/strict";
-import { WORKSPACE_OPTIM_ID, COACH_PROFILE_TEAGUE, CLIENT_PROFILE_DEMO } from "../tenancy/seed.ts";
+import { WORKSPACE_OPTIM_ID, COACH_PROFILE_TEAGUE, CLIENT_PROFILE_DEMO, CLIENT_PROFILE_SECONDARY } from "../tenancy/seed.ts";
+import { createInitialState } from "../state.ts";
+import { resolveClientLocalDateIso } from "../shared/local-date.ts";
+import { createInitialPlatformState } from "./platform-store.ts";
+import { getDailyBriefing } from "./repository.ts";
 import {
   approveAndPublishDailyBriefing,
   approveDailyBriefing,
@@ -14,6 +18,7 @@ import {
   generateDailyBriefing,
   isBriefingVisibleToClient,
   publishDailyBriefing,
+  resolveBriefingGenerationInput,
   resolveEffectiveBriefingAutomation,
   shouldHoldBriefingForReview,
   type CoachBriefingSettings,
@@ -206,6 +211,93 @@ check("the same client's briefing on two different dates never collide — disti
   const dayOne = generateDailyBriefing(baseInput({ forDateIso: "2026-01-10" }));
   const dayTwo = generateDailyBriefing(baseInput({ forDateIso: "2026-01-11" }));
   assert.notEqual(dayOne.id, dayTwo.id);
+});
+
+console.log("\n6. Acceptance-recovery — resolveBriefingGenerationInput never keys a briefing to a stale date\n");
+
+check("REGRESSION: forDateIso comes from the client's real current clock date, never a stale clientAppState.dateIso — the exact false-'Live' bug this pass repairs", () => {
+  const state = createInitialState({ clientId: CLIENT_PROFILE_DEMO.id });
+  // Simulate the bug precondition: this client's browser hasn't hydrated
+  // today yet, so its own dateIso is still several days behind the coach's
+  // real clock — exactly what happens for a client who hasn't opened the
+  // app yet on the day the coach approves a briefing.
+  const staleDateIso = "2020-01-01";
+  const staleState = { ...state, dateIso: staleDateIso };
+  const nowIso = "2026-09-08T15:00:00.000Z";
+  const expectedFreshDate = resolveClientLocalDateIso(new Date(nowIso), staleState.programEnrollment.timeZone);
+  assert.notEqual(expectedFreshDate, staleDateIso, "test setup must actually diverge from the stale date");
+
+  const input = resolveBriefingGenerationInput(staleState, COACH_PROFILE_TEAGUE.id, "review_first", nowIso);
+  assert.equal(input.forDateIso, expectedFreshDate);
+  assert.notEqual(input.forDateIso, staleDateIso);
+});
+
+check("resolveBriefingGenerationInput's forDateIso matches what the client's own /today lookup key would be for the same instant — generation and lookup can never key to two different days", () => {
+  const state = createInitialState({ clientId: CLIENT_PROFILE_DEMO.id });
+  const nowIso = "2026-09-08T15:00:00.000Z";
+  const input = resolveBriefingGenerationInput(state, COACH_PROFILE_TEAGUE.id, "review_first", nowIso);
+  const clientSideLookupDate = resolveClientLocalDateIso(new Date(nowIso), state.programEnrollment.timeZone);
+  assert.equal(input.forDateIso, clientSideLookupDate);
+});
+
+console.log("\n7. Acceptance-recovery — getDailyBriefing never leaks across clients or dates\n");
+
+check("REGRESSION: two different clients' approved briefings for the same date never cross-contaminate — each client's lookup returns only their own record", () => {
+  const platform = createInitialPlatformState();
+  const demoRecord = approveAndPublishDailyBriefing(
+    generateDailyBriefing(baseInput({ clientId: CLIENT_PROFILE_DEMO.id, forDateIso: "2026-09-08" })),
+    COACH_PROFILE_TEAGUE.id,
+    "Teague Barnett",
+    "2026-09-08T08:00:00.000Z"
+  );
+  const secondaryRecord = approveAndPublishDailyBriefing(
+    generateDailyBriefing(baseInput({ clientId: CLIENT_PROFILE_SECONDARY.id, forDateIso: "2026-09-08" })),
+    COACH_PROFILE_TEAGUE.id,
+    "Teague Barnett",
+    "2026-09-08T08:00:00.000Z"
+  );
+  platform.dailyBriefings.push(demoRecord, secondaryRecord);
+
+  const demoLookup = getDailyBriefing(platform, CLIENT_PROFILE_DEMO.id, "2026-09-08");
+  const secondaryLookup = getDailyBriefing(platform, CLIENT_PROFILE_SECONDARY.id, "2026-09-08");
+  assert.equal(demoLookup?.id, demoRecord.id);
+  assert.equal(secondaryLookup?.id, secondaryRecord.id);
+  assert.equal(demoLookup?.clientId, CLIENT_PROFILE_DEMO.id);
+  assert.equal(secondaryLookup?.clientId, CLIENT_PROFILE_SECONDARY.id);
+});
+
+check("REGRESSION: a briefing approved for one client is never visible to a different client, even with no record of their own", () => {
+  const platform = createInitialPlatformState();
+  const demoRecord = approveAndPublishDailyBriefing(
+    generateDailyBriefing(baseInput({ clientId: CLIENT_PROFILE_DEMO.id, forDateIso: "2026-09-08" })),
+    COACH_PROFILE_TEAGUE.id,
+    "Teague Barnett",
+    "2026-09-08T08:00:00.000Z"
+  );
+  platform.dailyBriefings.push(demoRecord);
+  assert.equal(getDailyBriefing(platform, CLIENT_PROFILE_SECONDARY.id, "2026-09-08"), null);
+});
+
+check("REGRESSION: an approved briefing for the wrong date is never returned for today's lookup — no false 'Live' from a stale day's approval", () => {
+  const platform = createInitialPlatformState();
+  const yesterdayRecord = approveAndPublishDailyBriefing(
+    generateDailyBriefing(baseInput({ clientId: CLIENT_PROFILE_DEMO.id, forDateIso: "2026-09-07" })),
+    COACH_PROFILE_TEAGUE.id,
+    "Teague Barnett",
+    "2026-09-07T08:00:00.000Z"
+  );
+  platform.dailyBriefings.push(yesterdayRecord);
+  assert.equal(getDailyBriefing(platform, CLIENT_PROFILE_DEMO.id, "2026-09-08"), null);
+});
+
+check("REGRESSION: a merely-approved (not yet published) briefing is never treated as visible/live, even though a real record now exists for that client and date", () => {
+  const platform = createInitialPlatformState();
+  const draft = generateDailyBriefing(baseInput({ clientId: CLIENT_PROFILE_DEMO.id, forDateIso: "2026-09-08" }));
+  const approvedOnly = approveDailyBriefing(draft, COACH_PROFILE_TEAGUE.id, "Teague Barnett", "2026-09-08T08:00:00.000Z");
+  platform.dailyBriefings.push(approvedOnly);
+  const lookup = getDailyBriefing(platform, CLIENT_PROFILE_DEMO.id, "2026-09-08");
+  assert.ok(lookup, "the record exists — this is the 'coach approved but client can't see it yet' state, not a missing record");
+  assert.equal(isBriefingVisibleToClient(lookup!.status), false);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

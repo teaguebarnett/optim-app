@@ -74,7 +74,21 @@ check("A coach who answers nutrition_offered=true sees the nutrition chapters an
   const answers: CoachOnboardingAnswers = { nutrition_offered: true };
   assert.equal(chapterApplies("nutrition_philosophy", answers), true);
   const visible = visibleQuestionsForChapter("nutrition_philosophy", answers);
-  assert.ok(visible.some((q) => q.id === "nutrition_protein_target"));
+  assert.ok(visible.some((q) => q.id === "nutrition_protein_approach"));
+});
+
+check("Phase 5.6A.4 — the goal-dependent protein follow-up is a real, meaningfully different branch, not the flat single-select it replaced", () => {
+  const fixed: CoachOnboardingAnswers = { nutrition_offered: true, nutrition_protein_approach: "fixed" };
+  const goalDependent: CoachOnboardingAnswers = { nutrition_offered: true, nutrition_protein_approach: "goal_dependent" };
+  const visibleFixed = visibleQuestionsForChapter("nutrition_philosophy", fixed);
+  const visibleGoalDependent = visibleQuestionsForChapter("nutrition_philosophy", goalDependent);
+  assert.ok(visibleFixed.some((q) => q.id === "nutrition_protein_target"), "fixed approach still shows the one universal target question");
+  assert.ok(!visibleFixed.some((q) => q.id === "nutrition_protein_target_fat_loss"), "fixed approach never shows goal-specific follow-ups");
+  assert.ok(!visibleGoalDependent.some((q) => q.id === "nutrition_protein_target"), "goal-dependent approach hides the single flat target question");
+  assert.ok(
+    ["nutrition_protein_target_fat_loss", "nutrition_protein_target_maintenance", "nutrition_protein_target_muscle_gain"].every((id) => visibleGoalDependent.some((q) => q.id === id)),
+    "goal-dependent approach reveals all three goal-specific follow-ups"
+  );
 });
 
 check("program_proximity_to_failure is hidden when the coach uses neither RPE nor RIR", () => {
@@ -323,6 +337,74 @@ check("confirmInference only upgrades a genuinely `inferred` entry, and is a no-
   const withCoachSelected = { ...base, provenance: { practice_success_definition: { source: "coach_selected" as const, confidence: 1, updatedAtIso: "2026-01-01T00:00:00.000Z" } } };
   const noOpSelected = confirmInference(withCoachSelected, "practice_success_definition", "2026-01-02T00:00:00.000Z");
   assert.equal(noOpSelected.provenance.practice_success_definition.source, "coach_selected");
+});
+
+console.log("\n8. Phase 5.6A.4 — duplicate safety/escalation/non-negotiable questions consolidated to one each\n");
+
+check("REGRESSION: safety_pain_response and safety_possible_injury (the exact duplicates of scn_pain/scn_possible_injury) no longer exist in the bank", () => {
+  assert.equal(findQuestion("safety_pain_response"), undefined);
+  assert.equal(findQuestion("safety_possible_injury"), undefined);
+});
+
+check("REGRESSION: program_non_negotiables (the near-duplicate of safety_absolute_rules) no longer exists in the bank", () => {
+  assert.equal(findQuestion("program_non_negotiables"), undefined);
+});
+
+check("scn_pain and scn_possible_injury now live once, in the safety chapter — never asked a second time in training_adjustment", () => {
+  assert.equal(findQuestion("scn_pain")?.chapter, "safety");
+  assert.equal(findQuestion("scn_possible_injury")?.chapter, "safety");
+  const trainingAdjustmentIds = COACH_ONBOARDING_QUESTIONS.filter((q) => q.chapter === "training_adjustment").map((q) => q.id);
+  assert.ok(!trainingAdjustmentIds.includes("scn_pain"));
+  assert.ok(!trainingAdjustmentIds.includes("scn_possible_injury"));
+});
+
+check("The merged scn_pain question now offers the third real option safety_pain_response used to have ('modify safely, don't necessarily stop')", () => {
+  const q = findQuestion("scn_pain")!;
+  assert.ok(q.options?.some((o) => o.value === "modify_and_notify"));
+});
+
+check("REGRESSION: a single scn_pain/scn_possible_injury answer populates BOTH the executable trainingAdjustmentPolicies entry AND the safety-chapter summary fields — one coach answer, two real consumers, never asked twice", () => {
+  const base = createDefaultCoachOperatingModel({ coachId: COACH_PROFILE_TEAGUE.id, workspaceId: WORKSPACE_OPTIM_ID, nowIso: "2026-01-01T00:00:00.000Z", businessName: "OPTIM" });
+  const model = applyCoachAnswersToModel(
+    base,
+    { scn_pain: ["modify_and_notify"], scn_possible_injury: ["pause_plan_and_escalate"] },
+    "2026-01-02T00:00:00.000Z"
+  );
+  assert.ok(model.trainingAdjustmentPolicies.some((p) => p.id === "scn_pain" && p.preferredAction === "modify_and_notify"));
+  assert.equal(model.safety.painResponsePolicy, "modify_and_notify");
+  assert.ok(model.trainingAdjustmentPolicies.some((p) => p.id === "scn_possible_injury" && p.preferredAction === "pause_plan_and_escalate"));
+  assert.equal(model.safety.injuryResponsePolicy, "pause_plan_and_escalate");
+});
+
+check("REGRESSION: a single safety_absolute_rules answer populates BOTH safety.absoluteOverrideRules AND programArchitecture.nonNegotiables — never asked as two separate questions", () => {
+  const base = createDefaultCoachOperatingModel({ coachId: COACH_PROFILE_TEAGUE.id, workspaceId: WORKSPACE_OPTIM_ID, nowIso: "2026-01-01T00:00:00.000Z", businessName: "OPTIM" });
+  const model = applyCoachAnswersToModel(base, { safety_absolute_rules: "Never program behind-the-neck presses." }, "2026-01-02T00:00:00.000Z");
+  assert.deepEqual(model.safety.absoluteOverrideRules, ["Never program behind-the-neck presses."]);
+  assert.deepEqual(model.programArchitecture.nonNegotiables, ["Never program behind-the-neck presses."]);
+});
+
+console.log("\n9. Phase 5.6A.4 — goal-dependent protein philosophy (never one hard-coded universal assumption)\n");
+
+check("The default model uses the honest, backward-compatible 'fixed' approach, never a fabricated goal-dependent default", () => {
+  const base = createDefaultCoachOperatingModel({ coachId: COACH_PROFILE_TEAGUE.id, workspaceId: WORKSPACE_OPTIM_ID, nowIso: "2026-01-01T00:00:00.000Z", businessName: "OPTIM" });
+  assert.equal(base.nutritionPhilosophy.proteinTargetApproach, "fixed");
+  assert.equal(base.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight, undefined);
+});
+
+check("Answering the three goal-specific follow-ups stores a real, structured per-goal policy, never a single flattened number", () => {
+  const base = createDefaultCoachOperatingModel({ coachId: COACH_PROFILE_TEAGUE.id, workspaceId: WORKSPACE_OPTIM_ID, nowIso: "2026-01-01T00:00:00.000Z", businessName: "OPTIM" });
+  const model = applyCoachAnswersToModel(
+    base,
+    {
+      nutrition_protein_approach: "goal_dependent",
+      nutrition_protein_target_fat_loss: "1.2",
+      nutrition_protein_target_maintenance: "0.8",
+      nutrition_protein_target_muscle_gain: "0.7",
+    },
+    "2026-01-02T00:00:00.000Z"
+  );
+  assert.equal(model.nutritionPhilosophy.proteinTargetApproach, "goal_dependent");
+  assert.deepEqual(model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight, { fatLoss: 1.2, maintenanceOrRecomposition: 0.8, muscleGain: 0.7 });
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

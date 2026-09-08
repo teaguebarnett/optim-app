@@ -1,13 +1,35 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowRight, Check, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCoachOperatingModel } from "@/hooks/use-coach-operating-model";
 import { generateThreeNutritionStrategies, generateThreeTrainingOptions, type ClientOnboardingSnapshot } from "@/lib/coach/activation-generation";
 import { lowConfidenceQuestionIds } from "@/lib/coach/operating-model";
 import { allRequiredVisibleQuestionIds, summarizeCoachOperatingModelChanges } from "@/lib/coach/coach-onboarding-engine";
-import type { CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
+import { findQuestion, type CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
+
+/** Fallback for free-text/no-option values only — never mutates a stored
+ * enum value. Prefer labelFor()/labelForList() below for anything backed by
+ * a question's real options: a bare regex can't recover structure a raw
+ * value threw away (e.g. "0_1_reps_in_reserve" -> "0 1 reps in reserve"
+ * reads as nonsense, not "0-1 reps in reserve"). */
+function humanize(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+/** The real coach-facing label for a stored option value, looked up from
+ * the same question bank the coach answered from — never a guess at what
+ * the underscores meant. Falls back to humanize() only if the value can't
+ * be matched to a real option (e.g. it's since been removed from the bank). */
+function labelFor(questionId: string, value: string): string {
+  const option = findQuestion(questionId)?.options?.find((o) => o.value === value);
+  return option?.label ?? humanize(value);
+}
+function labelForList(questionId: string, values: string[]): string {
+  return values.map((v) => labelFor(questionId, v)).join(", ");
+}
 
 const HYPOTHETICALS: { title: string; snapshot: ClientOnboardingSnapshot }[] = [
   {
@@ -47,6 +69,7 @@ const HYPOTHETICALS: { title: string; snapshot: ClientOnboardingSnapshot }[] = [
 ];
 
 export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: CoachOnboardingChapterId) => void }) {
+  const router = useRouter();
   const com = useCoachOperatingModel();
   const model = com.buildDraftModel();
   const [activated, setActivated] = useState(!!com.activeModel);
@@ -91,21 +114,21 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
 
       <div className="mt-6 space-y-4">
         <SummarySection title="Who you coach" onEdit={() => onEditChapter("practice")}>
-          <p>{model.practice.commonGoals.join(", ") || "No goals specified"} · {model.practice.experienceLevelsServed.join(", ") || "any experience level"}</p>
+          <p>{labelForList("practice_common_goals", model.practice.commonGoals) || "No goals specified"} · {labelForList("practice_experience_levels", model.practice.experienceLevelsServed) || "any experience level"}</p>
           <p className="mt-1 text-neutral">{model.practice.successDefinition || "No success definition provided yet."}</p>
         </SummarySection>
 
         <SummarySection title="How you program" onEdit={() => onEditChapter("program_architecture")}>
           <p>
-            {model.programArchitecture.preferredSplits.join(", ") || "no split preference set"} · {model.programArchitecture.setsPerExerciseMin}–{model.programArchitecture.setsPerExerciseMax} sets ·{" "}
-            {model.programArchitecture.repRangePhilosophy.replace(/_/g, " ")}
+            {labelForList("program_splits", model.programArchitecture.preferredSplits) || "no split preference set"} · {model.programArchitecture.setsPerExerciseMin}–{model.programArchitecture.setsPerExerciseMax} sets ·{" "}
+            {labelFor("program_rep_philosophy", model.programArchitecture.repRangePhilosophy)}
           </p>
         </SummarySection>
 
         <SummarySection title="How you progress clients & handle fatigue" onEdit={() => onEditChapter("program_architecture")}>
           <p>
-            {model.programArchitecture.progressionMethod.replace(/_/g, " ")} · deload every {model.programArchitecture.deloadFrequencyWeeks ?? "as-needed"} weeks · proximity to failure:{" "}
-            {model.programArchitecture.proximityToFailure.replace(/_/g, " ")}
+            {labelFor("program_progression", model.programArchitecture.progressionMethod)} · deload every {model.programArchitecture.deloadFrequencyWeeks ?? "as-needed"} weeks · proximity to failure:{" "}
+            {labelFor("program_proximity_to_failure", model.programArchitecture.proximityToFailure)}
           </p>
           <p className="mt-1 text-neutral">{model.trainingAdjustmentPolicies.length} real adjustment scenarios configured.</p>
         </SummarySection>
@@ -114,8 +137,15 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
           {model.nutritionPhilosophy.providesNutritionCoaching ? (
             <>
               <p>
-                {model.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight}g/lb protein · {model.nutritionPhilosophy.planVsFrameworkPreference.replace(/_/g, " ")} ·{" "}
-                {model.nutritionPhilosophy.rateOfLossPercentPerWeek}%/week loss rate
+                {model.nutritionPhilosophy.proteinTargetApproach === "goal_dependent" && model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight ? (
+                  <>
+                    Protein by goal: {model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight.fatLoss}g/lb (fat loss) · {model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight.maintenanceOrRecomposition}g/lb (maintenance/recomp) ·{" "}
+                    {model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight.muscleGain}g/lb (muscle gain)
+                  </>
+                ) : (
+                  <>{model.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight}g/lb protein for every client</>
+                )}{" "}
+                · {labelFor("nutrition_plan_vs_framework", model.nutritionPhilosophy.planVsFrameworkPreference)} · {model.nutritionPhilosophy.rateOfLossPercentPerWeek}%/week loss rate
               </p>
               <p className="mt-1 text-neutral">{model.nutritionAdjustmentPolicies.length} real adjustment scenarios configured.</p>
             </>
@@ -126,13 +156,13 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
 
         <SummarySection title="How you communicate" onEdit={() => onEditChapter("communication")}>
           <p>
-            {model.communication.tone.replace(/_/g, " ")} · directness {model.communication.directness}/5 · warmth {model.communication.warmth}/5 · {model.communication.messageLength} messages
+            {humanize(model.communication.tone)} · directness {model.communication.directness}/5 · warmth {model.communication.warmth}/5 · {model.communication.messageLength} messages
           </p>
         </SummarySection>
 
         <SummarySection title="Safety boundaries" onEdit={() => onEditChapter("safety")}>
-          <p>Pain: {model.safety.painResponsePolicy.replace(/_/g, " ")}</p>
-          <p>Possible injury: {model.safety.injuryResponsePolicy.replace(/_/g, " ")}</p>
+          <p>Pain: {labelFor("scn_pain", model.safety.painResponsePolicy)}</p>
+          <p>Possible injury: {labelFor("scn_possible_injury", model.safety.injuryResponsePolicy)}</p>
           {model.safety.absoluteOverrideRules.length > 0 ? <p className="mt-1 text-neutral">Your rules: {model.safety.absoluteOverrideRules.join("; ")}</p> : null}
         </SummarySection>
 
@@ -178,9 +208,21 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
 
       <div className="mt-10 border-t border-border pt-6">
         {activated ? (
-          <p className="flex items-center gap-2 text-body font-medium text-success">
-            <Check size={18} aria-hidden="true" /> {isRevision ? "Your updated coaching model is active — new client generations will use it." : "Your coaching model is active — OPTIM will use it for every new client."}
-          </p>
+          <div>
+            <p className="flex items-center gap-2 text-heading font-semibold text-success">
+              <Check size={20} aria-hidden="true" /> {unansweredRequired.length > 0 ? "Onboarding complete — playbook review pending" : "Calibration complete"}
+            </p>
+            <p className="mt-1.5 text-body text-neutral">
+              {unansweredRequired.length > 0
+                ? `Your coaching model is active with ${unansweredRequired.length} honest OPTIM default${unansweredRequired.length === 1 ? "" : "s"} standing in for unanswered required questions — worth reviewing when you have a moment, from ${isRevision ? "the Playbook" : "Settings → Coach Playbook"}.`
+                : isRevision
+                  ? "Your updated coaching model is active — new client generations will use it."
+                  : "Your coaching model is active — OPTIM will use it for every new client."}
+            </p>
+            <Button size="lg" className="mt-4" onClick={() => router.push("/coach")}>
+              Return to dashboard <ArrowRight size={16} aria-hidden="true" />
+            </Button>
+          </div>
         ) : (
           <>
             {isRevision ? (

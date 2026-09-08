@@ -652,8 +652,27 @@ function goalCalories(tdee: number, snapshot: ClientOnboardingSnapshot, com: Coa
   return { calories: Math.round(tdee) };
 }
 
-function macrosForCalories(calories: number, weightLb: number, com: CoachOperatingModel, fatPercent: number): NutritionTargets {
-  const proteinG = Math.round(com.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight * weightLb);
+/** The one place a real client's protein target g/lb is actually resolved
+ * — honors a coach's goal-dependent policy (see
+ * NutritionPhilosophyProfile.proteinTargetApproach) instead of always
+ * reading the flat universal number, falling back to it when the coach
+ * hasn't set up goal-specific targets (or explicitly chose "fixed"). */
+export function resolveProteinTargetGramsPerLb(com: CoachOperatingModel, snapshot: ClientOnboardingSnapshot): number {
+  const philosophy = com.nutritionPhilosophy;
+  const byGoal = philosophy.proteinTargetsByGoalGramsPerLbBodyweight;
+  if (philosophy.proteinTargetApproach !== "goal_dependent" || !byGoal) {
+    return philosophy.proteinTargetGramsPerLbBodyweight;
+  }
+  if (isRecompositionGoal(snapshot)) return byGoal.maintenanceOrRecomposition;
+  const wantsFatLoss = snapshot.primaryGoal === "lose_fat" || snapshot.secondaryGoals.includes("lose_fat");
+  const wantsMuscle = snapshot.primaryGoal === "build_muscle" || snapshot.secondaryGoals.includes("build_muscle");
+  if (wantsFatLoss) return byGoal.fatLoss;
+  if (wantsMuscle) return byGoal.muscleGain;
+  return byGoal.maintenanceOrRecomposition;
+}
+
+function macrosForCalories(calories: number, weightLb: number, proteinGPerLb: number, fatPercent: number): NutritionTargets {
+  const proteinG = Math.round(proteinGPerLb * weightLb);
   const fatG = Math.round((calories * fatPercent) / 9);
   const remaining = calories - proteinG * 4 - fatG * 9;
   const carbsG = Math.max(0, Math.round(remaining / 4));
@@ -681,16 +700,17 @@ export function generateThreeNutritionStrategies(input: { snapshot: ClientOnboar
     ...(assumption ? [assumption] : []),
   ];
 
-  const bestFitTargets = macrosForCalories(calories, input.snapshot.weightLb, input.com, 0.3);
-  const alternativeTargets = macrosForCalories(calories, input.snapshot.weightLb, input.com, input.com.nutritionPhilosophy.planVsFrameworkPreference === "structured_meal_plan" ? 0.25 : 0.35);
+  const proteinGPerLb = resolveProteinTargetGramsPerLb(input.com, input.snapshot);
+  const bestFitTargets = macrosForCalories(calories, input.snapshot.weightLb, proteinGPerLb, 0.3);
+  const alternativeTargets = macrosForCalories(calories, input.snapshot.weightLb, proteinGPerLb, input.com.nutritionPhilosophy.planVsFrameworkPreference === "structured_meal_plan" ? 0.25 : 0.35);
 
   // Wildcard: training-day / rest-day carb cycling at the same weekly
   // average calories — a real, legitimate, safe strategy distinct from a
   // flat daily target, not a renamed copy of best_fit.
   const trainingDayCalories = Math.round(calories * 1.08);
   const restDayCalories = Math.round(calories * 0.92);
-  const wildcardTrainingTargets = macrosForCalories(trainingDayCalories, input.snapshot.weightLb, input.com, 0.25);
-  const wildcardRestTargets = macrosForCalories(restDayCalories, input.snapshot.weightLb, input.com, 0.35);
+  const wildcardTrainingTargets = macrosForCalories(trainingDayCalories, input.snapshot.weightLb, proteinGPerLb, 0.25);
+  const wildcardRestTargets = macrosForCalories(restDayCalories, input.snapshot.weightLb, proteinGPerLb, 0.35);
 
   const explanationFor = (kind: OptionKind, description: string, advantage: string, tradeoff: string): TrainingOptionExplanation => ({
     whyItFits: description,
@@ -698,7 +718,11 @@ export function generateThreeNutritionStrategies(input: { snapshot: ClientOnboar
     tradeoff,
     whatOptimWillMonitor: ["Body-weight trend", "Adherence to logged meals", "Hunger/energy feedback"],
     clientFactsUsed: [`${input.snapshot.weightLb}lb reported weight`, `Goal: ${input.snapshot.primaryGoal.replace(/_/g, " ")}`, `Dietary restrictions: ${input.snapshot.hasDietaryRestrictions ? input.snapshot.dietaryRestrictionsDetail || "reported, detail pending" : "none reported"}`],
-    coachingRulesUsed: [`Protein target: ${input.com.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight}g/lb`, `Rate of loss: ${input.com.nutritionPhilosophy.rateOfLossPercentPerWeek}%/week`, `Plan style: ${input.com.nutritionPhilosophy.planVsFrameworkPreference}`],
+    coachingRulesUsed: [
+      `Protein target: ${proteinGPerLb}g/lb${input.com.nutritionPhilosophy.proteinTargetApproach === "goal_dependent" ? ` (goal-dependent, for ${input.snapshot.primaryGoal.replace(/_/g, " ")})` : ""}`,
+      `Rate of loss: ${input.com.nutritionPhilosophy.rateOfLossPercentPerWeek}%/week`,
+      `Plan style: ${input.com.nutritionPhilosophy.planVsFrameworkPreference}`,
+    ],
   });
 
   const requiresApproval = input.snapshot.hasDietaryRestrictions && !input.snapshot.dietaryRestrictionsDetail;

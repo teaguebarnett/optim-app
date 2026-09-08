@@ -273,7 +273,25 @@ export interface NutritionPhilosophyProfile {
   providesNutritionCoaching: boolean;
   calorieTargetPhilosophy: string;
   macroTargetPhilosophy: string;
+  /** The flat/fallback protein target — the one actually used when
+   * `proteinTargetApproach === "fixed"`, or as a last-resort default if a
+   * goal-dependent lookup somehow finds nothing. Never removed: a coach who
+   * genuinely uses one universal number for every client is a real,
+   * legitimate answer, not a worse one than goal-dependent. */
   proteinTargetGramsPerLbBodyweight: number;
+  /** "fixed": one universal protein target regardless of the client's goal
+   * (the historical/simple behavior). "goal_dependent": OPTIM picks the
+   * target from `proteinTargetsByGoalGramsPerLbBodyweight` based on each
+   * client's own real goal — see
+   * lib/coach/activation-generation.ts's resolveProteinTargetGramsPerLb,
+   * the one place this is actually consulted for plan generation. */
+  proteinTargetApproach: "fixed" | "goal_dependent";
+  /** Only meaningful when proteinTargetApproach === "goal_dependent". */
+  proteinTargetsByGoalGramsPerLbBodyweight?: {
+    fatLoss: number;
+    maintenanceOrRecomposition: number;
+    muscleGain: number;
+  };
   planVsFrameworkPreference: "structured_meal_plan" | "flexible_framework" | "hybrid";
   foodQualityPriorities: string[];
   mealFrequencyPreference: string;
@@ -509,6 +527,7 @@ export function createDefaultCoachOperatingModel(input: { coachId: CoachProfileI
       calorieTargetPhilosophy: "moderate_deficit_or_surplus_from_maintenance",
       macroTargetPhilosophy: "protein_first_then_split_remainder",
       proteinTargetGramsPerLbBodyweight: 0.8,
+      proteinTargetApproach: "fixed",
       planVsFrameworkPreference: "flexible_framework",
       foodQualityPriorities: ["whole_foods_majority", "adequate_protein"],
       mealFrequencyPreference: "3_4_meals",

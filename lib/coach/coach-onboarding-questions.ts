@@ -49,6 +49,11 @@ export interface CoachQuestionOption {
   label: string;
   description?: string;
   icon?: LucideIcon;
+  /** True for a "None"/"Never"-equivalent option on a multi_select question
+   * — selecting it clears every other selection, and selecting any other
+   * option clears it, so the two can never coexist (see
+   * components/coach-onboarding/question-field.tsx's toggle logic). */
+  exclusive?: boolean;
 }
 
 /** Loose on purpose — mirrors OnboardingStepAnswers' own pragmatic looseness
@@ -170,7 +175,7 @@ const PRACTICE_QUESTIONS: CoachOnboardingQuestionDef[] = [
       { value: "eating_disorder_history", label: "Active eating-disorder history" },
       { value: "under_17", label: "Clients under 17" },
       { value: "extreme_weight_goals", label: "Extreme weight goals" },
-      { value: "none", label: "None — I take a broad range of clients" },
+      { value: "none", label: "None — I take a broad range of clients", exclusive: true },
     ],
   },
   {
@@ -487,24 +492,13 @@ const PROGRAM_ARCHITECTURE_QUESTIONS: CoachOnboardingQuestionDef[] = [
     ],
   },
   {
-    id: "program_non_negotiables",
-    domain: "program_architecture",
-    chapter: "program_architecture",
-    prompt: "Any hard rules OPTIM should never break when building a program?",
-    explanation: "These are treated as absolute constraints, not preferences.",
-    type: "text",
-    required: false,
-    priority: 15,
-    modelFieldsAffected: ["programArchitecture.nonNegotiables"],
-  },
-  {
     id: "program_exercises_avoided",
     domain: "program_architecture",
     chapter: "program_architecture",
     prompt: "Are there exercises you avoid prescribing?",
     type: "text",
     required: false,
-    priority: 16,
+    priority: 15,
     modelFieldsAffected: ["programArchitecture.exercisesAvoided"],
   },
 ];
@@ -716,30 +710,12 @@ const TRAINING_ADJUSTMENT_QUESTIONS: CoachOnboardingQuestionDef[] = [
       { value: "pause_and_resume", label: "Pause formal programming and resume after the trip" },
     ],
   }),
-  scenarioQuestion({
-    id: "scn_pain",
-    domain: "training",
-    chapter: "training_adjustment",
-    priority: 15,
-    prompt: "A client reports pain during a workout. Beyond OPTIM's built-in safety stop, what should happen next?",
-    explanation: "This always escalates to you, regardless of your answer here — OPTIM's platform safety rules never depend on a coach's preference for this scenario.",
-    actions: [
-      { value: "stop_exercise_and_notify", label: "Stop that exercise and notify me" },
-      { value: "stop_workout_and_notify", label: "Stop the whole workout and notify me" },
-    ],
-  }),
-  scenarioQuestion({
-    id: "scn_possible_injury",
-    domain: "training",
-    chapter: "training_adjustment",
-    priority: 16,
-    prompt: "A client reports something that sounds like a possible injury, not just soreness. Beyond OPTIM's built-in safety stop, what should happen next?",
-    explanation: "This always escalates to you, regardless of your answer here.",
-    actions: [
-      { value: "pause_plan_and_escalate", label: "Pause their plan and notify me" },
-      { value: "modify_and_escalate", label: "Modify around it and notify me" },
-    ],
-  }),
+  // Pain-during-workout and possible-injury used to also be asked HERE,
+  // worded almost identically to their real home in the Safety chapter
+  // (scn_pain/scn_possible_injury, below) — the exact kind of duplicate
+  // safety question this consolidation pass removes. They now live once,
+  // in Safety, where their "always escalates, never AI-executable"
+  // framing actually belongs.
 ];
 
 // ---------------------------------------------------------------------------
@@ -774,19 +750,84 @@ const NUTRITION_PHILOSOPHY_QUESTIONS: CoachOnboardingQuestionDef[] = [
     ],
   },
   {
+    id: "nutrition_protein_approach",
+    domain: "nutrition_philosophy",
+    chapter: "nutrition_philosophy",
+    prompt: "How do you set a client's protein target?",
+    explanation: "OPTIM will use this same logic when generating a plan for a real client.",
+    type: "single_select",
+    required: true,
+    priority: 2,
+    visibleIf: (a) => a.nutrition_offered === true,
+    modelFieldsAffected: ["nutritionPhilosophy.proteinTargetApproach"],
+    options: [
+      { value: "fixed", label: "One consistent target for every client" },
+      { value: "goal_dependent", label: "Depends on the client's goal" },
+    ],
+  },
+  {
     id: "nutrition_protein_target",
     domain: "nutrition_philosophy",
     chapter: "nutrition_philosophy",
     prompt: "What's your default protein target?",
     type: "single_select",
     required: true,
-    priority: 2,
-    visibleIf: (a) => a.nutrition_offered === true,
+    priority: 2.1,
+    visibleIf: (a) => a.nutrition_offered === true && a.nutrition_protein_approach === "fixed",
     modelFieldsAffected: ["nutritionPhilosophy.proteinTargetGramsPerLbBodyweight"],
     options: [
-      { value: "0.7", label: "~0.7g per lb bodyweight" },
-      { value: "0.8", label: "~0.8g per lb bodyweight" },
-      { value: "1.0", label: "~1.0g per lb bodyweight" },
+      { value: "0.7", label: "~0.7g per lb of bodyweight" },
+      { value: "0.8", label: "~0.8g per lb of bodyweight" },
+      { value: "1.0", label: "~1.0g per lb of bodyweight" },
+    ],
+  },
+  {
+    id: "nutrition_protein_target_fat_loss",
+    domain: "nutrition_philosophy",
+    chapter: "nutrition_philosophy",
+    prompt: "Protein target for a client whose goal is fat loss?",
+    explanation: "Higher protein during a deficit helps preserve muscle — this is usually the highest of the three.",
+    type: "single_select",
+    required: true,
+    priority: 2.2,
+    visibleIf: (a) => a.nutrition_offered === true && a.nutrition_protein_approach === "goal_dependent",
+    modelFieldsAffected: ["nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight"],
+    options: [
+      { value: "0.8", label: "~0.8g per lb of bodyweight" },
+      { value: "1.0", label: "~1.0g per lb of bodyweight" },
+      { value: "1.2", label: "~1.2g per lb of bodyweight" },
+    ],
+  },
+  {
+    id: "nutrition_protein_target_maintenance",
+    domain: "nutrition_philosophy",
+    chapter: "nutrition_philosophy",
+    prompt: "Protein target for a client whose goal is maintenance or recomposition?",
+    type: "single_select",
+    required: true,
+    priority: 2.3,
+    visibleIf: (a) => a.nutrition_offered === true && a.nutrition_protein_approach === "goal_dependent",
+    modelFieldsAffected: ["nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight"],
+    options: [
+      { value: "0.7", label: "~0.7g per lb of bodyweight" },
+      { value: "0.8", label: "~0.8g per lb of bodyweight" },
+      { value: "1.0", label: "~1.0g per lb of bodyweight" },
+    ],
+  },
+  {
+    id: "nutrition_protein_target_muscle_gain",
+    domain: "nutrition_philosophy",
+    chapter: "nutrition_philosophy",
+    prompt: "Protein target for a client whose goal is building muscle?",
+    type: "single_select",
+    required: true,
+    priority: 2.4,
+    visibleIf: (a) => a.nutrition_offered === true && a.nutrition_protein_approach === "goal_dependent",
+    modelFieldsAffected: ["nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight"],
+    options: [
+      { value: "0.7", label: "~0.7g per lb of bodyweight" },
+      { value: "0.8", label: "~0.8g per lb of bodyweight" },
+      { value: "1.0", label: "~1.0g per lb of bodyweight" },
     ],
   },
   {
@@ -1210,7 +1251,7 @@ const COMMUNICATION_QUESTIONS: CoachOnboardingQuestionDef[] = [
       { value: "routine_logistics", label: "Routine logistics (“what time is my session”)" },
       { value: "how_to_log_a_meal", label: "How to log something" },
       { value: "exercise_how_to", label: "How to perform an exercise" },
-      { value: "none", label: "None — I want to see everything first" },
+      { value: "none", label: "None — I want to see everything first", exclusive: true },
     ],
   },
   {
@@ -1246,35 +1287,33 @@ const COMMUNICATION_QUESTIONS: CoachOnboardingQuestionDef[] = [
 // ---------------------------------------------------------------------------
 
 const SAFETY_QUESTIONS: CoachOnboardingQuestionDef[] = [
-  {
-    id: "safety_pain_response",
-    domain: "safety",
+  scenarioQuestion({
+    id: "scn_pain",
+    domain: "training",
     chapter: "safety",
-    prompt: "A client reports pain during a workout. What should happen?",
-    type: "single_select",
-    required: true,
     priority: 1,
-    modelFieldsAffected: ["safety.painResponsePolicy", "safety.stopExerciseConditions"],
-    options: [
+    prompt: "A client reports pain during a workout. What should happen?",
+    explanation: "This always escalates to you — OPTIM's platform safety rules never depend on a coach's preference for this scenario. Your answer sets the action OPTIM takes before escalating.",
+    actions: [
       { value: "stop_exercise_and_notify", label: "Stop that exercise and notify me immediately" },
       { value: "stop_workout_and_notify", label: "Stop the entire workout and notify me immediately" },
       { value: "modify_and_notify", label: "Modify safely and notify me — don't necessarily stop" },
     ],
-  },
-  {
-    id: "safety_possible_injury",
-    domain: "safety",
+    modelFieldsAffected: ["trainingAdjustmentPolicies[scn_pain]", "safety.painResponsePolicy", "safety.stopExerciseConditions"],
+  }),
+  scenarioQuestion({
+    id: "scn_possible_injury",
+    domain: "training",
     chapter: "safety",
-    prompt: "A client reports something that sounds like a possible injury, not just soreness. What should happen?",
-    type: "single_select",
-    required: true,
     priority: 2,
-    modelFieldsAffected: ["safety.injuryResponsePolicy", "safety.pausePlanConditions"],
-    options: [
+    prompt: "A client reports something that sounds like a possible injury, not just soreness. What should happen?",
+    explanation: "This always escalates to you, regardless of your answer here.",
+    actions: [
       { value: "pause_plan_and_escalate", label: "Pause their plan and escalate to me immediately" },
       { value: "modify_and_escalate", label: "Modify around it and escalate to me for review" },
     ],
-  },
+    modelFieldsAffected: ["trainingAdjustmentPolicies[scn_possible_injury]", "safety.injuryResponsePolicy"],
+  }),
   {
     id: "safety_extreme_nutrition_request",
     domain: "safety",
@@ -1320,12 +1359,12 @@ const SAFETY_QUESTIONS: CoachOnboardingQuestionDef[] = [
     id: "safety_absolute_rules",
     domain: "safety",
     chapter: "safety",
-    prompt: "Any absolute rules of your own that should override everything else, no exceptions?",
-    explanation: "These are added on top of OPTIM's own platform safety rules — they can only make things stricter, never looser.",
+    prompt: "Any hard rules of your own that OPTIM should never break, no exceptions?",
+    explanation: "Covers both program-building constraints (exercises, structure) and anything else you consider non-negotiable. These are added on top of OPTIM's own platform safety rules — they can only make things stricter, never looser.",
     type: "text",
     required: false,
     priority: 6,
-    modelFieldsAffected: ["safety.absoluteOverrideRules"],
+    modelFieldsAffected: ["safety.absoluteOverrideRules", "programArchitecture.nonNegotiables"],
   },
 ];
 

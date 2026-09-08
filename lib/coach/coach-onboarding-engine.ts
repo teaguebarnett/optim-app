@@ -343,10 +343,6 @@ export function applyCoachAnswersToModel(base: CoachOperatingModel, answers: Coa
     model.programArchitecture.cardioPhilosophy = asString(answers.program_cardio);
     markAnswered("program_cardio");
   }
-  if (answers.program_non_negotiables !== undefined) {
-    model.programArchitecture.nonNegotiables = freeTextList(answers.program_non_negotiables);
-    markAnswered("program_non_negotiables");
-  }
   if (answers.program_exercises_avoided !== undefined) {
     model.programArchitecture.exercisesAvoided = freeTextList(answers.program_exercises_avoided);
     markAnswered("program_exercises_avoided");
@@ -366,6 +362,19 @@ export function applyCoachAnswersToModel(base: CoachOperatingModel, answers: Coa
     } else {
       model.nutritionAdjustmentPolicies = [...model.nutritionAdjustmentPolicies.filter((p) => p.id !== policy.id), policy];
     }
+    // scn_pain/scn_possible_injury live once, in the Safety chapter (see
+    // coach-onboarding-questions.ts), but still need to feed BOTH the
+    // executable trainingAdjustmentPolicies entry above (read by
+    // lib/coach/program-adaptation.ts's real "pain-report"/possible-injury
+    // handling) AND the safety-chapter's own summary fields — a single
+    // coach answer, two real consumers, never asked twice.
+    if (question.id === "scn_pain") {
+      const v = policy.preferredAction;
+      model.safety.painResponsePolicy = v;
+      model.safety.stopExerciseConditions = v === "stop_exercise_and_notify" || v === "stop_workout_and_notify" ? ["reported_pain"] : model.safety.stopExerciseConditions;
+    } else if (question.id === "scn_possible_injury") {
+      model.safety.injuryResponsePolicy = policy.preferredAction;
+    }
     markAnswered(question.id);
   }
 
@@ -378,9 +387,28 @@ export function applyCoachAnswersToModel(base: CoachOperatingModel, answers: Coa
     model.nutritionPhilosophy.planVsFrameworkPreference = asString(answers.nutrition_plan_vs_framework) as CoachOperatingModel["nutritionPhilosophy"]["planVsFrameworkPreference"];
     markAnswered("nutrition_plan_vs_framework");
   }
+  if (answers.nutrition_protein_approach !== undefined) {
+    model.nutritionPhilosophy.proteinTargetApproach = asString(answers.nutrition_protein_approach) as CoachOperatingModel["nutritionPhilosophy"]["proteinTargetApproach"];
+    markAnswered("nutrition_protein_approach");
+  }
   if (answers.nutrition_protein_target !== undefined) {
     model.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight = asNumber(answers.nutrition_protein_target, 0.8);
     markAnswered("nutrition_protein_target");
+  }
+  if (
+    answers.nutrition_protein_target_fat_loss !== undefined ||
+    answers.nutrition_protein_target_maintenance !== undefined ||
+    answers.nutrition_protein_target_muscle_gain !== undefined
+  ) {
+    const existing = model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight;
+    model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight = {
+      fatLoss: asNumber(answers.nutrition_protein_target_fat_loss, existing?.fatLoss ?? 1.0),
+      maintenanceOrRecomposition: asNumber(answers.nutrition_protein_target_maintenance, existing?.maintenanceOrRecomposition ?? 0.8),
+      muscleGain: asNumber(answers.nutrition_protein_target_muscle_gain, existing?.muscleGain ?? 0.8),
+    };
+    if (answers.nutrition_protein_target_fat_loss !== undefined) markAnswered("nutrition_protein_target_fat_loss");
+    if (answers.nutrition_protein_target_maintenance !== undefined) markAnswered("nutrition_protein_target_maintenance");
+    if (answers.nutrition_protein_target_muscle_gain !== undefined) markAnswered("nutrition_protein_target_muscle_gain");
   }
   if (answers.nutrition_food_quality !== undefined) {
     model.nutritionPhilosophy.foodQualityPriorities = asStringArray(answers.nutrition_food_quality);
@@ -490,17 +518,8 @@ export function applyCoachAnswersToModel(base: CoachOperatingModel, answers: Coa
     markAnswered("comm_avoided_phrases");
   }
 
-  // --- Safety ---
-  if (answers.safety_pain_response !== undefined) {
-    const v = asString(answers.safety_pain_response);
-    model.safety.painResponsePolicy = v;
-    model.safety.stopExerciseConditions = v === "stop_exercise_and_notify" || v === "stop_workout_and_notify" ? ["reported_pain"] : model.safety.stopExerciseConditions;
-    markAnswered("safety_pain_response");
-  }
-  if (answers.safety_possible_injury !== undefined) {
-    model.safety.injuryResponsePolicy = asString(answers.safety_possible_injury);
-    markAnswered("safety_possible_injury");
-  }
+  // --- Safety --- (scn_pain/scn_possible_injury are handled above, in the
+  // shared scenario loop — see its own comment for why)
   if (answers.safety_extreme_nutrition_request !== undefined) {
     const v = asString(answers.safety_extreme_nutrition_request);
     model.safety.disorderedEatingEscalation = v;
@@ -516,7 +535,11 @@ export function applyCoachAnswersToModel(base: CoachOperatingModel, answers: Coa
     markAnswered("safety_out_of_scope");
   }
   if (answers.safety_absolute_rules !== undefined) {
-    model.safety.absoluteOverrideRules = freeTextList(answers.safety_absolute_rules);
+    const rules = freeTextList(answers.safety_absolute_rules);
+    model.safety.absoluteOverrideRules = rules;
+    // The one merged question now covers what program_non_negotiables used
+    // to ask separately — see coach-onboarding-questions.ts's own comment.
+    model.programArchitecture.nonNegotiables = rules;
     markAnswered("safety_absolute_rules");
   }
 

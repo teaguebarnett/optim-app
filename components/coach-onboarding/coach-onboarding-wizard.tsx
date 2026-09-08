@@ -235,12 +235,12 @@ function LearningPanel() {
         <Sparkles size={14} className="text-accent-strong" aria-hidden="true" />
         WHAT OPTIM IS LEARNING
       </div>
-      <p className="mt-3 text-heading text-off-white">{summary.percentComplete}% calibrated</p>
+      <p className="mt-3 text-heading text-off-white">{summary.percentComplete}% of applicable questions answered</p>
       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">
         <div className="pc-segment h-full rounded-full bg-accent" style={{ width: `${summary.percentComplete}%` }} />
       </div>
       <p className="mt-3 text-meta text-neutral">
-        {summary.answeredQuestions} of {summary.totalApplicableQuestions} questions answered — {ALL_CHAPTER_IDS_IN_ORDER.length} chapters total, some adapt to your answers.
+        {summary.answeredQuestions} of {summary.totalApplicableQuestions} questions apply to you — {ALL_CHAPTER_IDS_IN_ORDER.length} chapters total, some skip automatically based on your answers.
       </p>
     </aside>
   );
