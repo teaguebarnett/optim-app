@@ -38,6 +38,30 @@ export function meaningfulNutritionStrategyName(strategy: Pick<GeneratedNutritio
   return /structured/i.test(strategy.mealStructureDescription) ? "Structured Meal Framework" : "Flexible Macro Targets";
 }
 
+// ---------------------------------------------------------------------------
+// Phase 5.6A.2 — the active-plan screen's adaptive-monitoring status.
+// ---------------------------------------------------------------------------
+
+export type AdaptiveCheckState = "checking" | "insufficient_data" | "no_recommendation" | "proposal_available";
+
+/**
+ * Pure decision behind the active-plan screen's compact adaptive-status
+ * area (spec Part 1) — never a new detection algorithm, just an honest
+ * classification of state the existing detectAdaptationProposals/
+ * persistAdaptationProposalReview pipeline already produced. A real,
+ * currently-unresolved proposal always wins regardless of how little
+ * history exists (a pain report on day one still deserves attention);
+ * otherwise, fewer than one full completed week of real execution is
+ * treated as "still gathering data" rather than a false-confidence "nothing
+ * to report."
+ */
+export function resolveAdaptiveCheckState(input: { hasActiveProposals: boolean; hasCheckedOnce: boolean; currentWeekNumber: number }): AdaptiveCheckState {
+  if (input.hasActiveProposals) return "proposal_available";
+  if (!input.hasCheckedOnce) return "checking";
+  if (input.currentWeekNumber <= 1) return "insufficient_data";
+  return "no_recommendation";
+}
+
 /** The nutrition assumptions that materially change the numeric
  * prescription itself (an averaged-sex calorie formula, a clamped safety
  * floor) — as opposed to a standard methodology note that's always present

@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TextArea } from "@/components/ui/textarea";
 import {
-  approveDailyBriefing,
+  approveAndPublishDailyBriefing,
   editDailyBriefingText,
   generateDailyBriefing,
   isBriefingVisibleToClient,
@@ -20,12 +20,15 @@ import type { AppState } from "@/lib/state";
 import type { CoachProfileId } from "@/lib/tenancy/types";
 
 const STATUS_LABEL: Record<DailyBriefingRecord["status"], string> = {
-  draft: "Draft — not yet sent",
+  draft: "Draft — coach-only",
   held_for_review: "Held for your review",
+  // Reachable only for a record approved before Phase 5.6A.2's fix (see
+  // approveAndPublishDailyBriefing) — a fresh Approve click always
+  // publishes immediately, so no new record can land here.
   approved: "Approved — not yet published",
   scheduled: "Scheduled",
-  published: "Published to client",
-  auto_published: "Auto-published to client",
+  published: "Live on the client's Today",
+  auto_published: "Auto-published — live on the client's Today",
 };
 
 /**
@@ -83,7 +86,7 @@ export function DailyBriefingCard({
 
   function handleApprove() {
     if (!briefing) return;
-    onSave(approveDailyBriefing(briefing, coachId, coachName, new Date().toISOString()));
+    onSave(approveAndPublishDailyBriefing(briefing, coachId, coachName, new Date().toISOString()));
   }
 
   function handlePublish() {

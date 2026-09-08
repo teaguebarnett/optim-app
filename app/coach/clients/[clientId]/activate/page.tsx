@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { AlertTriangle, ArrowLeft, Bookmark, Check, Sparkles, Wand2, CheckCircle2, XCircle, PenLine, Layers, Zap } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, Sparkles, Wand2, Layers, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { TextArea } from "@/components/ui/textarea";
 import { ProgramWeekPreviewSheet } from "@/components/coach/program-preview-sheet";
 import { HealthReviewGate } from "@/components/coach/program-composer/health-review-gate";
 import { DirectionCard } from "@/components/coach/program-composer/direction-card";
@@ -16,9 +15,15 @@ import { PlanAlternatives } from "@/components/coach/program-composer/plan-alter
 import { PlanTrainingReview } from "@/components/coach/program-composer/plan-training-review";
 import { PlanNutritionReview } from "@/components/coach/program-composer/plan-nutrition-review";
 import { ReviseWithOptimSheet, type ReviseScope } from "@/components/coach/program-composer/revise-with-optim-sheet";
+import { ActivePlanHeader } from "@/components/coach/program-composer/active-plan-header";
+import { ActivePlanOverview } from "@/components/coach/program-composer/active-plan-overview";
+import { ActivePlanCurrentWeek } from "@/components/coach/program-composer/active-plan-current-week";
+import { AdaptiveStatusArea } from "@/components/coach/program-composer/adaptive-status-area";
+import { PlanChangeHistory } from "@/components/coach/program-composer/plan-change-history";
 import { useProgramComposer } from "@/hooks/use-program-composer";
-import { materialNutritionAssumptions } from "@/lib/coach/plan-presentation";
+import { materialNutritionAssumptions, meaningfulTrainingDirectionName, meaningfulNutritionStrategyName, resolveAdaptiveCheckState } from "@/lib/coach/plan-presentation";
 import { AI_AUTHORITY_LEVEL_DESCRIPTIONS, type AiAuthorityLevel } from "@/lib/coach/ai-authority";
+import { localDateDayOfWeek } from "@/lib/shared/local-date";
 import type { RevisionChange, RevisionPlan } from "@/lib/coach/program-revision";
 import type { CompleteNutritionPrescription, NutritionRevisionChange, NutritionRevisionPlan } from "@/lib/coach/nutrition-directions";
 import type { ActivationGenerationRecord } from "@/lib/coach/activation-lifecycle";
@@ -60,7 +65,15 @@ export default function OptimPlanPage() {
   }
 
   const client = composer.client;
-  const showGenericHeader = composer.isActiveClient || !composer.latest || (composer.latest.state !== "ready_for_review" && composer.latest.state !== "revision_prepared");
+  // Phase 5.6A.2 — an active client with a real assigned program gets its
+  // own richer ActivePlanHeader (see ActiveClientComposer) instead of this
+  // generic one, so the two never stack. An active client with NO assigned
+  // program yet (a legacy/manually-activated edge case) still falls back to
+  // this generic header for basic back-navigation, since ActiveClientComposer
+  // itself renders nothing but a bare warning card in that case.
+  const showGenericHeader = composer.isActiveClient
+    ? !composer.assignedProgram
+    : !composer.latest || (composer.latest.state !== "ready_for_review" && composer.latest.state !== "revision_prepared");
 
   return (
     <div className="mx-auto max-w-[1440px] space-y-6">
@@ -395,11 +408,31 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
   const [previewWeekNumber, setPreviewWeekNumber] = useState<number | null>(null);
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionPreview, setRevisionPreview] = useState<{ plan: RevisionPlan; revisedProgram: ClientAssignedProgram; changes: RevisionChange[] } | null>(null);
-  const [nutritionRevisionInstruction, setNutritionRevisionInstruction] = useState("");
   const [nutritionRevisionPreview, setNutritionRevisionPreview] = useState<{ plan: NutritionRevisionPlan; revisedPrescription: CompleteNutritionPrescription; changes: NutritionRevisionChange[] } | null>(null);
-  const [checked, setChecked] = useState(false);
+  const [reviseOpen, setReviseOpen] = useState(false);
+  const [reviseScope, setReviseScope] = useState<ReviseScope>("training");
+  const [autoChecked, setAutoChecked] = useState(false);
+  const autoCheckRanForRef = useRef<string | null>(null);
 
   const program = composer.assignedProgram;
+
+  // Phase 5.6A.2 — OPTIM appears to monitor the client automatically: the
+  // exact same detectAdaptationProposals/persistAdaptationProposalReview
+  // pipeline the old manual "Check for proposals" button called now runs
+  // once per client on its own. Idempotent by construction (see
+  // detectAdaptationProposals' own dedup against existingProposals and
+  // persistAdaptationProposalReview's own dedup against the client's real
+  // ReviewRequests), so a StrictMode double-invoke or a re-run for the same
+  // client is always safe — the ref guard just avoids a redundant call.
+  useEffect(() => {
+    if (!program) return;
+    if (autoCheckRanForRef.current === clientId) return;
+    autoCheckRanForRef.current = clientId;
+    composer.checkForAdaptationProposals();
+    setAutoChecked(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientId, program]);
+
   if (!program) {
     return (
       <Card className="text-center">
@@ -412,137 +445,130 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
     );
   }
 
-  function applyPreview() {
+  const direction = composer.latest?.directions?.find((d) => d.id === composer.latest?.selectedDirectionId) ?? null;
+  const trainingName = direction ? meaningfulTrainingDirectionName(direction) : program.name;
+  const frequencyPerWeek = direction?.frequencyPerWeek ?? program.weeks[0]?.days.filter((d) => d.type === "training").length ?? 0;
+  const sessionLengthMin = direction?.estimatedSessionLengthMin ?? null;
+
+  const nutritionStrategy = composer.latest?.nutritionOptions?.find((o) => o.id === composer.latest?.selectedNutritionOptionId) ?? null;
+  const nutritionName = nutritionStrategy ? meaningfulNutritionStrategyName(nutritionStrategy) : (composer.assignedNutritionPlan?.sourceStrategyLabel ?? null);
+
+  const startDateIso = composer.clientAppState?.programEnrollment.startDateIso;
+  const startDateLabel = startDateIso ? new Date(`${startDateIso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "Not set";
+  const lastUpdatedLabel = composer.latest?.updatedAtIso ? new Date(composer.latest.updatedAtIso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+  const todayDayOfWeek = composer.clientAppState ? localDateDayOfWeek(composer.clientAppState.dateIso) : "Monday";
+
+  const adaptiveState = resolveAdaptiveCheckState({ hasActiveProposals: composer.activeProposalReviews.length > 0, hasCheckedOnce: autoChecked, currentWeekNumber: composer.currentWeekNumber });
+
+  function handleReviseOpen() {
+    setReviseScope("training");
+    setReviseOpen(true);
+  }
+
+  function handleRevisePreview() {
     if (!revisionInstruction.trim()) return;
-    setRevisionPreview(composer.previewRevision(revisionInstruction));
+    if (reviseScope === "training" || reviseScope === "both") {
+      setRevisionPreview(composer.previewRevision(revisionInstruction));
+    } else {
+      setRevisionPreview(null);
+    }
+    if ((reviseScope === "nutrition" || reviseScope === "both") && composer.assignedNutritionPlan) {
+      setNutritionRevisionPreview(composer.previewNutritionRevision(revisionInstruction));
+    } else {
+      setNutritionRevisionPreview(null);
+    }
   }
 
-  function confirmPreview() {
-    if (!revisionPreview) return;
-    composer.confirmRevision(revisionInstruction, revisionPreview.plan, revisionPreview.revisedProgram, revisionPreview.changes);
+  function handleReviseConfirm() {
+    if (revisionPreview && (reviseScope === "training" || reviseScope === "both")) {
+      composer.confirmRevision(revisionInstruction, revisionPreview.plan, revisionPreview.revisedProgram, revisionPreview.changes);
+    }
+    if (nutritionRevisionPreview && (reviseScope === "nutrition" || reviseScope === "both")) {
+      composer.confirmNutritionRevision(nutritionRevisionPreview.revisedPrescription);
+    }
     setRevisionPreview(null);
-    setRevisionInstruction("");
-  }
-
-  function applyNutritionPreview() {
-    if (!nutritionRevisionInstruction.trim()) return;
-    setNutritionRevisionPreview(composer.previewNutritionRevision(nutritionRevisionInstruction));
-  }
-
-  function confirmNutritionPreview() {
-    if (!nutritionRevisionPreview) return;
-    composer.confirmNutritionRevision(nutritionRevisionPreview.revisedPrescription);
     setNutritionRevisionPreview(null);
-    setNutritionRevisionInstruction("");
+    setRevisionInstruction("");
+    setReviseOpen(false);
+  }
+
+  function handleReviseDiscard() {
+    setRevisionPreview(null);
+    setNutritionRevisionPreview(null);
   }
 
   return (
     <div className="space-y-5">
-      <Card>
-        <p className="text-subheading text-off-white">{program.name}</p>
-        <p className="mt-1 text-meta text-neutral">
-          Currently week {composer.currentWeekNumber} of {program.durationWeeks}
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {program.weeks.map((w) => (
-            <button key={w.weekNumber} onClick={() => setPreviewWeekNumber(w.weekNumber)} className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-2.5 py-1 text-xs font-medium text-off-white hover:bg-surface-input">
-              Wk {w.weekNumber}
-            </button>
-          ))}
-        </div>
-      </Card>
+      {/* 1. Active plan and current week */}
+      <ActivePlanHeader clientName={clientName} currentWeekNumber={composer.currentWeekNumber} durationWeeks={program.durationWeeks} startDateLabel={startDateLabel} lastUpdatedLabel={lastUpdatedLabel} onBack={onBack} />
+      <ActivePlanOverview
+        trainingName={trainingName}
+        frequencyPerWeek={frequencyPerWeek}
+        sessionLengthMin={sessionLengthMin}
+        currentWeekNumber={composer.currentWeekNumber}
+        nutritionName={nutritionName}
+        nutritionTargets={composer.assignedNutritionPlan?.targets ?? null}
+      />
+      <ActivePlanCurrentWeek program={program} currentWeekNumber={composer.currentWeekNumber} todayDayOfWeek={todayDayOfWeek} onOpenWeek={setPreviewWeekNumber} />
 
-      <Card>
-        <p className="text-subheading text-off-white">Revise upcoming training</p>
-        <p className="mt-1 text-meta text-neutral">
-          Only week {composer.currentWeekNumber + 1} onward can change — {clientName}&apos;s current and past weeks stay exactly as they are.
-        </p>
-        <div className="mt-3 max-w-xl">
-          <TextArea id="active-revision" label="What should change?" value={revisionInstruction} onChange={(e) => setRevisionInstruction(e.target.value)} rows={2} placeholder="e.g. Reduce next week's fatigue without changing frequency." />
-          <Button size="sm" variant="secondary" className="mt-2" onClick={applyPreview} disabled={!revisionInstruction.trim()}>
-            <PenLine size={14} aria-hidden="true" /> Preview change
-          </Button>
-        </div>
-        {revisionPreview ? <RevisionPreviewPanel preview={revisionPreview} onConfirm={confirmPreview} onDiscard={() => setRevisionPreview(null)} confirmLabel="Approve & assign this revision" /> : null}
-      </Card>
+      {/* 2. Any proposal requiring attention */}
+      <AdaptiveStatusArea
+        state={adaptiveState}
+        clientName={clientName}
+        activeProposalReviews={composer.activeProposalReviews}
+        existingProposals={composer.existingProposals}
+        onApply={(proposal, review) => composer.applyProposal(proposal, review)}
+        onDismiss={(review) => composer.dismissProposal(review)}
+        onRefresh={() => {
+          composer.checkForAdaptationProposals();
+          setAutoChecked(true);
+        }}
+      />
 
+      {/* 3. Training and nutrition details — training is the current week above; nutrition detail here. */}
       {composer.assignedNutritionPlan ? (
         <Card>
-          <p className="text-subheading text-off-white">Nutrition plan — {composer.assignedNutritionPlan.sourceStrategyLabel}</p>
+          <p className="text-subheading text-off-white">{nutritionName ?? composer.assignedNutritionPlan.sourceStrategyLabel}</p>
           <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
             <NutritionStat label="Calories" value={`${composer.assignedNutritionPlan.targets.calories} kcal`} />
             <NutritionStat label="Protein" value={`${composer.assignedNutritionPlan.targets.proteinG}g`} />
             <NutritionStat label="Carbs" value={`${composer.assignedNutritionPlan.targets.carbsG}g`} />
             <NutritionStat label="Fat" value={`${composer.assignedNutritionPlan.targets.fatG}g`} />
           </div>
-          <div className="mt-4 border-t border-border pt-3">
-            <p className="text-sm font-medium text-off-white">Revise nutrition</p>
-            <div className="mt-2 max-w-xl">
-              <TextArea id="active-nutrition-revision" label="What should change?" value={nutritionRevisionInstruction} onChange={(e) => setNutritionRevisionInstruction(e.target.value)} rows={2} placeholder="e.g. Reduce calories slightly." />
-              <Button size="sm" variant="secondary" className="mt-2" onClick={applyNutritionPreview} disabled={!nutritionRevisionInstruction.trim()}>
-                <PenLine size={14} aria-hidden="true" /> Preview change
-              </Button>
-            </div>
-            {nutritionRevisionPreview ? <NutritionRevisionPreviewPanel preview={nutritionRevisionPreview} onConfirm={confirmNutritionPreview} onDiscard={() => setNutritionRevisionPreview(null)} confirmLabel="Approve & assign this revision" /> : null}
-          </div>
         </Card>
       ) : null}
 
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-subheading text-off-white">Adaptive proposals</p>
-            <p className="mt-1 text-meta text-neutral">Real signals from {clientName}&apos;s logged training — checked against your Coach Operating Model.</p>
-          </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              composer.checkForAdaptationProposals();
-              setChecked(true);
-            }}
-          >
-            <Sparkles size={14} aria-hidden="true" /> Check for proposals
+      {/* 4. Adjustment controls */}
+      <Card className="space-y-3">
+        <p className="text-subheading text-off-white">Adjustments</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={handleReviseOpen}>
+            <Wand2 size={15} aria-hidden="true" /> Adjust with OPTIM
+          </Button>
+          <Button variant="outline" onClick={() => router.push(`/coach/clients/${clientId}/setup/training`)}>
+            <Layers size={15} aria-hidden="true" /> Fine-tune manually
           </Button>
         </div>
-        {checked && composer.activeProposalReviews.length === 0 ? <p className="mt-3 text-sm text-neutral">Nothing new to review.</p> : null}
-        {composer.activeProposalReviews.length > 0 ? (
-          <div className="mt-3 space-y-2">
-            {composer.activeProposalReviews.map((review) => {
-              const proposal = composer.existingProposals.find((p) => p.id === review.sourceEventId);
-              if (!proposal) return null;
-              return (
-                <div key={review.id} className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised p-3.5">
-                  <p className="text-sm font-medium text-off-white">{proposal.proposedChangeSummary}</p>
-                  <p className="mt-1 text-meta text-neutral">{proposal.reasoning}</p>
-                  <p className="mt-1 text-meta text-neutral">
-                    Targets week{proposal.affectedWeeks.length > 1 ? "s" : ""} {proposal.affectedWeeks.join(", ")} · confidence {Math.round(proposal.confidence * 100)}%
-                    {proposal.status === "auto_applied" ? " · already applied" : ""}
-                  </p>
-                  <div className="mt-2.5 flex gap-2">
-                    {proposal.status !== "auto_applied" ? (
-                      <Button size="sm" onClick={() => composer.applyProposal(proposal, review)}>
-                        <CheckCircle2 size={14} aria-hidden="true" /> Apply
-                      </Button>
-                    ) : null}
-                    <Button size="sm" variant="secondary" onClick={() => composer.dismissProposal(review)}>
-                      <XCircle size={14} aria-hidden="true" /> Dismiss
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
+        <PlanChangeHistory trainingRevisions={composer.latest?.revisions ?? []} nutritionRevisions={composer.latest?.nutritionRevisions ?? []} />
       </Card>
 
-      <Card>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="secondary" size="lg" onClick={() => router.push(`/coach/clients/${clientId}/setup/training`)}>
-            <Layers size={16} aria-hidden="true" /> Fine-tune manually
-          </Button>
-        </div>
-      </Card>
+      <ReviseWithOptimSheet
+        open={reviseOpen}
+        onClose={() => {
+          setReviseOpen(false);
+          handleReviseDiscard();
+        }}
+        scope={reviseScope}
+        onScopeChange={setReviseScope}
+        hasNutrition={!!composer.assignedNutritionPlan}
+        instruction={revisionInstruction}
+        onInstructionChange={setRevisionInstruction}
+        onPreview={handleRevisePreview}
+        trainingPreview={revisionPreview}
+        nutritionPreview={nutritionRevisionPreview}
+        onConfirm={handleReviseConfirm}
+        onDiscard={handleReviseDiscard}
+      />
 
       <ProgramWeekPreviewSheet week={program.weeks.find((w) => w.weekNumber === previewWeekNumber) ?? null} open={previewWeekNumber !== null} onClose={() => setPreviewWeekNumber(null)} />
     </div>
@@ -557,86 +583,6 @@ function ClientIntelligenceSection({ latest }: { latest: ActivationGenerationRec
   if (!latest.programmingProfile) return null;
   const completeness = latest.programmingProfile.dailyActivityLevelIsAssumed || latest.programmingProfile.cardioPreferenceIsAssumed ? "Some inputs assumed" : "Fully reported";
   return <ClientIntelligencePanel profile={latest.programmingProfile} coachModelVersion={latest.coachModelVersion} dataCompleteness={completeness} />;
-}
-
-function RevisionPreviewPanel({
-  preview,
-  onConfirm,
-  onDiscard,
-  confirmLabel,
-}: {
-  preview: { plan: RevisionPlan; revisedProgram: ClientAssignedProgram; changes: RevisionChange[] };
-  onConfirm: () => void;
-  onDiscard: () => void;
-  confirmLabel?: string;
-}) {
-  if (preview.plan.kind === "unrecognized") {
-    return <p className="mt-3 text-sm text-warning-strong">{preview.plan.summary}</p>;
-  }
-  return (
-    <div className="mt-3 rounded-[var(--radius-md)] border border-border-strong bg-surface-raised p-3.5">
-      <p className="text-sm font-medium text-off-white">{preview.plan.summary}</p>
-      {preview.changes.length === 0 ? (
-        <p className="mt-2 text-sm text-neutral">No concrete change resulted — nothing to apply.</p>
-      ) : (
-        <ul className="mt-2 space-y-1.5">
-          {preview.changes.map((c, i) => (
-            <li key={i} className="text-meta text-neutral">
-              Week {c.weekNumber}, {c.dayOfWeek} — {c.field}: <span className="text-off-white">{c.before}</span> → <span className="text-success">{c.after}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="mt-3 flex gap-2">
-        <Button size="sm" onClick={onConfirm} disabled={preview.changes.length === 0}>
-          <Bookmark size={14} aria-hidden="true" /> {confirmLabel ?? "Confirm change"}
-        </Button>
-        <Button size="sm" variant="secondary" onClick={onDiscard}>
-          Discard
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function NutritionRevisionPreviewPanel({
-  preview,
-  onConfirm,
-  onDiscard,
-  confirmLabel,
-}: {
-  preview: { plan: NutritionRevisionPlan; revisedPrescription: CompleteNutritionPrescription; changes: NutritionRevisionChange[] };
-  onConfirm: () => void;
-  onDiscard: () => void;
-  confirmLabel?: string;
-}) {
-  if (preview.plan.kind === "unrecognized") {
-    return <p className="mt-3 text-sm text-warning-strong">{preview.plan.summary}</p>;
-  }
-  return (
-    <div className="mt-3 rounded-[var(--radius-md)] border border-border-strong bg-surface-raised p-3.5">
-      <p className="text-sm font-medium text-off-white">{preview.plan.summary}</p>
-      {preview.changes.length === 0 ? (
-        <p className="mt-2 text-sm text-neutral">No concrete change resulted — nothing to apply.</p>
-      ) : (
-        <ul className="mt-2 space-y-1.5">
-          {preview.changes.map((c, i) => (
-            <li key={i} className="text-meta text-neutral">
-              {c.field}: <span className="text-off-white">{c.before}</span> → <span className="text-success">{c.after}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="mt-3 flex gap-2">
-        <Button size="sm" onClick={onConfirm} disabled={preview.changes.length === 0}>
-          <Bookmark size={14} aria-hidden="true" /> {confirmLabel ?? "Confirm change"}
-        </Button>
-        <Button size="sm" variant="secondary" onClick={onDiscard}>
-          Discard
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 function NutritionStat({ label, value }: { label: string; value: string }) {

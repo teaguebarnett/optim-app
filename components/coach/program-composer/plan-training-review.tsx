@@ -69,13 +69,24 @@ export function PlanTrainingReview({ program, onOpenWeek }: { program: ClientAss
   );
 }
 
-function WeekDayRow({ day }: { day: ProgramDay }) {
+/**
+ * Exported so the active-plan screen's current-week view (see
+ * active-plan-current-week.tsx) can render each day with the exact same
+ * detail-level treatment as the pre-approval review, rather than a second,
+ * subtly different implementation. `isToday` marks the client's real
+ * current local day — a display affordance only, never a gate on which
+ * days are editable (that stays governed entirely by week number).
+ */
+export function WeekDayRow({ day, isToday }: { day: ProgramDay; isToday?: boolean }) {
   const [expanded, setExpanded] = useState(false);
 
   if (day.type === "rest" || !day.workout) {
     return (
-      <div className="flex items-center justify-between rounded-[var(--radius-sm)] border border-border px-3.5 py-2.5">
-        <p className="text-sm font-medium text-off-white">{day.dayOfWeek}</p>
+      <div className={cn("flex items-center justify-between rounded-[var(--radius-sm)] border px-3.5 py-2.5", isToday ? "border-accent/50 bg-accent-soft/30" : "border-border")}>
+        <p className="flex items-center gap-2 text-sm font-medium text-off-white">
+          {day.dayOfWeek}
+          {isToday ? <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-accent">Today</span> : null}
+        </p>
         <p className="text-sm text-neutral">Rest day</p>
       </div>
     );
@@ -83,11 +94,12 @@ function WeekDayRow({ day }: { day: ProgramDay }) {
 
   const workout = day.workout;
   return (
-    <div className="rounded-[var(--radius-sm)] border border-border-strong">
+    <div className={cn("rounded-[var(--radius-sm)] border", isToday ? "border-accent/50 bg-accent-soft/20" : "border-border-strong")}>
       <button type="button" onClick={() => setExpanded((v) => !v)} className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-off-white">
+          <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-off-white">
             {day.dayOfWeek} &middot; {workout.name}
+            {isToday ? <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-accent">Today</span> : null}
           </p>
           <p className="text-meta text-neutral">
             {workout.focus} &middot; ~{workout.estimatedDurationMin} min &middot; {workout.exercises.length} exercises

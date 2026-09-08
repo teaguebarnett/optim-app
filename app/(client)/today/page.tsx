@@ -9,8 +9,10 @@ import { CoachNote } from "@/components/today/coach-note";
 import { PreStartToday } from "@/components/today/pre-start-today";
 import { DailyEntranceSequence } from "@/components/today/daily-entrance-sequence";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { usePlatformState } from "@/hooks/use-platform-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
-import { PUSH_WORKOUT } from "@/lib/mock-data";
+import { getDailyBriefing } from "@/lib/coach/repository";
+import { isBriefingVisibleToClient } from "@/lib/coach/daily-briefing";
 import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 
 // Today's visual architecture (Phase 4.4B.1 bento revision — see
@@ -31,9 +33,10 @@ import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 //   once tapped. See today-bento.tsx.
 export default function TodayPage() {
   const { isHydrated, state, dispatch, dailyTrainingPlan, dailyPlan } = usePrototypeState();
+  const { platform, isPlatformHydrated } = usePlatformState();
   const [trainingTimeSheetOpen, setTrainingTimeSheetOpen] = useState(false);
 
-  if (!isHydrated) {
+  if (!isHydrated || !isPlatformHydrated) {
     return <ScreenSkeleton />;
   }
 
@@ -59,13 +62,25 @@ export default function TodayPage() {
     return <DailyEntranceSequence onDone={() => dispatch({ type: "MARK_DAILY_ENTRANCE_SEEN" })} />;
   }
 
+  // Phase 5.6A.2 — the one place the client actually sees a coach-approved
+  // Today's Edge for the rest of the day, not just in the one-time entrance
+  // sequence above (which a client who already opened the app today never
+  // sees again). Scoped to this exact client + this exact local date via
+  // getDailyBriefing (see lib/coach/repository.ts) — never another client's,
+  // never a stale day's. Renders nothing at all when there's no approved
+  // message yet, per spec: no empty card, no fabricated placeholder text.
+  const todaysEdge = getDailyBriefing(platform, state.clientId, state.dateIso);
+  const todaysEdgeVisible = todaysEdge && isBriefingVisibleToClient(todaysEdge.status);
+
   return (
     <div className="pb-4">
       <DayHeader />
 
-      <div className="mt-3">
-        <CoachNote note={PUSH_WORKOUT.coachNote} />
-      </div>
+      {todaysEdgeVisible ? (
+        <div className="mt-3">
+          <CoachNote note={todaysEdge!.todaysEdgeText} label="Today's Edge" />
+        </div>
+      ) : null}
 
       <section className="mx-4 mt-3 divide-y divide-border/70 overflow-hidden rounded-[var(--radius-lg)] bg-charcoal shadow-[var(--shadow-subtle)]">
         <FuelSection />

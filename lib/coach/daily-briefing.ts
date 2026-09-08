@@ -167,11 +167,41 @@ export function publishDailyBriefing(record: DailyBriefingRecord, nowIso: string
   return { ...record, status: "published", publishedAtIso: nowIso, updatedAtIso: nowIso };
 }
 
-/** A coach's own edit to the client-facing text — never regenerates the
+/**
+ * Phase 5.6A.2 — the ONE action a coach actually takes on a normal (non-
+ * held) briefing: clicking "Approve" must itself result in a published,
+ * client-visible message, not a second silent "approved but still
+ * invisible" state the coach has to separately remember to publish. Composes
+ * the two existing pure transitions rather than inventing a new status.
+ */
+export function approveAndPublishDailyBriefing(record: DailyBriefingRecord, coachId: CoachProfileId, coachName: string, nowIso: string): DailyBriefingRecord {
+  return publishDailyBriefing(approveDailyBriefing(record, coachId, coachName, nowIso), nowIso);
+}
+
+/**
+ * A coach's own edit to the client-facing text — never regenerates the
  * whole record, and marks generationSource so the distinction between
- * "OPTIM wrote this" and "the coach rewrote this" is never lost. */
+ * "OPTIM wrote this" and "the coach rewrote this" is never lost.
+ *
+ * Phase 5.6A.2 — editing anything the client could already see (approved,
+ * published, or auto-published) must pull it back to "draft" so a coach's
+ * in-progress rewrite can never appear live before it's re-approved: the
+ * client keeps seeing whatever was last actually approved (nothing changes
+ * for them yet) rather than a half-edited line. A still-pending record
+ * (draft, or held for a safety reason unrelated to this text edit) stays in
+ * its current status — there's nothing "live" to protect yet.
+ */
 export function editDailyBriefingText(record: DailyBriefingRecord, todaysEdgeText: string, nowIso: string): DailyBriefingRecord {
-  return { ...record, todaysEdgeText, generationSource: "coach_edited", updatedAtIso: nowIso };
+  const wasVisibleOrApproved = record.status === "approved" || isBriefingVisibleToClient(record.status);
+  return {
+    ...record,
+    todaysEdgeText,
+    generationSource: "coach_edited",
+    updatedAtIso: nowIso,
+    ...(wasVisibleOrApproved
+      ? { status: "draft" as const, approvedByCoachId: undefined, approvedByCoachName: undefined, approvedAtIso: undefined, publishedAtIso: undefined }
+      : null),
+  };
 }
 
 /**

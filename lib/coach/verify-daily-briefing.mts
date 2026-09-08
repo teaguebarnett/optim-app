@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { WORKSPACE_OPTIM_ID, COACH_PROFILE_TEAGUE, CLIENT_PROFILE_DEMO } from "../tenancy/seed.ts";
 import {
+  approveAndPublishDailyBriefing,
   approveDailyBriefing,
   defaultCoachBriefingSettings,
   editDailyBriefingText,
@@ -145,6 +146,66 @@ check("editDailyBriefingText marks generationSource coach_edited and never regen
   assert.equal(edited.todaysEdgeText, "Custom coach-written line for today.");
   assert.equal(edited.generationSource, "coach_edited");
   assert.equal(edited.focusLine, draft.focusLine);
+});
+
+console.log("\n5. Phase 5.6A.2 — repairing the publishing contract\n");
+
+check("approveAndPublishDailyBriefing makes a fresh Approve click immediately visible to the client — the exact bug this phase repairs", () => {
+  const draft = generateDailyBriefing(baseInput());
+  assert.equal(isBriefingVisibleToClient(draft.status), false);
+  const result = approveAndPublishDailyBriefing(draft, COACH_PROFILE_TEAGUE.id, "Teague Barnett", "2026-01-10T08:00:00.000Z");
+  assert.equal(result.status, "published");
+  assert.equal(isBriefingVisibleToClient(result.status), true);
+  assert.equal(result.approvedByCoachName, "Teague Barnett");
+  assert.ok(result.publishedAtIso);
+});
+
+check("re-editing a published briefing pulls it back to draft — the client keeps seeing the last real approved text, not a half-edited one, until it's approved again", () => {
+  const draft = generateDailyBriefing(baseInput());
+  const published = approveAndPublishDailyBriefing(draft, COACH_PROFILE_TEAGUE.id, "Teague Barnett", "2026-01-10T08:00:00.000Z");
+  assert.equal(isBriefingVisibleToClient(published.status), true);
+
+  const reEdited = editDailyBriefingText(published, "Changed my mind — new focus for today.", "2026-01-10T09:00:00.000Z");
+  assert.equal(reEdited.status, "draft");
+  assert.equal(isBriefingVisibleToClient(reEdited.status), false);
+  assert.equal(reEdited.approvedByCoachId, undefined);
+  assert.equal(reEdited.publishedAtIso, undefined);
+  assert.equal(reEdited.todaysEdgeText, "Changed my mind — new focus for today.");
+});
+
+check("re-editing an auto_published briefing also requires a fresh approval before it's visible again", () => {
+  const record = generateDailyBriefing(baseInput({ automation: "auto_publish" }));
+  assert.equal(isBriefingVisibleToClient(record.status), true);
+  const reEdited = editDailyBriefingText(record, "A different auto-generated line.", "2026-01-10T09:00:00.000Z");
+  assert.equal(reEdited.status, "draft");
+});
+
+check("editing a plain draft (never yet approved) stays a draft — nothing to protect the client from yet", () => {
+  const draft = generateDailyBriefing(baseInput());
+  const edited = editDailyBriefingText(draft, "Still drafting.", "2026-01-10T08:00:00.000Z");
+  assert.equal(edited.status, "draft");
+});
+
+check("editing a held-for-review briefing stays held — an unrelated text edit never silently clears a safety hold", () => {
+  const held = generateDailyBriefing(baseInput({ hasPainFlag: true }));
+  assert.equal(held.status, "held_for_review");
+  const edited = editDailyBriefingText(held, "Adjusted wording.", "2026-01-10T08:00:00.000Z");
+  assert.equal(edited.status, "held_for_review");
+  assert.equal(edited.heldForReviewReason, held.heldForReviewReason);
+});
+
+check("repeated approval of the same record never produces a second identity — deterministic per-client-per-date id is unchanged by approval", () => {
+  const draft = generateDailyBriefing(baseInput());
+  const first = approveAndPublishDailyBriefing(draft, COACH_PROFILE_TEAGUE.id, "Teague Barnett", "2026-01-10T08:00:00.000Z");
+  const second = approveAndPublishDailyBriefing(first, COACH_PROFILE_TEAGUE.id, "Teague Barnett", "2026-01-10T08:10:00.000Z");
+  assert.equal(second.id, draft.id);
+  assert.equal(second.id, `briefing-${draft.clientId}-${draft.forDateIso}`);
+});
+
+check("the same client's briefing on two different dates never collide — distinct ids", () => {
+  const dayOne = generateDailyBriefing(baseInput({ forDateIso: "2026-01-10" }));
+  const dayTwo = generateDailyBriefing(baseInput({ forDateIso: "2026-01-11" }));
+  assert.notEqual(dayOne.id, dayTwo.id);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
