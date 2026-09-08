@@ -27,7 +27,7 @@ import {
   saveClientAppState,
 } from "@/lib/tenancy/client-state-store";
 import { getDemoClientSession, resolveActiveContext } from "@/lib/tenancy/context";
-import { resolveCoachCreatedClientContext } from "@/lib/coach/repository";
+import { getClientLifecycle, resolveCoachCreatedClientContext, shouldAutosaveClientAppState } from "@/lib/coach/repository";
 import { resolveDefaultDevPerspective } from "@/lib/coach/routing";
 import {
   getDemoCoachSession,
@@ -172,10 +172,28 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlatformHydrated]);
 
+  // Phase 5.6A.3 — a client who isn't lifecycle "active" yet (invited,
+  // onboarding, coach_setup, ready_to_activate — see
+  // lib/coach/types.ts's ClientLifecycleStatus) has no legitimate autosaved
+  // AppState of their own: their real answers/setup are written through
+  // their own dedicated coach/platform paths, and this reducer's defaults
+  // (see lib/state.ts's createInitialState / buildDefaultProgramEnrollmentFor,
+  // which starts programEnrollment "today") are only ever a scaffold for
+  // rendering their waiting screen. Persisting that scaffold here — on every
+  // render of this component while it merely hydrates, not on any real
+  // client action — is exactly what could clobber the coach's own real
+  // approval write (assignedProgram + the coach's chosen startDateIso) with
+  // a phantom "starts today, nothing assigned" state if this provider's
+  // in-memory `state` was captured even a moment before that approval
+  // landed in storage. Waiting for isPlatformHydrated too: before the
+  // platform store loads, getClientLifecycle can't see any real lifecycle
+  // record yet and would default every client to "active" (see its own
+  // doc), reopening the exact same race during that brief window.
   useEffect(() => {
-    if (!isHydrated) return;
+    if (!isHydrated || !isPlatformHydrated) return;
+    if (!shouldAutosaveClientAppState(getClientLifecycle(platform, state.clientId))) return;
     saveClientAppState(state.clientId, state);
-  }, [state, isHydrated]);
+  }, [state, isHydrated, isPlatformHydrated, platform]);
 
   // A coarse once-a-minute re-render is enough for "training time passed"
   // language and recommendation windows to stay accurate without

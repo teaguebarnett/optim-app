@@ -8,6 +8,7 @@
 // recency) matching the Phase 5.0A brief's decision-boundary ordering, then
 // by recency within the same priority.
 
+import { latestGenerationForClient, type ActivationGenerationRecord } from "./activation-lifecycle.ts";
 import type { ClientProfile, ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 import type { ReviewRequest } from "../types";
 import type { AttentionItemKind, AttentionQueueItem, HealthReviewRecord, NotificationTier } from "./types";
@@ -38,6 +39,7 @@ const NOTIFICATION_TIER_ORDER: Record<NotificationTier, number> = { immediate: 0
  * most "only Teague can decide this" item the queue ever carries. */
 const ATTENTION_PRIORITY: Record<AttentionItemKind, number> = {
   health_review: -1,
+  plan_approval: -0.9,
   "pain-report": 0,
   "recovery-deterioration": 0.5,
   "ai-authority-boundary": 0.75,
@@ -70,6 +72,30 @@ export interface BuildAttentionQueueInput {
    * never as "unknown -> immediate" — an unknown/missing signal must never
    * default toward the more urgent classification. */
   workoutInProgressClientIds?: Set<ClientProfileId>;
+  /** Phase 5.6A.3 — every activation-generation record scoped to this
+   * coach's own clients in this workspace, used only to synthesize a
+   * "plan_approval" item for whichever client's OWN LATEST record is
+   * sitting at "ready_for_review" or "revision_prepared" — a real,
+   * generated plan genuinely waiting on the coach's own explicit approval,
+   * never a fabricated reminder. A client whose latest record has already
+   * moved to "activated" (or hasn't been generated at all yet) never gets
+   * one. */
+  activationGenerations?: ActivationGenerationRecord[];
+  /** This client's own real intended start date (see
+   * lib/coach/types.ts's ClientIntendedProgram), when the coach has set
+   * one — used only to name the real date in the plan_approval item's
+   * summary; the item still appears (with honest, date-free copy) when
+   * absent, never a fabricated date. */
+  intendedStartDateIsoByClientId?: ReadonlyMap<ClientProfileId, string>;
+}
+
+function formatCalendarDateLabel(dateIso: string): string {
+  // Constructing from an explicit local midnight (never `new Date(dateIso)`
+  // alone) — a bare YYYY-MM-DD string parses as UTC midnight, which can
+  // display as the PREVIOUS calendar day in any negative-UTC-offset
+  // timezone. See this phase's brief: "Avoid UTC parsing that can shift a
+  // YYYY-MM-DD value."
+  return new Date(`${dateIso}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 }
 
 /**
@@ -139,7 +165,47 @@ export function buildReviewQueueItems(input: BuildAttentionQueueInput): Attentio
     status: "needs_review",
   }));
 
-  return [...healthReviewItems, ...reviewItems].sort(
+  // Phase 5.6A.3 — a real, already-generated plan sitting unapproved is a
+  // genuine coach decision, exactly like an unresolved health review, and
+  // now gets the same first-class treatment instead of having no
+  // representation in this queue at all. One item per client, only for
+  // that client's OWN LATEST generation (never a stale superseded attempt),
+  // and only while it's genuinely awaiting approval.
+  const generationsByClient = new Map<ClientProfileId, ActivationGenerationRecord[]>();
+  for (const record of input.activationGenerations ?? []) {
+    if (record.workspaceId !== input.workspaceId) continue;
+    const forClient = generationsByClient.get(record.clientId) ?? [];
+    forClient.push(record);
+    generationsByClient.set(record.clientId, forClient);
+  }
+  const planApprovalItems: AttentionQueueItem[] = [];
+  for (const [clientId, records] of generationsByClient) {
+    const latest = latestGenerationForClient(records, clientId);
+    if (!latest || (latest.state !== "ready_for_review" && latest.state !== "revision_prepared")) continue;
+    const clientName = clientsById.get(clientId)?.name ?? "Unknown client";
+    const firstName = clientName.split(" ")[0];
+    const startDateIso = input.intendedStartDateIsoByClientId?.get(clientId);
+    const summary = startDateIso
+      ? `Review the training, nutrition, and launch details before ${firstName}'s plan begins ${formatCalendarDateLabel(startDateIso)}.`
+      : `Review the training, nutrition, and launch details before ${firstName}'s plan begins.`;
+    planApprovalItems.push({
+      reviewRequestId: `plan-approval-${clientId}`,
+      workspaceId: input.workspaceId,
+      clientId,
+      clientName,
+      assignedCoachId: input.coachId,
+      kind: "plan_approval",
+      summary,
+      createdAtIso: latest.updatedAtIso,
+      updatedAtIso: latest.updatedAtIso,
+      priority: ATTENTION_PRIORITY.plan_approval,
+      severity: "high",
+      notificationTier: resolveNotificationTier("plan_approval", { workoutInProgress: false }),
+      status: "needs_review",
+    });
+  }
+
+  return [...healthReviewItems, ...planApprovalItems, ...reviewItems].sort(
     (a, b) =>
       NOTIFICATION_TIER_ORDER[a.notificationTier] - NOTIFICATION_TIER_ORDER[b.notificationTier] ||
       a.priority - b.priority ||

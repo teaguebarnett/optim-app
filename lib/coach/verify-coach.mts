@@ -25,6 +25,7 @@ import {
   getInvitationForClient,
   getOnboardingProgress,
   resolveProgramAssignmentRef,
+  shouldAutosaveClientAppState,
 } from "./repository.ts";
 import { checkActivationReadiness } from "./activation.ts";
 import { createEmptyClientProgram, createEmptyExercise, createEmptyWorkout } from "./training.ts";
@@ -183,6 +184,40 @@ check("CREATE_CLIENT starts a new client at 'invited' with a real invitation", (
   assert.equal(invitation!.delivery, "local_link_only");
   assert.equal(invitation!.acceptedAtIso, undefined);
   assert.equal(getIntendedProgram(state, client.id)?.intendedWeeklyCheckIn, true);
+});
+
+check("Phase 5.6A.3 — RESCHEDULE_INTENDED_PROGRAM is the one explicit way a client's real start date changes after 'Add client', and never regresses on a mismatched clientId", () => {
+  const client = makeClient();
+  const state = platformReducer(createInitialPlatformState(), {
+    type: "CREATE_CLIENT",
+    workspaceId: WORKSPACE_OPTIM_ID,
+    client,
+    intendedStartDateIso: "2026-01-15",
+    intendedDurationWeeks: 12,
+    intendedWeeklyCheckIn: true,
+    nowIso: "2026-01-01T00:00:00.000Z",
+  });
+  const rescheduled = platformReducer(state, {
+    type: "RESCHEDULE_INTENDED_PROGRAM",
+    clientId: client.id,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    intendedStartDateIso: "2026-01-20",
+  });
+  assert.equal(getIntendedProgram(rescheduled, client.id)?.intendedStartDateIso, "2026-01-20");
+  // Everything else about the intended program (duration, weekly check-in)
+  // must survive untouched — this only ever changes the one field it owns.
+  assert.equal(getIntendedProgram(rescheduled, client.id)?.intendedDurationWeeks, 12);
+  assert.equal(getIntendedProgram(rescheduled, client.id)?.intendedWeeklyCheckIn, true);
+
+  // Rescheduling a client with no real intended-program record at all is a
+  // safe no-op, never a fabricated new record.
+  const untouched = platformReducer(state, {
+    type: "RESCHEDULE_INTENDED_PROGRAM",
+    clientId: "no-such-client" as typeof client.id,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    intendedStartDateIso: "2026-01-20",
+  });
+  assert.equal(untouched, state);
 });
 
 check("ACCEPT_INVITATION moves an invited client to 'onboarding' and marks the invitation opened", () => {
@@ -851,6 +886,21 @@ check("A coach with zero clients but who has already started/confirmed calibrati
   assert.equal(isGenuinelyNewCoach({ calibrationStatus: "in_progress", clientCount: 0 }), false);
   assert.equal(isGenuinelyNewCoach({ calibrationStatus: "calibrated", clientCount: 0 }), false);
   assert.equal(isGenuinelyNewCoach({ calibrationStatus: "inferred_unconfirmed", clientCount: 0 }), false);
+});
+
+console.log("\n14. Phase 5.6A.3 — shouldAutosaveClientAppState (the client-side autosave lifecycle gate)\n");
+
+check("A not-yet-active client (invited/onboarding/coach_setup/ready_to_activate) never autosaves their own scaffold AppState", () => {
+  assert.equal(shouldAutosaveClientAppState("invited"), false);
+  assert.equal(shouldAutosaveClientAppState("onboarding"), false);
+  assert.equal(shouldAutosaveClientAppState("coach_setup"), false);
+  assert.equal(shouldAutosaveClientAppState("ready_to_activate"), false);
+});
+
+check("An active, paused, or completed client's real state autosaves normally", () => {
+  assert.equal(shouldAutosaveClientAppState("active"), true);
+  assert.equal(shouldAutosaveClientAppState("paused"), true);
+  assert.equal(shouldAutosaveClientAppState("completed"), true);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

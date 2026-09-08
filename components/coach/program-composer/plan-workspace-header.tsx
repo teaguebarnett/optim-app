@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Wand2, PenLine, Layers } from "lucide-react";
+import { ArrowLeft, Wand2, PenLine, Layers, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/progress/status-badge";
 
@@ -37,12 +37,19 @@ export function PlanActionBar({
   onFineTune,
   approveDisabled,
   approveDisabledReason,
+  approveError,
 }: {
   onApprove: () => void;
   onRevise: () => void;
   onFineTune: () => void;
   approveDisabled?: boolean;
   approveDisabledReason?: string;
+  /** Phase 5.6A.3 — the honest failure half of ApproveInitialOutcome (see
+   * hooks/use-program-composer.ts). Distinct from approveDisabledReason:
+   * that one explains why approval isn't available yet; this one reports
+   * that a real approval attempt was made and did NOT persist, so the
+   * coach can see it and retry rather than believing the plan went live. */
+  approveError?: string | null;
 }) {
   return (
     <div className="sticky bottom-4 z-20 mt-2">
@@ -58,7 +65,11 @@ export function PlanActionBar({
             <Layers size={15} aria-hidden="true" /> Fine-tune manually
           </Button>
         </div>
-        {approveDisabled && approveDisabledReason ? (
+        {approveError ? (
+          <p className="flex items-center gap-1.5 text-meta text-error">
+            <TriangleAlert size={13} aria-hidden="true" /> {approveError}
+          </p>
+        ) : approveDisabled && approveDisabledReason ? (
           <p className="flex items-center gap-1.5 text-meta text-warning-strong">
             <PenLine size={13} aria-hidden="true" /> {approveDisabledReason}
           </p>

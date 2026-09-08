@@ -82,6 +82,14 @@ export function useCoachWorkspace() {
   const unresolvedHealthReviews = platform.healthReviews.filter(
     (r) => !RESOLVED_HEALTH_REVIEW_STATUSES.has(r.status) && r.workspaceId === workspaceId && thisCoachsClientIds.has(r.clientId)
   );
+  // Phase 5.6A.3 — scoped the exact same way every other attention-queue
+  // input already is: this coach's own clients, this workspace, nothing
+  // else — see lib/coach/attention-queue.ts's own synthesis for how these
+  // become real "plan_approval" items.
+  const thisCoachsActivationGenerations = platform.activationGenerations.filter((g) => g.workspaceId === workspaceId && thisCoachsClientIds.has(g.clientId));
+  const intendedStartDateIsoByClientId = new Map(
+    platform.intendedPrograms.filter((p) => thisCoachsClientIds.has(p.clientId)).map((p) => [p.clientId, p.intendedStartDateIso])
+  );
   // Phase 5.4B completion pass — the one piece of live context
   // resolveNotificationTier needs: which clients have a workout actually
   // in progress RIGHT NOW, so a pain report only ever classifies as
@@ -90,12 +98,28 @@ export function useCoachWorkspace() {
     allClients.filter((c) => clientAppStates.get(c.id)?.workoutSession.status === "in-progress").map((c) => c.id)
   );
   const attentionQueue = coachId
-    ? buildAttentionQueue({ workspaceId, coachId, reviewRequests: allReviewRequests, clients: allClients, healthReviews: unresolvedHealthReviews, workoutInProgressClientIds })
+    ? buildAttentionQueue({
+        workspaceId,
+        coachId,
+        reviewRequests: allReviewRequests,
+        clients: allClients,
+        healthReviews: unresolvedHealthReviews,
+        workoutInProgressClientIds,
+        activationGenerations: thisCoachsActivationGenerations,
+        intendedStartDateIsoByClientId,
+      })
     : [];
   // Every status, not just unresolved — the Reviews page's Needs review /
   // In progress / Resolved tabs (see app/coach/reviews/page.tsx) need the
   // full history, while every other screen keeps using attentionQueue
   // above (unresolved-only, unchanged badge/dashboard behavior).
+  //
+  // Phase 5.6A.3 — deliberately does NOT pass activationGenerations here:
+  // "plan_approval" is synthesized only for the Command Center's own
+  // attentionQueue above. The Decisions page's generic resolve/note/
+  // "move to waiting" lifecycle actions (see review-detail-sheet.tsx) don't
+  // apply to a plan awaiting approval — its own real resolution is the
+  // actual Approve action on /activate, never a second parallel one here.
   const reviewQueueItems = coachId
     ? buildReviewQueueItems({ workspaceId, coachId, reviewRequests: allReviewRequests, clients: allClients, healthReviews: unresolvedHealthReviews, workoutInProgressClientIds })
     : [];

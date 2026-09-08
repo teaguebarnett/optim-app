@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, CheckCircle2, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2 } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, CheckCircle2, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2, ClipboardCheck } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/coach/empty-state";
 import { ATTENTION_KIND_LABELS } from "@/lib/coach/labels";
@@ -8,6 +8,7 @@ import type { AttentionQueueItem } from "@/lib/coach/types";
 
 const KIND_ICON: Record<AttentionQueueItem["kind"], typeof AlertTriangle> = {
   health_review: HeartPulse,
+  plan_approval: ClipboardCheck,
   "pain-report": AlertTriangle,
   "program-change-request": RefreshCcw,
   "rpe-anomaly": Activity,

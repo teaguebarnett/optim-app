@@ -2,10 +2,32 @@
 // idempotent generation (including the real bug fix that made "blocked"
 // retryable), regeneration history, the one real approval write path, and
 // the independent health/safety gate on auto-activation.
+//
+// Phase 5.6A.3 — approveActivation now writes through to, and reads back
+// from, this client's REAL persisted AppState (see activation-lifecycle.ts's
+// ActivationPersistenceError) rather than only returning an in-memory
+// result. A FakeWindow (same pattern as verify-review-lifecycle.mts) makes
+// that real storage round-trip observable here instead of silently
+// no-op'ing (see lib/storage.ts's isStorageAvailable, which is false with no
+// `window` at all — as this Node script had none before).
+
+class FakeWindow extends EventTarget {
+  localStorage = (() => {
+    const store = new Map<string, string>();
+    return {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    };
+  })();
+}
+const fakeWindow = new FakeWindow();
+(globalThis as unknown as { window: unknown }).window = fakeWindow;
 
 import assert from "node:assert/strict";
 import {
   ACTIVATION_GENERATOR_VERSION,
+  ActivationPersistenceError,
   approveActivation,
   canAutoActivateWithoutApproval,
   computeIdempotencyKey,
@@ -20,9 +42,24 @@ import {
 import { createDefaultCoachOperatingModel } from "./operating-model.ts";
 import { defaultCoachAiAuthoritySettings, type CoachAiAuthoritySettings } from "./ai-authority.ts";
 import { createInitialPlatformState } from "./platform-store.ts";
+import { loadClientAppState } from "../tenancy/client-state-store.ts";
 import { WORKSPACE_OPTIM_ID, COACH_PROFILE_TEAGUE } from "../tenancy/seed.ts";
 import type { OnboardingProgress } from "./types";
 import type { ClientProfile, ClientProfileId } from "../tenancy/types";
+
+/** Simulates a real storage failure (full/blocked disk, a private-browsing
+ * quota, etc.) for the duration of `fn` — every write silently no-ops, then
+ * storage is restored exactly as it was. Never leaves a half-broken
+ * localStorage behind for later checks. */
+function withBlockedStorage<T>(fn: () => T): T {
+  const realSetItem = fakeWindow.localStorage.setItem;
+  fakeWindow.localStorage.setItem = () => {};
+  try {
+    return fn();
+  } finally {
+    fakeWindow.localStorage.setItem = realSetItem;
+  }
+}
 
 let passed = 0;
 let failed = 0;
@@ -360,6 +397,143 @@ check("A successful approval produces an 'activated' record with a real approval
   assert.equal(updatedRecord.approval?.resultingProgramId, generated.trainingOptions[0].program.id);
   assert.equal(communicationPolicy.clientId, CLIENT_ID);
   assert.ok(communicationPolicy.scheduledActions.length > 0);
+
+  // Phase 5.6A.3 — the real, persisted write this client's own session will
+  // actually read back, not just the in-memory return value above.
+  const persisted = loadClientAppState(CLIENT_ID);
+  assert.ok(persisted, "approval must leave a real persisted AppState behind for this client");
+  assert.equal(persisted?.assignedProgram?.id, generated.trainingOptions[0].program.id);
+  assert.equal(persisted?.programEnrollment.startDateIso, "2026-01-06T00:00:00.000Z", "the coach's real chosen start date must be the one persisted, never silently replaced by approval day");
+});
+
+check("REGRESSION: a blocked/failed write never produces a false 'activated' success — approveActivation throws ActivationPersistenceError instead, and the client's stored state is left exactly as it was", () => {
+  const isolatedClientId = "client-persistence-failure-test" as ClientProfileId;
+  const isolatedClient: ClientProfile = { ...client, id: isolatedClientId };
+  const generated = generateActivation({
+    clientId: isolatedClientId,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    onboarding: { ...completedOnboarding(), clientId: isolatedClientId },
+    activeCoachOperatingModel: com(),
+    healthReviewResolved: "no_review_needed",
+    existingRecords: [],
+    nowIso: "2026-01-01T00:00:00.000Z",
+  }).record;
+  const selected = selectActivationOptions(generated, generated.trainingOptions[0].id, generated.nutritionOptions[0]?.id ?? null, "2026-01-01T00:00:00.000Z");
+
+  assert.throws(
+    () =>
+      withBlockedStorage(() =>
+        approveActivation({
+          record: selected,
+          client: isolatedClient,
+          approvedByCoachId: COACH_PROFILE_TEAGUE.id,
+          aiAuthorityLevelAtApproval: "copilot",
+          clientFirstName: "Blocked",
+          coachName: "Teague",
+          businessName: "OPTIM",
+          com: com(),
+          aiMayRespondDirectlyForRoutine: false,
+          assignWeeklyCheckIn: true,
+          startDateIso: "2026-01-06T00:00:00.000Z",
+          nowIso: "2026-01-05T00:00:00.000Z",
+        })
+      ),
+    ActivationPersistenceError
+  );
+  assert.equal(loadClientAppState(isolatedClientId), null, "a failed write must leave nothing behind — never a partially-activated client");
+
+  // The exact same call, retried once storage is healthy again, must
+  // succeed cleanly — a thrown failure is always safe to retry.
+  const { updatedRecord } = approveActivation({
+    record: selected,
+    client: isolatedClient,
+    approvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    aiAuthorityLevelAtApproval: "copilot",
+    clientFirstName: "Blocked",
+    coachName: "Teague",
+    businessName: "OPTIM",
+    com: com(),
+    aiMayRespondDirectlyForRoutine: false,
+    assignWeeklyCheckIn: true,
+    startDateIso: "2026-01-06T00:00:00.000Z",
+    nowIso: "2026-01-05T00:00:00.000Z",
+  });
+  assert.equal(updatedRecord.state, "activated");
+  const persisted = loadClientAppState(isolatedClientId);
+  assert.equal(persisted?.assignedProgram?.id, generated.trainingOptions[0].program.id);
+});
+
+check("REGRESSION: repeated (idempotent) approval of the same record never produces a duplicate or conflicting persisted program", () => {
+  const repeatClientId = "client-idempotent-approval-test" as ClientProfileId;
+  const repeatClient: ClientProfile = { ...client, id: repeatClientId };
+  const generated = generateActivation({
+    clientId: repeatClientId,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    onboarding: { ...completedOnboarding(), clientId: repeatClientId },
+    activeCoachOperatingModel: com(),
+    healthReviewResolved: "no_review_needed",
+    existingRecords: [],
+    nowIso: "2026-01-01T00:00:00.000Z",
+  }).record;
+  const selected = selectActivationOptions(generated, generated.trainingOptions[0].id, generated.nutritionOptions[0]?.id ?? null, "2026-01-01T00:00:00.000Z");
+  const approveOnce = () =>
+    approveActivation({
+      record: selected,
+      client: repeatClient,
+      approvedByCoachId: COACH_PROFILE_TEAGUE.id,
+      aiAuthorityLevelAtApproval: "copilot",
+      clientFirstName: "Repeat",
+      coachName: "Teague",
+      businessName: "OPTIM",
+      com: com(),
+      aiMayRespondDirectlyForRoutine: false,
+      assignWeeklyCheckIn: true,
+      startDateIso: "2026-01-06T00:00:00.000Z",
+      nowIso: "2026-01-05T00:00:00.000Z",
+    });
+
+  const first = approveOnce();
+  const second = approveOnce();
+  assert.equal(first.updatedRecord.approval?.resultingProgramId, second.updatedRecord.approval?.resultingProgramId);
+  const persisted = loadClientAppState(repeatClientId);
+  assert.equal(persisted?.assignedProgram?.id, generated.trainingOptions[0].program.id);
+});
+
+check("REGRESSION: approving one client's plan never writes into a different client's persisted AppState (client isolation)", () => {
+  const clientA = "client-isolation-a" as ClientProfileId;
+  const clientB = "client-isolation-b" as ClientProfileId;
+  const profileA: ClientProfile = { ...client, id: clientA };
+  const generatedA = generateActivation({
+    clientId: clientA,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    onboarding: { ...completedOnboarding(), clientId: clientA },
+    activeCoachOperatingModel: com(),
+    healthReviewResolved: "no_review_needed",
+    existingRecords: [],
+    nowIso: "2026-01-01T00:00:00.000Z",
+  }).record;
+  const selectedA = selectActivationOptions(generatedA, generatedA.trainingOptions[0].id, generatedA.nutritionOptions[0]?.id ?? null, "2026-01-01T00:00:00.000Z");
+
+  assert.equal(loadClientAppState(clientB), null, "client B must start with nothing persisted");
+  approveActivation({
+    record: selectedA,
+    client: profileA,
+    approvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    aiAuthorityLevelAtApproval: "copilot",
+    clientFirstName: "Isolation",
+    coachName: "Teague",
+    businessName: "OPTIM",
+    com: com(),
+    aiMayRespondDirectlyForRoutine: false,
+    assignWeeklyCheckIn: true,
+    startDateIso: "2026-01-06T00:00:00.000Z",
+    nowIso: "2026-01-05T00:00:00.000Z",
+  });
+  assert.ok(loadClientAppState(clientA)?.assignedProgram, "client A's own approval must persist under client A's own key");
+  assert.equal(loadClientAppState(clientB), null, "client B's storage must remain completely untouched by client A's approval");
 });
 
 console.log("\n6. Health/safety gate is independent of, and overrides, AI Authority\n");

@@ -173,6 +173,7 @@ export type PlatformAction =
     }
   | { type: "COMPLETE_ONBOARDING"; clientId: string; workspaceId: WorkspaceId; nowIso: string }
   | { type: "SET_CLIENT_LIFECYCLE"; clientId: string; workspaceId: WorkspaceId; status: ClientLifecycleStatus; nowIso: string }
+  | { type: "RESCHEDULE_INTENDED_PROGRAM"; clientId: string; workspaceId: WorkspaceId; intendedStartDateIso: string }
   | { type: "SET_HEALTH_REVIEW_STATUS"; clientId: string; workspaceId: WorkspaceId; status: HealthReviewStatus; nowIso: string; documentedLimitations?: string }
   | { type: "SAVE_PROGRAM_TEMPLATE"; template: CoachProgramTemplate }
   | { type: "DELETE_PROGRAM_TEMPLATE"; templateId: string; coachId: string }
@@ -335,6 +336,24 @@ export function platformReducer(state: PlatformState, action: PlatformAction): P
       return {
         ...state,
         lifecycles: upsertLifecycle(state.lifecycles, action.clientId, action.workspaceId, action.status, action.nowIso),
+      };
+    }
+
+    // Phase 5.6A.3 — the ONE explicit, coach-driven way the real, canonical
+    // start date (see lib/coach/types.ts's ClientIntendedProgram) is ever
+    // changed after "Add client" time. Never fired automatically by
+    // approval, onboarding completion, or any other date passing — a
+    // scheduled start date that lapses before the coach approves must stay
+    // exactly what the coach chose until the coach explicitly resolves it
+    // (see the "past start date" gate in app/coach/clients/[clientId]/
+    // activate/page.tsx), not silently jump to "today."
+    case "RESCHEDULE_INTENDED_PROGRAM": {
+      const existingIndex = state.intendedPrograms.findIndex((p) => p.clientId === action.clientId);
+      if (existingIndex === -1) return state;
+      const updated: ClientIntendedProgram = { ...state.intendedPrograms[existingIndex], intendedStartDateIso: action.intendedStartDateIso };
+      return {
+        ...state,
+        intendedPrograms: state.intendedPrograms.map((p, i) => (i === existingIndex ? updated : p)),
       };
     }
 

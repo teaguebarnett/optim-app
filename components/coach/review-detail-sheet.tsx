@@ -54,8 +54,8 @@ export function ReviewDetailSheet({
 
   if (!item) return null;
 
-  const noteRequired = item.kind !== "health_review" && requiresResolutionNote(item.kind);
-  const notificationRequired = item.kind !== "health_review" && requiresClientNotificationBeforeResolution(item.kind);
+  const noteRequired = item.kind !== "health_review" && item.kind !== "plan_approval" && requiresResolutionNote(item.kind);
+  const notificationRequired = item.kind !== "health_review" && item.kind !== "plan_approval" && requiresClientNotificationBeforeResolution(item.kind);
   const noteBlocksResolution = noteRequired && note.trim().length === 0;
   const messageBlocksResolution = notificationRequired && clientMessage.trim().length === 0;
 

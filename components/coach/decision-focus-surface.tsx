@@ -74,9 +74,10 @@ export function DecisionFocusSurface({
   const [blockedReason, setBlockedReason] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const isHealthReview = item.kind === "health_review";
+  const isPlanApproval = item.kind === "plan_approval";
   const isMilestone = item.kind === "milestone";
-  const noteRequired = item.kind !== "health_review" && requiresResolutionNote(item.kind);
-  const notificationRequired = item.kind !== "health_review" && requiresClientNotificationBeforeResolution(item.kind);
+  const noteRequired = item.kind !== "health_review" && item.kind !== "plan_approval" && requiresResolutionNote(item.kind);
+  const notificationRequired = item.kind !== "health_review" && item.kind !== "plan_approval" && requiresClientNotificationBeforeResolution(item.kind);
   const noteBlocksResolution = noteRequired && note.trim().length === 0;
   const messageBlocksResolution = notificationRequired && clientMessage.trim().length === 0;
   const firstName = item.clientName.split(" ")[0];
@@ -223,6 +224,13 @@ export function DecisionFocusSurface({
         ) : isHealthReview ? (
           <Link href={`/coach/clients/${item.clientId}`} className="inline-flex w-fit items-center gap-1.5 text-action text-white hover:underline">
             Review on {item.clientName}&apos;s page <ArrowRight size={14} aria-hidden="true" />
+          </Link>
+        ) : isPlanApproval ? (
+          <Link
+            href={`/coach/clients/${item.clientId}/activate`}
+            className="inline-flex w-fit items-center gap-1.5 rounded-[var(--radius-md)] bg-accent px-4 py-2.5 text-action text-on-accent hover:bg-accent-strong"
+          >
+            Review plan <ArrowRight size={14} aria-hidden="true" />
           </Link>
         ) : (
           <>

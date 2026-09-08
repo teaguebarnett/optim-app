@@ -17,6 +17,7 @@
 
 import { applyCoachSetup } from "./setup.ts";
 import { saveClientProgram } from "./program-assignment.ts";
+import { loadClientAppState } from "../tenancy/client-state-store.ts";
 import { getHealthReview } from "./repository.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES } from "./types.ts";
 import { extractClientSnapshot, generateThreeNutritionStrategies, generateThreeTrainingOptions, type GeneratedNutritionStrategy, type GeneratedTrainingOption } from "./activation-generation.ts";
@@ -338,6 +339,18 @@ export interface ApproveActivationResult {
   communicationPolicy: ClientCommunicationPolicy;
 }
 
+/** Thrown by approveActivation when the client-side write can't be
+ * verified to have actually landed — see the function's own doc. Never
+ * caught internally; the caller (useProgramComposer's approveInitial) is
+ * responsible for surfacing this as a real, actionable error rather than
+ * a silent no-op or a false "activated" state. */
+export class ActivationPersistenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ActivationPersistenceError";
+  }
+}
+
 /**
  * The one real write path from an approved selection to the client's
  * actual daily experience (Part X of the phase brief). Requires a selected
@@ -349,6 +362,20 @@ export interface ApproveActivationResult {
  * the platform reducer (SAVE_ACTIVATION_GENERATION,
  * SAVE_COMMUNICATION_POLICY, SET_CLIENT_LIFECYCLE) — see
  * components/coach/activation-studio/ for that call site.
+ *
+ * Phase 5.6A.3 — approval must never report success on the strength of an
+ * in-memory belief alone: after the real writes above, this reads the
+ * client's own persisted AppState straight back and confirms the program
+ * that's actually there is the one just assigned, for this exact client.
+ * If that verification fails (storage blocked/full, a write raced with
+ * something else, etc.), this throws ActivationPersistenceError instead of
+ * returning — the caller must never dispatch SET_CLIENT_LIFECYCLE
+ * "active" (or anything else implying success) when this throws, so a
+ * client can never be marked active with no real assigned program behind
+ * it. Calling this again after a thrown failure is always safe: every
+ * write above is a full-field overwrite keyed by this exact client id,
+ * never an append, so a retry (or an accidental double-click) can never
+ * produce a duplicate assignment.
  */
 export function approveActivation(input: ApproveActivationInput): ApproveActivationResult {
   const selectedTraining = input.record.trainingOptions.find((o) => o.id === input.record.selectedTrainingOptionId);
@@ -389,6 +416,14 @@ export function approveActivation(input: ApproveActivationInput): ApproveActivat
       input.approvedByCoachId,
       toAssignedNutritionPlan(input.record.selectedNutritionPrescription, `nutrition-plan-${input.client.id}-${Date.now()}`, input.nowIso)
     );
+  }
+
+  // Verify the write actually landed for THIS exact client before this
+  // function ever tells its caller approval succeeded — see this
+  // function's own doc and ActivationPersistenceError.
+  const persisted = loadClientAppState(input.client.id);
+  if (!persisted || persisted.clientId !== input.client.id || !persisted.assignedProgram || persisted.assignedProgram.id !== selectedTraining.program.id) {
+    throw new ActivationPersistenceError(`${input.client.name}'s plan couldn't be saved — nothing was activated. Please try approving again.`);
   }
 
   const communicationPolicy = buildInitialCommunicationPolicy({

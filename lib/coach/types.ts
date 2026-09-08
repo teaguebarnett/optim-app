@@ -315,11 +315,18 @@ export interface ActivationReadiness {
  */
 export type NotificationTier = "immediate" | "action_required" | "awareness";
 
-/** "health_review" is the one AttentionItemKind not backed by a real
- * ReviewRequest (see lib/types.ts) — it's synthesized directly from a
- * HealthReviewRecord by lib/coach/attention-queue.ts, still only ever for
- * this coach's own client in this coach's own workspace. */
-export type AttentionItemKind = ReviewRequestKind | "health_review";
+/** "health_review" and "plan_approval" are the two AttentionItemKinds not
+ * backed by a real ReviewRequest (see lib/types.ts) — both are synthesized
+ * directly by lib/coach/attention-queue.ts (from a HealthReviewRecord, and
+ * from an ActivationGenerationRecord sitting at "ready_for_review" or
+ * "revision_prepared", respectively), still only ever for this coach's own
+ * client in this coach's own workspace. Phase 5.6A.3 — "plan_approval" is
+ * the one honest signal that a generated plan is real and waiting on the
+ * coach's own explicit approval; before this it had no representation in
+ * the attention queue at all, which is exactly why the Command Center could
+ * show "All clear" / "Everything's on track" while a real plan sat
+ * unapproved. */
+export type AttentionItemKind = ReviewRequestKind | "health_review" | "plan_approval";
 
 /** One item in the coach's "Needs attention" queue — always traces back to
  * a real ReviewRequest (see lib/types.ts) already created by existing

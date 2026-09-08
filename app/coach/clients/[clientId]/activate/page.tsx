@@ -23,7 +23,7 @@ import { PlanChangeHistory } from "@/components/coach/program-composer/plan-chan
 import { useProgramComposer } from "@/hooks/use-program-composer";
 import { materialNutritionAssumptions, meaningfulTrainingDirectionName, meaningfulNutritionStrategyName, resolveAdaptiveCheckState } from "@/lib/coach/plan-presentation";
 import { AI_AUTHORITY_LEVEL_DESCRIPTIONS, type AiAuthorityLevel } from "@/lib/coach/ai-authority";
-import { localDateDayOfWeek } from "@/lib/shared/local-date";
+import { formatLongDateLabel, isLocalDateBefore, localDateDayOfWeek, resolveBrowserTimeZone, resolveClientLocalDateIso } from "@/lib/shared/local-date";
 import type { RevisionChange, RevisionPlan } from "@/lib/coach/program-revision";
 import type { CompleteNutritionPrescription, NutritionRevisionChange, NutritionRevisionPlan } from "@/lib/coach/nutrition-directions";
 import type { ActivationGenerationRecord } from "@/lib/coach/activation-lifecycle";
@@ -141,6 +141,7 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
   const [combineWithId, setCombineWithId] = useState<string | null>(null);
   const [selectedNutritionId, setSelectedNutritionId] = useState<string | null>(null);
   const [justApproved, setJustApproved] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
   const [previewWeekNumber, setPreviewWeekNumber] = useState<number | null>(null);
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionPreview, setRevisionPreview] = useState<{ plan: RevisionPlan; revisedProgram: ClientAssignedProgram; changes: RevisionChange[] } | null>(null);
@@ -298,7 +299,22 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
   const activeNutritionId = selectedNutritionId ?? latest.selectedNutritionOptionId ?? null;
   const selectedNutritionStrategy = latest.nutritionOptions.find((o) => o.id === activeNutritionId) ?? null;
   const materialAssumptions = selectedNutritionStrategy ? materialNutritionAssumptions(selectedNutritionStrategy.assumptions) : [];
-  const approveDisabled = materialAssumptions.length > 0 && !assumptionsAcknowledged;
+
+  // Phase 5.6A.3 — the scheduled start date lapsing before the coach ever
+  // approves must never be silently absorbed into "starts today" (that's
+  // the exact premature-Day-1 bug this phase repairs). It requires the
+  // coach's own explicit resolution here, before Approve is available —
+  // see the RESCHEDULE_INTENDED_PROGRAM action this dispatches.
+  const timeZone = composer.activeModel?.operationalContext.timeZone || resolveBrowserTimeZone();
+  const todayIso = resolveClientLocalDateIso(new Date(), timeZone);
+  const scheduledStartIso = composer.intendedProgram?.intendedStartDateIso ?? null;
+  const startDateHasPassed = !!scheduledStartIso && isLocalDateBefore(scheduledStartIso, todayIso);
+
+  function handleRescheduleToToday() {
+    composer.dispatchPlatform({ type: "RESCHEDULE_INTENDED_PROGRAM", clientId, workspaceId: composer.workspaceId, intendedStartDateIso: todayIso });
+  }
+
+  const approveDisabled = (materialAssumptions.length > 0 && !assumptionsAcknowledged) || startDateHasPassed;
 
   function handleRevisePreview() {
     if (!revisionInstruction.trim() || !latest) return;
@@ -339,6 +355,22 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
     <div className="space-y-5">
       <PlanWorkspaceHeader clientName={clientName} startDateLabel={startDateLabel} onBack={onBack} />
       {healthGate}
+      {startDateHasPassed && scheduledStartIso ? (
+        <Card className="border-l-2 border-l-warning-strong">
+          <div className="flex items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-warning-soft text-warning-strong">
+              <AlertTriangle size={16} aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-body font-semibold text-off-white">This plan&apos;s scheduled start ({formatLongDateLabel(scheduledStartIso)}) has already passed.</p>
+              <p className="mt-1 text-meta text-neutral">It never started on its own — approving is paused until you decide how to proceed.</p>
+              <Button variant="secondary" size="sm" className="mt-3" onClick={handleRescheduleToToday}>
+                Start today instead
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
       <ClientIntelligenceSection latest={latest} />
 
       <PlanOverviewCard
@@ -367,13 +399,25 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
 
       <PlanActionBar
         onApprove={() => {
-          const result = composer.approveInitial(latest);
-          if (result) setJustApproved(true);
+          const outcome = composer.approveInitial(latest);
+          if (outcome.ok) {
+            setApproveError(null);
+            setJustApproved(true);
+          } else {
+            setApproveError(outcome.error);
+          }
         }}
         onRevise={() => setReviseOpen(true)}
         onFineTune={() => router.push(`/coach/clients/${clientId}/setup/training`)}
         approveDisabled={approveDisabled}
-        approveDisabledReason={approveDisabled ? "Review the flagged assumption above before approving." : undefined}
+        approveDisabledReason={
+          startDateHasPassed
+            ? "Resolve the passed start date above before approving."
+            : approveDisabled
+              ? "Review the flagged assumption above before approving."
+              : undefined
+        }
+        approveError={approveError}
       />
 
       <ReviseWithOptimSheet

@@ -30,11 +30,13 @@ export const REVIEW_KIND_LABELS: Record<ReviewRequestKind, string> = {
   milestone: "Worth a personal touch",
 };
 
-/** Every AttentionQueueItem's kind, including the one ("health_review")
- * that isn't a real ReviewRequestKind — see lib/coach/attention-queue.ts. */
+/** Every AttentionQueueItem's kind, including the two ("health_review",
+ * "plan_approval") that aren't real ReviewRequestKinds — see
+ * lib/coach/attention-queue.ts. */
 export const ATTENTION_KIND_LABELS: Record<AttentionItemKind, string> = {
   ...REVIEW_KIND_LABELS,
   health_review: "Health review needed",
+  plan_approval: "Plan approval required",
 };
 
 /** A short, deterministic decision question for the command center's focus
@@ -43,6 +45,7 @@ export const ATTENTION_KIND_LABELS: Record<AttentionItemKind, string> = {
  * the real client's first name by the caller. */
 export const ATTENTION_KIND_QUESTIONS: Record<AttentionItemKind, string> = {
   health_review: "Does {name} need anything resolved before you activate them?",
+  plan_approval: "{name}'s plan needs your approval",
   "pain-report": "Is it safe for {name} to continue training as planned?",
   "program-change-request": "Should {name}'s program change as requested?",
   "rpe-anomaly": "Is {name}'s current training load still right for them?",

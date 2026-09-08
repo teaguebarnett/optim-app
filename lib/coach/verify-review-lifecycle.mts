@@ -38,6 +38,7 @@ import {
 } from "./review-lifecycle.ts";
 import type { ReviewRequest } from "../types";
 import type { AttentionQueueItem } from "./types.ts";
+import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 
 let passed = 0;
 let failed = 0;
@@ -377,6 +378,80 @@ check("each queue item carries its severity, status, and resolution fields throu
   assert.equal(item.resolutionNote, "Discussed on call, no action needed.");
   assert.equal(item.resolvedAtIso, "2026-01-05T00:00:00.000Z");
   assert.equal(item.resolvedByCoachId, COACH_PROFILE_TEAGUE.id);
+});
+
+console.log("\n5. Phase 5.6A.3 — 'plan_approval' attention items (the honest signal a generated plan is real and waiting on the coach)\n");
+
+check("A generation record sitting at 'ready_for_review' synthesizes a real, high-priority plan_approval item — never silently absent from the queue", () => {
+  const record = {
+    id: "gen-1",
+    clientId: CLIENT_PROFILE_DEMO.id,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    state: "ready_for_review",
+    createdAtIso: "2026-01-01T00:00:00.000Z",
+    updatedAtIso: "2026-01-02T00:00:00.000Z",
+  } as unknown as ActivationGenerationRecord;
+
+  const queue = buildAttentionQueue({
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    reviewRequests: [],
+    clients: [CLIENT_PROFILE_DEMO],
+    activationGenerations: [record],
+    intendedStartDateIsoByClientId: new Map([[CLIENT_PROFILE_DEMO.id, "2026-01-15"]]),
+  });
+  const item = queue.find((i) => i.kind === "plan_approval");
+  assert.ok(item, "a ready_for_review generation must produce a real plan_approval attention item");
+  assert.equal(item?.clientId, CLIENT_PROFILE_DEMO.id);
+  assert.ok(item!.summary.includes("January 15"), "the summary must name the coach's own real chosen start date, never a generic placeholder");
+  // Ranks ahead of every ordinary review-kind priority (only health_review outranks it) — see ATTENTION_PRIORITY.
+  assert.equal(queue[0].kind, "plan_approval");
+});
+
+check("A generation record sitting at 'activated' (already approved) never produces a plan_approval item — nothing left to decide", () => {
+  const record = {
+    id: "gen-2",
+    clientId: CLIENT_PROFILE_DEMO.id,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    state: "activated",
+    createdAtIso: "2026-01-01T00:00:00.000Z",
+    updatedAtIso: "2026-01-02T00:00:00.000Z",
+  } as unknown as ActivationGenerationRecord;
+
+  const queue = buildAttentionQueue({
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    reviewRequests: [],
+    clients: [CLIENT_PROFILE_DEMO],
+    activationGenerations: [record],
+  });
+  assert.equal(
+    queue.some((i) => i.kind === "plan_approval"),
+    false
+  );
+});
+
+check("A generation record from a different workspace is never synthesized into this workspace's queue (isolation)", () => {
+  const record = {
+    id: "gen-3",
+    clientId: CLIENT_PROFILE_DEMO.id,
+    workspaceId: "workspace-someone-else",
+    state: "ready_for_review",
+    createdAtIso: "2026-01-01T00:00:00.000Z",
+    updatedAtIso: "2026-01-02T00:00:00.000Z",
+  } as unknown as ActivationGenerationRecord;
+
+  const queue = buildAttentionQueue({
+    workspaceId: WORKSPACE_OPTIM_ID,
+    coachId: COACH_PROFILE_TEAGUE.id,
+    reviewRequests: [],
+    clients: [CLIENT_PROFILE_DEMO],
+    activationGenerations: [record],
+  });
+  assert.equal(
+    queue.some((i) => i.kind === "plan_approval"),
+    false
+  );
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

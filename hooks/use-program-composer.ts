@@ -16,7 +16,9 @@ import {
   applyNutritionRevisionApproval,
   healthReviewPermitsActivation,
   latestGenerationForClient,
+  ActivationPersistenceError,
   type ActivationGenerationRecord,
+  type ApproveActivationResult,
 } from "@/lib/coach/activation-lifecycle";
 import { interpretRevisionInstruction, applyProgramRevision, type ProgramRevisionRecord, type RevisionPlan } from "@/lib/coach/program-revision";
 import {
@@ -34,6 +36,11 @@ import { extractClientSnapshot, equipmentForClient } from "@/lib/coach/activatio
 import type { EquipmentTag } from "@/lib/coach/exercise-library";
 import type { ClientAssignedProgram, ReviewRequest } from "@/lib/types";
 import type { ClientProfileId } from "@/lib/tenancy/types";
+
+/** Phase 5.6A.3 — approveInitial's real, honest outcome: either the
+ * verified-persisted result, or a real error the coach can act on. Never a
+ * bare boolean/null that loses the actual reason a failure happened. */
+export type ApproveInitialOutcome = { ok: true; result: ApproveActivationResult } | { ok: false; error: string };
 
 /**
  * The Program Composer's one data + action source for a single client
@@ -103,34 +110,55 @@ export function useProgramComposer(clientId: ClientProfileId) {
   );
 
   const approveInitial = useCallback(
-    (record: ActivationGenerationRecord) => {
-      if (!clientView.coachId || !clientView.client || !com.activeModel) return null;
+    (record: ActivationGenerationRecord): ApproveInitialOutcome => {
+      if (!clientView.coachId || !clientView.client || !com.activeModel) return { ok: false, error: "This workspace isn't ready to approve yet — reload and try again." };
       const nowIso = new Date().toISOString();
       const timeZone = com.activeModel.operationalContext.timeZone || resolveBrowserTimeZone();
-      const startDateIso = resolveClientLocalDateIso(new Date(), timeZone);
+      // Phase 5.6A.3 — the coach's own real, previously-chosen intended
+      // start date (see lib/coach/types.ts's ClientIntendedProgram, set at
+      // "Add client" time) is the one canonical start date. Falling back to
+      // "today" only when a client somehow reached approval with no
+      // intended date ever recorded at all (a manually-built legacy path) —
+      // never silently substituting today's date over a real coach choice,
+      // which is exactly the bug that made a future-dated program start
+      // immediately on approval day instead of its real start date.
+      const startDateIso = clientView.intendedProgram?.intendedStartDateIso ?? resolveClientLocalDateIso(new Date(), timeZone);
       const clientFirstName = clientView.client.name.split(" ")[0];
       const coachName = clientView.activeContext.coachProfile?.displayName ?? "Your coach";
       const aiMayRespondDirectly = resolveAiActionDisposition(resolveEffectiveAiAuthorityLevel(authority.settings, clientId, "communication"), "messaging_nudge") === "auto_execute";
 
-      const result = approveActivation({
-        record,
-        client: clientView.client,
-        approvedByCoachId: clientView.coachId,
-        aiAuthorityLevelAtApproval: effectiveLevel,
-        clientFirstName,
-        coachName,
-        businessName: com.businessName,
-        com: com.activeModel,
-        aiMayRespondDirectlyForRoutine: aiMayRespondDirectly,
-        assignWeeklyCheckIn: true,
-        startDateIso,
-        nowIso,
-      });
+      let result;
+      try {
+        result = approveActivation({
+          record,
+          client: clientView.client,
+          approvedByCoachId: clientView.coachId,
+          aiAuthorityLevelAtApproval: effectiveLevel,
+          clientFirstName,
+          coachName,
+          businessName: com.businessName,
+          com: com.activeModel,
+          aiMayRespondDirectlyForRoutine: aiMayRespondDirectly,
+          assignWeeklyCheckIn: true,
+          startDateIso,
+          nowIso,
+        });
+      } catch (err) {
+        // Phase 5.6A.3 — approval must never be marked complete when the
+        // real client-side write can't be verified (see
+        // ActivationPersistenceError's own doc): no dispatch at all here,
+        // so the generation record stays exactly at "ready_for_review"/
+        // "revision_prepared" and the client's lifecycle never advances.
+        // The plan stays visibly awaiting approval — never a false
+        // "activated" state — and the coach sees a real, actionable error.
+        const message = err instanceof ActivationPersistenceError ? err.message : "Something went wrong while approving this plan. Please try again.";
+        return { ok: false, error: message };
+      }
 
       clientView.dispatchPlatform({ type: "SAVE_ACTIVATION_GENERATION", record: result.updatedRecord });
       clientView.dispatchPlatform({ type: "SAVE_COMMUNICATION_POLICY", policy: result.communicationPolicy });
       clientView.dispatchPlatform({ type: "SET_CLIENT_LIFECYCLE", clientId, workspaceId: clientView.workspaceId, status: "active", nowIso });
-      return result;
+      return { ok: true, result };
     },
     [clientView, com.activeModel, com.businessName, authority.settings, clientId, effectiveLevel]
   );

@@ -73,6 +73,22 @@ export function getClientLifecycle(platform: PlatformState, clientId: ClientProf
   return platform.lifecycles.find((l) => l.clientId === clientId)?.status ?? "active";
 }
 
+/** Phase 5.6A.3 — whether a client at this lifecycle status has any
+ * legitimate AppState of their own to autosave (see
+ * hooks/use-prototype-state.tsx's autosave effect). A client who is
+ * invited/onboarding/coach_setup/ready_to_activate has no real assigned
+ * program yet — their reducer state is only ever the scaffold rendering
+ * their waiting screen (see lib/state.ts's createInitialState, which
+ * defaults programEnrollment to start "today"), and persisting that
+ * scaffold is exactly what could clobber the coach's own real approval
+ * write (see lib/coach/activation-lifecycle.ts's approveActivation) if it
+ * happened to still be sitting in a stale browser tab's memory. Once a
+ * client has ever been active, their own state IS real and must keep
+ * autosaving normally, even while paused or completed. */
+export function shouldAutosaveClientAppState(lifecycle: ClientLifecycleStatus): boolean {
+  return lifecycle === "active" || lifecycle === "paused" || lifecycle === "completed";
+}
+
 export function getOnboardingProgress(platform: PlatformState, clientId: ClientProfileId): OnboardingProgress | null {
   return platform.onboarding.find((o) => o.clientId === clientId) ?? null;
 }
