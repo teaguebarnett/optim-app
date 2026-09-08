@@ -173,7 +173,7 @@ export type PlatformAction =
     }
   | { type: "COMPLETE_ONBOARDING"; clientId: string; workspaceId: WorkspaceId; nowIso: string }
   | { type: "SET_CLIENT_LIFECYCLE"; clientId: string; workspaceId: WorkspaceId; status: ClientLifecycleStatus; nowIso: string }
-  | { type: "SET_HEALTH_REVIEW_STATUS"; clientId: string; workspaceId: WorkspaceId; status: HealthReviewStatus; nowIso: string }
+  | { type: "SET_HEALTH_REVIEW_STATUS"; clientId: string; workspaceId: WorkspaceId; status: HealthReviewStatus; nowIso: string; documentedLimitations?: string }
   | { type: "SAVE_PROGRAM_TEMPLATE"; template: CoachProgramTemplate }
   | { type: "DELETE_PROGRAM_TEMPLATE"; templateId: string; coachId: string }
   | { type: "SAVE_MEAL_RECOMMENDATION"; recommendation: MealRecommendation }
@@ -342,7 +342,9 @@ export function platformReducer(state: PlatformState, action: PlatformAction): P
       const existingIndex = state.healthReviews.findIndex((r) => r.clientId === action.clientId);
       if (existingIndex === -1) return state;
       const healthReviews = state.healthReviews.map((r, i) =>
-        i === existingIndex ? { ...r, status: action.status, updatedAtIso: action.nowIso } : r
+        i === existingIndex
+          ? { ...r, status: action.status, updatedAtIso: action.nowIso, documentedLimitations: action.documentedLimitations !== undefined ? action.documentedLimitations : r.documentedLimitations }
+          : r
       );
       return { ...state, healthReviews };
     }

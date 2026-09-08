@@ -58,9 +58,17 @@ export const ATTENTION_KIND_QUESTIONS: Record<AttentionItemKind, string> = {
 };
 
 export const HEALTH_REVIEW_STATUS_LABELS: Record<HealthReviewStatus, string> = {
-  review_needed: "Review needed",
-  discuss_with_client: "Discuss with client",
-  professional_guidance_requested: "Professional guidance requested",
-  professional_guidance_confirmed: "Professional guidance confirmed",
-  reviewed_by_coach: "Reviewed by coach",
+  review_needed: "Needs coach review",
+  discuss_with_client: "Follow up with client",
+  professional_guidance_requested: "Professional/medical guidance requested",
+  professional_guidance_confirmed: "Guidance confirmed",
+  reviewed_by_coach: "Cleared after coach review",
+  proceed_with_limitations: "Proceed with documented limitations",
 };
+
+/** Phase 5.6A.1 — the health-review decision card's own pending/resolved
+ * grouping (spec's "clearly distinguish pending actions from completed
+ * resolutions"), kept alongside the labels above so every surface groups
+ * the same five statuses the same way. */
+export const PENDING_HEALTH_REVIEW_STATUSES: HealthReviewStatus[] = ["review_needed", "discuss_with_client", "professional_guidance_requested"];
+export const RESOLVED_HEALTH_REVIEW_STATUS_ORDER: HealthReviewStatus[] = ["reviewed_by_coach", "professional_guidance_confirmed", "proceed_with_limitations"];

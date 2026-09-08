@@ -9,9 +9,15 @@ import { TextArea } from "@/components/ui/textarea";
 import { ProgramWeekPreviewSheet } from "@/components/coach/program-preview-sheet";
 import { HealthReviewGate } from "@/components/coach/program-composer/health-review-gate";
 import { DirectionCard } from "@/components/coach/program-composer/direction-card";
-import { NutritionDirectionCard } from "@/components/coach/program-composer/nutrition-direction-card";
 import { ClientIntelligencePanel } from "@/components/coach/program-composer/client-intelligence-panel";
+import { PlanWorkspaceHeader, PlanActionBar } from "@/components/coach/program-composer/plan-workspace-header";
+import { PlanOverviewCard } from "@/components/coach/program-composer/plan-overview-card";
+import { PlanAlternatives } from "@/components/coach/program-composer/plan-alternatives";
+import { PlanTrainingReview } from "@/components/coach/program-composer/plan-training-review";
+import { PlanNutritionReview } from "@/components/coach/program-composer/plan-nutrition-review";
+import { ReviseWithOptimSheet, type ReviseScope } from "@/components/coach/program-composer/revise-with-optim-sheet";
 import { useProgramComposer } from "@/hooks/use-program-composer";
+import { materialNutritionAssumptions } from "@/lib/coach/plan-presentation";
 import { AI_AUTHORITY_LEVEL_DESCRIPTIONS, type AiAuthorityLevel } from "@/lib/coach/ai-authority";
 import type { RevisionChange, RevisionPlan } from "@/lib/coach/program-revision";
 import type { CompleteNutritionPrescription, NutritionRevisionChange, NutritionRevisionPlan } from "@/lib/coach/nutrition-directions";
@@ -21,16 +27,26 @@ import type { ClientAssignedProgram } from "@/lib/types";
 /**
  * Phase 5.5A — the unified OPTIM Plan (spec Parts 2-4, 7-9): one client
  * entry point covering both training and nutrition, always reachable even
- * while a health concern is unresolved (Part 3), with concise recommendation
- * cards, structural distinctness enforced upstream (program-directions.ts),
- * and manual tools kept available but subordinate. Replaces the old
- * "Program Composer" naming/placement this phase's brief calls out as
- * buried and training-only.
+ * while a health concern is unresolved (Part 3).
+ *
+ * Phase 5.6A.1 — the "ready to review" stage is now a real decision
+ * workspace (see PlanWorkspaceHeader/PlanOverviewCard/PlanAlternatives/
+ * PlanTrainingReview/PlanNutritionReview/ReviseWithOptimSheet) rather than
+ * one long, undifferentiated page: a compact overview leads, alternatives
+ * stay secondary, the actual program is inspectable without tiny pills, and
+ * approval stays available via a persistent action bar as the coach scrolls.
  */
 export default function OptimPlanPage() {
   const params = useParams<{ clientId: string }>();
   const router = useRouter();
   const composer = useProgramComposer(params.clientId);
+
+  // Phase 5.6A.1 — opening this page must always land at the top of the
+  // workspace, never inherit whatever scroll position the client page (or a
+  // previous visit to this same page) left behind.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
 
   if (!composer.client) {
     return (
@@ -44,22 +60,21 @@ export default function OptimPlanPage() {
   }
 
   const client = composer.client;
+  const showGenericHeader = composer.isActiveClient || !composer.latest || (composer.latest.state !== "ready_for_review" && composer.latest.state !== "revision_prepared");
 
   return (
     <div className="mx-auto max-w-[1440px] space-y-6">
-      <BackLink onClick={() => router.push(`/coach/clients/${client.id}`)} />
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-display text-off-white">OPTIM Plan — {client.name}</h1>
-          <p className="mt-1 text-body text-neutral">
-            {client.goal} · {composer.effectiveLevelLabel} authority
-          </p>
-        </div>
-        <div className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2 text-sm text-accent-strong">
-          {AI_AUTHORITY_LEVEL_DESCRIPTIONS[composer.effectiveLevel as AiAuthorityLevel]}
-        </div>
-      </div>
+      {showGenericHeader ? (
+        <>
+          <BackLink onClick={() => router.push(`/coach/clients/${client.id}`)} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h1 className="text-display text-off-white">OPTIM Plan — {client.name}</h1>
+            {!composer.isActiveClient ? (
+              <div className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2 text-sm text-accent-strong">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[composer.effectiveLevel as AiAuthorityLevel]}</div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
 
       {!composer.activeModel ? (
         <BlockedState
@@ -116,8 +131,10 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
   const [previewWeekNumber, setPreviewWeekNumber] = useState<number | null>(null);
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionPreview, setRevisionPreview] = useState<{ plan: RevisionPlan; revisedProgram: ClientAssignedProgram; changes: RevisionChange[] } | null>(null);
-  const [nutritionRevisionInstruction, setNutritionRevisionInstruction] = useState("");
   const [nutritionRevisionPreview, setNutritionRevisionPreview] = useState<{ plan: NutritionRevisionPlan; revisedPrescription: CompleteNutritionPrescription; changes: NutritionRevisionChange[] } | null>(null);
+  const [reviseOpen, setReviseOpen] = useState(false);
+  const [reviseScope, setReviseScope] = useState<ReviseScope>("training");
+  const [assumptionsAcknowledged, setAssumptionsAcknowledged] = useState(false);
 
   const latest = composer.latest;
   const manualFirst = composer.effectiveLevel === "advisor";
@@ -136,12 +153,19 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latest?.id]);
 
+  const startDateIso = composer.clientAppState?.programEnrollment.startDateIso ?? composer.intendedProgram?.intendedStartDateIso;
+  const startDateLabel = startDateIso ? new Date(`${startDateIso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "Not set";
+  const clientReportedDetail = typeof composer.onboarding?.answers.health_finish?.injuryRestrictions === "string" ? composer.onboarding.answers.health_finish.injuryRestrictions : null;
+
   const healthGate =
     composer.healthReviewResolved === false && composer.healthReview ? (
       <HealthReviewGate
         clientFirstName={clientName.split(" ")[0]}
         healthReview={composer.healthReview}
-        onChangeStatus={(status) => composer.dispatchPlatform({ type: "SET_HEALTH_REVIEW_STATUS", clientId, workspaceId: composer.workspaceId, status, nowIso: new Date().toISOString() })}
+        clientReportedDetail={clientReportedDetail}
+        onChangeStatus={(status, documentedLimitations) =>
+          composer.dispatchPlatform({ type: "SET_HEALTH_REVIEW_STATUS", clientId, workspaceId: composer.workspaceId, status, nowIso: new Date().toISOString(), documentedLimitations })
+        }
       />
     ) : null;
 
@@ -219,19 +243,19 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
           <h2 className="text-heading text-off-white">Ranked training directions</h2>
           <p className="mt-1 text-meta text-neutral">Three concise, structurally distinct directions — pick one, or combine two before generating the full program.</p>
           <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-3">
-            {latest.directions.map((direction) => (
+            {latest.directions.map((dir) => (
               <DirectionCard
-                key={direction.id}
-                direction={direction}
-                selectedPrimary={selectedDirectionId === direction.id}
-                selectedSecondary={combineWithId === direction.id}
+                key={dir.id}
+                direction={dir}
+                selectedPrimary={selectedDirectionId === dir.id}
+                selectedSecondary={combineWithId === dir.id}
                 onSelectPrimary={() => {
-                  setSelectedDirectionId(direction.id);
-                  if (combineWithId === direction.id) setCombineWithId(null);
+                  setSelectedDirectionId(dir.id);
+                  if (combineWithId === dir.id) setCombineWithId(null);
                 }}
                 onToggleCombine={() => {
-                  if (direction.id === selectedDirectionId) return;
-                  setCombineWithId((prev) => (prev === direction.id ? null : direction.id));
+                  if (dir.id === selectedDirectionId) return;
+                  setCombineWithId((prev) => (prev === dir.id ? null : dir.id));
                 }}
               />
             ))}
@@ -242,7 +266,6 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
             <Button size="lg" disabled={!selectedDirectionId} onClick={() => selectedDirectionId && composer.buildFullProgram(latest, selectedDirectionId, combineWithId ?? undefined)}>
               <Wand2 size={16} aria-hidden="true" /> Generate the full program
             </Button>
-            {combineWithId ? <span className="text-meta text-accent-strong">Combining with a second direction</span> : null}
             <Button variant="outline" size="lg" onClick={() => router.push(`/coach/clients/${clientId}/setup/training`)}>
               <Layers size={16} aria-hidden="true" /> Build manually instead
             </Button>
@@ -252,155 +275,111 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
     );
   }
 
-  // ready_for_review — exactly one full, periodized training program.
+  // ready_for_review / revision_prepared — exactly one full, periodized
+  // training program plus (when this coach offers it) a complete nutrition
+  // prescription, presented as one decision workspace.
   const option = latest.trainingOptions[0];
   const direction = latest.directions?.find((d) => d.id === latest.selectedDirectionId) ?? null;
   if (!option) return null;
 
-  function applyDraftPreview() {
-    if (!revisionInstruction.trim()) return;
-    setRevisionPreview(composer.previewDraftRevision(option.program, revisionInstruction));
+  const activeNutritionId = selectedNutritionId ?? latest.selectedNutritionOptionId ?? null;
+  const selectedNutritionStrategy = latest.nutritionOptions.find((o) => o.id === activeNutritionId) ?? null;
+  const materialAssumptions = selectedNutritionStrategy ? materialNutritionAssumptions(selectedNutritionStrategy.assumptions) : [];
+  const approveDisabled = materialAssumptions.length > 0 && !assumptionsAcknowledged;
+
+  function handleRevisePreview() {
+    if (!revisionInstruction.trim() || !latest) return;
+    if (reviseScope === "training" || reviseScope === "both") {
+      setRevisionPreview(composer.previewDraftRevision(option.program, revisionInstruction));
+    } else {
+      setRevisionPreview(null);
+    }
+    if ((reviseScope === "nutrition" || reviseScope === "both") && latest.selectedNutritionPrescription) {
+      const weightLb = composer.onboarding?.answers.about_you?.weightLb;
+      const baseProteinGPerLb = composer.activeModel?.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight ?? 1;
+      setNutritionRevisionPreview(composer.previewDraftNutritionRevision(latest.selectedNutritionPrescription, revisionInstruction, typeof weightLb === "number" ? weightLb : 180, baseProteinGPerLb));
+    } else {
+      setNutritionRevisionPreview(null);
+    }
   }
 
-  function confirmDraftPreview() {
-    if (!revisionPreview || !latest) return;
-    composer.confirmDraftRevision(latest, revisionInstruction, revisionPreview.plan, revisionPreview.revisedProgram, revisionPreview.changes);
+  function handleReviseConfirm() {
+    if (!latest) return;
+    if (revisionPreview && (reviseScope === "training" || reviseScope === "both")) {
+      composer.confirmDraftRevision(latest, revisionInstruction, revisionPreview.plan, revisionPreview.revisedProgram, revisionPreview.changes);
+    }
+    if (nutritionRevisionPreview && (reviseScope === "nutrition" || reviseScope === "both")) {
+      composer.confirmDraftNutritionRevision(latest, revisionInstruction, nutritionRevisionPreview.plan, nutritionRevisionPreview.revisedPrescription, nutritionRevisionPreview.changes);
+    }
     setRevisionPreview(null);
-    setRevisionInstruction("");
-  }
-
-  function applyNutritionDraftPreview() {
-    if (!nutritionRevisionInstruction.trim() || !latest?.selectedNutritionPrescription) return;
-    const weightLb = composer.onboarding?.answers.about_you?.weightLb;
-    const baseProteinGPerLb = composer.activeModel?.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight ?? 1;
-    setNutritionRevisionPreview(composer.previewDraftNutritionRevision(latest.selectedNutritionPrescription, nutritionRevisionInstruction, typeof weightLb === "number" ? weightLb : 180, baseProteinGPerLb));
-  }
-
-  function confirmNutritionDraftPreview() {
-    if (!nutritionRevisionPreview || !latest) return;
-    composer.confirmDraftNutritionRevision(latest, nutritionRevisionInstruction, nutritionRevisionPreview.plan, nutritionRevisionPreview.revisedPrescription, nutritionRevisionPreview.changes);
     setNutritionRevisionPreview(null);
-    setNutritionRevisionInstruction("");
+    setRevisionInstruction("");
+    setReviseOpen(false);
+  }
+
+  function handleReviseDiscard() {
+    setRevisionPreview(null);
+    setNutritionRevisionPreview(null);
   }
 
   return (
     <div className="space-y-5">
+      <PlanWorkspaceHeader clientName={clientName} startDateLabel={startDateLabel} onBack={onBack} />
       {healthGate}
       <ClientIntelligenceSection latest={latest} />
 
-      {direction ? (
-        <Card>
-          <p className="text-subheading text-off-white">Selected training strategy — {direction.label}</p>
-          <p className="mt-1 text-sm text-neutral">{direction.whyItFits}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {direction.constraintsHonored.map((c) => (
-              <span key={c} className="rounded-full bg-success-soft px-2.5 py-1 text-xs font-medium text-success">
-                {c}
-              </span>
-            ))}
-          </div>
-        </Card>
-      ) : null}
+      <PlanOverviewCard
+        direction={direction}
+        nutritionStrategy={selectedNutritionStrategy}
+        materialAssumptions={materialAssumptions}
+        assumptionsAcknowledged={assumptionsAcknowledged}
+        onAcknowledgeAssumptions={setAssumptionsAcknowledged}
+      />
 
-      <ConstraintSummary option={option} />
+      <PlanAlternatives
+        directions={latest.directions ?? []}
+        selectedDirectionId={latest.selectedDirectionId ?? null}
+        onSelectDirection={(id) => composer.buildFullProgram(latest, id)}
+        nutritionOptions={latest.nutritionOptions}
+        selectedNutritionId={activeNutritionId}
+        onSelectNutrition={(id) => {
+          setSelectedNutritionId(id);
+          composer.selectNutrition(latest, id);
+        }}
+      />
 
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-subheading text-off-white">
-            {option.program.durationWeeks}-week program — {option.program.weeks.length} weeks generated
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
-            {option.program.weeks.map((w) => (
-              <button key={w.weekNumber} onClick={() => setPreviewWeekNumber(w.weekNumber)} className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-2.5 py-1 text-xs font-medium text-off-white hover:bg-surface-input">
-                Wk {w.weekNumber}
-              </button>
-            ))}
-          </div>
-        </div>
-      </Card>
+      <PlanTrainingReview program={option.program} onOpenWeek={setPreviewWeekNumber} />
 
-      <Card>
-        <p className="text-subheading text-off-white">Revise training before approving</p>
-        <p className="mt-1 text-meta text-neutral">Describe a change in plain language — e.g. &quot;Keep all workouts under 60 minutes.&quot;</p>
-        <div className="mt-3 max-w-xl">
-          <TextArea id="draft-revision" label="What should change?" value={revisionInstruction} onChange={(e) => setRevisionInstruction(e.target.value)} rows={2} />
-          <Button size="sm" variant="secondary" className="mt-2" onClick={applyDraftPreview} disabled={!revisionInstruction.trim()}>
-            <PenLine size={14} aria-hidden="true" /> Preview change
-          </Button>
-        </div>
-        {revisionPreview ? <RevisionPreviewPanel preview={revisionPreview} onConfirm={confirmDraftPreview} onDiscard={() => setRevisionPreview(null)} /> : null}
-      </Card>
+      {selectedNutritionStrategy && latest.selectedNutritionPrescription ? <PlanNutritionReview prescription={latest.selectedNutritionPrescription} /> : null}
 
-      {latest.nutritionOptions.length > 0 ? (
-        <>
-          <div>
-            <h2 className="text-heading text-off-white">Ranked nutrition directions</h2>
-            <p className="mt-1 text-meta text-neutral">Three concise, genuinely different nutrition approaches, computed from this client&apos;s real stats and your nutrition philosophy.</p>
-            <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-3">
-              {latest.nutritionOptions.map((strategy) => (
-                <NutritionDirectionCard
-                  key={strategy.id}
-                  strategy={strategy}
-                  selected={selectedNutritionId === strategy.id}
-                  onSelect={() => {
-                    setSelectedNutritionId(strategy.id);
-                    composer.selectNutrition(latest, strategy.id);
-                  }}
-                />
-              ))}
-            </div>
-          </div>
+      <PlanActionBar
+        onApprove={() => {
+          const result = composer.approveInitial(latest);
+          if (result) setJustApproved(true);
+        }}
+        onRevise={() => setReviseOpen(true)}
+        onFineTune={() => router.push(`/coach/clients/${clientId}/setup/training`)}
+        approveDisabled={approveDisabled}
+        approveDisabledReason={approveDisabled ? "Review the flagged assumption above before approving." : undefined}
+      />
 
-          {latest.selectedNutritionPrescription ? (
-            <Card>
-              <p className="text-subheading text-off-white">Complete nutrition prescription — {latest.selectedNutritionPrescription.label}</p>
-              <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
-                <NutritionStat label="Calories" value={`${latest.selectedNutritionPrescription.targets.calories} kcal`} />
-                <NutritionStat label="Protein" value={`${latest.selectedNutritionPrescription.targets.proteinG}g`} />
-                <NutritionStat label="Carbs" value={`${latest.selectedNutritionPrescription.targets.carbsG}g`} />
-                <NutritionStat label="Fat" value={`${latest.selectedNutritionPrescription.targets.fatG}g`} />
-                <NutritionStat label="Meals/day" value={String(latest.selectedNutritionPrescription.mealsPerDay)} />
-                <NutritionStat label="Hydration" value={`${latest.selectedNutritionPrescription.hydrationOzPerDay} oz`} />
-                <NutritionStat label="Fiber" value={`${latest.selectedNutritionPrescription.fiberGramsPerDay}g`} />
-                <NutritionStat label="Training/rest split" value={latest.selectedNutritionPrescription.usesTrainingRestSplit ? "Split" : "Flat"} />
-              </div>
-              <p className="mt-3 text-meta text-neutral">{latest.selectedNutritionPrescription.preTrainingGuidance}</p>
-              <p className="mt-1 text-meta text-neutral">{latest.selectedNutritionPrescription.postTrainingGuidance}</p>
-              <p className="mt-1 text-meta text-neutral">{latest.selectedNutritionPrescription.substitutionGuidance}</p>
-
-              <div className="mt-4 border-t border-border pt-3">
-                <p className="text-sm font-medium text-off-white">Revise nutrition before approving</p>
-                <div className="mt-2 max-w-xl">
-                  <TextArea id="nutrition-draft-revision" label="What should change?" value={nutritionRevisionInstruction} onChange={(e) => setNutritionRevisionInstruction(e.target.value)} rows={2} placeholder="e.g. Increase protein a bit." />
-                  <Button size="sm" variant="secondary" className="mt-2" onClick={applyNutritionDraftPreview} disabled={!nutritionRevisionInstruction.trim()}>
-                    <PenLine size={14} aria-hidden="true" /> Preview change
-                  </Button>
-                </div>
-                {nutritionRevisionPreview ? <NutritionRevisionPreviewPanel preview={nutritionRevisionPreview} onConfirm={confirmNutritionDraftPreview} onDiscard={() => setNutritionRevisionPreview(null)} /> : null}
-              </div>
-            </Card>
-          ) : null}
-        </>
-      ) : null}
-
-      <Card>
-        <p className="text-subheading text-off-white">Approval</p>
-        <p className="mt-1 text-meta text-neutral">Approving assigns this training program (every week, every exercise) and nutrition plan directly to {clientName}&apos;s real account.</p>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Button
-            size="lg"
-            onClick={() => {
-              const result = composer.approveInitial(latest);
-              if (result) setJustApproved(true);
-            }}
-          >
-            Approve &amp; assign
-          </Button>
-          <Button variant="secondary" size="lg" onClick={() => router.push(`/coach/clients/${clientId}/setup/training`)}>
-            <Layers size={16} aria-hidden="true" /> Fine-tune manually
-          </Button>
-        </div>
-      </Card>
+      <ReviseWithOptimSheet
+        open={reviseOpen}
+        onClose={() => {
+          setReviseOpen(false);
+          handleReviseDiscard();
+        }}
+        scope={reviseScope}
+        onScopeChange={setReviseScope}
+        hasNutrition={latest.nutritionOptions.length > 0}
+        instruction={revisionInstruction}
+        onInstructionChange={setRevisionInstruction}
+        onPreview={handleRevisePreview}
+        trainingPreview={revisionPreview}
+        nutritionPreview={nutritionRevisionPreview}
+        onConfirm={handleReviseConfirm}
+        onDiscard={handleReviseDiscard}
+      />
 
       <ProgramWeekPreviewSheet week={option.program.weeks.find((w) => w.weekNumber === previewWeekNumber) ?? null} open={previewWeekNumber !== null} onClose={() => setPreviewWeekNumber(null)} />
     </div>
@@ -578,21 +557,6 @@ function ClientIntelligenceSection({ latest }: { latest: ActivationGenerationRec
   if (!latest.programmingProfile) return null;
   const completeness = latest.programmingProfile.dailyActivityLevelIsAssumed || latest.programmingProfile.cardioPreferenceIsAssumed ? "Some inputs assumed" : "Fully reported";
   return <ClientIntelligencePanel profile={latest.programmingProfile} coachModelVersion={latest.coachModelVersion} dataCompleteness={completeness} />;
-}
-
-function ConstraintSummary({ option }: { option: { constraints: { passed: boolean; checks: { id: string; label: string; passed: boolean; reason?: string }[] } } }) {
-  return (
-    <Card>
-      <p className="text-subheading text-off-white">Constraints {option.constraints.passed ? "honored" : "— attention needed"}</p>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {option.constraints.checks.map((c) => (
-          <span key={c.id} className={`rounded-full px-2.5 py-1 text-xs font-medium ${c.passed ? "bg-success-soft text-success" : "bg-error-soft text-error-strong"}`} title={c.reason}>
-            {c.label}
-          </span>
-        ))}
-      </div>
-    </Card>
-  );
 }
 
 function RevisionPreviewPanel({

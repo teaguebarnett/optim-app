@@ -385,6 +385,24 @@ check("A resolved health review (reviewed_by_coach) permits activation", () => {
   assert.equal(healthReviewPermitsActivation(platform, CLIENT_ID), true);
 });
 
+check("Phase 5.6A.1 — 'proceed_with_limitations' is a real, distinct resolved outcome that also permits activation", () => {
+  const platform = {
+    ...createInitialPlatformState(),
+    healthReviews: [
+      {
+        clientId: CLIENT_ID,
+        workspaceId: WORKSPACE_OPTIM_ID,
+        status: "proceed_with_limitations" as const,
+        reasons: ["Reported a current pain/injury"],
+        documentedLimitations: "No overhead pressing.",
+        createdAtIso: "2026-01-01T00:00:00.000Z",
+        updatedAtIso: "2026-01-02T00:00:00.000Z",
+      },
+    ],
+  };
+  assert.equal(healthReviewPermitsActivation(platform, CLIENT_ID), true);
+});
+
 function authoritySettings(overrides: Partial<CoachAiAuthoritySettings> = {}): CoachAiAuthoritySettings {
   return { ...defaultCoachAiAuthoritySettings(COACH_PROFILE_TEAGUE.id, WORKSPACE_OPTIM_ID, "2026-01-01T00:00:00.000Z"), ...overrides };
 }

@@ -4,71 +4,44 @@ import { useRouter } from "next/navigation";
 import { Wrench, Wand2, HeartPulse, Mail, AlertTriangle, RotateCw, CheckCircle2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
-import { CoachBriefCard } from "@/components/coach/coach-brief-card";
-import { BlockerList } from "@/components/coach/blocker-list";
-import { SetupEssentials } from "@/components/coach/setup-essentials";
+import { StatusBadge, type BadgeTone } from "@/components/progress/status-badge";
+import { OptimClientBrief } from "@/components/coach/optim-client-brief";
+import { HealthReviewDecisionCard } from "@/components/coach/health-review-decision-card";
 import { FullIntakeDisclosure } from "@/components/coach/full-intake-disclosure";
-import { ActivationChecklist } from "@/components/coach/activation-checklist";
+import { SetupDetailsDisclosure } from "@/components/coach/setup-details-disclosure";
 import { InvitationLinkCard } from "@/components/coach/invitation-link-card";
-import { useCoachBrief } from "@/hooks/use-coach-brief";
 import { getActivationGenerationsForClient } from "@/lib/coach/repository";
 import { latestGenerationForClient, healthReviewPermitsActivation } from "@/lib/coach/activation-lifecycle";
-import { resolveClientJourneyStage } from "@/lib/coach/plan-status";
+import { resolveClientJourneyStage, CLIENT_JOURNEY_STAGE_LABELS, type ClientJourneyStage } from "@/lib/coach/plan-status";
+import { buildOptimClientBrief } from "@/lib/coach/activation-brief";
 import type { useProgramComposer } from "@/hooks/use-program-composer";
-import type { ActivationReadiness, HealthReviewStatus } from "@/lib/coach/types";
+import type { HealthReviewStatus } from "@/lib/coach/types";
 
 type CoachClientView = ReturnType<typeof useProgramComposer>;
 
-// Phase 5.6A — these two requirements are now represented entirely by the
-// unified plan-status card below (section 2): a coach following that one
-// card into /activate sees the real training AND nutrition state directly,
-// so surfacing them a second time here as red "Blocking" rows — often
-// BEFORE onboarding is even done, when there's nothing to review yet at all
-// — was exactly the "competing status cards" problem this phase's brief
-// documents. `onboarding_complete` is excluded the same way: it IS the
-// dominant "Awaiting client onboarding" state below, never a second,
-// separate blocker about the same fact. Every other real requirement
-// (assigned coach, start date, health review) still belongs here — they're
-// genuinely independent of the plan itself.
-const REQUIREMENTS_FOLDED_INTO_PLAN_STATUS = new Set(["onboarding_complete", "week1_program_assigned", "nutrition_configuration_exists"]);
-
-function blockersForRequiredSection(readiness: ActivationReadiness): ActivationReadiness {
-  return { ...readiness, requirements: readiness.requirements.filter((r) => !REQUIREMENTS_FOLDED_INTO_PLAN_STATUS.has(r.id)) };
-}
+const STAGE_BADGE_TONE: Record<ClientJourneyStage, BadgeTone> = {
+  awaiting_onboarding: "steel",
+  blocked_by_health_review: "warning",
+  not_started: "brass",
+  recommendations_ready: "brass",
+  coach_approval_needed: "accent",
+  generation_failed: "error",
+  approved: "success",
+};
 
 /**
- * The focused pre-activation Activation Workspace (spec §4, corrected by
- * Phase 5.5A Part 2, restructured by Phase 5.6A around the one honest
- * client-journey stage — spec's "State 1..4") — who is this client, when do
- * they start, and — above everything else — a single, truthful primary
- * action that matches what's actually available right now. A coach must
- * never need to hunt under "Setup & invitation" to find OPTIM's
- * recommendations, and must never be shown a CTA for a plan that doesn't
- * exist yet.
+ * Phase 5.6A.1 — the redesigned post-intake decision workspace for a
+ * not-yet-active client (spec Part 1). Replaces the old stack of competing
+ * status cards (Activation brief, Setup essentials, a six-item Activation
+ * readiness checklist, all visible at once, sometimes contradicting each
+ * other) with: one honest header, one synthesized OPTIM Client Brief, one
+ * dominant next-action, a dedicated health-review decision when relevant,
+ * and everything else — the full intake, the internal readiness checklist —
+ * folded behind small secondary disclosures.
  */
 export function ActivationWorkspace({ view, onActivateClick }: { view: CoachClientView; onActivateClick: () => void }) {
   const router = useRouter();
-  const {
-    client,
-    lifecycle,
-    hasClientAppState,
-    clientAppState,
-    intendedProgram,
-    invitation,
-    readiness,
-    healthReview,
-    onboarding,
-    dispatchPlatform,
-    workspaceId,
-    platform,
-    runAutoGeneration,
-  } = view;
-
-  // useCoachBrief must run on every render regardless of `client` (rules of
-  // hooks) — it's already null-safe internally (see its own doc), so
-  // calling it before the early return below is always correct.
-  const { brief, refresh } = useCoachBrief(view, null);
+  const { client, hasClientAppState, clientAppState, intendedProgram, invitation, readiness, healthReview, onboarding, dispatchPlatform, workspaceId, platform, runAutoGeneration } = view;
 
   if (!client) return null;
 
@@ -80,15 +53,16 @@ export function ActivationWorkspace({ view, onActivateClick }: { view: CoachClie
   const startDateIso = clientAppState?.programEnrollment.startDateIso ?? intendedProgram?.intendedStartDateIso;
   const startDateLabel = startDateIso ? new Date(`${startDateIso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "Not set";
 
-  function handleHealthReviewStatus(status: HealthReviewStatus) {
-    dispatchPlatform({ type: "SET_HEALTH_REVIEW_STATUS", clientId: client!.id, workspaceId, status, nowIso: new Date().toISOString() });
-  }
+  const brief = buildOptimClientBrief({ onboarding, intendedProgram, programEnrollment: clientAppState?.programEnrollment ?? null, healthReview });
+  const clientReportedDetail = typeof onboarding?.answers.health_finish?.injuryRestrictions === "string" ? onboarding.answers.health_finish.injuryRestrictions : null;
 
-  const requiredBlockers = blockersForRequiredSection(readiness);
+  function handleHealthReviewStatus(status: HealthReviewStatus, documentedLimitations?: string) {
+    dispatchPlatform({ type: "SET_HEALTH_REVIEW_STATUS", clientId: client!.id, workspaceId, status, nowIso: new Date().toISOString(), documentedLimitations });
+  }
 
   return (
     <div className="space-y-5">
-      {/* 1. Compact client header */}
+      {/* 1. Header — who, when, one honest stage badge. */}
       <Card className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="truncate text-heading text-off-white">{client.name}</h1>
@@ -96,50 +70,24 @@ export function ActivationWorkspace({ view, onActivateClick }: { view: CoachClie
             {client.email ?? "No email on file"} &middot; Start {startDateLabel}
           </p>
         </div>
-        <LifecycleBadge lifecycle={lifecycle} />
+        <StatusBadge label={CLIENT_JOURNEY_STAGE_LABELS[stage]} tone={STAGE_BADGE_TONE[stage]} />
       </Card>
 
-      {/* 2. The single, truthful status + next action — spec's State 1-4. */}
-      <ClientJourneyCard
-        stage={stage}
-        clientName={client.name}
-        failureReason={latestGeneration?.failureReason ?? latestGeneration?.blockedReasons?.join(" ")}
-        invitation={invitation}
-        onReviewPlan={() => router.push(`/coach/clients/${client.id}/activate`)}
-        onRetry={() => runAutoGeneration()}
-      />
+      {/* 2. One coherent OPTIM Client Brief — synthesis, not a repeat of raw fields. */}
+      {brief ? <OptimClientBrief brief={brief} /> : null}
 
-      {/* 3. Dominant Activation Brief */}
-      <CoachBriefCard brief={brief} kicker="Activation Brief" onRefresh={refresh} />
+      {/* 3. The single, dominant next action — spec's State 1-6. */}
+      <ClientJourneyCard stage={stage} clientName={client.name} failureReason={latestGeneration?.failureReason ?? latestGeneration?.blockedReasons?.join(" ")} invitation={invitation} onReviewPlan={() => router.push(`/coach/clients/${client.id}/activate`)} onRetry={() => runAutoGeneration()} />
 
-      {/* 4. Required before activation — only genuinely independent
-          blockers; training/nutrition status lives in section 2 above. */}
-      {requiredBlockers.requirements.some((r) => !r.met) ? (
-        <section className="space-y-2">
-          <p className="text-subheading text-off-white">Required before activation</p>
-          <BlockerList readiness={requiredBlockers} healthReview={healthReview} onChangeHealthReviewStatus={handleHealthReviewStatus} requirementActions={{ start_date_exists: { href: `/coach/clients/${client.id}/setup`, label: "Set start date" } }} />
-        </section>
-      ) : null}
+      {/* 4. Health review — its own clear decision, never a generic dropdown. */}
+      {healthReview ? <HealthReviewDecisionCard clientFirstName={client.name.split(" ")[0]} healthReview={healthReview} clientReportedDetail={clientReportedDetail} onResolve={handleHealthReviewStatus} /> : null}
 
-      {/* 5. Setup essentials */}
-      <Card>
-        <p className="text-subheading text-off-white">Setup essentials</p>
-        <div className="mt-2.5">
-          <SetupEssentials onboarding={onboarding} intendedProgram={intendedProgram} programEnrollment={clientAppState?.programEnrollment ?? null} />
-        </div>
-      </Card>
+      {/* 5. Secondary disclosures — never dominant, never contradicting section 3. */}
+      <div className="space-y-2.5">
+        <SetupDetailsDisclosure readiness={readiness} requirementActions={{ start_date_exists: { href: `/coach/clients/${client.id}/setup`, label: "Set start date" } }} onActivateManually={onActivateClick} checkInAssigned={hasClientAppState ? !!clientAppState?.checkInSchedule : undefined} />
+        <FullIntakeDisclosure onboarding={onboarding} healthReview={healthReview} />
+      </div>
 
-      {/* 6. Full intake */}
-      <FullIntakeDisclosure onboarding={onboarding} healthReview={healthReview} />
-
-      {/* 7. Activation readiness — still the real gate for a manually-built
-          (non-AI) program; a client approved through the OPTIM Plan above
-          is already active by the time every row here would read
-          "Complete," so this never competes with section 2 in practice. */}
-      <ActivationChecklist readiness={readiness} alreadyActive={false} onActivate={onActivateClick} checkInAssigned={hasClientAppState ? !!clientAppState?.checkInSchedule : undefined} compact />
-
-      {/* 8. Secondary utilities — setup details and invitation, never a
-          path into manual programming. */}
       <Card className="space-y-3">
         <p className="text-subheading text-off-white">Setup &amp; invitation</p>
         <div className="flex flex-wrap gap-2">
@@ -161,7 +109,7 @@ function ClientJourneyCard({
   onReviewPlan,
   onRetry,
 }: {
-  stage: ReturnType<typeof resolveClientJourneyStage>;
+  stage: ClientJourneyStage;
   clientName: string;
   failureReason?: string;
   invitation: CoachClientView["invitation"];
@@ -197,8 +145,8 @@ function ClientJourneyCard({
             <HeartPulse size={18} aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <p className="text-subheading text-off-white">Blocked by health review</p>
-            <p className="mt-0.5 text-meta text-neutral">A reported concern needs your review before OPTIM can generate a plan around it safely — resolve it below.</p>
+            <p className="text-subheading text-off-white">Your review is next</p>
+            <p className="mt-0.5 text-meta text-neutral">A reported concern needs your decision before OPTIM can generate a plan around it safely — see below.</p>
           </div>
         </div>
       </Card>
@@ -236,7 +184,7 @@ function ClientJourneyCard({
             </span>
             <div className="min-w-0">
               <p className="text-subheading text-off-white">OPTIM plan ready for review</p>
-              <p className="mt-0.5 text-meta text-neutral">Compare OPTIM&apos;s ranked training and nutrition directions and approve or adjust before it goes live for {clientName}.</p>
+              <p className="mt-0.5 text-meta text-neutral">Review OPTIM&apos;s recommended training and nutrition direction and approve or adjust before it goes live for {clientName}.</p>
             </div>
           </div>
           <Button onClick={onReviewPlan}>

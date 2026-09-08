@@ -11,6 +11,7 @@
 // defaulting to a guessed value the client never gave.
 
 import { extractClientSnapshot, type ClientOnboardingSnapshot } from "./activation-generation.ts";
+import { RESOLVED_HEALTH_REVIEW_STATUSES } from "./types.ts";
 import type { HealthReviewRecord, OnboardingProgress, OnboardingStepAnswers } from "./types";
 
 export type DailyActivityLevel = "mostly_sedentary" | "lightly_active" | "very_active";
@@ -45,9 +46,25 @@ export interface ClientProgrammingProfile extends ClientOnboardingSnapshot {
   // -- Health / movement restrictions (health_finish) ----------------------
   hasCurrentInjury: boolean;
   injuryBodyAreas: string[];
+  /** The client's own reported restriction detail, plus (appended, when
+   * present) the coach's own documented limitation recorded while
+   * resolving a health review with "Proceed with documented limitations" —
+   * see HealthReviewRecord.documentedLimitations. Both flow into the same
+   * field so a real coach-recorded boundary reaches the same planning
+   * constraints as a client-reported one, rather than living only on a
+   * separate record nothing downstream reads. */
   injuryRestrictions: string | null;
   requiresHealthReview: boolean;
   healthReviewResolved: boolean | "no_review_needed";
+
+  // -- Goal (what_you_want) -------------------------------------------------
+  /** Phase 5.6A.1 — the client's own written answer when primaryGoal is
+   * "something_else"; null otherwise (including when they picked "Something
+   * else" but left the detail blank). Kept alongside primaryGoal — inherited
+   * unchanged from ClientOnboardingSnapshot — rather than replacing it, so
+   * every existing goal-matching check in the generation engine keeps
+   * comparing against the real enum value. */
+  primaryGoalOther: string | null;
 }
 
 function readAnswers(onboarding: OnboardingProgress, step: string): OnboardingStepAnswers {
@@ -67,10 +84,13 @@ export function extractClientProgrammingProfile(onboarding: OnboardingProgress |
   if ("missing" in base) return base;
   if (!onboarding) return { missing: ["Onboarding has not been completed yet."] };
 
+  const goals = readAnswers(onboarding, "what_you_want");
   const start = readAnswers(onboarding, "starting_point");
   const week = readAnswers(onboarding, "your_week");
   const fuel = readAnswers(onboarding, "fuel_recovery");
   const health = readAnswers(onboarding, "health_finish");
+
+  const primaryGoalOther = goals.primaryGoal === "something_else" && typeof goals.primaryGoalOther === "string" && goals.primaryGoalOther.trim() ? goals.primaryGoalOther.trim() : null;
 
   const recentConsistency = typeof start.recentConsistency === "string" ? (start.recentConsistency as ClientProgrammingProfile["recentConsistency"]) : "unknown";
   const recentWeeklyFrequency = typeof start.weeklyFrequency === "number" ? start.weeklyFrequency : null;
@@ -90,10 +110,13 @@ export function extractClientProgrammingProfile(onboarding: OnboardingProgress |
 
   const hasCurrentInjury = health.hasInjuryHistory === true;
   const injuryBodyAreas = Array.isArray(health.injuryBodyAreas) ? (health.injuryBodyAreas as string[]) : [];
-  const injuryRestrictions = typeof health.injuryRestrictions === "string" && health.injuryRestrictions.trim() ? health.injuryRestrictions.trim() : null;
+  const clientReportedRestriction = typeof health.injuryRestrictions === "string" && health.injuryRestrictions.trim() ? health.injuryRestrictions.trim() : null;
+  const coachDocumentedLimitation = healthReview?.documentedLimitations?.trim() || null;
+  const injuryRestrictions = [clientReportedRestriction, coachDocumentedLimitation].filter((v): v is string => !!v).join(" ") || null;
 
   const profile: ClientProgrammingProfile = {
     ...base.snapshot,
+    primaryGoalOther,
     recentConsistency,
     recentWeeklyFrequency,
     trainingNotes,
@@ -111,7 +134,7 @@ export function extractClientProgrammingProfile(onboarding: OnboardingProgress |
     injuryBodyAreas,
     injuryRestrictions,
     requiresHealthReview: !!healthReview,
-    healthReviewResolved: healthReview ? healthReview.status === "reviewed_by_coach" || healthReview.status === "professional_guidance_confirmed" : "no_review_needed",
+    healthReviewResolved: healthReview ? RESOLVED_HEALTH_REVIEW_STATUSES.has(healthReview.status) : "no_review_needed",
   };
 
   return { profile };

@@ -4,9 +4,8 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, Sparkles } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RANK_LABEL, meaningfulTrainingDirectionName } from "@/lib/coach/plan-presentation";
 import type { ProgramDirectionSummary } from "@/lib/coach/program-directions";
-
-const KIND_LABEL: Record<string, string> = { best_fit: "Best fit", strong_alternative: "Strong alternative", wildcard: "Strategic wildcard" };
 
 /**
  * Phase 5.5A Part 4 — a recommendation card scannable at a glance: rank,
@@ -33,8 +32,8 @@ export function DirectionCard({
 
   return (
     <Card className={selectedPrimary ? "border-l-2 border-l-brass" : selectedSecondary ? "border-l-2 border-l-brass/40" : ""}>
-      <p className="text-xs font-semibold uppercase tracking-wide text-brass-strong">{KIND_LABEL[direction.kind] ?? direction.kind}</p>
-      <p className="mt-1 text-subheading text-off-white">{direction.label}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-brass-strong">{RANK_LABEL[direction.kind] ?? direction.kind}</p>
+      <p className="mt-1 text-subheading text-off-white">{meaningfulTrainingDirectionName(direction)}</p>
       <p className="mt-1 text-sm text-neutral">
         {direction.splitName} · {direction.frequencyPerWeek}x/week · ~{direction.estimatedSessionLengthMin} min
       </p>

@@ -7,9 +7,9 @@
 // surfaces can never describe the same answer two different ways.
 
 import { ONBOARDING_STEPS, type OnboardingStepDef } from "./onboarding-steps.ts";
-import { formatFieldValue, NOT_PROVIDED } from "./onboarding-format.ts";
+import { formatFieldValue, describePrimaryGoal, NOT_PROVIDED } from "./onboarding-format.ts";
 import { describeInjuryBodyAreas } from "./health-review.ts";
-import type { ActivationReadiness, ClientIntendedProgram, OnboardingProgress, OnboardingStepAnswers, OnboardingStepId } from "./types";
+import type { ActivationReadiness, ClientIntendedProgram, HealthReviewRecord, OnboardingProgress, OnboardingStepAnswers, OnboardingStepId } from "./types";
 import type { ProgramEnrollment } from "../scheduling/types";
 
 function stepAnswers(onboarding: OnboardingProgress | null, id: OnboardingStepId): OnboardingStepAnswers | undefined {
@@ -54,7 +54,7 @@ export function buildActivationBriefSentences(input: ActivationBriefInput): stri
   const week = stepAnswers(onboarding, "your_week");
   const health = stepAnswers(onboarding, "health_finish");
 
-  const goal = fieldValue(ONBOARDING_STEPS, goals, "what_you_want", "primaryGoal");
+  const goal = describePrimaryGoal(ONBOARDING_STEPS, goals);
   const startDateIso = programEnrollment?.startDateIso ?? intendedProgram?.intendedStartDateIso;
   const durationWeeks = programEnrollment?.durationWeeks ?? intendedProgram?.intendedDurationWeeks;
 
@@ -86,4 +86,80 @@ export function buildActivationBriefSentences(input: ActivationBriefInput): stri
   }
 
   return [sentence1, sentence2, sentence3];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5.6A.1 — the OPTIM Client Brief: one coherent synthesis, not a
+// second copy of raw intake fields (spec Part 1's "Primary client brief").
+// ---------------------------------------------------------------------------
+
+export interface OptimClientBrief {
+  primaryOutcome: string;
+  secondaryOutcomes: string | null;
+  trainingFit: string;
+  nutritionReality: string;
+  /** Only populated when there's something that materially affects
+   * programming (a flagged health-review concern) — never a generic
+   * "nothing to report" filler line, per spec's "only information that
+   * materially affects programming." */
+  readinessAndSafety: string | null;
+  startDateLabel: string;
+}
+
+/**
+ * Synthesizes the client's real onboarding answers into the one coherent
+ * brief the post-intake client page leads with — never a second dump of
+ * raw fields (that's what the "View full intake" disclosure is for). Every
+ * value here traces to a real submitted answer; a custom "Something else"
+ * goal shows the client's own written text (see describePrimaryGoal), never
+ * the useless option label.
+ */
+export function buildOptimClientBrief(input: {
+  onboarding: OnboardingProgress | null;
+  intendedProgram: ClientIntendedProgram | null;
+  programEnrollment: ProgramEnrollment | null;
+  healthReview: HealthReviewRecord | null;
+}): OptimClientBrief | null {
+  const { onboarding, intendedProgram, programEnrollment, healthReview } = input;
+  if (!onboarding?.completedAtIso) return null;
+
+  const goals = stepAnswers(onboarding, "what_you_want");
+  const week = stepAnswers(onboarding, "your_week");
+  const start = stepAnswers(onboarding, "starting_point");
+  const fuel = stepAnswers(onboarding, "fuel_recovery");
+  const health = stepAnswers(onboarding, "health_finish");
+
+  const goal = describePrimaryGoal(ONBOARDING_STEPS, goals);
+  const successDefinition = typeof goals?.successDefinition === "string" ? goals.successDefinition.trim() : "";
+  const primaryOutcome = successDefinition ? `${goal} — ${successDefinition}` : goal;
+
+  const secondaryGoalsRaw = Array.isArray(goals?.secondaryGoals) ? (goals!.secondaryGoals as string[]) : [];
+  const secondaryOutcomes = secondaryGoalsRaw.length > 0 ? fieldValue(ONBOARDING_STEPS, goals, "what_you_want", "secondaryGoals") : null;
+
+  const availableDays = Array.isArray(week?.availableDays) ? (week!.availableDays as string[]) : [];
+  const experience = start ? fieldValue(ONBOARDING_STEPS, start, "starting_point", "trainingExperience") : NOT_PROVIDED;
+  const sessionLength = week ? fieldValue(ONBOARDING_STEPS, week, "your_week", "maxSessionLength") : NOT_PROVIDED;
+  const environment = week ? fieldValue(ONBOARDING_STEPS, week, "your_week", "trainingEnvironment") : NOT_PROVIDED;
+  const trainingFit =
+    availableDays.length > 0
+      ? `${experience} · ${availableDays.length} days/week, up to ${sessionLength.toLowerCase()} · ${environment}`
+      : `${experience} · training availability not yet reported`;
+
+  const nutritionApproach = fuel ? fieldValue(ONBOARDING_STEPS, fuel, "fuel_recovery", "nutritionApproach") : NOT_PROVIDED;
+  const hasDietaryRestrictions = fuel?.hasDietaryRestrictions === "yes";
+  const restrictionDetail = typeof fuel?.dietaryRestrictionsDetail === "string" ? fuel.dietaryRestrictionsDetail.trim() : "";
+  const nutritionReality = hasDietaryRestrictions ? `${nutritionApproach} · Restrictions: ${restrictionDetail || "reported, no detail given"}` : `${nutritionApproach} · No restrictions reported`;
+
+  let readinessAndSafety: string | null = null;
+  if (healthReview) {
+    const area = health ? describeInjuryBodyAreas(health) : "";
+    const resolved = healthReview.status !== "review_needed" && healthReview.status !== "discuss_with_client" && healthReview.status !== "professional_guidance_requested";
+    const base = area ? `Flagged a ${area} concern during intake.` : healthReview.reasons[0] || "A safety concern was flagged during intake.";
+    readinessAndSafety = resolved ? `${base} Resolved by you before this draft was prepared.` : `${base} Awaiting your review before OPTIM can program around it safely.`;
+  }
+
+  const startDateIso = programEnrollment?.startDateIso ?? intendedProgram?.intendedStartDateIso;
+  const startDateLabel = startDateIso ? formatStartDate(startDateIso) : "Not set";
+
+  return { primaryOutcome, secondaryOutcomes, trainingFit, nutritionReality, readinessAndSafety, startDateLabel };
 }

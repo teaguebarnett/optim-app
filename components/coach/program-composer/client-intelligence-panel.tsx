@@ -32,7 +32,7 @@ export function ClientIntelligencePanel({ profile, coachModelVersion, dataComple
     <Card>
       <p className="text-subheading text-off-white">Client intelligence</p>
       <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
-        <Stat label="Goal" value={profile.primaryGoal.replace(/_/g, " ")} />
+        <Stat label="Goal" value={profile.primaryGoal === "something_else" && profile.primaryGoalOther ? profile.primaryGoalOther : profile.primaryGoal.replace(/_/g, " ")} />
         <Stat label="Availability" value={`${profile.availableDays.length} days/week`} />
         <Stat label="Session length" value={`${profile.maxSessionLengthMinutes} min`} />
         <Stat label="Experience" value={profile.trainingExperience.replace(/_/g, " ")} />

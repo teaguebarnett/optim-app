@@ -32,7 +32,7 @@ import {
   visibleFieldsForStep,
   onboardingStepIndex,
 } from "./onboarding-steps.ts";
-import { formatDaySelection, formatFieldValue, NOT_PROVIDED } from "./onboarding-format.ts";
+import { formatDaySelection, formatFieldValue, describePrimaryGoal, NOT_PROVIDED } from "./onboarding-format.ts";
 import { checkActivationReadiness } from "./activation.ts";
 import { createInitialPlatformState, migratePlatformState, platformReducer, type PlatformState } from "./platform-store.ts";
 import { getHealthReview, getOnboardingProgress } from "./repository.ts";
@@ -506,6 +506,15 @@ check("'Something else' reveals a required clarification field, and only for tha
   assert.equal(field.required, true);
   assert.equal(field.visibleIf!({ primaryGoal: "something_else" }), true);
   assert.equal(field.visibleIf!({ primaryGoal: "body_recomposition" }), false);
+});
+
+check("Phase 5.6A.1 — a custom 'Something else' goal displays the client's own written answer, never the useless option label", () => {
+  assert.equal(describePrimaryGoal(ONBOARDING_STEPS, { primaryGoal: "something_else", primaryGoalOther: "Complete a Spartan Race in June" }), "Complete a Spartan Race in June");
+  // A real, non-custom goal still resolves to its normal option label.
+  assert.equal(describePrimaryGoal(ONBOARDING_STEPS, { primaryGoal: "build_muscle" }), "Build muscle");
+  // "Something else" with no detail recorded (an incomplete/legacy record) falls back to the honest option label rather than a blank string.
+  assert.equal(describePrimaryGoal(ONBOARDING_STEPS, { primaryGoal: "something_else" }), "Something else");
+  assert.equal(describePrimaryGoal(ONBOARDING_STEPS, undefined), NOT_PROVIDED);
 });
 
 check("Target weight is deliberately NOT implied by body recomposition — only build_muscle/lose_fat show it", () => {

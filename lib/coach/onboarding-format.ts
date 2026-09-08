@@ -8,7 +8,7 @@
 // brief's explicit requirement.
 
 import { resolveHeight, formatHeight } from "./height.ts";
-import type { OnboardingFieldDef } from "./onboarding-steps.ts";
+import type { OnboardingFieldDef, OnboardingStepDef } from "./onboarding-steps.ts";
 import type { InjuryEntry, OnboardingStepAnswers } from "./types";
 
 export const NOT_PROVIDED = "Not provided";
@@ -68,4 +68,24 @@ export function formatFieldValue(field: OnboardingFieldDef, value: unknown): str
 
 export function formatHeightFromAnswers(basicsAnswers: OnboardingStepAnswers | undefined): string {
   return formatHeight(resolveHeight(basicsAnswers));
+}
+
+/**
+ * Phase 5.6A.1 — the client's real, human-readable primary goal. A plain
+ * `formatFieldValue` lookup reduces the "Something else" answer to that
+ * same useless option label; this substitutes the client's own written
+ * `primaryGoalOther` text instead, so every coach-facing surface describes
+ * a custom goal the same honest way. Falls back to the option label itself
+ * only when no custom text was actually recorded (a legacy or incomplete
+ * record).
+ */
+export function describePrimaryGoal(steps: OnboardingStepDef[], answers: OnboardingStepAnswers | undefined): string {
+  if (!answers) return NOT_PROVIDED;
+  const field = steps.find((s) => s.id === "what_you_want")?.fields.find((f) => f.key === "primaryGoal");
+  if (!field) return NOT_PROVIDED;
+  if (answers.primaryGoal === "something_else") {
+    const other = typeof answers.primaryGoalOther === "string" ? answers.primaryGoalOther.trim() : "";
+    if (other) return other;
+  }
+  return formatFieldValue(field, answers.primaryGoal);
 }

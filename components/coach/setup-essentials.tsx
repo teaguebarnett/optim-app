@@ -1,5 +1,5 @@
 import { ONBOARDING_STEPS, type OnboardingStepDef } from "@/lib/coach/onboarding-steps";
-import { formatFieldValue, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
+import { formatFieldValue, describePrimaryGoal, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
 import type { ClientIntendedProgram, OnboardingProgress, OnboardingStepAnswers } from "@/lib/coach/types";
 import type { ProgramEnrollment } from "@/lib/scheduling/types";
 
@@ -34,7 +34,7 @@ export function SetupEssentials({
   const startDateIso = programEnrollment?.startDateIso ?? intendedProgram?.intendedStartDateIso;
 
   const rows: { label: string; value: string }[] = [
-    { label: "Goal", value: goals ? fieldValue(ONBOARDING_STEPS, goals, "what_you_want", "primaryGoal") : NOT_PROVIDED },
+    { label: "Goal", value: goals ? describePrimaryGoal(ONBOARDING_STEPS, goals) : NOT_PROVIDED },
     {
       label: "Availability",
       value: availableDays.length > 0 ? `${availableDays.length} days/week, ${fieldValue(ONBOARDING_STEPS, week, "your_week", "maxSessionLength").toLowerCase()}` : NOT_PROVIDED,

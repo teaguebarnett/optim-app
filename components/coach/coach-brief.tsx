@@ -1,7 +1,7 @@
 import { AlertTriangle, Dumbbell, Salad, Target, Clock3, Moon, HeartPulse, Users2, Home } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { ONBOARDING_STEPS, LEGACY_V51_STEPS, visibleFieldsForStep, type OnboardingFieldDef, type OnboardingStepDef } from "@/lib/coach/onboarding-steps";
-import { formatFieldValue, formatHeightFromAnswers, formatInjuryEntry, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
+import { formatFieldValue, formatHeightFromAnswers, formatInjuryEntry, describePrimaryGoal, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
 import { computeHealthReviewRequired, computeLegacyHealthReviewRequired, describeInjuryBodyAreas } from "@/lib/coach/health-review";
 import { cn } from "@/lib/cn";
 import type { HealthReviewRecord, InjuryEntry, OnboardingProgress, OnboardingStepAnswers, OnboardingStepId } from "@/lib/coach/types";
@@ -84,7 +84,7 @@ function LiveCoachBrief({ onboarding, healthReview }: { onboarding: OnboardingPr
       </HealthFlag>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-        <GlanceFact icon={Target} label="Goal" value={goals ? fmt(ONBOARDING_STEPS, goals, "what_you_want", "primaryGoal") : NOT_PROVIDED} />
+        <GlanceFact icon={Target} label="Goal" value={goals ? describePrimaryGoal(ONBOARDING_STEPS, goals) : NOT_PROVIDED} />
         <GlanceFact icon={Clock3} label="Availability" value={availableDays.length > 0 ? `${availableDays.length}d/wk · ${fmt(ONBOARDING_STEPS, week, "your_week", "maxSessionLength")}` : NOT_PROVIDED} />
         <GlanceFact icon={Home} label="Environment" value={week ? fmt(ONBOARDING_STEPS, week, "your_week", "trainingEnvironment") : NOT_PROVIDED} />
         <GlanceFact icon={Dumbbell} label="Experience" value={start ? fmt(ONBOARDING_STEPS, start, "starting_point", "trainingExperience") : NOT_PROVIDED} />

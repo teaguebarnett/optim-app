@@ -81,3 +81,20 @@ export function resolveClientJourneyStage(input: {
   if (!input.onboardingCompleted) return "awaiting_onboarding";
   return resolveTrainingPlanStatus({ latestGeneration: input.latestGeneration, healthReviewResolved: input.healthReviewResolved }).status;
 }
+
+/**
+ * Phase 5.6A.1 — the one honest lifecycle badge a coach sees for a
+ * not-yet-active client (spec Part 1's header requirement): real stage
+ * language, never the old generic "Coach setup." Every value here is a
+ * short noun phrase — the header renders it as a single badge, never a
+ * second competing status card.
+ */
+export const CLIENT_JOURNEY_STAGE_LABELS: Record<ClientJourneyStage, string> = {
+  awaiting_onboarding: "Awaiting onboarding",
+  blocked_by_health_review: "Intake needs review",
+  not_started: "OPTIM preparing draft",
+  recommendations_ready: "OPTIM preparing draft",
+  coach_approval_needed: "Awaiting your approval",
+  generation_failed: "Plan generation failed",
+  approved: "Active",
+};

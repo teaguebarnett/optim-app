@@ -27,7 +27,7 @@ import {
   type OnboardingFieldDef,
   type OnboardingStepDef,
 } from "@/lib/coach/onboarding-steps";
-import { formatFieldValue, formatHeightFromAnswers, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
+import { formatFieldValue, formatHeightFromAnswers, describePrimaryGoal, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
 import { computeHealthReviewRequired } from "@/lib/coach/health-review";
 import { contextualResponseFor } from "@/lib/coach/contextual-response";
 import { detectTimeZone } from "@/lib/shared/timezone";
@@ -252,7 +252,9 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
             </div>
           </div>
         ) : (
-          <h1 className="text-display text-off-white">{step.title}</h1>
+          <div className="mb-6">
+            <h1 className="text-display text-off-white">{step.title}</h1>
+          </div>
         )}
         {momentIndex === 0 ? <p className="-mt-4 mb-6 text-body text-neutral">{step.description}</p> : null}
 
@@ -292,8 +294,7 @@ function buildRecapFacts(draftAnswers: Partial<Record<string, OnboardingStepAnsw
     if (height !== NOT_PROVIDED) facts.push({ label: "Height", value: height });
   }
   if (goals?.primaryGoal && currentStepIndex > goalsIndex) {
-    const field = ONBOARDING_STEPS[goalsIndex].fields.find((f) => f.key === "primaryGoal")!;
-    facts.push({ label: "Goal", value: formatFieldValue(field, goals.primaryGoal) });
+    facts.push({ label: "Goal", value: describePrimaryGoal(ONBOARDING_STEPS, goals) });
   }
   if (week?.availableDays && currentStepIndex > weekIndex) {
     const days = Array.isArray(week.availableDays) ? (week.availableDays as string[]) : [];
@@ -395,7 +396,6 @@ function ReviewSummary({
   const health = draftAnswers.health_finish;
   const healthFlag = computeHealthReviewRequired(health);
 
-  const goalField = ONBOARDING_STEPS.find((s) => s.id === "what_you_want")!.fields.find((f) => f.key === "primaryGoal")!;
   const secondaryGoalsField = ONBOARDING_STEPS.find((s) => s.id === "what_you_want")!.fields.find((f) => f.key === "secondaryGoals")!;
   const sessionField = ONBOARDING_STEPS.find((s) => s.id === "your_week")!.fields.find((f) => f.key === "maxSessionLength")!;
   const envField = ONBOARDING_STEPS.find((s) => s.id === "your_week")!.fields.find((f) => f.key === "trainingEnvironment")!;
@@ -409,7 +409,7 @@ function ReviewSummary({
   // row's "Edit" at the wrong internal screen.
   const rows: { label: string; value: string; jumpTo: OnboardingStepId; moment: number }[] = [
     { label: "Height", value: formatHeightFromAnswers(about), jumpTo: "about_you", moment: momentIndexForField(step("about_you"), "heightFeetInches") },
-    { label: "Goal", value: goals ? formatFieldValue(goalField, goals.primaryGoal) : NOT_PROVIDED, jumpTo: "what_you_want", moment: momentIndexForField(step("what_you_want"), "primaryGoal") },
+    { label: "Goal", value: goals ? describePrimaryGoal(ONBOARDING_STEPS, goals) : NOT_PROVIDED, jumpTo: "what_you_want", moment: momentIndexForField(step("what_you_want"), "primaryGoal") },
     ...(hasSecondaryGoals
       ? [{ label: "Also working on", value: formatFieldValue(secondaryGoalsField, goals!.secondaryGoals), jumpTo: "what_you_want" as const, moment: momentIndexForField(step("what_you_want"), "secondaryGoals") }]
       : []),

@@ -130,5 +130,46 @@ check("a resolved health review never blocks readiness", () => {
   assert.equal(readiness.status, "ready");
 });
 
+// ---------------------------------------------------------------------------
+// Phase 5.6A.1 additions
+// ---------------------------------------------------------------------------
+
+console.log("\n3. Phase 5.6A.1 — custom goal text and coach-documented limitations\n");
+
+check("a custom 'Something else' goal carries the client's own written text on the profile", () => {
+  const onboarding = completedOnboarding({ what_you_want: { primaryGoal: "something_else", primaryGoalOther: "Finish a Spartan Race in June" } });
+  const result = extractClientProgrammingProfile(onboarding, null);
+  if (!("profile" in result)) throw new Error("expected a profile");
+  assert.equal(result.profile.primaryGoal, "something_else");
+  assert.equal(result.profile.primaryGoalOther, "Finish a Spartan Race in June");
+});
+
+check("a normal (non-custom) goal never carries stray primaryGoalOther text", () => {
+  const result = extractClientProgrammingProfile(completedOnboarding(), null);
+  if (!("profile" in result)) throw new Error("expected a profile");
+  assert.equal(result.profile.primaryGoalOther, null);
+});
+
+check("'proceed_with_limitations' resolves health review and folds the coach's documented limitation into injuryRestrictions — reaching the same planning constraints a client-reported restriction does", () => {
+  const onboarding = completedOnboarding({ health_finish: { hasInjuryHistory: true, injuryBodyAreas: ["shoulder"], injuryRestrictions: "No pain above shoulder height." } });
+  const healthReview: HealthReviewRecord = {
+    clientId: CLIENT_PROFILE_DEMO.id,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    status: "proceed_with_limitations",
+    reasons: ["Reported shoulder limitation."],
+    documentedLimitations: "No overhead pressing.",
+    createdAtIso: "2026-01-01T00:00:00.000Z",
+    updatedAtIso: "2026-01-01T00:00:00.000Z",
+  };
+  const result = extractClientProgrammingProfile(onboarding, healthReview);
+  if (!("profile" in result)) throw new Error("expected a profile");
+  assert.equal(result.profile.healthReviewResolved, true);
+  assert.ok(result.profile.injuryRestrictions?.includes("No pain above shoulder height."));
+  assert.ok(result.profile.injuryRestrictions?.includes("No overhead pressing."));
+
+  const readiness = resolveProgrammingProfileReadiness(result);
+  assert.equal(readiness.status, "ready_with_assumptions");
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

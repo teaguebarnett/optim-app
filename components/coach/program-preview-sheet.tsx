@@ -37,9 +37,9 @@ export function ProgramWeekPreviewSheet({ week, open, onClose }: { week: Program
                 type="button"
                 disabled={disabled}
                 onClick={() => setPreviewDay(day.dayOfWeek)}
-                className="flex w-full items-center justify-between rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-3.5 py-3 text-left disabled:opacity-50"
+                className="flex w-full items-center justify-between rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-3.5 py-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-default"
               >
-                <span className="text-sm font-medium text-off-white">{day.dayOfWeek}</span>
+                <span className={disabled ? "text-sm font-medium text-neutral" : "text-sm font-medium text-off-white"}>{day.dayOfWeek}</span>
                 <span className="text-sm text-neutral">{day.type === "rest" ? "Rest day" : (day.workout?.name ?? "No session authored yet")}</span>
               </button>
             );

@@ -175,13 +175,20 @@ export type HealthReviewStatus =
   | "discuss_with_client"
   | "professional_guidance_requested"
   | "professional_guidance_confirmed"
-  | "reviewed_by_coach";
+  | "reviewed_by_coach"
+  /** Phase 5.6A.1 — a distinct resolved outcome from "reviewed_by_coach":
+   * the coach isn't declaring the concern a non-issue, they're proceeding
+   * deliberately with a documented programming boundary (see
+   * HealthReviewRecord.documentedLimitations). Never implies medical
+   * clearance any more than the other resolved statuses do. */
+  | "proceed_with_limitations";
 
-/** Statuses that unblock activation — both represent Teague having
+/** Statuses that unblock activation — every one represents Teague having
  * actually completed their part, not OPTIM deciding anything. */
 export const RESOLVED_HEALTH_REVIEW_STATUSES: ReadonlySet<HealthReviewStatus> = new Set([
   "professional_guidance_confirmed",
   "reviewed_by_coach",
+  "proceed_with_limitations",
 ]);
 
 export interface HealthReviewRecord {
@@ -194,6 +201,13 @@ export interface HealthReviewRecord {
   reasons: string[];
   createdAtIso: string;
   updatedAtIso: string;
+  /** Phase 5.6A.1 — required when status is "proceed_with_limitations": the
+   * real programming boundary the coach recorded (e.g. "No overhead
+   * pressing; cap load on unilateral knee work"). Folded into the client's
+   * ClientProgrammingProfile.injuryRestrictions (see programming-profile.ts)
+   * so it actually reaches the same planning constraints every other
+   * reported restriction does — never just decorative text on this record. */
+  documentedLimitations?: string;
 }
 
 export interface OnboardingProgress {

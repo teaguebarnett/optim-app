@@ -42,6 +42,7 @@ function baseProfile(overrides: Partial<ClientProgrammingProfile> = {}): ClientP
     weightLb: 180,
     sex: "male",
     primaryGoal: "build_muscle",
+    primaryGoalOther: null,
     secondaryGoals: [],
     availableDays: ["Monday", "Wednesday", "Friday"],
     maxSessionLengthMinutes: 60,

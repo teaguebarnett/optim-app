@@ -5,7 +5,7 @@
 // winning as the one safety override.
 
 import assert from "node:assert/strict";
-import { resolveTrainingPlanStatus, resolveClientJourneyStage } from "./plan-status.ts";
+import { resolveTrainingPlanStatus, resolveClientJourneyStage, CLIENT_JOURNEY_STAGE_LABELS, type ClientJourneyStage } from "./plan-status.ts";
 import type { ActivationGenerationRecord } from "./activation-lifecycle.ts";
 
 let passed = 0;
@@ -93,6 +93,28 @@ check("resolveClientJourneyStage: once onboarding is complete, it defers to reso
   assert.equal(resolveClientJourneyStage({ onboardingCompleted: true, latestGeneration: null, healthReviewResolved: "no_review_needed" }), "not_started");
   assert.equal(resolveClientJourneyStage({ onboardingCompleted: true, latestGeneration: record("ready_for_review"), healthReviewResolved: "no_review_needed" }), "coach_approval_needed");
   assert.equal(resolveClientJourneyStage({ onboardingCompleted: true, latestGeneration: record("generation_failed"), healthReviewResolved: "no_review_needed" }), "generation_failed");
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5.6A.1 additions
+// ---------------------------------------------------------------------------
+
+check("CLIENT_JOURNEY_STAGE_LABELS: every stage carries a real, non-empty, honest label", () => {
+  const stages: ClientJourneyStage[] = ["awaiting_onboarding", "blocked_by_health_review", "not_started", "recommendations_ready", "coach_approval_needed", "generation_failed", "approved"];
+  for (const s of stages) {
+    assert.ok(CLIENT_JOURNEY_STAGE_LABELS[s].length > 0);
+  }
+});
+
+check("CLIENT_JOURNEY_STAGE_LABELS: the ready-for-approval stage never uses alarming 'Blocking' language — the spec's ready/blocking contradiction bug", () => {
+  assert.equal(CLIENT_JOURNEY_STAGE_LABELS.coach_approval_needed, "Awaiting your approval");
+  assert.ok(!/blocking/i.test(CLIENT_JOURNEY_STAGE_LABELS.coach_approval_needed));
+});
+
+check("CLIENT_JOURNEY_STAGE_LABELS: no more vague 'Coach setup' wording for a not-yet-active client", () => {
+  for (const label of Object.values(CLIENT_JOURNEY_STAGE_LABELS)) {
+    assert.notEqual(label, "Coach setup");
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
