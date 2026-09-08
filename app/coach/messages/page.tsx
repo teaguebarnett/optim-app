@@ -9,8 +9,10 @@ import { EmptyState } from "@/components/coach/empty-state";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
-import { getClientLifecycle } from "@/lib/coach/repository";
+import { getClientLifecycle, getOnboardingProgress } from "@/lib/coach/repository";
 import { sendCoachMessage } from "@/lib/coach/coach-messaging";
+import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
+import { describePrimaryGoal, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
 import { cn } from "@/lib/cn";
 import type { ClientProfileId } from "@/lib/tenancy/types";
 
@@ -55,6 +57,11 @@ export default function CoachMessagesPage() {
   const selectedRow = rows.find((r) => r.client.id === selectedClientId) ?? null;
   const selectedMessages = selectedClientId ? (workspace.clientAppStates.get(selectedClientId)?.chatMessages ?? []) : [];
   const selectedLifecycle = selectedClientId ? getClientLifecycle(workspace.platform, selectedClientId) : null;
+  // Phase 5.6A.4 — the real submitted primary goal, same source
+  // client-workspace.tsx's header now reads — never the stale `client.goal`
+  // field (see components/coach/client-workspace.tsx's comment for why).
+  const selectedGoals = selectedClientId ? getOnboardingProgress(workspace.platform, selectedClientId)?.answers.what_you_want : undefined;
+  const selectedGoalLabel = selectedGoals ? describePrimaryGoal(ONBOARDING_STEPS, selectedGoals) : NOT_PROVIDED;
   const coachOverride = workspace.activeContext.coachProfile
     ? { displayName: workspace.activeContext.coachProfile.displayName, avatarInitials: workspace.activeContext.coachProfile.avatarInitials }
     : null;
@@ -115,7 +122,7 @@ export default function CoachMessagesPage() {
                   <Avatar initials={selectedRow.client.avatarInitials} size="sm" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-off-white">{selectedRow.client.name}</p>
-                    <p className="text-meta text-neutral">{selectedRow.client.goal || "—"}</p>
+                    <p className="text-meta text-neutral">{selectedGoalLabel}</p>
                   </div>
                   {selectedLifecycle ? <LifecycleBadge lifecycle={selectedLifecycle} className="shrink-0" /> : null}
                 </div>

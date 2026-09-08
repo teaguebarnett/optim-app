@@ -37,6 +37,12 @@ export interface OperatingBriefCheckpoint {
   latestClientChatMessageAtIso: string | null;
   latestWorkoutCompletedAtIso: string | null;
   lifecycle: ClientLifecycleStatus;
+  /** Phase 5.6A.4 — true only when this client's approved program hasn't
+   * reached its own real start date yet (see
+   * lib/scheduling/program-timing.ts's ProgramPhase). Part of the
+   * checkpoint so crossing the start date always regenerates the brief,
+   * even when nothing else changed. */
+  isPreProgramStart: boolean;
 }
 
 export interface ActivationCheckpoint {
@@ -132,6 +138,15 @@ export interface OperatingBriefInput {
   /** e.g. "Week 8 of 12" — reuses whatever the caller already computed via
    * lib/scheduling/program-timing.ts, never a second timing derivation. */
   programWeekLabel: string | null;
+  /** Phase 5.6A.4 — see OperatingBriefCheckpoint's own doc. When true, the
+   * "current status" sentence names the real upcoming start date instead
+   * of ever claiming the client is "on track" against program performance
+   * that hasn't started. */
+  isPreProgramStart: boolean;
+  /** Phase 5.6A.4 — full "Monday, September 14" label (see
+   * lib/shared/local-date.ts's formatLongDateLabel), used only when
+   * isPreProgramStart is true. */
+  startDateFullLabel: string | null;
   unresolvedReviews: { id: string; kind: ReviewRequestKind; summary: string }[];
   latestResolvedReview: { id: string; kind: ReviewRequestKind; resolvedAtIso: string } | null;
   latestClientChatMessageAtIso: string | null;
@@ -172,6 +187,7 @@ export function resolveOperatingBrief(stored: CoachBriefRecord | null, input: Op
     latestClientChatMessageAtIso: input.latestClientChatMessageAtIso,
     latestWorkoutCompletedAtIso: input.latestWorkoutCompletedAtIso,
     lifecycle: input.lifecycle,
+    isPreProgramStart: input.isPreProgramStart,
   };
 
   const prior = stored?.kind === "operating" ? stored.operatingCheckpoint : undefined;
@@ -182,17 +198,27 @@ export function resolveOperatingBrief(stored: CoachBriefRecord | null, input: Op
     prior.latestResolvedReviewId === checkpoint.latestResolvedReviewId &&
     prior.latestClientChatMessageAtIso === checkpoint.latestClientChatMessageAtIso &&
     prior.latestWorkoutCompletedAtIso === checkpoint.latestWorkoutCompletedAtIso &&
-    prior.lifecycle === checkpoint.lifecycle;
+    prior.lifecycle === checkpoint.lifecycle &&
+    prior.isPreProgramStart === checkpoint.isPreProgramStart;
 
   if (unchanged && stored) return { record: stored, changed: false };
 
   // -- Sentence 1: current status --------------------------------------
+  // Phase 5.6A.4 — a program that hasn't reached its own start date yet
+  // can never be described as "on track": there's no real performance to
+  // be on track WITH. This branch checks first, ahead of the
+  // programWeekLabel fallback, so a pre-program client never gets the
+  // nonsensical "is on track in Starts Sep 14 · 12-week program" text
+  // that combining those two independently-formatted strings used to
+  // produce.
   const currentStatus =
     checkpoint.unresolvedReviewCount > 0
       ? `${input.clientFirstName} has ${checkpoint.unresolvedReviewCount} open item${checkpoint.unresolvedReviewCount === 1 ? "" : "s"} needing your review.`
-      : input.programWeekLabel
-        ? `${input.clientFirstName} is on track in ${input.programWeekLabel}.`
-        : `${input.clientFirstName} is active with nothing open right now.`;
+      : checkpoint.isPreProgramStart && input.startDateFullLabel
+        ? `${input.clientFirstName}'s program begins ${input.startDateFullLabel}. No adherence data is expected yet.`
+        : input.programWeekLabel
+          ? `${input.clientFirstName} is on track in ${input.programWeekLabel}.`
+          : `${input.clientFirstName} is active with nothing open right now.`;
 
   // -- Sentence 2: meaningful change since the prior checkpoint ---------
   let meaningfulChange: string;

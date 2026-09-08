@@ -13,6 +13,8 @@ import { CardioCard } from "@/components/progress/cardio-card";
 import { CheckInCard } from "@/components/progress/checkin-card";
 import { CoachGuidanceCard } from "@/components/progress/coach-guidance-card";
 import { HistoryDayPicker } from "@/components/progress/history-day-picker";
+import { PreStartProgress } from "@/components/progress/pre-start-progress";
+import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 
 // Phase 4.2 — the client-visible expression of OPTIM's memory. Every value
 // on this page traces back to a Phase 4.1 record, correction, weekly
@@ -20,10 +22,20 @@ import { HistoryDayPicker } from "@/components/progress/history-day-picker";
 // build-dashboard.ts, the one place this data is assembled. Card order is
 // stable and never rearranges; only the priority card is conditional.
 function ProgressDashboard() {
-  const { isHydrated } = usePrototypeState();
+  const { isHydrated, state } = usePrototypeState();
   const { dashboard, source } = useProgressDashboard();
 
   if (!isHydrated) return <ScreenSkeleton />;
+
+  // Phase 5.6A.4 — the same shared pre-start boundary Today/Training/
+  // Nutrition use: no weigh-in, adherence, or completion history can be
+  // real for a program that hasn't reached its own start date yet (see
+  // resolveProgramTiming). Checked after useProgressDashboard() so hook
+  // order stays unconditional, before any of its output is rendered.
+  const timing = resolveProgramTiming(state.programEnrollment, state.dateIso);
+  if (timing.phase === "pre_program") {
+    return <PreStartProgress timing={timing} state={state} />;
+  }
 
   return (
     <div className="space-y-4 pb-6 pt-5">

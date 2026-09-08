@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, CheckCircle2, ClipboardCheck, Sparkles, UserPlus, Users2 } from "lucide-react";
+import { ArrowRight, CalendarClock, CheckCircle2, ClipboardCheck, Sparkles, UserPlus, Users2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/coach/section-header";
 import { EmptyState } from "@/components/coach/empty-state";
@@ -25,8 +25,9 @@ import { resolveProgramTiming, describeProgramTimingForCoach } from "@/lib/sched
 import { buildRosterPulse, buildUpcomingWork, timeOfDayForHour, SECONDARY_SECTION_ORDER } from "@/lib/coach/command-center";
 import { attentionBucketForItem } from "@/lib/coach/attention-queue";
 import { resolveEffectiveAiAuthorityLevel, AI_AUTHORITY_LEVEL_LABELS } from "@/lib/coach/ai-authority";
-import { resolveClientLocalDateIso } from "@/lib/shared/local-date";
+import { resolveClientLocalDateIso, formatLongDateLabel } from "@/lib/shared/local-date";
 import type { AttentionQueueItem } from "@/lib/coach/types";
+import type { ProgramPhase } from "@/lib/scheduling/types";
 
 function greetingForHour(hour: number): string {
   if (hour < 12) return "Good morning";
@@ -84,12 +85,28 @@ export default function CoachOverviewPage() {
   const clientsWithLifecycle = workspace.clients.map((client) => ({ client, lifecycle: getClientLifecycle(workspace.platform, client.id) }));
   const lifecycleByClientId = new Map(clientsWithLifecycle.map(({ client, lifecycle }) => [client.id, lifecycle]));
   const needsCoachClientIds = new Set(workspace.attentionQueue.map((i) => i.clientId));
+  // Phase 5.6A.4 — the one shared program-timing derivation, computed once
+  // per client here and reused for both the roster pulse (so a scheduled
+  // launch never inflates "On track") and "Next up" (so it never claims
+  // the pipeline is clear while a scheduled launch is still coming).
+  const programPhaseByClientId = new Map<string, ProgramPhase | null>();
+  const scheduledStartLabelByClientId = new Map<string, string>();
+  for (const client of workspace.clients) {
+    const appState = workspace.clientAppStates.get(client.id);
+    if (!appState) continue;
+    const timing = resolveProgramTiming(appState.programEnrollment, appState.dateIso);
+    programPhaseByClientId.set(client.id, timing.phase);
+    if (timing.phase === "pre_program") {
+      scheduledStartLabelByClientId.set(client.id, formatLongDateLabel(appState.programEnrollment.startDateIso));
+    }
+  }
   const rosterPulse = buildRosterPulse(
     workspace.clients.map((c) => c.id),
     lifecycleByClientId,
-    needsCoachClientIds
+    needsCoachClientIds,
+    programPhaseByClientId
   );
-  const upcomingWork = buildUpcomingWork(workspace.clients, lifecycleByClientId).slice(0, 5);
+  const upcomingWork = buildUpcomingWork(workspace.clients, lifecycleByClientId, scheduledStartLabelByClientId).slice(0, 5);
   const globalAiLevel = resolveEffectiveAiAuthorityLevel(aiSettings, null);
   const clientNameById = new Map(workspace.clients.map((c) => [c.id, c.name]));
 
@@ -230,11 +247,14 @@ export default function CoachOverviewPage() {
             <Card className="divide-y divide-border p-0">
               {upcomingWork.map((row) => (
                 <Link key={row.clientId} href={`/coach/clients/${row.clientId}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-raised first:rounded-t-[var(--radius-lg)] last:rounded-b-[var(--radius-lg)]" style={{ transitionDuration: "var(--motion-fast)" }}>
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${row.readyToActivate ? "bg-warning-soft text-warning" : "bg-accent-soft text-accent-strong"}`}>
-                    {row.readyToActivate ? <Sparkles size={14} aria-hidden="true" /> : <ClipboardCheck size={14} aria-hidden="true" />}
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${row.readyToActivate ? "bg-warning-soft text-warning" : row.startsLabel ? "bg-brass-soft text-brass-strong" : "bg-accent-soft text-accent-strong"}`}>
+                    {row.readyToActivate ? <Sparkles size={14} aria-hidden="true" /> : row.startsLabel ? <CalendarClock size={14} aria-hidden="true" /> : <ClipboardCheck size={14} aria-hidden="true" />}
                   </span>
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium text-off-white">{row.clientName}</p>
-                  <LifecycleBadge lifecycle={row.lifecycle} className="shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-off-white">{row.clientName}</p>
+                    {row.startsLabel ? <p className="truncate text-meta text-neutral">Starts {row.startsLabel}</p> : null}
+                  </div>
+                  <LifecycleBadge lifecycle={row.lifecycle} programPhase={row.startsLabel ? "pre_program" : undefined} className="shrink-0" />
                 </Link>
               ))}
             </Card>

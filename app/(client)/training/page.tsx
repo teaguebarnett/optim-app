@@ -4,11 +4,13 @@ import { Suspense, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { DayCarousel } from "@/components/training/day-carousel";
 import { SessionSurface } from "@/components/training/session-surface";
+import { PreStartTraining } from "@/components/training/pre-start-training";
 import { CoachNote } from "@/components/today/coach-note";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { TRAINING_WEEKLY_NOTE } from "@/lib/mock-data";
 import { deriveProgramWeek } from "@/lib/scheduling/enrollment";
+import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 
 // Training's NOW architecture (Phase 4.4B-1 — see
 // docs/design/OPTIM_VISUAL_CONSTITUTION.md): a compact header, a centered
@@ -50,6 +52,15 @@ function TrainingScreen() {
   const [pickedDateIso, setPickedDateIso] = useState<string | null>(null);
 
   if (!isHydrated) return <ScreenSkeleton />;
+
+  // Phase 5.6A.4 — the same shared pre-start boundary Today already uses
+  // (see app/(client)/today/page.tsx), applied here too: none of this
+  // screen's real calendar days, "today" workout, or coach focus note can
+  // exist for a program that hasn't reached its own start date yet.
+  const timing = resolveProgramTiming(state.programEnrollment, state.dateIso);
+  if (timing.phase === "pre_program") {
+    return <PreStartTraining timing={timing} state={state} />;
+  }
 
   const selectedDateIso = pickedDateIso ?? state.dateIso;
   const isViewingToday = selectedDateIso === state.dateIso;

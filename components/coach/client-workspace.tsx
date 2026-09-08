@@ -18,12 +18,15 @@ import { MealRecommendationAssignmentCard } from "@/components/coach/meal-recomm
 import { useCoachBrief } from "@/hooks/use-coach-brief";
 import { resolveClientStatusLabel, CLIENT_STATUS_LABELS } from "@/lib/coach/client-status";
 import { resolveProgramTiming, describeProgramTimingForCoach } from "@/lib/scheduling/program-timing";
+import { formatLongDateLabel } from "@/lib/shared/local-date";
+import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
+import { describePrimaryGoal, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
 import type { useCoachClientView } from "@/hooks/use-coach-data";
 import type { BadgeTone } from "@/components/progress/status-badge";
 
 type CoachClientView = ReturnType<typeof useCoachClientView>;
 
-const STATUS_TONE: Record<string, BadgeTone> = { on_track: "success", monitoring: "warning", needs_attention: "error" };
+const STATUS_TONE: Record<string, BadgeTone> = { scheduled: "brass", on_track: "success", monitoring: "warning", needs_attention: "error" };
 
 /**
  * The approved, ongoing Client Workspace (spec §5) for an active client —
@@ -41,18 +44,31 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
   // Every hook below must run on every render regardless of whether this
   // client turns out to be renderable (rules of hooks) — computed
   // defensively so the early return can come after them.
-  const programWeekLabel = clientAppState
-    ? describeProgramTimingForCoach(
-        resolveProgramTiming(clientAppState.programEnrollment, clientAppState.dateIso),
-        clientAppState.programEnrollment.durationWeeks,
-        new Date(`${clientAppState.programEnrollment.startDateIso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-      )
-    : null;
-  const { brief, refresh } = useCoachBrief(view, programWeekLabel);
+  //
+  // Phase 5.6A.4 — computed once here and reused for the status badge and
+  // the coach brief below, rather than each re-deriving its own timing
+  // check — the exact "one shared source of truth" pattern the client-side
+  // pre-start pages also follow (see lib/scheduling/program-timing.ts).
+  const timing = clientAppState ? resolveProgramTiming(clientAppState.programEnrollment, clientAppState.dateIso) : null;
+  const programWeekLabel =
+    clientAppState && timing
+      ? describeProgramTimingForCoach(timing, clientAppState.programEnrollment.durationWeeks, new Date(`${clientAppState.programEnrollment.startDateIso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }))
+      : null;
+  const startDateFullLabel = clientAppState ? formatLongDateLabel(clientAppState.programEnrollment.startDateIso) : null;
+  const { brief, refresh } = useCoachBrief(view, programWeekLabel, timing, startDateFullLabel);
 
   if (!client || !clientAppState || !coachId) return null;
 
-  const statusLabel = resolveClientStatusLabel(client.id, attentionQueue);
+  const statusLabel = resolveClientStatusLabel(client.id, attentionQueue, timing?.phase === "pre_program");
+  // Phase 5.6A.4 — the real submitted primary goal (see
+  // lib/coach/activation-generation.ts's extractClientSnapshot, which reads
+  // this exact same source for plan generation), never the stale
+  // `client.goal` field — that field is only ever initialized to "" at
+  // "Add client" time (see add-client-sheet.tsx) and nothing ever writes
+  // it again after onboarding, so it can never reflect the client's real
+  // answer.
+  const goals = view.onboarding?.answers.what_you_want;
+  const goalLabel = goals ? describePrimaryGoal(ONBOARDING_STEPS, goals) : NOT_PROVIDED;
 
   const thisClientItems = attentionQueue.filter((i) => i.clientId === client.id && i.status !== "resolved");
   const resolvedReviews = clientAppState.reviewRequests.filter((r) => r.status === "resolved");
@@ -70,7 +86,7 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
         <div className="min-w-0">
           <h1 className="truncate text-heading text-off-white">{client.name}</h1>
           <p className="mt-0.5 text-meta text-neutral">
-            {client.goal || "No goal on file"} &middot; {programWeekLabel}
+            {goalLabel} &middot; {programWeekLabel}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">

@@ -177,6 +177,8 @@ function baseOperatingInput(overrides: Partial<Parameters<typeof resolveOperatin
     clientFirstName: "Charles",
     lifecycle: "active" as const,
     programWeekLabel: "Week 8 of 12",
+    isPreProgramStart: false,
+    startDateFullLabel: null,
     unresolvedReviews: [],
     latestResolvedReview: null,
     latestClientChatMessageAtIso: null,
@@ -192,6 +194,28 @@ check("an on-track client with nothing open never claims action is required", ()
   assert.equal(result.record.actionRequired, false);
   assert.ok(result.record.sentences[0].includes("on track"));
   assert.equal(result.record.sentences[2], "No action required right now.");
+});
+
+check("REGRESSION: a scheduled client (approved program, real start date still in the future) is never described as 'on track' — the exact bug this phase repairs", () => {
+  const result = resolveOperatingBrief(
+    null,
+    baseOperatingInput({
+      programWeekLabel: "Starts Sep 14 · 12-week program",
+      isPreProgramStart: true,
+      startDateFullLabel: "Monday, September 14",
+      clientFirstName: "E2E",
+    })
+  );
+  assert.equal(result.record.sentences[0], "E2E's program begins Monday, September 14. No adherence data is expected yet.");
+  assert.ok(!result.record.sentences[0].toLowerCase().includes("on track"));
+  assert.equal(result.record.actionRequired, false);
+});
+
+check("crossing the real start date (isPreProgramStart flips false) always regenerates, even with everything else unchanged", () => {
+  const first = resolveOperatingBrief(null, baseOperatingInput({ isPreProgramStart: true, startDateFullLabel: "Monday, September 14" }));
+  const second = resolveOperatingBrief(first.record, baseOperatingInput({ isPreProgramStart: false, nowIso: "2026-01-06T00:00:00.000Z" }));
+  assert.equal(second.changed, true);
+  assert.ok(second.record.sentences[0].includes("on track"));
 });
 
 check("a new unresolved review is detected as the meaningful change and requires action", () => {

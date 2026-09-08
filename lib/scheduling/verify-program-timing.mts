@@ -238,5 +238,77 @@ check("Repeated pre-start evaluation on the same date is idempotent — never ad
 
 // ---------------------------------------------------------------------------
 
+console.log("\n7. Phase 5.6A.4 — the exact E2E verification scenario (Sep 8 today, Sep 14 start)\n");
+
+check("September 13 (the day before a Sep 14 Monday start) is still pre-program, in a non-UTC timezone", () => {
+  const enrollment = buildProgramEnrollmentForClient({
+    workspaceId: WORKSPACE_OPTIM_ID,
+    clientId: CLIENT_ID,
+    startDateIso: "2026-09-14",
+    durationWeeks: 12,
+    timeZone: "America/Chicago",
+  });
+  const timing = resolveProgramTiming(enrollment, "2026-09-13");
+  assert.equal(timing.phase, "pre_program");
+  assert.equal(timing.week, null);
+  assert.equal(timing.daysUntilStart, 1);
+});
+
+check("September 14 itself is Day 1 — active_program, Program Week 1", () => {
+  const enrollment = buildProgramEnrollmentForClient({
+    workspaceId: WORKSPACE_OPTIM_ID,
+    clientId: CLIENT_ID,
+    startDateIso: "2026-09-14",
+    durationWeeks: 12,
+    timeZone: "America/Chicago",
+  });
+  const timing = resolveProgramTiming(enrollment, "2026-09-14");
+  assert.equal(timing.phase, "active_program");
+  assert.equal(timing.week, 1);
+  assert.equal(deriveProgramWeek(enrollment, "2026-09-14"), 1);
+});
+
+check("No program date/week can ever be derived before September 14 — every date from Sep 1 through Sep 13 is honestly pre_program with a null week", () => {
+  const enrollment = buildProgramEnrollmentForClient({
+    workspaceId: WORKSPACE_OPTIM_ID,
+    clientId: CLIENT_ID,
+    startDateIso: "2026-09-14",
+    durationWeeks: 12,
+    timeZone: "America/Chicago",
+  });
+  for (let day = 1; day <= 13; day++) {
+    const dateIso = `2026-09-${String(day).padStart(2, "0")}`;
+    const timing = resolveProgramTiming(enrollment, dateIso);
+    assert.equal(timing.phase, "pre_program", `expected ${dateIso} to be pre_program`);
+    assert.equal(timing.week, null, `expected ${dateIso} to have no program week`);
+  }
+});
+
+check("A later date correctly reports its real program day/week distance from the canonical Sep 14 start — Sep 21 is Week 2, Sep 28 is Week 3", () => {
+  const enrollment = buildProgramEnrollmentForClient({
+    workspaceId: WORKSPACE_OPTIM_ID,
+    clientId: CLIENT_ID,
+    startDateIso: "2026-09-14",
+    durationWeeks: 12,
+    timeZone: "America/Chicago",
+  });
+  assert.equal(resolveProgramTiming(enrollment, "2026-09-21").week, 2);
+  assert.equal(resolveProgramTiming(enrollment, "2026-09-28").week, 3);
+});
+
+check("Date-only phase/week derivation never shifts with the enrollment's configured timezone — Chicago, UTC, and Tokyo all agree on the same calendar date", () => {
+  for (const timeZone of ["America/Chicago", "UTC", "Asia/Tokyo"]) {
+    const enrollment = buildProgramEnrollmentForClient({
+      workspaceId: WORKSPACE_OPTIM_ID,
+      clientId: CLIENT_ID,
+      startDateIso: "2026-09-14",
+      durationWeeks: 12,
+      timeZone,
+    });
+    assert.equal(resolveProgramTiming(enrollment, "2026-09-13").phase, "pre_program", timeZone);
+    assert.equal(resolveProgramTiming(enrollment, "2026-09-14").phase, "active_program", timeZone);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

@@ -8,10 +8,12 @@ import { MealTimeline } from "@/components/nutrition/meal-timeline";
 import { PhotoMealSheet } from "@/components/nutrition/photo/photo-meal-sheet";
 import { MealRecommendationCard } from "@/components/coach/meal-recommendation-card";
 import { NutritionGuidanceCard } from "@/components/nutrition/nutrition-guidance-card";
+import { PreStartNutrition } from "@/components/nutrition/pre-start-nutrition";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { usePlatformState } from "@/hooks/use-platform-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { deriveNutritionStatusLine } from "@/lib/nutrition/status";
+import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 import { MACRO_FIELD, nextRelevantMealPeriod } from "@/lib/nutrition/view-model";
 import type { MacroKey } from "@/lib/nutrition/view-model";
 import type { MealPeriod } from "@/lib/types";
@@ -30,6 +32,14 @@ export default function NutritionPage() {
   const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
 
   if (!isHydrated) return <ScreenSkeleton />;
+
+  // Phase 5.6A.4 — the same shared pre-start boundary Today/Training use:
+  // no target can be "due" and no meal can be "logged" before this
+  // client's real program start date (see resolveProgramTiming).
+  const timing = resolveProgramTiming(state.programEnrollment, state.dateIso);
+  if (timing.phase === "pre_program") {
+    return <PreStartNutrition timing={timing} state={state} />;
+  }
 
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
   // Only ever the client's assigned coach's own active recommendations that

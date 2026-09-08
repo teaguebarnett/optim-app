@@ -38,6 +38,8 @@ import {
   resolveHomeRoute,
 } from "./routing.ts";
 import { resolveNextCoachAction } from "./next-action.ts";
+import { ONBOARDING_STEPS } from "./onboarding-steps.ts";
+import { describePrimaryGoal } from "./onboarding-format.ts";
 import { DEV_ENTRY_ACTIONS, DEV_PENDING_LIFECYCLE_STATUS, DEV_TARGET_CLIENT_ID, DEV_TARGET_WORKSPACE_ID } from "./dev-actions.ts";
 import { createInitialState } from "../state.ts";
 import {
@@ -265,6 +267,43 @@ check("SAVE_ONBOARDING_STEP never regresses a client the coach already moved pas
     nowIso: "2026-01-04T00:00:00.000Z",
   });
   assert.equal(getClientLifecycle(state, client.id), "paused", "a routine step-save must never un-pause a client");
+});
+
+check("Phase 5.6A.4 — REGRESSION: the real submitted primary goal is recoverable from onboarding even though ClientProfile.goal is (and stays) permanently blank", () => {
+  const client = makeClient(); // goal: "" — exactly what add-client-sheet.tsx really sets, and nothing ever writes to it again.
+  let state = platformReducer(createInitialPlatformState(), {
+    type: "CREATE_CLIENT",
+    workspaceId: WORKSPACE_OPTIM_ID,
+    client,
+    intendedStartDateIso: "2026-09-14",
+    intendedDurationWeeks: 12,
+    intendedWeeklyCheckIn: false,
+    nowIso: "2026-09-08T00:00:00.000Z",
+  });
+  state = platformReducer(state, {
+    type: "SAVE_ONBOARDING_STEP",
+    clientId: client.id,
+    workspaceId: WORKSPACE_OPTIM_ID,
+    stepId: "what_you_want",
+    answers: { primaryGoal: "build_muscle" },
+    nextStepIndex: 3,
+    nowIso: "2026-09-08T00:00:01.000Z",
+  });
+  state = platformReducer(state, { type: "COMPLETE_ONBOARDING", clientId: client.id, workspaceId: WORKSPACE_OPTIM_ID, nowIso: "2026-09-08T00:00:02.000Z" });
+
+  // The stale field a coach-detail-page bug once read directly — still
+  // blank, exactly as it always is, and that's fine: nothing should ever
+  // read it for display again.
+  const clientRecord = state.clients.find((c) => c.id === client.id);
+  assert.equal(clientRecord?.goal, "");
+
+  // The real, canonical source — same one lib/coach/activation-generation.ts's
+  // extractClientSnapshot reads for plan generation — genuinely carries the
+  // client's real answer.
+  const onboarding = getOnboardingProgress(state, client.id);
+  const goals = onboarding?.answers.what_you_want;
+  assert.ok(goals, "onboarding must carry a real what_you_want answer");
+  assert.equal(describePrimaryGoal(ONBOARDING_STEPS, goals), "Build muscle");
 });
 
 check("COMPLETE_ONBOARDING moves the client to 'coach_setup' and stamps completedAtIso", () => {

@@ -21,6 +21,7 @@ const FILTERS: { value: FilterValue; label: string }[] = [
   { value: "needs_coach", label: "Needs coach" },
   { value: "watch", label: "Watch" },
   { value: "on_track", label: "On track" },
+  { value: "scheduled", label: "Scheduled" },
   { value: "onboarding", label: LIFECYCLE_LABELS.onboarding },
   { value: "ready_to_activate", label: LIFECYCLE_LABELS.ready_to_activate },
 ];
@@ -53,7 +54,7 @@ export default function CoachClientsPage() {
       if (filter === "onboarding" || filter === "ready_to_activate") {
         if (row.lifecycle !== filter) return false;
       } else if (filter !== "all") {
-        if (categorizeRosterStatus(row.attentionCount > 0, row.lifecycle) !== filter) return false;
+        if (categorizeRosterStatus(row.attentionCount > 0, row.lifecycle, row.programPhase) !== filter) return false;
       }
       if (q && !row.name.toLowerCase().includes(q)) return false;
       return true;

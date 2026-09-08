@@ -75,5 +75,23 @@ check("needs_attention takes priority over monitoring when both are present", ()
   assert.equal(resolveClientStatusLabel("client-a", items), "needs_attention");
 });
 
+console.log("\n2. Phase 5.6A.4 — isPreProgramStart overrides the 'on_track' default to 'scheduled'\n");
+
+check("REGRESSION: a client whose approved program hasn't reached its start date yet is 'scheduled', never 'on_track' — a program can't be on track before it starts", () => {
+  assert.equal(resolveClientStatusLabel("client-a", [], true), "scheduled");
+});
+
+check("omitting isPreProgramStart preserves the old default — every pre-existing call site keeps working unchanged", () => {
+  assert.equal(resolveClientStatusLabel("client-a", []), "on_track");
+});
+
+check("a genuinely open decision still outranks 'scheduled' — a real decision is real regardless of whether the program has started", () => {
+  assert.equal(resolveClientStatusLabel("client-a", [item({ status: "needs_review" })], true), "needs_attention");
+});
+
+check("a waiting item still outranks 'scheduled' the same way it outranks 'on_track'", () => {
+  assert.equal(resolveClientStatusLabel("client-a", [item({ status: "waiting" })], true), "monitoring");
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

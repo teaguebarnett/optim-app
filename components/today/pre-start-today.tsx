@@ -57,7 +57,7 @@ export function PreStartToday({ timing, state }: { timing: ProgramTiming; state:
         </div>
       </Card>
 
-      <p className="mb-2 mt-6 text-label text-neutral">What&apos;s waiting for you</p>
+      <p className="mb-2 mt-6 text-label text-neutral">Your plan at a glance</p>
       <Card className="space-y-3">
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Program length</span>

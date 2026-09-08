@@ -5,6 +5,7 @@ import { getCoachBrief } from "@/lib/coach/repository";
 import { resolveActivationBrief, resolveOperatingBrief, type CoachBriefRecord } from "@/lib/coach/coach-brief-record";
 import type { useCoachClientView } from "./use-coach-data";
 import type { ReviewRequestKind } from "@/lib/types";
+import type { ProgramTiming } from "@/lib/scheduling/program-timing";
 
 type CoachClientView = ReturnType<typeof useCoachClientView>;
 
@@ -18,7 +19,18 @@ type CoachClientView = ReturnType<typeof useCoachClientView>;
  * ACT of persisting a genuinely changed one happens in an effect, never
  * mid-render, and never on a render where nothing real changed.
  */
-export function useCoachBrief(view: CoachClientView, programWeekLabel: string | null): { brief: CoachBriefRecord | null; refresh: () => void } {
+export function useCoachBrief(
+  view: CoachClientView,
+  programWeekLabel: string | null,
+  /** Phase 5.6A.4 — the same ProgramTiming the caller already derived for
+   * programWeekLabel, so this hook never re-derives program timing a
+   * second, potentially drifting way. Null when there's no real
+   * clientAppState yet. */
+  timing: ProgramTiming | null = null,
+  /** Phase 5.6A.4 — full "Monday, September 14" label, used only when
+   * timing.phase === "pre_program". */
+  startDateFullLabel: string | null = null
+): { brief: CoachBriefRecord | null; refresh: () => void } {
   const { client, workspaceId, coachId, platform, dispatchPlatform, lifecycle, clientAppState, onboarding, intendedProgram, readiness, attentionQueue } = view;
 
   const stored = client ? getCoachBrief(platform, client.id) : null;
@@ -45,6 +57,8 @@ export function useCoachBrief(view: CoachClientView, programWeekLabel: string | 
         clientFirstName,
         lifecycle,
         programWeekLabel,
+        isPreProgramStart: timing?.phase === "pre_program",
+        startDateFullLabel,
         unresolvedReviews,
         latestResolvedReview,
         latestClientChatMessageAtIso: clientMessages[0]?.createdAtIso ?? null,
