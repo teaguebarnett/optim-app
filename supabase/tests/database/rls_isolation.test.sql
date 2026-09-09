@@ -22,7 +22,7 @@
 -- real request, so this exercises the actual policies, not a stand-in.
 
 begin;
-select plan(23);
+select plan(26);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures — two independent workspaces, mirroring lib/tenancy/seed.ts's
@@ -34,7 +34,13 @@ insert into auth.users (id, email) values
   ('10000000-0000-0000-0000-000000000001', 'coach-a@example.test'),
   ('10000000-0000-0000-0000-000000000002', 'coach-b@example.test'),
   ('10000000-0000-0000-0000-000000000003', 'client-a@example.test'),
-  ('10000000-0000-0000-0000-000000000004', 'client-b@example.test');
+  ('10000000-0000-0000-0000-000000000004', 'client-b@example.test'),
+  -- Phase 6.0A-V addition: a plain (non-owner) coach in Workspace A,
+  -- assigned only to Client A — proves coach access is scoped through
+  -- coach_client_assignments, not workspace membership alone, against a
+  -- SECOND client in the SAME workspace (distinct from the cross-workspace
+  -- Client A/Client B isolation already covered above).
+  ('10000000-0000-0000-0000-000000000005', 'coach-a-plain@example.test');
 
 -- handle_new_user's trigger fires on the inserts above and creates matching
 -- public.profiles rows automatically.
@@ -48,15 +54,26 @@ insert into public.workspace_memberships (workspace_id, user_id, role) values
   ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'workspace_owner'),
   ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000003', 'client'),
   ('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'workspace_owner'),
-  ('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000004', 'client');
+  ('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000004', 'client'),
+  ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000005', 'coach');
 
 insert into public.client_profiles (id, workspace_id, user_id, display_name) values
   ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000003', 'Client A'),
   ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000004', 'Client B');
 
-insert into public.coach_client_assignments (workspace_id, coach_user_id, client_profile_id) values
-  ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001'),
-  ('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002');
+-- A second client in Workspace A (same workspace as Client A), never
+-- assigned to coach-a-plain — the "different client in the same workspace"
+-- fixture. Not yet signed in (no user_id), so invited_email satisfies
+-- client_profiles_user_or_invite.
+insert into public.client_profiles (id, workspace_id, invited_email, display_name) values
+  ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'client-a2@example.test', 'Client A2');
+
+insert into public.coach_client_assignments (workspace_id, coach_user_id, client_profile_id, is_primary) values
+  ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', true),
+  ('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002', true),
+  -- coach-a-plain is assigned to Client A only — never to Client A2, even
+  -- though both are in Workspace A.
+  ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000005', '30000000-0000-0000-0000-000000000001', false);
 
 insert into public.conversations (id, workspace_id, client_profile_id, kind) values
   ('40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'optim_default'),
@@ -143,7 +160,10 @@ select is(
 -- ---------------------------------------------------------------------------
 set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000001","role":"authenticated"}';
 
-select is((select count(*) from public.client_profiles)::int, 1, 'coach A: sees exactly Workspace A''s one client');
+-- Two clients now, Client A and Client A2 — the workspace_owner sees both,
+-- since is_workspace_admin grants workspace-wide access regardless of
+-- individual coach_client_assignments rows.
+select is((select count(*) from public.client_profiles)::int, 2, 'coach A (owner): sees both of Workspace A''s clients');
 select lives_ok(
   $$ insert into public.coach_notes (workspace_id, client_profile_id, author_user_id, body)
      values ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Great week.') $$,
@@ -153,6 +173,31 @@ select lives_ok(
   $$ insert into public.conversation_messages (conversation_id, workspace_id, actor_type, actor_user_id, body)
      values ('40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'coach', '10000000-0000-0000-0000-000000000001', 'Nice work.') $$,
   'coach A: can insert their own coach-authored message'
+);
+
+-- ---------------------------------------------------------------------------
+-- Coach A-plain (plain 'coach' role in Workspace A, assigned only to
+-- Client A) — the "different client in the same workspace" isolation case:
+-- unlike the owner above, a plain coach's access is scoped through
+-- coach_client_assignments alone, so Client A2 (same workspace, no
+-- assignment to this coach) must stay invisible to them.
+-- ---------------------------------------------------------------------------
+set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000005","role":"authenticated"}';
+
+select is(
+  (select count(*) from public.client_profiles)::int,
+  1,
+  'coach A-plain: sees exactly one client (their own assignment), not Client A2 in the same workspace'
+);
+select is(
+  (select id from public.client_profiles limit 1)::text,
+  '30000000-0000-0000-0000-000000000001',
+  'coach A-plain: the one visible client is Client A, not Client A2'
+);
+select throws_ok(
+  $$ insert into public.coach_notes (workspace_id, client_profile_id, author_user_id, body)
+     values ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000005', 'Unassigned note') $$,
+  null, null, 'coach A-plain: cannot write a coach_notes row for Client A2 — same workspace, but not their assignment'
 );
 
 -- ---------------------------------------------------------------------------

@@ -10,6 +10,67 @@
 -- role regardless of the function's own privilege.
 
 -- ---------------------------------------------------------------------------
+-- app_private.is_workspace_member / has_workspace_role / is_workspace_admin
+-- — the base membership predicates every other helper and policy in this
+-- file and 20260909000008 composes from. Phase 6.0A-V fix: these three were
+-- referenced throughout this file (is_workspace_staff below) and throughout
+-- 20260909000008_rls_policies.sql, but were never actually defined anywhere
+-- in the original Phase 6.0A migration set — a real defect that would have
+-- failed CREATE FUNCTION/CREATE POLICY on a clean `supabase db reset` the
+-- moment either file ran, since a `language sql` function is parse-analyzed
+-- against real functions/tables at creation time (see this file's own
+-- module-level intent) and CREATE POLICY validates its USING/WITH CHECK
+-- expression the same way. Caught by Phase 6.0A-V's local verification gate
+-- before this ever reached a real database.
+-- ---------------------------------------------------------------------------
+create or replace function app_private.is_workspace_member(target_workspace_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  select exists (
+    select 1 from public.workspace_memberships m
+    where m.workspace_id = target_workspace_id
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+  );
+$$;
+
+create or replace function app_private.has_workspace_role(target_workspace_id uuid, allowed_roles app_role[])
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  select exists (
+    select 1 from public.workspace_memberships m
+    where m.workspace_id = target_workspace_id
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+      and m.role = any(allowed_roles)
+  );
+$$;
+
+-- workspace_owner and platform_admin are the two roles with tenant-wide
+-- administrative authority over a workspace; a plain "coach" is deliberately
+-- excluded here (see app_private.is_assigned_coach below and
+-- app_private.is_workspace_staff further down — coach-level access is
+-- always scoped through coach_client_assignments, never granted workspace-
+-- wide by this predicate).
+create or replace function app_private.is_workspace_admin(target_workspace_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  select app_private.has_workspace_role(target_workspace_id, array['platform_admin', 'workspace_owner']::app_role[]);
+$$;
+
+-- ---------------------------------------------------------------------------
 -- app_private.client_workspace_id — the workspace a client_profiles row
 -- belongs to. STRICT so a null client_id short-circuits to null rather than
 -- running the query.
