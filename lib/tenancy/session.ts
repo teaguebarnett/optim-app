@@ -16,7 +16,7 @@
 // clientId (see lib/coach/repository.ts's resolveCoachCreatedClientContext)
 // rather than through a SessionPointer.
 
-import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID, TEAGUE_USER } from "./seed.ts";
+import { ALEX_USER, CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID, TEAGUE_USER } from "./seed.ts";
 import type { ClientProfileId, SessionPointer, UserId } from "./types";
 
 export type DevPerspective = "client" | "coach";
@@ -32,6 +32,44 @@ const PERSPECTIVE_STORAGE_KEY = "peak-coaching:dev-perspective:v1";
  * profile data, never hardcoded to Teague, and this is how that gets
  * proven live rather than only in unit tests. */
 const ACTIVE_COACH_USER_STORAGE_KEY = "peak-coaching:active-coach-user-id:v1";
+
+/** One-time correction, not a real schema version — see
+ * applyActiveCoachIdentityCorrectionOnce's own doc directly below. */
+const ACTIVE_COACH_IDENTITY_CORRECTION_KEY = "peak-coaching:active-coach-identity-correction:v1";
+
+/**
+ * Pre-production QA fix: a browser whose ACTIVE_COACH_USER_STORAGE_KEY was
+ * left pointing at ALEX_USER — the multi-coach QA fixture /dev's "Enter as
+ * Alex (second coach)" switches to (see lib/coach/dev-actions.ts;
+ * COACH_PROFILE_ALEX's own doc calls it "not surfaced anywhere in the UI"
+ * outside that switcher) — from an earlier QA/testing pass would otherwise
+ * keep resolving the real coach dashboard as Alex on every load, forever,
+ * since loadActiveCoachUserId only ever defaults to Teague when the key is
+ * completely absent, never when it holds a stale explicit value.
+ *
+ * Runs at most once per browser (the correction-applied flag below is
+ * itself permanent), and only ever corrects that one exact stale value —
+ * never touches ACTIVE_CLIENT_STORAGE_KEY, AppState, PlatformState, or any
+ * client/program/message data. A later, genuinely deliberate "Enter as
+ * Alex" from /dev after this has run is a fresh explicit choice (via
+ * saveActiveCoachUserId) and is never reverted by this — the flag only
+ * guards against re-running the correction itself, not against a real
+ * developer choosing Alex again.
+ */
+function applyActiveCoachIdentityCorrectionOnce(): void {
+  if (!isStorageAvailable()) return;
+  try {
+    if (window.localStorage.getItem(ACTIVE_COACH_IDENTITY_CORRECTION_KEY) === "done") return;
+    if (window.localStorage.getItem(ACTIVE_COACH_USER_STORAGE_KEY) === ALEX_USER.id) {
+      window.localStorage.setItem(ACTIVE_COACH_USER_STORAGE_KEY, TEAGUE_USER.id);
+    }
+    window.localStorage.setItem(ACTIVE_COACH_IDENTITY_CORRECTION_KEY, "done");
+  } catch {
+    // Storage blocked mid-check — nothing to correct or persist; the
+    // ordinary default-to-Teague fallback in loadActiveCoachUserId below
+    // still applies for the rest of this session.
+  }
+}
 
 /** Phase 5.0B — which client the "client" perspective currently acts as.
  * Widens lib/tenancy/session.ts's original two-seeded-session switch (see
@@ -129,6 +167,7 @@ export function saveActiveClientId(clientId: ClientProfileId): void {
 /** Defaults to Teague — see ACTIVE_COACH_USER_STORAGE_KEY's own doc. */
 export function loadActiveCoachUserId(): UserId {
   if (!isStorageAvailable()) return TEAGUE_USER.id;
+  applyActiveCoachIdentityCorrectionOnce();
   try {
     return window.localStorage.getItem(ACTIVE_COACH_USER_STORAGE_KEY) || TEAGUE_USER.id;
   } catch {
