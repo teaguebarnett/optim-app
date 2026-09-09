@@ -34,6 +34,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# .env.example carries only variable names and explanations, never real
+# credentials (see that file's own header) — always safe, and useful, to
+# commit. Phase 6.0A.
+!.env.example
 
 # vercel
 .vercel

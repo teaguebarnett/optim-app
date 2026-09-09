@@ -49,13 +49,21 @@
     "verify:program-adaptation": "node --experimental-strip-types lib/coach/verify-program-adaptation.mts",
     "verify:nutrition-directions": "node --experimental-strip-types lib/coach/verify-nutrition-directions.mts",
     "verify:plan-status": "node --experimental-strip-types lib/coach/verify-plan-status.mts",
-    "verify:plan-presentation": "node --experimental-strip-types lib/coach/verify-plan-presentation.mts"
+    "verify:plan-presentation": "node --experimental-strip-types lib/coach/verify-plan-presentation.mts",
+    "verify:communications-contracts": "node --experimental-strip-types lib/communications/verify-communications-contracts.mts",
+    "verify:import-contracts": "node --experimental-strip-types lib/imports/verify-import-contracts.mts",
+    "verify:production-mode": "node --conditions=react-server --experimental-strip-types lib/production/verify-mode.mts",
+    "test:db": "supabase test db"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.116.0",
+    "client-only": "^0.0.1",
     "lucide-react": "^1.27.0",
     "next": "16.2.12",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
