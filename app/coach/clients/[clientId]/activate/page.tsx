@@ -498,7 +498,12 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
   const direction = composer.latest?.directions?.find((d) => d.id === composer.latest?.selectedDirectionId) ?? null;
   const trainingName = direction ? meaningfulTrainingDirectionName(direction) : program.name;
   const frequencyPerWeek = direction?.frequencyPerWeek ?? program.weeks[0]?.days.filter((d) => d.type === "training").length ?? 0;
-  const sessionLengthMin = direction?.estimatedSessionLengthMin ?? null;
+  // Acceptance pass — read the live program's own first training day rather
+  // than direction.estimatedSessionLengthMin, which is frozen at generation
+  // time and goes stale the moment a revision (see program-revision.ts's
+  // applyProgramRevision/estimateDuration) changes actual session length.
+  const firstTrainingDayWorkout = program.weeks[0]?.days.find((d) => d.type === "training" && d.workout)?.workout ?? null;
+  const sessionLengthMin = firstTrainingDayWorkout?.estimatedDurationMin ?? direction?.estimatedSessionLengthMin ?? null;
 
   const nutritionStrategy = composer.latest?.nutritionOptions?.find((o) => o.id === composer.latest?.selectedNutritionOptionId) ?? null;
   const nutritionName = nutritionStrategy ? meaningfulNutritionStrategyName(nutritionStrategy) : (composer.assignedNutritionPlan?.sourceStrategyLabel ?? null);
