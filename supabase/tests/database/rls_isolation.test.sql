@@ -85,9 +85,29 @@ insert into public.conversations (id, workspace_id, client_profile_id, kind) val
 set local role anon;
 reset request.jwt.claims;
 
-select is((select count(*) from public.client_profiles)::int, 0, 'anon: sees zero client_profiles rows');
-select is((select count(*) from public.workspaces)::int, 0, 'anon: sees zero workspaces rows');
-select is((select count(*) from public.conversation_messages)::int, 0, 'anon: sees zero conversation_messages rows');
+-- Phase 6.0A-V live-run fix: migration 20260909000008's own grants preamble
+-- explicitly documents (and enforces via `revoke all on all tables in
+-- schema public from anon`) that anon gets zero table-level grants at
+-- all — stronger than RLS-filters-to-empty, by design. That means a query
+-- against any protected table doesn't succeed-with-zero-rows for anon, it
+-- fails at the grant layer before RLS is ever evaluated (Postgres:
+-- "permission denied for table ...", SQLSTATE 42501). These three
+-- assertions were written and committed before this file was ever actually
+-- run against a real Postgres, and encoded the wrong expectation for that
+-- design — caught by this live run, matching the throws_ok pattern the
+-- INSERT assertion right below already used correctly.
+select throws_ok(
+  $$ select count(*) from public.client_profiles $$,
+  '42501', null, 'anon: cannot select client_profiles at all (no grant, not just filtered to zero)'
+);
+select throws_ok(
+  $$ select count(*) from public.workspaces $$,
+  '42501', null, 'anon: cannot select workspaces at all (no grant, not just filtered to zero)'
+);
+select throws_ok(
+  $$ select count(*) from public.conversation_messages $$,
+  '42501', null, 'anon: cannot select conversation_messages at all (no grant, not just filtered to zero)'
+);
 select throws_ok(
   $$ insert into public.client_profiles (workspace_id, display_name) values ('20000000-0000-0000-0000-000000000001', 'Ghost') $$,
   null, null, 'anon: cannot insert a client_profiles row (no grant at all)'

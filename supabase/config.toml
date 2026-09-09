@@ -172,7 +172,17 @@ enable_refresh_token_rotation = true
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
-enable_signup = true
+# Phase 6.0A-V live-run fix: OPTIM is invite-only — "A generic login attempt
+# must not automatically create an uninvited user" (Phase 6.0A spec).
+# app/auth/sign-in/page.tsx's signInWithOtp call already enforces this
+# per-request via shouldCreateUser: false (proved live by this gate: a
+# never-invited email is correctly rejected with "Signups not allowed for
+# otp"), but that stock `supabase init` default of true left this off at
+# the project-config layer too — pure defense-in-depth, since disabling it
+# here does not affect lib/production/invite.ts's inviteToWorkspace or
+# scripts/bootstrap-workspace.mts, both of which create users via the
+# service-role admin API, which is not gated by this flag.
+enable_signup = false
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
@@ -216,8 +226,6 @@ web3 = 30
 # secret = ""
 
 [auth.email]
-# Allow/disallow new user signups via email to your project.
-enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
@@ -231,6 +239,17 @@ max_frequency = "1s"
 otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
 otp_expiry = 3600
+# Phase 6.0A-V live-run correction: setting this to false does not just
+# block NEW-account creation via email — it disables the email provider
+# for sign-in entirely ("Email logins are disabled" for an already-invited,
+# already-existing user too, confirmed live). That would break the actual
+# passwordless OTP sign-in this app depends on for every invited user, so
+# this must stay true; the top-level [auth] enable_signup = false above is
+# what actually blocks public self-registration, and does so without
+# touching sign-in for existing users — confirmed live below by both the
+# legitimate owner sign-in succeeding and a never-invited stranger still
+# being correctly rejected.
+enable_signup = true
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
@@ -246,6 +265,16 @@ otp_expiry = 3600
 # [auth.email.template.invite]
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
+
+# Phase 6.0A-V live-run fix: app/auth/sign-in/page.tsx's UI asks the user
+# for "the 6-digit code sent to {email}" — the stock default template for
+# this email type only shows a magic-link URL, never the {{ .Token }}
+# GoTrue also generates for the same OTP request, so a real user had no
+# code to type in as the UI actually asks for. See
+# supabase/templates/magic_link.html.
+[auth.email.template.magic_link]
+subject = "Your OPTIM sign-in code"
+content_path = "./supabase/templates/magic_link.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
