@@ -204,14 +204,14 @@ console.log("\n4. AppState v13 -> v14 migration — assignedNutritionPlan is rea
 
 check("a fresh v14 state migrates through unchanged, and a pre-v14 stored state gains the new field as undefined, never a fabricated default", () => {
   const fresh = createInitialState();
-  assert.equal(fresh.version, 14);
+  assert.equal(fresh.version, 15);
   assert.equal(fresh.assignedNutritionPlan, undefined);
 
   const preV14 = JSON.parse(JSON.stringify({ ...fresh, version: 13 }));
   delete preV14.assignedNutritionPlan;
   const migrated = migrateStoredState(preV14);
   assert.ok(migrated);
-  assert.equal(migrated!.version, 14);
+  assert.equal(migrated!.version, 15);
   assert.equal(migrated!.assignedNutritionPlan, undefined);
   // The one field this migration step actually cares about — the client's
   // real, already-approved flat nutritionTargets — survives untouched.

@@ -175,13 +175,13 @@ export interface SessionGuidanceContext {
  * nothing is invented when the underlying comparison isn't valid.
  */
 export function buildSessionGuidanceSignals(
-  workout: Workout,
+  workout: Workout | null,
   session: WorkoutSession,
   context: SessionGuidanceContext
 ): SessionGuidanceSignal[] {
   const signals: SessionGuidanceSignal[] = [];
 
-  for (const exercise of workout.exercises) {
+  for (const exercise of workout?.exercises ?? []) {
     const log = session.exerciseLogs[exercise.id];
     if (!log || log.status === "skipped" || log.status === "not-started") continue;
     const rising = detectRisingRpe(exercise, log);
@@ -209,7 +209,7 @@ export function buildSessionGuidanceSignals(
     });
   }
 
-  const resolvedPlannedOrder = workout.exercises.map((e) => e.id).filter((id) => session.actualExerciseOrder.includes(id));
+  const resolvedPlannedOrder = (workout?.exercises ?? []).map((e) => e.id).filter((id) => session.actualExerciseOrder.includes(id));
   const actualOrderResolvedOnly = session.actualExerciseOrder.filter((id) => resolvedPlannedOrder.includes(id));
   if (
     resolvedPlannedOrder.length > 1 &&

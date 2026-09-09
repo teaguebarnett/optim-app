@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { SkipReasonSheet } from "@/components/workout/skip-reason-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { resolveSessionWarmupConfig } from "@/lib/workout/warmup";
-import { PUSH_WORKOUT } from "@/lib/mock-data";
 import type { SkipReason } from "@/lib/types";
 
 /**
@@ -17,9 +16,11 @@ import type { SkipReason } from "@/lib/types";
  * future workout with no session-level routine.
  */
 export function SessionWarmupPanel() {
-  const { dispatch } = usePrototypeState();
+  const { state, dispatch } = usePrototypeState();
   const [skipOpen, setSkipOpen] = useState(false);
-  const config = resolveSessionWarmupConfig(PUSH_WORKOUT);
+  const workout = state.workoutSession.resolvedWorkout;
+  if (!workout) return null;
+  const config = resolveSessionWarmupConfig(workout);
   if (config.mode !== "confirmation") return null;
 
   function handleSkipConfirm(reason: SkipReason, note?: string) {

@@ -5,7 +5,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { SKIP_REASON_LABELS } from "@/components/ui/reason-picker";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { cardioPrescriptionForClient } from "@/lib/mock-data";
-import { MEAL_OPTIONS, MEAL_PERIOD_LABELS, PUSH_WORKOUT } from "@/lib/mock-data";
+import { MEAL_OPTIONS, MEAL_PERIOD_LABELS } from "@/lib/mock-data";
 import type { MealPeriod, MealSelection } from "@/lib/types";
 
 const MEAL_ORDER: MealPeriod[] = ["breakfast", "postWorkout", "lunch", "dinner", "snack"];
@@ -39,7 +39,7 @@ export function ReviewTodaySheet({ open, onClose }: { open: boolean; onClose: ()
     prescription.options[0];
 
   const exceptions: string[] = [];
-  for (const exercise of PUSH_WORKOUT.exercises) {
+  for (const exercise of session.resolvedWorkout?.exercises ?? []) {
     const log = session.exerciseLogs[exercise.id];
     if (!log) continue;
     for (const set of log.loggedSets) {

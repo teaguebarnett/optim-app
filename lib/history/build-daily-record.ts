@@ -10,10 +10,11 @@
 // change if lib/mock-data.ts's catalog is edited later. See Phase 4.1 §1.
 
 import { MEAL_ORDER } from "../calculations.ts";
-import { WORKOUTS_BY_ID, cardioPrescriptionForClient, isCardioAssignedForDay } from "../mock-data.ts";
+import { cardioPrescriptionForClient, isCardioAssignedForDay } from "../mock-data.ts";
 import { ALL_CLIENT_PROFILES } from "../tenancy/seed.ts";
 import { localDateDayOfWeek } from "../shared/local-date.ts";
 import { deriveProgramPhase, deriveProgramWeek } from "../scheduling/enrollment.ts";
+import { resolveScheduledWorkoutForStart } from "../workout/resolve-scheduled-workout.ts";
 import { authorshipClient } from "./shared-types.ts";
 import { buildDailyRecordId } from "./types.ts";
 import type { RecordSource } from "./shared-types";
@@ -52,12 +53,28 @@ export function buildDailyRecordFromLiveState(state: AppState, enrollment: Progr
   const client = ALL_CLIENT_PROFILES.find((c) => c.id === state.clientId);
   const coachId = client?.primaryCoachId ?? "";
 
-  // The live app assigns PUSH_WORKOUT as the default day's training unless
-  // the client explicitly marked today a rest day — see the Phase 4.1 report
-  // for why (no other day currently has a real, loggable workout; see
-  // lib/mock-data.ts's TRAINING_WEEK, which is label-only beyond Monday).
-  const trainingDayType: TrainingDayType = state.dailyTrainingPlan?.status === "rest_day" ? "scheduled_rest" : "scheduled_workout";
-  const prescribedWorkout = trainingDayType === "scheduled_workout" ? WORKOUTS_BY_ID[state.workoutSession.workoutId] ?? null : null;
+  const clientDeclaredRest = state.dailyTrainingPlan?.status === "rest_day";
+  const trainingDayType: TrainingDayType = clientDeclaredRest ? "scheduled_rest" : "scheduled_workout";
+  // Prefer the session's own resolvedWorkout snapshot (see
+  // WorkoutSession.resolvedWorkout) — the real, frozen prescription an
+  // actually-started session was built from, immune to a same-day program
+  // edit after the fact — falling back to resolving today's real scheduled
+  // workout (the exact same START_WORKOUT resolution — see
+  // lib/workout/resolve-scheduled-workout.ts — including its own-day-of-week
+  // demo fallback) for a day that hasn't been started yet. Never the old
+  // global demo-catalog lookup by id, which only ever recognized
+  // PUSH_WORKOUT's own id and silently resolved to null for any real
+  // client's own assigned program.
+  const prescribedWorkout =
+    trainingDayType === "scheduled_workout"
+      ? (state.workoutSession.resolvedWorkout ??
+        resolveScheduledWorkoutForStart({
+          dateIso,
+          programEnrollment: enrollment,
+          assignedProgram: state.assignedProgram,
+          clientDeclaredRest,
+        }).workout)
+      : null;
 
   const training: TrainingDaySnapshot = {
     trainingDayType,

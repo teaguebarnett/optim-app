@@ -140,7 +140,10 @@ check("A client can select Rest day", () => {
 check("Rest day does not complete or delete the prescribed workout", () => {
   const state = reducer(createInitialState(), { type: "SET_TRAINING_REST_DAY" });
   assert.equal(state.workoutSession.status, "not-started");
-  assert.equal(state.workoutSession.workoutId, PUSH_WORKOUT.id);
+  // Nothing has actually been resolved/started yet — a not-started session
+  // has no real workoutId to claim (see WorkoutSession.resolvedWorkout's
+  // doc); START_WORKOUT is the one place that resolves and stamps it.
+  assert.equal(state.workoutSession.workoutId, "");
   const { result } = plan(state, referenceNow(10));
   const workoutItem = result.items.find((i) => i.id === "workout");
   assert.ok(workoutItem);
@@ -304,7 +307,7 @@ check("Next action progresses: log weight -> enter time -> choose breakfast -> b
 console.log("\n23. Phase 1 completion/adherence rules still hold\n");
 
 check("An exercise with zero completed working sets still cannot be marked complete", () => {
-  const state = createInitialState();
+  const state = reducer(createInitialState(), { type: "START_WORKOUT" });
   const exercise = PUSH_WORKOUT.exercises[0];
   const log = state.workoutSession.exerciseLogs[exercise.id];
   assert.equal(canCompleteExercise(exercise, log), false);

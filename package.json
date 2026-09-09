@@ -13,6 +13,7 @@
     "verify:progress": "node --experimental-strip-types lib/progress/verify-progress.mts",
     "verify:historical": "node --experimental-strip-types lib/progress/verify-historical-day.mts",
     "verify:workout": "node --experimental-strip-types lib/workout/verify-workout-flow.mts",
+    "verify:assigned-program-engine": "node --experimental-strip-types lib/workout/verify-assigned-program-engine.mts",
     "verify:numeric-wheel": "node --experimental-strip-types lib/verify-numeric-wheel.mts",
     "verify:nutrition": "node --experimental-strip-types lib/nutrition/verify-nutrition.mts",
     "verify:chat": "node --experimental-strip-types lib/chat/verify-chat.mts",

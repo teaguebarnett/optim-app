@@ -1,7 +1,6 @@
-import { PUSH_WORKOUT } from "./mock-data.ts";
 import { ALL_CLIENT_PROFILES, ALL_COACH_PROFILES, ALL_WORKSPACES } from "./tenancy/seed.ts";
 import { classifyEffort } from "./workout/effort-policy.ts";
-import type { Exercise, ExerciseLog, WorkoutSession, WorkoutSummary } from "./types";
+import type { Exercise, ExerciseLog, Workout, WorkoutSession, WorkoutSummary } from "./types";
 
 /** Resolves the business/coach display names for the session's workspace and
  * client, so the zero-data message below never hardcodes a specific
@@ -25,8 +24,8 @@ function resolveSessionIdentity(session: WorkoutSession): { businessName: string
 // submitted. Nothing here may claim a result, comparison, or trend that
 // isn't backed by logged data (see buildWorkoutSummary).
 
-export function totalPrescribedWorkingSets(): number {
-  return PUSH_WORKOUT.exercises.reduce((n, e) => n + e.workingSets, 0);
+export function totalPrescribedWorkingSets(workout: Workout | null): number {
+  return workout ? workout.exercises.reduce((n, e) => n + e.workingSets, 0) : 0;
 }
 
 /**
@@ -53,11 +52,11 @@ export function canCompleteExercise(exercise: Exercise, log: ExerciseLog): boole
 }
 
 export function buildWorkoutSummary(
+  workout: Workout | null,
   session: WorkoutSession,
   startedAtIso: string,
   completedAtIso: string
 ): WorkoutSummary {
-  const workout = PUSH_WORKOUT;
   let exercisesCompleted = 0;
   let exercisesSkipped = 0;
   let workingSetsCompleted = 0;
@@ -67,7 +66,7 @@ export function buildWorkoutSummary(
   let anyLighterThanExpected = false;
   const rpeValues: number[] = [];
 
-  for (const exercise of workout.exercises) {
+  for (const exercise of workout?.exercises ?? []) {
     const log = session.exerciseLogs[exercise.id];
     if (!log) continue;
 
@@ -116,7 +115,7 @@ export function buildWorkoutSummary(
       ? Math.round((rpeValues.reduce((sum, v) => sum + v, 0) / rpeValues.length) * 10) / 10
       : null;
 
-  const missedMajorityOfWork = workingSetsCompleted < totalPrescribedWorkingSets() / 2;
+  const missedMajorityOfWork = workingSetsCompleted < totalPrescribedWorkingSets(workout) / 2;
 
   // Fully completed means every prescribed working set was actually
   // addressed with a valid logged RPE, nothing anywhere in the session was
@@ -128,7 +127,7 @@ export function buildWorkoutSummary(
     exercisesSkipped === 0 &&
     skippedSetsCount === 0 &&
     missingRpeCount === 0 &&
-    workingSetsCompleted >= totalPrescribedWorkingSets();
+    workingSetsCompleted >= totalPrescribedWorkingSets(workout);
 
   const needsReview =
     anyRpeAnomaly ||

@@ -16,7 +16,6 @@ import { SessionSummaryScreen } from "@/components/workout/live/session-summary-
 import { PainReviewPanel } from "@/components/workout/live/pain-review-panel";
 import { ExercisePainCheckPanel } from "@/components/workout/live/exercise-pain-check-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { PUSH_WORKOUT } from "@/lib/mock-data";
 
 // Phase 4.4B-2 — the live workout is now a guided, state-aware experience
 // rather than one long linear checklist page. This file is purely an
@@ -51,7 +50,8 @@ export default function ActiveWorkoutPage() {
     return <WorkoutCompleteScreen session={session} />;
   }
 
-  const currentExercise = PUSH_WORKOUT.exercises.find((e) => e.id === session.currentExerciseId);
+  const sessionExercises = session.resolvedWorkout?.exercises ?? [];
+  const currentExercise = sessionExercises.find((e) => e.id === session.currentExerciseId);
 
   const techniqueFlagCount = state.reviewRequests.filter(
     (r) => r.kind === "technique-flag" && (!session.startedAtIso || r.createdAtIso >= session.startedAtIso)
@@ -66,7 +66,7 @@ export default function ActiveWorkoutPage() {
     // branch below.
     if (session.phase === "pain-review" && session.activePainInterruption) {
       const interruption = session.activePainInterruption;
-      const interruptedExercise = PUSH_WORKOUT.exercises.find((e) => e.id === interruption.exerciseId);
+      const interruptedExercise = sessionExercises.find((e) => e.id === interruption.exerciseId);
       const report = session.painReports.find((r) => r.id === interruption.painReportId);
       return interruptedExercise ? (
         <PainReviewPanel exercise={interruptedExercise} interruption={interruption} report={report} />
@@ -78,7 +78,7 @@ export default function ActiveWorkoutPage() {
     // confirms it feels unaffected — see lib/state.ts's ENTER_EXERCISE_INTRO.
     if (session.phase === "exercise-pain-check" && session.activePainInterruption) {
       const interruption = session.activePainInterruption;
-      const gatedExercise = PUSH_WORKOUT.exercises.find((e) => e.id === session.currentExerciseId);
+      const gatedExercise = sessionExercises.find((e) => e.id === session.currentExerciseId);
       const report = session.painReports.find((r) => r.id === interruption.painReportId);
       return gatedExercise ? <ExercisePainCheckPanel exercise={gatedExercise} report={report} /> : null;
     }
@@ -92,7 +92,7 @@ export default function ActiveWorkoutPage() {
     }
 
     if (session.phase === "exercise-transition") {
-      const finishedExercise = PUSH_WORKOUT.exercises.find((e) => e.id === session.lastResolvedExerciseId);
+      const finishedExercise = sessionExercises.find((e) => e.id === session.lastResolvedExerciseId);
       return <ExerciseTransitionPanel finishedExercise={finishedExercise} nextExercise={currentExercise} session={session} />;
     }
 

@@ -12,7 +12,7 @@
 // client didn't actually do — see the adaptability rules in the Phase 3
 // spec this implements.
 
-import { cardioPrescriptionForClient, MEAL_OPTIONS, PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
+import { cardioPrescriptionForClient, MEAL_OPTIONS, resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
 import { resolvePlannedDateTime } from "./training-plan.ts";
 import { comfortableTrainingWindow, mealTimingProfileForMacros, mealTimingProfileForOption } from "./meal-timing.ts";
 import { buildMealSchedule } from "./meal-schedule.ts";
@@ -29,6 +29,12 @@ function formatClockTime(iso: string): string {
 function isMealCounted(selection: MealSelection | undefined): boolean {
   return !!selection && (selection.source === "option" || selection.source === "manual" || selection.source === "photo-estimate");
 }
+
+/** Meal-timing heuristics need SOME session-length estimate even on a day
+ * with no real, resolved workout (rest day, no assignment yet) — a plain,
+ * generic estimate, never PUSH_WORKOUT's specific duration borrowed as a
+ * stand-in for a real client's own program. */
+const DEFAULT_WORKOUT_DURATION_ESTIMATE_MIN = 60;
 
 function selectedOptionFor(period: MealPeriod, selection: MealSelection | undefined): MealOption | null {
   if (!selection || selection.source !== "option" || !selection.optionId) return null;
@@ -96,6 +102,28 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     actionLabel: weightDone ? undefined : "Log weight",
   });
 
+  // Resolved up front (Phase 4.1 corrective — "today's workout" must be
+  // resolved against the real training schedule, keyed by the client-local
+  // day of week derived from state.dateIso, not always assumed to be Push
+  // Workout) so the meal schedule below can anchor to this client's real
+  // workout duration rather than a hardcoded one. Resolved through the one
+  // shared resolveWorkoutAvailabilityForDay (Phase 4.4B-1.1) — a genuinely
+  // scheduled training day whose catalog has no real, loggable content (e.g.
+  // Friday's "Upper Workout" label) never silently substitutes Push
+  // Workout's content under a different name, and this can never disagree
+  // with what Today or Training decide for the exact same day.
+  const todayDayOfWeek = localDateDayOfWeek(state.dateIso);
+  const clientDeclaredRest = trainingPlan?.status === "rest_day";
+  const availability = resolveWorkoutAvailabilityForDay(
+    todayDayOfWeek,
+    clientDeclaredRest,
+    state.assignedProgram,
+    deriveProgramWeek(state.programEnrollment, state.dateIso)
+  );
+  const scheduledWithoutDetail = availability.isUnavailable;
+  const isRestDay = clientDeclaredRest || (!clientDeclaredRest && !trainingPlan && availability.scheduleEntry?.type === "rest");
+  const workoutDisplayName = availability.displayName;
+
   // --- Full-day meal schedule (Phase 3.1 §2) — computed once, up front, so
   // every meal item below (and the Nutrition page, via mealSchedule on the
   // returned result) reads the exact same recommended times. ---
@@ -110,7 +138,7 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     now,
     meals: state.meals,
     periods,
-    workoutEstimatedDurationMin: PUSH_WORKOUT.estimatedDurationMin,
+    workoutEstimatedDurationMin: availability.workout?.estimatedDurationMin ?? DEFAULT_WORKOUT_DURATION_ESTIMATE_MIN,
   });
 
   // --- Breakfast ---
@@ -153,31 +181,6 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   const session = state.workoutSession;
   const plannedAt = trainingPlan ? resolvePlannedDateTime(trainingPlan, now) : null;
 
-  // Phase 4.1 corrective — "today's workout" must be resolved against the
-  // real training schedule (TRAINING_WEEK, keyed by the client-local day of
-  // week derived from state.dateIso — the same date system every other
-  // Phase 4.1 selector uses), not always assumed to be Push Workout. A
-  // client's own explicit rest-day choice still wins over the schedule, and
-  // real progress on the (only loggable) session always wins over both —
-  // see the session.status branches above this.
-  const todayDayOfWeek = localDateDayOfWeek(state.dateIso);
-  const clientDeclaredRest = trainingPlan?.status === "rest_day";
-  // Resolved through the one shared resolveWorkoutAvailabilityForDay (Phase
-  // 4.4B-1.1) — a genuinely scheduled training day whose catalog has no
-  // real, loggable content (e.g. Friday's "Upper Workout" label) never
-  // silently substitutes Push Workout's content under a different name, and
-  // this can never disagree with what Today or Training decide for the
-  // exact same day.
-  const availability = resolveWorkoutAvailabilityForDay(
-    todayDayOfWeek,
-    clientDeclaredRest,
-    state.assignedProgram,
-    deriveProgramWeek(state.programEnrollment, state.dateIso)
-  );
-  const scheduledWithoutDetail = availability.isUnavailable;
-  const isRestDay = clientDeclaredRest || (!clientDeclaredRest && !trainingPlan && availability.scheduleEntry?.type === "rest");
-  const workoutDisplayName = availability.displayName;
-
   let workoutStatus: PlannerItemStatus;
   let workoutTimeLabel: string | undefined;
   let workoutExplanation: string | undefined;
@@ -207,8 +210,8 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     // or deleted.
     workoutStatus = "upcoming";
     workoutExplanation = clientDeclaredRest
-      ? `Today is set as a rest day. ${PUSH_WORKOUT.name} stays available if your plan changes.`
-      : `Today is a scheduled rest day. ${PUSH_WORKOUT.name} stays available if you'd like to train anyway.`;
+      ? `Today is set as a rest day. ${workoutDisplayName} stays available if your plan changes.`
+      : `Today is a scheduled rest day. ${workoutDisplayName} stays available if you'd like to train anyway.`;
     workoutActionLabel = "Begin workout anyway";
   } else if (plannedAt && now.getTime() >= plannedAt.getTime()) {
     workoutStatus = "recommended";
@@ -226,7 +229,7 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   items.push({
     id: "workout",
     kind: "workout",
-    title: scheduledWithoutDetail ? workoutDisplayName : PUSH_WORKOUT.name,
+    title: session.resolvedWorkout?.name ?? workoutDisplayName,
     status: workoutStatus,
     timeLabel: workoutTimeLabel,
     explanation: workoutExplanation,

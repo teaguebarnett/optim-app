@@ -15,6 +15,7 @@ import {
   isExerciseResolved,
 } from "./workout/session-flow.ts";
 import { resolveExerciseWarmupConfig, resolveSessionWarmupConfig } from "./workout/warmup.ts";
+import { resolveScheduledWorkoutForStart } from "./workout/resolve-scheduled-workout.ts";
 import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
@@ -40,6 +41,7 @@ import type {
   RpeValue,
   SkipReason,
   WarmupOutcome,
+  Workout,
   WorkoutSession,
   WorkoutSessionEvent,
   WorkoutSummary,
@@ -65,7 +67,7 @@ export interface DailyEntranceState {
 }
 
 export interface AppState {
-  version: 14;
+  version: 15;
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   /** This client's assigned coach, resolved ONCE when this state is first
@@ -135,35 +137,34 @@ export interface AppState {
   consecutiveCleanWorkouts: number;
 }
 
-/** Not-started per-exercise warm-up outcomes for every exercise in a
- * workout — the shared starting point for both a fresh session and the
- * v5->v6 migration's honest reconstruction. */
-function initialExerciseWarmups(): Record<string, WarmupOutcome> {
+/** Not-started per-exercise warm-up outcomes for every exercise in a real,
+ * resolved workout — shared by START_WORKOUT (below) and the v5->v6
+ * migration's honest reconstruction of old PUSH_WORKOUT-only sessions. */
+function initialExerciseWarmups(workout: Workout): Record<string, WarmupOutcome> {
   const warmups: Record<string, WarmupOutcome> = {};
-  for (const exercise of PUSH_WORKOUT.exercises) {
+  for (const exercise of workout.exercises) {
     warmups[exercise.id] = { status: "not-started" };
   }
   return warmups;
 }
 
+/** A not-started-anything empty shell — genuinely no workout has been
+ * resolved or started yet, so there is nothing real to enumerate
+ * exerciseLogs/exerciseWarmups against. START_WORKOUT (below) is the one
+ * place that resolves this client's actual scheduled workout and populates
+ * every workout-shaped field from it — never this constructor, and never a
+ * hardcoded catalog entry. */
 export function createInitialWorkoutSession(
   workspaceId: WorkspaceId = DEMO_WORKSPACE_ID,
   clientId: ClientProfileId = DEMO_CLIENT_ID
 ): WorkoutSession {
-  const exerciseLogs: WorkoutSession["exerciseLogs"] = {};
-  for (const exercise of PUSH_WORKOUT.exercises) {
-    exerciseLogs[exercise.id] = {
-      exerciseId: exercise.id,
-      status: "not-started",
-      loggedSets: [],
-    };
-  }
   return {
     workspaceId,
     clientId,
-    workoutId: PUSH_WORKOUT.id,
+    workoutId: "",
+    resolvedWorkout: null,
     status: "not-started",
-    exerciseLogs,
+    exerciseLogs: {},
     painReports: [],
     phase: "session-warmup",
     currentExerciseId: null,
@@ -173,7 +174,7 @@ export function createInitialWorkoutSession(
     lastResolvedExerciseId: null,
     currentSetNumber: null,
     sessionWarmup: { status: "not-started" },
-    exerciseWarmups: initialExerciseWarmups(),
+    exerciseWarmups: {},
     events: [],
     activePainInterruption: null,
   };
@@ -210,7 +211,7 @@ export function createInitialState(options: CreateInitialStateOptions = {}): App
       ? buildDemoDefaultProgramEnrollment(now)
       : buildDefaultProgramEnrollmentFor(workspaceId, clientId, now);
   return {
-    version: 14,
+    version: 15,
     workspaceId,
     clientId,
     primaryCoachId,
@@ -391,9 +392,13 @@ function withMealMacros(
 
 /** Resolves a working-set outcome into the exercise's log, auto-completing
  * the exercise the moment it's genuinely resolved — the one place LOG_SET
- * and SKIP_SET share this rule so they can never disagree. */
-function withResolvedLogStatus(exerciseId: string, updatedLog: ExerciseLog): ExerciseLog {
-  const exercise = PUSH_WORKOUT.exercises.find((e) => e.id === exerciseId);
+ * and SKIP_SET share this rule so they can never disagree. Reads the
+ * exercise's real prescription from the session's own resolvedWorkout
+ * snapshot (see WorkoutSession.resolvedWorkout) — never the global demo
+ * catalog — so this is correct for whichever real workout this session was
+ * actually started against. */
+function withResolvedLogStatus(exerciseId: string, updatedLog: ExerciseLog, workout: Workout | null): ExerciseLog {
+  const exercise = workout?.exercises.find((e) => e.id === exerciseId);
   const resolved = exercise ? isExerciseResolved(exercise, updatedLog) : false;
   return { ...updatedLog, status: resolved ? "completed" : "in-progress" };
 }
@@ -647,15 +652,44 @@ export function reducer(state: AppState, action: Action): AppState {
       if (state.workoutSession.status !== "not-started") {
         return { ...state, workoutSession: { ...state.workoutSession, status: "in-progress" } };
       }
+      // The one moment a real session is actually resolved against this
+      // client's real approved program — see
+      // lib/workout/resolve-scheduled-workout.ts. A day with nothing honest
+      // to start (pre-Day-1, a rest day, or a genuine assignment gap) is a
+      // no-op: the UI already refuses to offer "Begin workout" in every one
+      // of those cases (see components/training/session-surface.tsx and the
+      // pre-program gates on Today/Training), so this is a defensive
+      // backstop, never the primary gate.
+      const resolved = resolveScheduledWorkoutForStart({
+        dateIso: state.dateIso,
+        programEnrollment: state.programEnrollment,
+        assignedProgram: state.assignedProgram,
+        clientDeclaredRest: state.dailyTrainingPlan?.status === "rest_day",
+      });
+      if (!resolved.workout) return state;
+      const workout = resolved.workout;
+
+      const exerciseLogs: WorkoutSession["exerciseLogs"] = {};
+      for (const exercise of workout.exercises) {
+        exerciseLogs[exercise.id] = { exerciseId: exercise.id, status: "not-started", loggedSets: [] };
+      }
+
       const nowIso = new Date().toISOString();
-      const initialFlow = buildInitialFlowState(PUSH_WORKOUT);
-      const sessionWarmupConfig = resolveSessionWarmupConfig(PUSH_WORKOUT);
+      const initialFlow = buildInitialFlowState(workout);
+      const sessionWarmupConfig = resolveSessionWarmupConfig(workout);
       return {
         ...state,
         workoutSession: {
           ...state.workoutSession,
+          workoutId: workout.id,
+          // Snapshotted once, here — see WorkoutSession.resolvedWorkout's
+          // doc for why every later lookup in this session reads this
+          // exact object rather than re-resolving against the client's
+          // (possibly since-revised) assignedProgram.
+          resolvedWorkout: workout,
           status: "in-progress",
           startedAtIso: nowIso,
+          exerciseLogs,
           currentExerciseId: initialFlow.currentExerciseId,
           exerciseQueue: initialFlow.exerciseQueue,
           actualExerciseOrder: initialFlow.actualExerciseOrder,
@@ -665,7 +699,7 @@ export function reducer(state: AppState, action: Action): AppState {
           restStartedAtIso: undefined,
           phase: sessionWarmupConfig.mode === "confirmation" ? "session-warmup" : "exercise-intro",
           sessionWarmup: { status: "not-started" },
-          exerciseWarmups: initialExerciseWarmups(),
+          exerciseWarmups: initialExerciseWarmups(workout),
           events: [...state.workoutSession.events, { type: "started", atIso: nowIso } satisfies WorkoutSessionEvent],
         },
       };
@@ -707,7 +741,7 @@ export function reducer(state: AppState, action: Action): AppState {
         existingIndex >= 0
           ? log.loggedSets.map((s, i) => (i === existingIndex ? newSet : s))
           : [...log.loggedSets, newSet];
-      const updatedLog = withResolvedLogStatus(action.exerciseId, { ...log, loggedSets });
+      const updatedLog = withResolvedLogStatus(action.exerciseId, { ...log, loggedSets }, state.workoutSession.resolvedWorkout);
       return {
         ...state,
         workoutSession: {
@@ -724,7 +758,9 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!log) return state;
       const loggedSets = log.loggedSets.filter((s) => s.id !== action.setId);
       const updatedLog =
-        log.status === "skipped" ? { ...log, loggedSets } : withResolvedLogStatus(action.exerciseId, { ...log, loggedSets });
+        log.status === "skipped"
+          ? { ...log, loggedSets }
+          : withResolvedLogStatus(action.exerciseId, { ...log, loggedSets }, state.workoutSession.resolvedWorkout);
       return {
         ...state,
         workoutSession: {
@@ -750,10 +786,11 @@ export function reducer(state: AppState, action: Action): AppState {
         skipReason: action.reason,
         note: action.note,
       };
-      const updatedLog = withResolvedLogStatus(action.exerciseId, {
-        ...log,
-        loggedSets: [...log.loggedSets, skippedSet],
-      });
+      const updatedLog = withResolvedLogStatus(
+        action.exerciseId,
+        { ...log, loggedSets: [...log.loggedSets, skippedSet] },
+        state.workoutSession.resolvedWorkout
+      );
       return {
         ...state,
         workoutSession: {
@@ -957,7 +994,7 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case "BEGIN_EXERCISE": {
       const exerciseId = state.workoutSession.currentExerciseId;
-      const exercise = exerciseId ? PUSH_WORKOUT.exercises.find((e) => e.id === exerciseId) : undefined;
+      const exercise = exerciseId ? state.workoutSession.resolvedWorkout?.exercises.find((e) => e.id === exerciseId) : undefined;
       if (!exerciseId || !exercise) return state;
       const config = resolveExerciseWarmupConfig(exercise);
       const outcome = state.workoutSession.exerciseWarmups[exerciseId];
@@ -970,7 +1007,7 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case "ADVANCE_EXERCISE_WARMUP": {
       const exerciseId = state.workoutSession.currentExerciseId;
-      const exercise = exerciseId ? PUSH_WORKOUT.exercises.find((e) => e.id === exerciseId) : undefined;
+      const exercise = exerciseId ? state.workoutSession.resolvedWorkout?.exercises.find((e) => e.id === exerciseId) : undefined;
       if (!exerciseId || !exercise) return state;
       const config = resolveExerciseWarmupConfig(exercise);
       const current: WarmupOutcome = state.workoutSession.exerciseWarmups[exerciseId] ?? { status: "not-started" };
@@ -1003,7 +1040,7 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case "SKIP_EXERCISE_WARMUP": {
       const exerciseId = state.workoutSession.currentExerciseId;
-      const exercise = exerciseId ? PUSH_WORKOUT.exercises.find((e) => e.id === exerciseId) : undefined;
+      const exercise = exerciseId ? state.workoutSession.resolvedWorkout?.exercises.find((e) => e.id === exerciseId) : undefined;
       if (!exerciseId) return state;
       const nowIso = new Date().toISOString();
       const firstSet = exercise
@@ -1028,7 +1065,7 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case "CONTINUE_TO_NEXT_SET": {
       const exerciseId = state.workoutSession.currentExerciseId;
-      const exercise = exerciseId ? PUSH_WORKOUT.exercises.find((e) => e.id === exerciseId) : undefined;
+      const exercise = exerciseId ? state.workoutSession.resolvedWorkout?.exercises.find((e) => e.id === exerciseId) : undefined;
       const log = exerciseId ? state.workoutSession.exerciseLogs[exerciseId] : undefined;
       if (!exerciseId || !exercise || !log) return state;
       if (isExerciseResolved(exercise, log)) {
@@ -1142,8 +1179,8 @@ export function reducer(state: AppState, action: Action): AppState {
             createdAtIso: completeWorkoutNowIso,
             updatedAtIso: completeWorkoutNowIso,
             summary: hasSkippedWork
-              ? "Today's push workout was submitted with skipped work."
-              : "Today's push workout has RPE values worth a second look.",
+              ? "Today's workout was submitted with skipped work."
+              : "Today's workout has RPE values worth a second look.",
             status: "needs_review",
             resolved: false,
           });
@@ -1217,13 +1254,13 @@ export function reducer(state: AppState, action: Action): AppState {
             createdAtIso: nowIso,
             updatedAtIso: nowIso,
             summary: endedEarly
-              ? "Today's push workout ended early after partial completion."
-              : "Today's push workout was skipped.",
+              ? "Today's workout ended early after partial completion."
+              : "Today's workout was skipped.",
             status: "needs_review",
             resolved: false,
           };
       const summary = endedEarly
-        ? buildWorkoutSummary(state.workoutSession, state.workoutSession.startedAtIso ?? nowIso, nowIso)
+        ? buildWorkoutSummary(state.workoutSession.resolvedWorkout, state.workoutSession, state.workoutSession.startedAtIso ?? nowIso, nowIso)
         : undefined;
       const reviewRequestsAfterSkip = reviewRequest ? [...state.reviewRequests, reviewRequest] : state.reviewRequests;
       const patternEscalations = detectPatternEscalations({
@@ -1377,6 +1414,10 @@ function buildCompletedDayPreset(
     workspaceId: base.workspaceId,
     clientId: base.clientId,
     workoutId: PUSH_WORKOUT.id,
+    // Explicit, identified demo content (Prototype settings' "Load
+    // completed-day example") — the one legitimate place PUSH_WORKOUT still
+    // appears directly, never as a silent real-client fallback.
+    resolvedWorkout: PUSH_WORKOUT,
     status: "in-progress",
     startedAtIso,
     exerciseLogs,
@@ -1399,7 +1440,7 @@ function buildCompletedDayPreset(
 
   // Generate the summary from the actual logged data rather than hand-writing
   // feedback text, so even the demo presets never fabricate a claim.
-  const summary = buildWorkoutSummary(sessionBeforeSummary, startedAtIso, now);
+  const summary = buildWorkoutSummary(PUSH_WORKOUT, sessionBeforeSummary, startedAtIso, now);
 
   base.workoutSession = {
     ...sessionBeforeSummary,
@@ -1446,6 +1487,7 @@ function buildAwaitingReviewPreset(
   // Regenerate from the modified logged data (RPE 10 + pain report) instead
   // of hand-writing text, so this preset never fabricates a claim either.
   base.workoutSession.summary = buildWorkoutSummary(
+    PUSH_WORKOUT,
     base.workoutSession,
     base.workoutSession.startedAtIso!,
     base.workoutSession.completedAtIso!

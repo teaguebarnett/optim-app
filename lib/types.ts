@@ -503,6 +503,18 @@ export interface WorkoutSession {
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
   workoutId: string;
+  /** The exact, real prescription this session is (or would be) built
+   * from — captured once, at START_WORKOUT, from whatever
+   * resolveScheduledWorkoutForStart resolves for this client/day at that
+   * exact moment (see lib/workout/resolve-scheduled-workout.ts). Every
+   * exercise/set/warm-up lookup for the live session reads THIS snapshot,
+   * never a live re-resolution against the client's current assignedProgram
+   * or the global demo catalog — so a coach revising the program mid-session
+   * (or afterward) can never rewrite what an in-progress or already-completed
+   * session is shown as having been. Null before the session has ever
+   * started (nothing resolved yet) and for any session honestly never
+   * started at all. */
+  resolvedWorkout: Workout | null;
   status: WorkoutSessionStatus;
   startedAtIso?: string;
   completedAtIso?: string;

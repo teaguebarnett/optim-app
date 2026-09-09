@@ -323,6 +323,41 @@ function migrateV13ToV14(stored: Record<string, unknown>): Record<string, unknow
   return { ...stored, version: 14 };
 }
 
+/** v14 -> v15 (Assigned-Program Live Workout Engine) — adds
+ * WorkoutSession.resolvedWorkout, the frozen prescription snapshot every
+ * real reducer case now reads instead of the global PUSH_WORKOUT constant
+ * (see lib/state.ts's START_WORKOUT). Every session ever created before this
+ * version really was built against PUSH_WORKOUT specifically (there was no
+ * other possible source — see the v5->v6 migration's identical reasoning
+ * above), so a session that had actually started (anything but
+ * "not-started") honestly backfills resolvedWorkout: PUSH_WORKOUT. A session
+ * that never started gets the same genuinely-empty shell a brand-new one
+ * would (see createInitialWorkoutSession) — its old exerciseLogs/
+ * exerciseWarmups were only ever the untouched not-started placeholders
+ * anyway, so clearing them loses no real data. */
+function migrateV14ToV15(stored: Record<string, unknown>): Record<string, unknown> {
+  const migrated: Record<string, unknown> = { ...stored, version: 15 };
+  const session = stored.workoutSession;
+  if (!isRecord(session)) return migrated;
+
+  if (session.status === "not-started") {
+    migrated.workoutSession = {
+      ...session,
+      workoutId: "",
+      resolvedWorkout: null,
+      exerciseLogs: {},
+      exerciseWarmups: {},
+    };
+  } else {
+    migrated.workoutSession = {
+      ...session,
+      workoutId: typeof session.workoutId === "string" && session.workoutId ? session.workoutId : PUSH_WORKOUT.id,
+      resolvedWorkout: PUSH_WORKOUT,
+    };
+  }
+  return migrated;
+}
+
 /**
  * Upgrades raw localStorage content (of unknown/any prior shape) to the
  * current AppState (version 10), stepping through every intermediate
@@ -445,6 +480,17 @@ export function migrateStoredState(stored: unknown): AppState | null {
 
   if (
     working.version === 14 &&
+    typeof working.workspaceId === "string" &&
+    typeof working.clientId === "string" &&
+    typeof working.primaryCoachId === "string" &&
+    isRecord(working.programEnrollment) &&
+    isRecord(working.nutritionTargets)
+  ) {
+    working = migrateV14ToV15(working);
+  }
+
+  if (
+    working.version === 15 &&
     typeof working.workspaceId === "string" &&
     typeof working.clientId === "string" &&
     typeof working.primaryCoachId === "string" &&

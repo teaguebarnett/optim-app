@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Dumbbell } from "lucide-react";
+import { Dumbbell, BedDouble } from "lucide-react";
 import { TaskShell } from "@/components/today/task-shell";
 import { Button } from "@/components/ui/button";
 import { WorkoutDetailsSheet } from "@/components/workout/workout-details-sheet";
@@ -93,7 +93,7 @@ export function WorkoutTask({
   if (state === "completed" || state === "skipped") {
     return (
       <TaskShell
-        title={PUSH_WORKOUT.name}
+        title={appState.workoutSession.resolvedWorkout?.name ?? "Workout"}
         icon={<Dumbbell size={17} />}
         state={state}
         emphasisOverride={emphasisOverride}
@@ -106,7 +106,7 @@ export function WorkoutTask({
     const endedEarly = appState.workoutSession.status === "ended-early";
     return (
       <TaskShell
-        title={PUSH_WORKOUT.name}
+        title={appState.workoutSession.resolvedWorkout?.name ?? "Workout"}
         icon={<Dumbbell size={17} />}
         state={state}
         emphasisOverride={emphasisOverride}
@@ -127,7 +127,7 @@ export function WorkoutTask({
     const endedEarly = appState.workoutSession.status === "ended-early";
     return (
       <TaskShell
-        title={PUSH_WORKOUT.name}
+        title={appState.workoutSession.resolvedWorkout?.name ?? "Workout"}
         icon={<Dumbbell size={17} />}
         state={state}
         emphasisOverride={emphasisOverride}
@@ -154,24 +154,45 @@ export function WorkoutTask({
   // Not started yet — this is the one state where a real assigned program
   // (see lib/coach/training.ts) genuinely has content to show, exactly like
   // components/training/today-session-card.tsx's identical "not started"
-  // branch. Once a session actually exists (in-progress/completed/skipped
-  // above), it stays tied to PUSH_WORKOUT specifically, since the live
-  // workoutSession itself is still only ever modeled against that catalog
-  // entry (see lib/state.ts's createInitialWorkoutSession) — this is a
-  // pre-existing constraint, not something a display fix here can change.
+  // branch. Once a session actually exists (in-progress above), the session
+  // has already snapshotted its own real resolvedWorkout (see
+  // lib/state.ts's START_WORKOUT) — read that instead of re-resolving
+  // today's live availability, so a mid-session program edit can never
+  // change what's shown for an already-running session.
   const todaysAvailability = resolveWorkoutAvailabilityForDay(
     localDateDayOfWeek(appState.dateIso),
     false,
     appState.assignedProgram,
     deriveProgramWeek(appState.programEnrollment, appState.dateIso)
   );
-  const todaysWorkout = todaysAvailability.workout ?? PUSH_WORKOUT;
+  const todaysWorkout = isInProgress ? appState.workoutSession.resolvedWorkout : todaysAvailability.workout;
 
   function handleBeginWorkout() {
     if (!isInProgress) {
       dispatch({ type: "START_WORKOUT" });
     }
     router.push("/training/workout");
+  }
+
+  // A day with real schedule content but no workout to log is an honest
+  // rest day (the "locked"/unavailable-content case is handled entirely by
+  // the branch above) — never a silent excuse to show a fabricated PUSH_WORKOUT
+  // session under today's name. Mirrors
+  // components/training/today-session-card.tsx's own rest-day treatment.
+  if (!todaysWorkout) {
+    return (
+      <TaskShell
+        title="Rest day"
+        icon={<BedDouble size={17} />}
+        state={state}
+        emphasisOverride={emphasisOverride}
+        fillWidth={fillWidth}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+      >
+        <p className="text-body text-off-white">Today is a scheduled rest day.</p>
+      </TaskShell>
+    );
   }
 
   return (

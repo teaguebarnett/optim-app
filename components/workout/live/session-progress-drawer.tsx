@@ -6,7 +6,6 @@ import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { RpeWheel } from "@/components/workout/live/rpe-wheel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { PUSH_WORKOUT } from "@/lib/mock-data";
 import { cn } from "@/lib/cn";
 import type { Exercise, LoggedSet, RpeValue, WorkoutSession } from "@/lib/types";
 
@@ -21,9 +20,9 @@ export function SessionProgressDrawer({ open, onClose, session }: { open: boolea
   const [editingKey, setEditingKey] = useState<string | null>(null);
 
   return (
-    <Sheet open={open} onClose={onClose} title="This session" description={PUSH_WORKOUT.name}>
+    <Sheet open={open} onClose={onClose} title="This session" description={session.resolvedWorkout?.name ?? "Workout"}>
       <div className="space-y-3">
-        {PUSH_WORKOUT.exercises.map((exercise) => {
+        {(session.resolvedWorkout?.exercises ?? []).map((exercise) => {
           const log = session.exerciseLogs[exercise.id];
           const isCurrent = session.currentExerciseId === exercise.id;
           const isDeferred = session.deferredExerciseIds.includes(exercise.id);

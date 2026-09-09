@@ -8,7 +8,7 @@ import { SurfaceShell } from "@/components/training/surface-shell";
 import { WorkoutDetailsSheet } from "@/components/workout/workout-details-sheet";
 import { TrainingTimeSheet } from "@/components/today/training-time-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "@/lib/mock-data";
+import { resolveWorkoutAvailabilityForDay } from "@/lib/mock-data";
 import { deriveProgramWeek } from "@/lib/scheduling/enrollment";
 import { localDateDayOfWeek } from "@/lib/shared/local-date";
 import { resolvePlannedDateTime } from "@/lib/planning/training-plan";
@@ -95,13 +95,18 @@ export function TodaySessionCard() {
   let content: ReactNode;
 
   if (session.status === "in-progress") {
-    // The live workoutSession is always modeled against PUSH_WORKOUT
-    // specifically (see lib/state.ts's createInitialWorkoutSession) — never
-    // today's schedule label — so once a real session exists, its title
-    // must match what was actually started/logged, exactly like
-    // components/today/tasks/workout-task.tsx's identical branches.
+    // Once a real session exists, its title/focus must match its own
+    // resolvedWorkout snapshot (see WorkoutSession.resolvedWorkout) — what
+    // was actually started/logged — never a live re-resolution of today's
+    // schedule, which a later program edit could change out from under an
+    // already-running session.
     content = (
-      <SurfaceShell icon={<Dumbbell size={22} />} title={PUSH_WORKOUT.name} pillState={workoutPillState} meta={PUSH_WORKOUT.focus}>
+      <SurfaceShell
+        icon={<Dumbbell size={22} />}
+        title={session.resolvedWorkout?.name ?? workoutDisplayName}
+        pillState={workoutPillState}
+        meta={session.resolvedWorkout?.focus ?? workoutFocus}
+      >
         <p className="text-body text-off-white">Pick up right where you left off.</p>
         <Button className="mt-4 w-full" onClick={() => router.push("/training/workout")}>
           Continue session
@@ -114,7 +119,12 @@ export function TodaySessionCard() {
     const icon =
       session.status === "skipped" ? <XCircle size={22} /> : endedEarly ? <PauseCircle size={22} /> : <CheckCircle2 size={22} />;
     content = (
-      <SurfaceShell icon={icon} title={PUSH_WORKOUT.name} pillState={workoutPillState} meta={PUSH_WORKOUT.focus}>
+      <SurfaceShell
+        icon={icon}
+        title={session.resolvedWorkout?.name ?? workoutDisplayName}
+        pillState={workoutPillState}
+        meta={session.resolvedWorkout?.focus ?? workoutFocus}
+      >
         {session.status === "skipped" ? (
           <p className="text-body text-off-white">Today&apos;s session was skipped.</p>
         ) : (

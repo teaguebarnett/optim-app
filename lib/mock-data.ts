@@ -526,7 +526,7 @@ export function resolveWorkoutAvailabilityForDay(
       scheduleEntry,
       workout: assignedDay.workout,
       isUnavailable,
-      displayName: assignedDay.workout?.name ?? (assignedDay.type === "rest" ? "Rest day" : PUSH_WORKOUT.name),
+      displayName: assignedDay.workout?.name ?? (assignedDay.type === "rest" ? "Rest day" : "Workout"),
       focus: assignedDay.workout?.focus,
     };
   }
@@ -538,7 +538,7 @@ export function resolveWorkoutAvailabilityForDay(
     scheduleEntry,
     workout,
     isUnavailable,
-    displayName: workout?.name ?? scheduleEntry?.workoutName ?? PUSH_WORKOUT.name,
+    displayName: workout?.name ?? scheduleEntry?.workoutName ?? "Workout",
     focus: workout?.focus ?? scheduleEntry?.focus,
   };
 }

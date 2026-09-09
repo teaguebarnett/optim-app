@@ -257,7 +257,7 @@ check("Legacy v4 state (durationWeeks 16, the old default) migrates to a 12-week
   // legacy record all the way to the current version, so a v4 input now
   // lands on 13, not 5. The v4->v5 duration correction itself (the thing
   // this check actually exercises) is unaffected either way.
-  assert.equal(migrated!.version, 14);
+  assert.equal(migrated!.version, 15);
   assert.equal(migrated!.programEnrollment.durationWeeks, 12);
 });
 

@@ -1,4 +1,4 @@
-import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, PUSH_WORKOUT, resolveWorkoutAvailabilityForDay } from "./mock-data.ts";
+import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, resolveWorkoutAvailabilityForDay } from "./mock-data.ts";
 import { resolvePlannedDateTime } from "./planning/training-plan.ts";
 import { deriveProgramWeek } from "./scheduling/enrollment.ts";
 import { localDateDayOfWeek } from "./shared/local-date.ts";
@@ -202,7 +202,7 @@ export function isDailyComplete(state: AppState): boolean {
 const TASK_LABELS: Record<DailyTaskId, string> = {
   "morning-weight": "Morning weight",
   breakfast: "Breakfast",
-  workout: PUSH_WORKOUT.name,
+  workout: "Workout",
   "post-workout-meal": MEAL_PERIOD_LABELS.postWorkout,
   lunch: "Lunch",
   cardio: `Cardio — ${CARDIO_TARGET.activity}`,

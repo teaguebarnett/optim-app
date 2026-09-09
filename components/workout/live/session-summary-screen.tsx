@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { buildWorkoutSummary, sessionReviewHeadline } from "@/lib/workout-analysis";
 import { buildSessionGuidanceSignals } from "@/lib/workout/guidance";
-import { PUSH_WORKOUT } from "@/lib/mock-data";
 import type { WorkoutSession } from "@/lib/types";
 
 /**
@@ -29,11 +28,12 @@ export function SessionSummaryScreen({
   const assistantName = activeContext.assistantDisplayName;
 
   const preview = useMemo(
-    () => buildWorkoutSummary(session, session.startedAtIso ?? new Date().toISOString(), new Date().toISOString()),
+    () =>
+      buildWorkoutSummary(session.resolvedWorkout, session, session.startedAtIso ?? new Date().toISOString(), new Date().toISOString()),
     [session]
   );
   const signals = useMemo(
-    () => buildSessionGuidanceSignals(PUSH_WORKOUT, session, { techniqueFlagCount }),
+    () => buildSessionGuidanceSignals(session.resolvedWorkout, session, { techniqueFlagCount }),
     [session, techniqueFlagCount]
   );
   const flaggedSignals = signals.filter((s) => s.forCoachReview);

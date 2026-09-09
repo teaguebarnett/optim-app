@@ -6,7 +6,6 @@ import { X, ListChecks } from "lucide-react";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { SessionProgressDrawer } from "@/components/workout/live/session-progress-drawer";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { PUSH_WORKOUT } from "@/lib/mock-data";
 import type { WorkoutSession } from "@/lib/types";
 
 function formatElapsed(ms: number): string {
@@ -51,7 +50,7 @@ export function ActiveSessionShell({ session, children }: { session: WorkoutSess
   }, []);
 
   const elapsedMs = session.startedAtIso && now ? now - new Date(session.startedAtIso).getTime() : 0;
-  const totalExercises = PUSH_WORKOUT.exercises.length;
+  const totalExercises = session.resolvedWorkout?.exercises.length ?? 0;
   const resolvedCount = totalExercises - session.exerciseQueue.length;
 
   return (
@@ -66,7 +65,7 @@ export function ActiveSessionShell({ session, children }: { session: WorkoutSess
             <X size={18} />
           </button>
           <div className="text-center">
-            <p className="text-sm font-semibold text-off-white">{PUSH_WORKOUT.name}</p>
+            <p className="text-sm font-semibold text-off-white">{session.resolvedWorkout?.name ?? "Workout"}</p>
             <p className="text-xs tabular-nums text-neutral">{formatElapsed(elapsedMs)}</p>
           </div>
           <button
@@ -78,7 +77,7 @@ export function ActiveSessionShell({ session, children }: { session: WorkoutSess
           </button>
         </div>
         <div className="mt-2.5">
-          <ProgressBar percent={(resolvedCount / totalExercises) * 100} />
+          <ProgressBar percent={totalExercises > 0 ? (resolvedCount / totalExercises) * 100 : 0} />
           <p className="mt-1 text-xs text-neutral">
             Exercise {Math.min(resolvedCount + 1, totalExercises)} of {totalExercises}
           </p>
