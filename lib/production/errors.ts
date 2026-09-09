@@ -39,3 +39,19 @@ export class UnauthorizedError extends Error {
     this.name = "UnauthorizedError";
   }
 }
+
+/** Phase 6.0B — thrown when a `content jsonb` payload read back from
+ * training_program_versions/nutrition_plan_versions/daily_records doesn't
+ * structurally match the domain type it's supposed to be (lib/types.ts's
+ * ClientAssignedProgram/AssignedNutritionPlan, or lib/history/types.ts's
+ * TrainingDaySnapshot/NutritionDaySnapshot) — see lib/production/validation.ts.
+ * Callers must render this as a real, visible error state, never silently
+ * cast the raw JSON or fall back to demo/PUSH_WORKOUT content — "invalid
+ * stored content must produce a controlled error, not unsafe casting or
+ * demo fallback" is a hard architecture requirement, not a suggestion. */
+export class InvalidPersistedContentError extends Error {
+  constructor(what: string, reason: string) {
+    super(`Persisted ${what} content failed validation: ${reason}`);
+    this.name = "InvalidPersistedContentError";
+  }
+}

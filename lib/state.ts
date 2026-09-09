@@ -3,6 +3,7 @@ import { buildWorkoutSummary } from "./workout-analysis.ts";
 import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID, resolveAssignedCoachId } from "./tenancy/seed.ts";
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
 import { setTrainingStatus, setTrainingTime } from "./planning/training-plan.ts";
+import type { TrainingDaySnapshot, NutritionDaySnapshot } from "./history/types";
 import type { DailyTrainingPlan } from "./planning/types";
 import { buildDefaultProgramEnrollmentFor, buildDemoDefaultProgramEnrollment } from "./scheduling/enrollment.ts";
 import { resolveClientLocalDateIso } from "./shared/local-date.ts";
@@ -248,6 +249,7 @@ function clampCardioDurationMin(value: number): number {
 
 export type Action =
   | { type: "HYDRATE"; payload: AppState }
+  | { type: "HYDRATE_SUPABASE_ACTIVITY"; training: TrainingDaySnapshot; nutrition: NutritionDaySnapshot }
   | { type: "SET_MORNING_WEIGHT"; weightLb: number }
   | { type: "SKIP_MORNING_WEIGHT" }
   | { type: "SELECT_MEAL_OPTION"; period: MealPeriod; optionId: string }
@@ -453,6 +455,58 @@ export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "HYDRATE":
       return action.payload;
+
+    // Phase 6.0B — Supabase mode only. Overlays a persisted daily_records
+    // { training, nutrition } snapshot (see lib/production/programs.ts's
+    // getDailyActivity, and lib/history/build-daily-record.ts, which
+    // produces this exact same TrainingDaySnapshot/NutritionDaySnapshot
+    // shape) onto an already-HYDRATEd state — dispatched right after HYDRATE
+    // (and, when the session was already started, after START_WORKOUT has
+    // already run to properly seed exerciseQueue/phase from the client's
+    // real resolved workout — see hooks/use-prototype-state.tsx's Supabase
+    // bootstrap). Never invented independently of a real persisted record:
+    // this restores what actually happened, using the exact same
+    // exerciseId-keyed shape live exerciseLogs already use, so a refreshed
+    // browser shows the same completed/skipped sets, RPE, and skip reasons
+    // the client actually logged rather than resetting to "not started."
+    case "HYDRATE_SUPABASE_ACTIVITY": {
+      const exerciseLogs: WorkoutSession["exerciseLogs"] = { ...state.workoutSession.exerciseLogs };
+      for (const [exerciseId, snapshot] of Object.entries(action.training.exerciseLogs)) {
+        exerciseLogs[exerciseId] = {
+          exerciseId,
+          status: snapshot.status,
+          skipReason: snapshot.skipReason,
+          skipNote: snapshot.skipNote,
+          loggedSets: snapshot.loggedSets.map((s) => ({
+            id: nextId("set"),
+            exerciseId,
+            setNumber: s.setNumber,
+            isWarmup: s.isWarmup,
+            weightLb: s.weightLb,
+            reps: s.reps,
+            rpe: s.rpe,
+            note: s.note,
+            completedAtIso: s.completedAtIso,
+            status: s.status,
+            skipReason: s.skipReason,
+          })),
+        };
+      }
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          status: action.training.sessionStatus ?? state.workoutSession.status,
+          startedAtIso: action.training.startedAtIso ?? state.workoutSession.startedAtIso,
+          completedAtIso: action.training.completedAtIso ?? state.workoutSession.completedAtIso,
+          skipReason: action.training.skipReason ?? state.workoutSession.skipReason,
+          skipNote: action.training.skipNote ?? state.workoutSession.skipNote,
+          painReports: action.training.painReports.length > 0 ? action.training.painReports : state.workoutSession.painReports,
+          exerciseLogs,
+        },
+        meals: { ...state.meals, ...action.nutrition.meals },
+      };
+    }
 
     case "SET_MORNING_WEIGHT":
       return {

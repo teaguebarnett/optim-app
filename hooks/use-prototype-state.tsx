@@ -46,10 +46,50 @@ import { buildDailyPlan } from "@/lib/planning/planner";
 import { resolveScopedTrainingPlan } from "@/lib/planning/training-plan";
 import { resolveClientLocalDateIso } from "@/lib/shared/local-date";
 import { resolveRollover } from "@/lib/history/rollover";
+import { buildDailyRecordFromLiveState } from "@/lib/history/build-daily-record";
+import { getMySupabaseAppStateAction, saveMySupabaseDailyActivityAction } from "@/app/actions/production-programs";
 import type { PlatformState } from "@/lib/coach/platform-store";
 import type { ActiveAppContext, ClientProfileId, WorkspaceId } from "@/lib/tenancy/types";
 import type { DailyPlanResult, DailyTrainingPlan } from "@/lib/planning/types";
 import type { DailyTask, DailyTaskId } from "@/lib/types";
+import type { AppMode } from "@/lib/production/mode";
+
+/** Builds a real, non-demo ActiveAppContext for an authenticated Supabase
+ * client — every identity-bearing field (user id/name/email, workspace id,
+ * client id/name, primary coach id/name) is the real server-verified value
+ * from getMySupabaseAppStateAction; only the cosmetic scaffold this
+ * single-workspace pilot doesn't yet have its own Postgres-backed source
+ * for (branding colors, aiPolicy, the demo template's own ids for fields
+ * this UI never actually surfaces for a real client) is reused from the
+ * existing demo client template — see this function's one call site below
+ * for why a full per-tenant branding/AI-policy system is out of this
+ * vertical slice's scope. */
+function buildSupabaseActiveAppContext(params: {
+  clientId: ClientProfileId;
+  workspaceId: WorkspaceId;
+  clientDisplayName: string;
+  email: string | null;
+  primaryCoachDisplayName: string | null;
+}): ActiveAppContext {
+  const template = resolveActiveContext(getDemoClientSession());
+  const primaryCoach = template.primaryCoach
+    ? {
+        ...template.primaryCoach,
+        workspaceId: params.workspaceId,
+        displayName: params.primaryCoachDisplayName ?? template.primaryCoach.displayName,
+      }
+    : null;
+  return {
+    ...template,
+    user: { ...template.user, id: params.clientId, displayName: params.clientDisplayName, email: params.email ?? undefined },
+    workspace: { ...template.workspace, id: params.workspaceId },
+    membership: { ...template.membership, userId: params.clientId, workspaceId: params.workspaceId },
+    clientProfile: template.clientProfile
+      ? { ...template.clientProfile, id: params.clientId, workspaceId: params.workspaceId, name: params.clientDisplayName }
+      : null,
+    primaryCoach,
+  };
+}
 
 interface PrototypeStateValue {
   state: AppState;
@@ -97,6 +137,11 @@ interface PrototypeStateValue {
   dailyTrainingPlan: DailyTrainingPlan | null;
   /** The centralized adaptive schedule — see lib/planning/planner.ts. */
   dailyPlan: DailyPlanResult;
+  /** Supabase mode only: true once bootstrap has confirmed the
+   * authenticated user has no client_profiles row at all — a distinct,
+   * honest state from "hydrated with no program assigned yet." Always
+   * false in demo mode. */
+  supabaseNotProvisioned: boolean;
 }
 
 const PrototypeStateContext = createContext<PrototypeStateValue | null>(null);
@@ -126,14 +171,89 @@ function hydrateClientState(clientId: ClientProfileId, workspaceId: WorkspaceId,
   return createClientAppState(clientId, workspaceId, primaryCoachId);
 }
 
-export function PrototypeStateProvider({ children }: { children: ReactNode }) {
+export function PrototypeStateProvider({ children, appMode = "demo" }: { children: ReactNode; appMode?: AppMode }) {
   const { platform, isPlatformHydrated } = usePlatformState();
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const [isHydrated, setIsHydrated] = useState(false);
   const [perspective, setPerspectiveState] = useState<DevPerspective>("client");
   const [activeClientId, setActiveClientIdState] = useState<ClientProfileId>(CLIENT_PROFILE_DEMO.id);
   const [activeCoachUserId, setActiveCoachUserIdState] = useState<string>(TEAGUE_USER.id);
+  const [supabaseContext, setSupabaseContext] = useState<ActiveAppContext | null>(null);
+  const [supabaseNotProvisioned, setSupabaseNotProvisioned] = useState(false);
   const initialPathname = usePathname();
+
+  // ---------------------------------------------------------------------
+  // Phase 6.0B — Supabase mode bootstrap. Entirely separate from the demo
+  // bootstrap below: never reads localStorage, never waits on the demo
+  // PlatformStateProvider, and never falls back to seeded/demo content —
+  // "not_provisioned" (no client_profiles row for this authenticated user)
+  // renders its own honest state rather than silently substituting the demo
+  // client. See app/actions/production-programs.ts's
+  // getMySupabaseAppStateAction for what's actually fetched.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    if (appMode !== "supabase") return;
+    let cancelled = false;
+    (async () => {
+      const result = await getMySupabaseAppStateAction();
+      if (cancelled) return;
+      if (result.kind === "not_provisioned") {
+        setSupabaseNotProvisioned(true);
+        setIsHydrated(true);
+        return;
+      }
+      dispatch({ type: "HYDRATE", payload: result.state });
+      const sessionWasStarted =
+        result.dailyActivity && result.dailyActivity.training.sessionStatus && result.dailyActivity.training.sessionStatus !== "not-started";
+      if (sessionWasStarted && result.state.assignedProgram) {
+        // Re-run the same real START_WORKOUT initialization the reducer
+        // always uses (queue/phase derived from the client's actual
+        // resolved workout) before overlaying the persisted logs on top —
+        // see lib/state.ts's HYDRATE_SUPABASE_ACTIVITY doc for why this
+        // two-step order matters.
+        dispatch({ type: "START_WORKOUT" });
+      }
+      if (result.dailyActivity) {
+        dispatch({ type: "HYDRATE_SUPABASE_ACTIVITY", training: result.dailyActivity.training, nutrition: result.dailyActivity.nutrition });
+      }
+      setSupabaseContext(
+        buildSupabaseActiveAppContext({
+          clientId: result.state.clientId,
+          workspaceId: result.state.workspaceId,
+          clientDisplayName: result.clientDisplayName,
+          email: result.email,
+          primaryCoachDisplayName: result.primaryCoachDisplayName,
+        })
+      );
+      setActiveClientIdState(result.state.clientId);
+      setPerspectiveState("client");
+      setIsHydrated(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [appMode]);
+
+  // Phase 6.0B — Supabase mode's own autosave: persists today's real
+  // { training, nutrition } snapshot (the exact same pure builder archival
+  // already trusts — see lib/history/build-daily-record.ts) via a Server
+  // Action on every state change once hydrated, instead of demo mode's
+  // saveClientAppState/localStorage below. Never runs in demo mode.
+  useEffect(() => {
+    if (appMode !== "supabase" || !isHydrated || supabaseNotProvisioned) return;
+    const record = buildDailyRecordFromLiveState(state, state.programEnrollment, "live");
+    saveMySupabaseDailyActivityAction({
+      dateIso: state.dateIso,
+      programAssignmentId: null,
+      content: { training: record.training, nutrition: record.nutrition },
+    }).catch((err) => {
+      // A failed autosave must never be silently swallowed into "looks
+      // saved" — surfaced to the console for now; a visible toast/error
+      // affordance is a focused follow-up, not a blocker for this vertical
+      // slice's core persistence correctness.
+      console.error("Supabase daily activity autosave failed:", err);
+    });
+  }, [appMode, state, isHydrated, supabaseNotProvisioned]);
 
   // One combined bootstrap — reads perspective, which client is currently
   // active, and that client's own AppState together, so there is never an
@@ -145,6 +265,7 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
   // needs platform.clients to actually be loaded from storage, not the
   // empty pre-hydration default every render starts with.
   useEffect(() => {
+    if (appMode === "supabase") return;
     if (!isPlatformHydrated) return;
     const timeout = setTimeout(() => {
       // Phase 5.5B — a session that has NEVER explicitly chosen a
@@ -190,10 +311,11 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
   // record yet and would default every client to "active" (see its own
   // doc), reopening the exact same race during that brief window.
   useEffect(() => {
+    if (appMode === "supabase") return;
     if (!isHydrated || !isPlatformHydrated) return;
     if (!shouldAutosaveClientAppState(getClientLifecycle(platform, state.clientId))) return;
     saveClientAppState(state.clientId, state);
-  }, [state, isHydrated, isPlatformHydrated, platform]);
+  }, [state, isHydrated, isPlatformHydrated, platform, appMode]);
 
   // A coarse once-a-minute re-render is enough for "training time passed"
   // language and recommendation windows to stay accurate without
@@ -252,6 +374,14 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const activeContext = useMemo(() => {
+    // Supabase mode: real, server-resolved identity only — never the demo
+    // client/coach fallback below. supabaseContext is null only for the
+    // brief window before the bootstrap effect above resolves (or for a
+    // not-provisioned account, which never has anything real to show);
+    // resolveActiveContext(getDemoClientSession()) as a placeholder here is
+    // display-only scaffolding for that instant, identical to what
+    // createInitialState() itself renders before any hydration completes.
+    if (appMode === "supabase") return supabaseContext ?? resolveActiveContext(getDemoClientSession());
     if (perspective === "coach") return resolveActiveContext(getDemoCoachSession());
     if (activeClientId === CLIENT_PROFILE_DEMO.id) return resolveActiveContext(getDemoClientSession());
     return resolveCoachCreatedClientContext(activeClientId, platform) ?? resolveActiveContext(getDemoClientSession());
@@ -259,7 +389,7 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
     // (see lib/tenancy/session.ts) — included here purely so switching it
     // triggers this memo to actually recompute.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [perspective, activeClientId, platform, activeCoachUserId]);
+  }, [perspective, activeClientId, platform, activeCoachUserId, appMode, supabaseContext]);
 
   const dailyTrainingPlan = useMemo(
     () => resolveScopedTrainingPlan(state.dailyTrainingPlan, state.workspaceId, state.clientId, state.dateIso),
@@ -298,6 +428,7 @@ export function PrototypeStateProvider({ children }: { children: ReactNode }) {
     setActiveCoachUserId,
     dailyTrainingPlan,
     dailyPlan,
+    supabaseNotProvisioned,
   };
 
   return <PrototypeStateContext.Provider value={value}>{children}</PrototypeStateContext.Provider>;
