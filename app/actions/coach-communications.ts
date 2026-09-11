@@ -39,10 +39,17 @@ import {
 } from "../../lib/production/campaigns";
 import { proposePlaybookExampleFromEscalation, getApprovedPlaybook, approvePlaybookVersion, listPlaybookVersions } from "../../lib/production/playbooks";
 import { resolveClientWorkspaceId } from "../../lib/production/identity";
-import { getAuthenticatedContext } from "../../lib/production/auth";
+import { resolveOwnStaffWorkspace } from "../../lib/production/auth";
 
+// Phase 6.0D-A: the unified coach dashboard (app/coach/page.tsx) now shows
+// the same escalation/campaign data these actions mutate, so every mutation
+// must revalidate it too — never just the standalone escalations/campaigns
+// pages, or the dashboard would show stale state until an unrelated
+// navigation happened to refetch it.
 function revalidateCoachSurfaces(): void {
+  revalidatePath("/coach");
   revalidatePath("/coach/escalations");
+  revalidatePath("/coach/campaigns");
 }
 
 // ---------------------------------------------------------------------------
@@ -54,17 +61,6 @@ export interface CoachEscalationInbox {
   coachDisplayName: string;
   open: EscalationView[];
   resolved: EscalationView[];
-}
-
-/** Resolves the caller's own staff workspace server-side. A coach who
- * somehow holds staff membership in more than one workspace gets the first
- * one deterministically; this surface is scoped to one workspace at a time
- * by design, matching every other coach surface in the app. */
-async function resolveOwnStaffWorkspace(): Promise<{ workspaceId: string; coachDisplayName: string }> {
-  const ctx = await getAuthenticatedContext();
-  const staff = ctx.memberships.find((m) => m.role === "coach" || m.role === "workspace_owner" || m.role === "platform_admin");
-  if (!staff) throw new Error("The current session holds no coach/owner membership in any workspace.");
-  return { workspaceId: staff.workspaceId, coachDisplayName: ctx.profile.displayName };
 }
 
 export async function getCoachEscalationInboxAction(): Promise<CoachEscalationInbox> {

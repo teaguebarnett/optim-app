@@ -42,7 +42,7 @@ import {
   resolveAiActionDisposition,
   AI_AUTHORITY_LEVEL_LABELS,
   AI_AUTHORITY_LEVEL_DESCRIPTIONS,
-} from "../coach/ai-authority";
+} from "../coach/ai-authority.ts";
 import { deriveProgramWeek, deriveProgramPhase } from "../scheduling/enrollment.ts";
 import { resolveClientLocalDateIso } from "../shared/local-date.ts";
 import { describeEscalationForAssistantMessage, isValidEscalationTransition } from "../communications/types.ts";

@@ -10,8 +10,8 @@
 // trusts anything the browser merely claims about who it is.
 
 import "server-only";
-import { getSupabaseServerClient } from "../supabase/server";
-import { UnauthenticatedError, UnauthorizedError } from "./errors";
+import { getSupabaseServerClient } from "../supabase/server.ts";
+import { UnauthenticatedError, UnauthorizedError } from "./errors.ts";
 
 export type ProductionRole = "platform_admin" | "workspace_owner" | "coach" | "client";
 
@@ -115,4 +115,18 @@ export function requireWorkspaceRole(
 
 export function isWorkspaceStaffRole(role: ProductionRole): boolean {
   return role === "platform_admin" || role === "workspace_owner" || role === "coach";
+}
+
+/** Resolves the caller's own staff workspace server-side — the one place
+ * this lookup exists (Phase 6.0D-A: previously duplicated between
+ * app/actions/coach-communications.ts and lib/production/coach-operations.ts,
+ * now shared here since both need exactly the same "which workspace, as
+ * which coach" answer). A coach who somehow holds staff membership in more
+ * than one workspace gets the first one deterministically; every coach
+ * surface in the app is scoped to one workspace at a time by design. */
+export async function resolveOwnStaffWorkspace(): Promise<{ workspaceId: string; coachDisplayName: string }> {
+  const ctx = await getAuthenticatedContext();
+  const staff = ctx.memberships.find((m) => isWorkspaceStaffRole(m.role));
+  if (!staff) throw new UnauthorizedError("The current session holds no coach/owner membership in any workspace.");
+  return { workspaceId: staff.workspaceId, coachDisplayName: ctx.profile.displayName };
 }

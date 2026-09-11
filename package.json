@@ -54,6 +54,7 @@
     "verify:communications-contracts": "node --experimental-strip-types lib/communications/verify-communications-contracts.mts",
     "verify:import-contracts": "node --experimental-strip-types lib/imports/verify-import-contracts.mts",
     "verify:production-mode": "node --conditions=react-server --experimental-strip-types lib/production/verify-mode.mts",
+    "verify:coach-operations": "node --experimental-strip-types lib/production/verify-coach-operations.mts",
     "verify:production-validation": "node --experimental-strip-types lib/production/verify-validation.mts",
     "test:db": "supabase test db"
   },
