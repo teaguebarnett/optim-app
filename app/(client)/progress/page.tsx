@@ -15,6 +15,7 @@ import { CoachGuidanceCard } from "@/components/progress/coach-guidance-card";
 import { HistoryDayPicker } from "@/components/progress/history-day-picker";
 import { PreStartProgress } from "@/components/progress/pre-start-progress";
 import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
+import { AwaitingProgramSetup } from "@/components/today/awaiting-program-setup";
 
 // Phase 4.2 — the client-visible expression of OPTIM's memory. Every value
 // on this page traces back to a Phase 4.1 record, correction, weekly
@@ -22,10 +23,11 @@ import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 // build-dashboard.ts, the one place this data is assembled. Card order is
 // stable and never rearranges; only the priority card is conditional.
 function ProgressDashboard() {
-  const { isHydrated, state } = usePrototypeState();
+  const { isHydrated, state, supabaseProgramNotAssigned } = usePrototypeState();
   const { dashboard, source } = useProgressDashboard();
 
   if (!isHydrated) return <ScreenSkeleton />;
+  if (supabaseProgramNotAssigned) return <AwaitingProgramSetup />;
 
   // Phase 5.6A.4 — the same shared pre-start boundary Today/Training/
   // Nutrition use: no weigh-in, adherence, or completion history can be

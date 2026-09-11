@@ -40,6 +40,20 @@ export class UnauthorizedError extends Error {
   }
 }
 
+/** Phase 6.0D-B — thrown when a coach attempts to activate a client whose
+ * required setup (start date, assigned program, assigned nutrition plan)
+ * isn't actually complete yet — see lib/production/roster.ts's
+ * activateClientEnrollment. Distinct from UnauthorizedError: the caller IS
+ * authorized to activate clients in this workspace, the precondition just
+ * isn't met yet. Callers render this as an actionable "here's what's
+ * missing" message, never a generic access-denied screen. */
+export class ActivationNotReadyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ActivationNotReadyError";
+  }
+}
+
 /** Phase 6.0B — thrown when a `content jsonb` payload read back from
  * training_program_versions/nutrition_plan_versions/daily_records doesn't
  * structurally match the domain type it's supposed to be (lib/types.ts's

@@ -142,6 +142,15 @@ interface PrototypeStateValue {
    * honest state from "hydrated with no program assigned yet." Always
    * false in demo mode. */
   supabaseNotProvisioned: boolean;
+  /** Phase 6.0D-B — Supabase mode only: true once bootstrap has confirmed
+   * this client HAS a client_profiles row but no real program/nutrition
+   * assignment + start date yet (see app/actions/production-programs.ts's
+   * SupabaseClientBootstrap.programNotYetAssigned doc). Distinct from
+   * supabaseNotProvisioned (no account at all) and from resolveProgramTiming's
+   * "pre_program" (a real start date exists, it just hasn't arrived) — this
+   * is "nothing has been configured yet at all." Always false in demo
+   * mode. */
+  supabaseProgramNotAssigned: boolean;
 }
 
 const PrototypeStateContext = createContext<PrototypeStateValue | null>(null);
@@ -180,6 +189,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
   const [activeCoachUserId, setActiveCoachUserIdState] = useState<string>(TEAGUE_USER.id);
   const [supabaseContext, setSupabaseContext] = useState<ActiveAppContext | null>(null);
   const [supabaseNotProvisioned, setSupabaseNotProvisioned] = useState(false);
+  const [supabaseProgramNotAssigned, setSupabaseProgramNotAssigned] = useState(false);
   const initialPathname = usePathname();
 
   // ---------------------------------------------------------------------
@@ -203,6 +213,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
         return;
       }
       dispatch({ type: "HYDRATE", payload: result.state });
+      setSupabaseProgramNotAssigned(result.programNotYetAssigned);
       const sessionWasStarted =
         result.dailyActivity && result.dailyActivity.training.sessionStatus && result.dailyActivity.training.sessionStatus !== "not-started";
       if (sessionWasStarted && result.state.assignedProgram) {
@@ -240,7 +251,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
   // Action on every state change once hydrated, instead of demo mode's
   // saveClientAppState/localStorage below. Never runs in demo mode.
   useEffect(() => {
-    if (appMode !== "supabase" || !isHydrated || supabaseNotProvisioned) return;
+    if (appMode !== "supabase" || !isHydrated || supabaseNotProvisioned || supabaseProgramNotAssigned) return;
     const record = buildDailyRecordFromLiveState(state, state.programEnrollment, "live");
     saveMySupabaseDailyActivityAction({
       dateIso: state.dateIso,
@@ -253,7 +264,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
       // slice's core persistence correctness.
       console.error("Supabase daily activity autosave failed:", err);
     });
-  }, [appMode, state, isHydrated, supabaseNotProvisioned]);
+  }, [appMode, state, isHydrated, supabaseNotProvisioned, supabaseProgramNotAssigned]);
 
   // One combined bootstrap — reads perspective, which client is currently
   // active, and that client's own AppState together, so there is never an
@@ -429,6 +440,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
     dailyTrainingPlan,
     dailyPlan,
     supabaseNotProvisioned,
+    supabaseProgramNotAssigned,
   };
 
   return <PrototypeStateContext.Provider value={value}>{children}</PrototypeStateContext.Provider>;

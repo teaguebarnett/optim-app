@@ -11,6 +11,7 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { TRAINING_WEEKLY_NOTE } from "@/lib/mock-data";
 import { deriveProgramWeek } from "@/lib/scheduling/enrollment";
 import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
+import { AwaitingProgramSetup } from "@/components/today/awaiting-program-setup";
 
 // Training's NOW architecture (Phase 4.4B-1 — see
 // docs/design/OPTIM_VISUAL_CONSTITUTION.md): a compact header, a centered
@@ -48,10 +49,11 @@ export default function TrainingPage() {
 }
 
 function TrainingScreen() {
-  const { isHydrated, state, activeContext } = usePrototypeState();
+  const { isHydrated, state, activeContext, supabaseProgramNotAssigned } = usePrototypeState();
   const [pickedDateIso, setPickedDateIso] = useState<string | null>(null);
 
   if (!isHydrated) return <ScreenSkeleton />;
+  if (supabaseProgramNotAssigned) return <AwaitingProgramSetup />;
 
   // Phase 5.6A.4 — the same shared pre-start boundary Today already uses
   // (see app/(client)/today/page.tsx), applied here too: none of this

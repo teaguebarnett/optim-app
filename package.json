@@ -56,6 +56,7 @@
     "verify:production-mode": "node --conditions=react-server --experimental-strip-types lib/production/verify-mode.mts",
     "verify:coach-operations": "node --experimental-strip-types lib/production/verify-coach-operations.mts",
     "verify:production-validation": "node --experimental-strip-types lib/production/verify-validation.mts",
+    "verify:roster": "node --experimental-strip-types lib/production/verify-roster.mts",
     "test:db": "supabase test db"
   },
   "dependencies": {

@@ -8,11 +8,12 @@
 // re-derives the caller's own identity from getAuthenticatedContext()
 // itself rather than trusting an argument the client passed. This is the
 // only file client components (hooks/use-prototype-state.tsx's Supabase
-// bootstrap/autosave, and the minimal coach assign page) import from — they
-// never import lib/production/programs.ts or lib/supabase/* directly,
-// keeping every real Supabase query inside server-only code.
+// bootstrap/autosave, and components/coach/live-client-workspace.tsx's
+// program/nutrition/start-date forms) import from — they never import
+// lib/production/programs.ts or lib/supabase/* directly, keeping every real
+// Supabase query inside server-only code.
 
-import { getAuthenticatedContext, requireWorkspaceRole } from "../../lib/production/auth";
+import { getAuthenticatedContext } from "../../lib/production/auth";
 import { getSupabaseServerClient } from "../../lib/supabase/server";
 import {
   getClientProgramContext,
@@ -26,8 +27,6 @@ import {
   publishNutritionVersion,
   assignNutritionVersionToClient,
   setClientProgramStartDate,
-  getActiveProgramAssignment,
-  getActiveNutritionAssignment,
 } from "../../lib/production/programs";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
@@ -82,6 +81,20 @@ export type SupabaseClientBootstrap =
       clientDisplayName: string;
       primaryCoachDisplayName: string | null;
       email: string | null;
+      /** Phase 6.0D-B fix — true whenever this client has no real
+       * client_enrollments.original_program_start_date + active program
+       * assignment yet (context.enrollment is null — see
+       * lib/production/programs.ts's getClientProgramContext doc). Before
+       * this fix, callers fell back to createInitialState's generic
+       * "programEnrollment starts today" scaffold in this exact case,
+       * which resolveProgramTiming then read as a genuinely active,
+       * already-started program — a fabricated Day 1 for a client whose
+       * coach hasn't configured anything yet. Every client-facing page
+       * must render an honest "your coach is still setting up your
+       * program" state instead of the normal Today/Training/Nutrition/
+       * Progress experience whenever this is true (see
+       * components/today/awaiting-program-setup.tsx). */
+      programNotYetAssigned: boolean;
     };
 
 /** The one entry point hooks/use-prototype-state.tsx's Supabase-mode
@@ -131,6 +144,7 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
     clientDisplayName: identity.clientDisplayName,
     primaryCoachDisplayName: identity.primaryCoachDisplayName,
     email: ctx.profile.email,
+    programNotYetAssigned: !context.enrollment,
   };
 }
 
@@ -150,57 +164,11 @@ export async function saveMySupabaseDailyActivityAction(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Coach-side actions — the minimal, real create/publish/assign loop. See
-// app/coach/clients/[clientId]/assign-live/page.tsx, the one focused
-// Supabase-mode UI surface that calls these (Part 7 forbids a broader new
-// authoring UI in this phase).
+// Coach-side actions — the minimal, real create/publish/assign loop. Called
+// from components/coach/live-client-workspace.tsx (folded into the real,
+// connected client detail surface — see that file's own doc for why this is
+// no longer a standalone "proof page").
 // ---------------------------------------------------------------------------
-
-export interface CoachClientLiveSummary {
-  clientId: string;
-  displayName: string;
-  workspaceId: string;
-  startDateIso: string | null;
-  activeProgram: { versionId: string; versionNumber: number; name: string } | null;
-  activeNutrition: { versionId: string; versionNumber: number } | null;
-  todayActivity: DailyActivityContent | null;
-}
-
-export async function getCoachClientLiveSummaryAction(clientProfileId: string): Promise<CoachClientLiveSummary> {
-  const ctx = await getAuthenticatedContext();
-  const supabase = await getSupabaseServerClient();
-  const { data: clientRow, error } = await supabase
-    .from("client_profiles")
-    .select("id, workspace_id, display_name")
-    .eq("id", clientProfileId)
-    .single();
-  if (error) throw new Error(`getCoachClientLiveSummaryAction failed: ${error.message}`);
-  requireWorkspaceRole(ctx, clientRow.workspace_id as string, ["workspace_owner", "platform_admin", "coach"]);
-
-  const { data: enrollmentRow } = await supabase
-    .from("client_enrollments")
-    .select("original_program_start_date")
-    .eq("client_profile_id", clientProfileId)
-    .maybeSingle();
-
-  const [program, nutrition] = await Promise.all([
-    getActiveProgramAssignment(clientProfileId),
-    getActiveNutritionAssignment(clientProfileId),
-  ]);
-
-  const dateIso = resolveClientLocalDateIso(new Date(), "UTC");
-  const todayActivity = await getDailyActivity(clientProfileId, dateIso);
-
-  return {
-    clientId: clientRow.id as string,
-    displayName: clientRow.display_name as string,
-    workspaceId: clientRow.workspace_id as string,
-    startDateIso: (enrollmentRow?.original_program_start_date as string | null) ?? null,
-    activeProgram: program ? { versionId: program.versionId, versionNumber: program.versionNumber, name: program.content.name } : null,
-    activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber } : null,
-    todayActivity,
-  };
-}
 
 export async function createPublishAndAssignProgramAction(params: {
   workspaceId: string;

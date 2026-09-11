@@ -23,7 +23,7 @@ import {
   type EscalationView,
   type ConversationMessageView,
 } from "../../lib/production/chat";
-import { publishCoachNote } from "../../lib/production/coach-notes";
+import { publishCoachNote, getClientCoachNotes, type CoachNoteView } from "../../lib/production/coach-notes";
 import {
   createCampaignDraft,
   prepareCampaignPreview,
@@ -118,6 +118,10 @@ export async function publishCoachNoteAction(params: { clientProfileId: string; 
   const workspaceId = await resolveClientWorkspaceId(params.clientProfileId);
   await publishCoachNote({ workspaceId, clientProfileId: params.clientProfileId, body: params.body });
   revalidateCoachSurfaces();
+}
+
+export async function getClientCoachNotesAction(clientProfileId: string): Promise<CoachNoteView[]> {
+  return getClientCoachNotes(clientProfileId);
 }
 
 // ---------------------------------------------------------------------------

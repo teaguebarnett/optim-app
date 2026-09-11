@@ -35,6 +35,33 @@ import { ALL_COACH_PROFILES } from "@/lib/tenancy/seed";
 import type { OnboardingRecapFact } from "@/components/onboarding/onboarding-stage";
 import type { OnboardingStepAnswers, OnboardingStepId } from "@/lib/coach/types";
 
+/** Phase 6.0D-B — the Supabase-mode data/persistence source, injected by
+ * components/onboarding/live-onboarding-wizard.tsx. When omitted (every
+ * demo-mode call site, unchanged), the wizard reads/writes through
+ * usePlatformState()'s platform-store dispatch exactly as it always has —
+ * this prop exists so the same UI/pacing/validation logic below (Part 6's
+ * "reuse the strongest existing demo behavior... do not create a second
+ * competing implementation") drives real Supabase persistence too, without
+ * this component ever importing a Server Action or knowing what a
+ * workspace_id is. */
+export interface OnboardingWizardLiveSource {
+  isReady: boolean;
+  clientDisplayName: string;
+  coachDisplayName: string;
+  coachAvatarInitials: string | null;
+  existingProgress: {
+    currentStepIndex: number;
+    answers: Partial<Record<OnboardingStepId, OnboardingStepAnswers>>;
+    completedAtIso?: string;
+  } | null;
+  onSaveStep: (params: { stepId: OnboardingStepId; answers: OnboardingStepAnswers; nextStepIndex: number }) => Promise<void>;
+  onComplete: (finalAnswers: OnboardingStepAnswers) => Promise<void>;
+  /** Called after onComplete resolves — navigates to the real Supabase
+   * "awaiting your coach" screen, mirroring the demo push to
+   * /setup-status/[clientId] below. */
+  onCompleteNavigate: () => void;
+}
+
 /**
  * The connected onboarding framework — Phase 5.3A's adaptively-paced
  * six-chapter flow defined in lib/coach/onboarding-steps.ts. A chapter with
@@ -49,7 +76,7 @@ import type { OnboardingStepAnswers, OnboardingStepId } from "@/lib/coach/types"
  * applyStepFieldUpdate's generic hide-and-clear behavior, which never
  * needs to hardcode which field depends on which.
  */
-export function OnboardingWizard({ clientId }: { clientId: string }) {
+export function OnboardingWizard({ clientId, live }: { clientId: string; live?: OnboardingWizardLiveSource }) {
   const { platform, dispatch, isPlatformHydrated } = usePlatformState();
   const router = useRouter();
   const initializedRef = useRef(false);
@@ -61,11 +88,12 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
   const [draftAnswers, setDraftAnswers] = useState<Partial<Record<string, OnboardingStepAnswers>>>({});
   const step = ONBOARDING_STEPS[stepIndex];
 
-  const client = isPlatformHydrated ? getClientProfile(platform, clientId) : null;
-  const existingProgress = isPlatformHydrated ? getOnboardingProgress(platform, clientId) : null;
+  const isHydrated = live ? live.isReady : isPlatformHydrated;
+  const client = live ? { id: clientId, primaryCoachId: null as string | null, workspaceId: "" } : isPlatformHydrated ? getClientProfile(platform, clientId) : null;
+  const existingProgress = live ? live.existingProgress : isPlatformHydrated ? getOnboardingProgress(platform, clientId) : null;
 
   useEffect(() => {
-    if (!isPlatformHydrated || initializedRef.current) return;
+    if (!isHydrated || initializedRef.current) return;
     // The "already resumed" flag is set INSIDE the deferred callback, not
     // here before scheduling it — deliberately, to survive React Strict
     // Mode's dev-only double-invoke without ever silently skipping resume.
@@ -83,9 +111,9 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
       }
     }, 0);
     return () => clearTimeout(timeout);
-  }, [isPlatformHydrated, existingProgress, clientId, router]);
+  }, [isHydrated, existingProgress, clientId, router]);
 
-  if (!isPlatformHydrated) return null;
+  if (!isHydrated) return null;
 
   if (!client) {
     return (
@@ -97,13 +125,14 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
     );
   }
 
-  const coach = ALL_COACH_PROFILES.find((c) => c.id === client.primaryCoachId);
-  const coachName = coach?.displayName ?? "your coach";
+  const coach = live ? undefined : ALL_COACH_PROFILES.find((c) => c.id === client.primaryCoachId);
+  const coachName = live ? live.coachDisplayName : (coach?.displayName ?? "your coach");
+  const coachInitials = live ? (live.coachAvatarInitials ?? undefined) : coach?.avatarInitials;
 
   if (phase === "intro") {
     return (
       <RequireThemeChoice accountKind="client" accountId={client.id}>
-        <OnboardingStage coachName={coach?.displayName} coachInitials={coach?.avatarInitials}>
+        <OnboardingStage coachName={live ? coachName : coach?.displayName} coachInitials={live ? coachInitials : coach?.avatarInitials}>
           <OptimIntro coachName={coachName} onContinue={() => setPhase("chapters")} />
         </OnboardingStage>
       </RequireThemeChoice>
@@ -150,7 +179,7 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
     });
   }
 
-  function handleNext() {
+  async function handleNext() {
     // Skip straight past any run of moments that have nothing applicable to
     // answer (e.g. health_finish's injury-detail moments once
     // hasInjuryHistory is false) — see findVisibleMomentIndex's own doc for
@@ -165,21 +194,41 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
 
     const nowIso = new Date().toISOString();
     if (isReviewStep) {
+      if (live) {
+        // Awaited (unlike the per-chapter save below): this is the one
+        // navigation-gating write — the client must not land on
+        // /setup-status believing they're done if the completion write
+        // actually failed.
+        await live.onComplete(effectiveAnswers);
+        live.onCompleteNavigate();
+        return;
+      }
       dispatch({ type: "COMPLETE_ONBOARDING", clientId, workspaceId: client!.workspaceId, nowIso });
       router.push(`/setup-status/${clientId}`);
       return;
     }
     const nextIndex = Math.min(stepIndex + 1, ONBOARDING_STEPS.length - 1);
     setDraftAnswers((prev) => ({ ...prev, [step.id]: effectiveAnswers }));
-    dispatch({
-      type: "SAVE_ONBOARDING_STEP",
-      clientId,
-      workspaceId: client!.workspaceId,
-      stepId: step.id,
-      answers: effectiveAnswers,
-      nextStepIndex: nextIndex,
-      nowIso,
-    });
+    if (live) {
+      // Fire-and-forget, matching hooks/use-prototype-state.tsx's own
+      // Supabase autosave discipline: the chapter transition is never
+      // blocked on network latency, and a failure is surfaced to the
+      // console rather than silently swallowed — never treated as "saved"
+      // when it wasn't.
+      live.onSaveStep({ stepId: step.id, answers: effectiveAnswers, nextStepIndex: nextIndex }).catch((err) => {
+        console.error("Onboarding step save failed:", err);
+      });
+    } else {
+      dispatch({
+        type: "SAVE_ONBOARDING_STEP",
+        clientId,
+        workspaceId: client!.workspaceId,
+        stepId: step.id,
+        answers: effectiveAnswers,
+        nextStepIndex: nextIndex,
+        nowIso,
+      });
+    }
     setDirection("forward");
     setStepIndex(nextIndex);
     const nextStep = ONBOARDING_STEPS[nextIndex];
@@ -228,8 +277,8 @@ export function OnboardingWizard({ clientId }: { clientId: string }) {
   return (
     <RequireThemeChoice accountKind="client" accountId={client.id}>
     <OnboardingStage
-      coachName={coach?.displayName}
-      coachInitials={coach?.avatarInitials}
+      coachName={live ? coachName : coach?.displayName}
+      coachInitials={live ? coachInitials : coach?.avatarInitials}
       onBack={!isVeryFirstScreen ? handleBack : undefined}
       progress={
         isReviewStep

@@ -14,6 +14,7 @@ import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { getDailyBriefing } from "@/lib/coach/repository";
 import { isBriefingVisibleToClient } from "@/lib/coach/daily-briefing";
 import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
+import { AwaitingProgramSetup } from "@/components/today/awaiting-program-setup";
 
 // Today's visual architecture (Phase 4.4B.1 bento revision — see
 // docs/design/OPTIM_VISUAL_CONSTITUTION.md): a compact header, one
@@ -32,12 +33,16 @@ import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
 //   every remaining item as a 1-column tile that only claims a full row
 //   once tapped. See today-bento.tsx.
 export default function TodayPage() {
-  const { isHydrated, state, dispatch, dailyTrainingPlan, dailyPlan } = usePrototypeState();
+  const { isHydrated, state, dispatch, dailyTrainingPlan, dailyPlan, supabaseProgramNotAssigned } = usePrototypeState();
   const { platform, isPlatformHydrated } = usePlatformState();
   const [trainingTimeSheetOpen, setTrainingTimeSheetOpen] = useState(false);
 
   if (!isHydrated || !isPlatformHydrated) {
     return <ScreenSkeleton />;
+  }
+
+  if (supabaseProgramNotAssigned) {
+    return <AwaitingProgramSetup />;
   }
 
   const timing = resolveProgramTiming(state.programEnrollment, state.dateIso);

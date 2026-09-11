@@ -28,6 +28,11 @@ export interface OwnClientIdentity {
    * never from a hardcoded name. Falls back to the honest generic "your
    * coach" only when no coach is actually assigned yet. */
   coachDisplayName: string;
+  /** Phase 6.0D-B — the real coach's avatar initials, for the same
+   * onboarding/setup-status chrome (components/onboarding/onboarding-stage.tsx)
+   * demo mode already renders from ALL_COACH_PROFILES. Null when no coach is
+   * assigned yet, exactly like coachDisplayName's own fallback case. */
+  coachAvatarInitials: string | null;
 }
 
 export async function resolveOwnClientIdentity(): Promise<OwnClientIdentity> {
@@ -44,13 +49,13 @@ export async function resolveOwnClientIdentity(): Promise<OwnClientIdentity> {
 
   const { data: assignmentRow, error: assignmentError } = await supabase
     .from("coach_client_assignments")
-    .select("coach_user_id, profiles:coach_user_id(display_name)")
+    .select("coach_user_id, profiles:coach_user_id(display_name, avatar_initials)")
     .eq("client_profile_id", clientRow.id)
     .eq("is_primary", true)
     .maybeSingle();
   if (assignmentError) throw new Error(`resolveOwnClientIdentity (coach lookup) failed: ${assignmentError.message}`);
 
-  const coachProfile = assignmentRow?.profiles as unknown as { display_name: string } | null;
+  const coachProfile = assignmentRow?.profiles as unknown as { display_name: string; avatar_initials: string | null } | null;
 
   return {
     userId: ctx.userId,
@@ -59,6 +64,7 @@ export async function resolveOwnClientIdentity(): Promise<OwnClientIdentity> {
     clientDisplayName: clientRow.display_name as string,
     primaryCoachId: (assignmentRow?.coach_user_id as string | undefined) ?? null,
     coachDisplayName: coachProfile?.display_name ?? "your coach",
+    coachAvatarInitials: coachProfile?.avatar_initials ?? null,
   };
 }
 

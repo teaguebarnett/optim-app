@@ -14,6 +14,28 @@ import type { ClientProfile, ClientProfileId } from "../tenancy/types";
 import type { PlatformState } from "./platform-store";
 import type { AttentionQueueItem, ClientLifecycleStatus } from "./types";
 
+// ---------------------------------------------------------------------------
+// Phase 6.0D-B — Supabase-mode lifecycle derivation. Pure and
+// framework-independent (no "server-only", no Supabase import) so it lives
+// alongside this file's own demo-mode buildRosterRows and is independently
+// unit-testable by lib/production/verify-roster.mts without a database —
+// see lib/production/roster.ts, the one Supabase-only caller, for the full
+// module doc on why lifecycle is derived rather than stored as its own
+// column.
+// ---------------------------------------------------------------------------
+export function deriveLifecycle(params: {
+  enrollmentStatus: string | null;
+  onboardingExists: boolean;
+  onboardingCompletedAtIso: string | null;
+}): ClientLifecycleStatus {
+  if (params.enrollmentStatus === "active") return "active";
+  if (params.enrollmentStatus === "paused") return "paused";
+  if (params.enrollmentStatus === "offboarded") return "completed";
+  if (!params.onboardingExists) return "invited";
+  if (!params.onboardingCompletedAtIso) return "onboarding";
+  return "coach_setup";
+}
+
 export interface RosterRow {
   clientId: ClientProfileId;
   name: string;

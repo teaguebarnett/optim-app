@@ -14,6 +14,7 @@ import { usePlatformState } from "@/hooks/use-platform-state";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
 import { deriveNutritionStatusLine } from "@/lib/nutrition/status";
 import { resolveProgramTiming } from "@/lib/scheduling/program-timing";
+import { AwaitingProgramSetup } from "@/components/today/awaiting-program-setup";
 import { MACRO_FIELD, nextRelevantMealPeriod } from "@/lib/nutrition/view-model";
 import type { MacroKey } from "@/lib/nutrition/view-model";
 import type { MealPeriod } from "@/lib/types";
@@ -26,12 +27,13 @@ import type { MealPeriod } from "@/lib/types";
 // nutritionTotals/dailyPlan every other screen already reads from
 // usePrototypeState() so nothing here can ever drift from Today.
 export default function NutritionPage() {
-  const { isHydrated, state, nutritionTotals, dailyPlan, activeContext } = usePrototypeState();
+  const { isHydrated, state, nutritionTotals, dailyPlan, activeContext, supabaseProgramNotAssigned } = usePrototypeState();
   const { platform, isPlatformHydrated } = usePlatformState();
   const [activeMacro, setActiveMacro] = useState<MacroKey | null>(null);
   const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
 
   if (!isHydrated) return <ScreenSkeleton />;
+  if (supabaseProgramNotAssigned) return <AwaitingProgramSetup />;
 
   // Phase 5.6A.4 — the same shared pre-start boundary Today/Training use:
   // no target can be "due" and no meal can be "logged" before this

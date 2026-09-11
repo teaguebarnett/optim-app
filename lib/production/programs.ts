@@ -427,7 +427,22 @@ export async function assignNutritionVersionToClient(params: {
  * (see that function's own doc: no start date means "program not
  * configured," never a fabricated one). A plain RLS-governed upsert (staff
  * can manage any client_enrollments row they can manage the client for —
- * see 20260909000008's client_enrollments_insert_staff/update_staff). */
+ * see 20260909000008's client_enrollments_insert_staff/update_staff).
+ *
+ * Phase 6.0D-B fix — the real "calendar/start-date inconsistency in the
+ * production path" this phase's own brief called out: this used to force
+ * status: "active" on every call, which meant setting a start date (a
+ * config step a coach might reasonably do WHILE a client is still mid-
+ * onboarding, to have it ready) silently activated them — jumping straight
+ * past "coach_setup"/awaiting-review, and past
+ * lib/production/roster.ts's own deriveLifecycle entirely, for a client who
+ * may not have finished onboarding at all yet. Setting a start date now
+ * only ever sets the date/timezone; only an explicit, separate coach action
+ * — activateClientEnrollment, in lib/production/roster.ts — ever flips
+ * status to "active", and it refuses to unless a real program AND
+ * nutrition assignment already exist.
+ * Preserves whatever status already exists (defaults to the column's own
+ * "invited" default on first insert) rather than guessing one here. */
 export async function setClientProgramStartDate(params: {
   workspaceId: string;
   clientProfileId: string;
@@ -436,13 +451,20 @@ export async function setClientProgramStartDate(params: {
 }): Promise<void> {
   await requireCoachAuthority(params.workspaceId);
   const supabase = await getSupabaseServerClient();
+  const { data: existing, error: readError } = await supabase
+    .from("client_enrollments")
+    .select("status")
+    .eq("client_profile_id", params.clientProfileId)
+    .maybeSingle();
+  if (readError) throw new Error(`setClientProgramStartDate (read) failed: ${readError.message}`);
+
   const { error } = await supabase.from("client_enrollments").upsert(
     {
       workspace_id: params.workspaceId,
       client_profile_id: params.clientProfileId,
       original_program_start_date: params.startDateIso,
       timezone: params.timeZone,
-      status: "active",
+      ...(existing ? {} : { status: "onboarding" }),
     },
     { onConflict: "client_profile_id" }
   );
