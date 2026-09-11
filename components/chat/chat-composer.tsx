@@ -10,14 +10,21 @@ import { isSendKeystroke, shouldSuppressDuplicateSend } from "@/lib/chat/compose
 import type { ChatAttachment, ChatAttachmentKind } from "@/lib/types";
 
 interface ChatComposerProps {
-  coachName: string;
+  /** Phase 6.0C: the client's default conversation is ALWAYS OPTIM
+   * Assistant, so the composer never says "Message <coach>…" — that copy
+   * implied a permanent coach DM, which is exactly the model this product
+   * does not have. Overridable only for the temporary coach thread, where
+   * a real human genuinely is on the other end. */
+  placeholder?: string;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   onSendVoice: (attachment: ChatAttachment) => void;
 }
 
+const DEFAULT_PLACEHOLDER = "Ask OPTIM…";
+
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 
-export function ChatComposer({ coachName, onSend, onSendVoice }: ChatComposerProps) {
+export function ChatComposer({ placeholder = DEFAULT_PLACEHOLDER, onSend, onSendVoice }: ChatComposerProps) {
   const [value, setValue] = useState("");
   const [draftAttachments, setDraftAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -111,7 +118,7 @@ export function ChatComposer({ coachName, onSend, onSendVoice }: ChatComposerPro
               submit();
             }
           }}
-          placeholder={`Message ${coachName}...`}
+          placeholder={placeholder}
           className="max-h-40 flex-1 resize-none rounded-[var(--radius-md)] border border-border-strong bg-surface px-3.5 py-2.5 text-[15px] text-off-white outline-none placeholder:text-neutral/60 focus-visible:border-accent"
         />
         <button

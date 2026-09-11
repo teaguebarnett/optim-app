@@ -13,10 +13,16 @@
 // hold workspace-admin authority.
 
 import "server-only";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseServerConfig } from "../production/env";
 
-let client: ReturnType<typeof createClient> | null = null;
+// Typed via the exported `SupabaseClient` rather than `ReturnType<typeof
+// createClient>` — the latter resolves its default generics in a way that
+// makes `.from(table).select(...)` collapse to `never` on this SDK version
+// once the client is cached in a reassigned `let` (see lib/production/
+// chat.ts, the first caller to actually run `.from()` queries through this
+// admin client rather than only `.auth.admin.*`).
+let client: SupabaseClient | null = null;
 
 export function getSupabaseAdminClient() {
   if (client) return client;

@@ -53,7 +53,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <PlatformStateProvider>
           <PrototypeStateProvider appMode={appMode}>
             <WorkspaceTheme />
-            <RoleRouteBoundary>{children}</RoleRouteBoundary>
+            <RoleRouteBoundary appMode={appMode}>{children}</RoleRouteBoundary>
           </PrototypeStateProvider>
         </PlatformStateProvider>
       </body>

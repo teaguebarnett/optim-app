@@ -18,6 +18,7 @@
     "verify:numeric-wheel": "node --experimental-strip-types lib/verify-numeric-wheel.mts",
     "verify:nutrition": "node --experimental-strip-types lib/nutrition/verify-nutrition.mts",
     "verify:chat": "node --experimental-strip-types lib/chat/verify-chat.mts",
+    "verify:chat-intelligence": "node --conditions=react-server --experimental-strip-types lib/ai/verify-chat-intelligence.mts",
     "verify:coach": "node --experimental-strip-types lib/coach/verify-coach.mts",
     "verify:setup": "node --experimental-strip-types lib/coach/verify-setup.mts",
     "verify:program-timing": "node --experimental-strip-types lib/scheduling/verify-program-timing.mts",
@@ -57,6 +58,7 @@
     "test:db": "supabase test db"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.125.0",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.116.0",
     "client-only": "^0.0.1",

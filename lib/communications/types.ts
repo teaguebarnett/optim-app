@@ -121,10 +121,21 @@ export function isValidEscalationTransition(from: EscalationStatus, to: Escalati
  * anything was sent) unless the escalation genuinely reached at least
  * "proposed" — a caller literally cannot construct a "sent to Teague"
  * message from a boolean flag or a hopeful guess, only from a real row. */
-export function describeEscalationForAssistantMessage(escalation: Escalation | null): string | null {
+export function describeEscalationForAssistantMessage(
+  escalation: Escalation | null,
+  /** Phase 6.0C: the real assigned coach's display name, resolved
+   * server-side from the authenticated coach/client relationship — never a
+   * hardcoded "Teague" (this product has more than one coach; see
+   * lib/tenancy/seed.ts's Teague/Alex isolation fixture and
+   * lib/chat/assistant.ts's own interpolateCoachName rule). Defaults to the
+   * generic phrasing rather than a wrong name when a caller genuinely has
+   * no coach assigned. */
+  coachDisplayName?: string
+): string | null {
   if (!escalation) return null;
   if (escalation.status === "pending") return null;
-  return "I've flagged this for Teague to take a look.";
+  const who = coachDisplayName?.trim() ? coachDisplayName.trim() : "your coach";
+  return `I've flagged this for ${who} to take a look.`;
 }
 
 /** Personal Coach Note — one-way, no thread. */

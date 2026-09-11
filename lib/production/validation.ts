@@ -29,6 +29,7 @@
 import { InvalidPersistedContentError } from "./errors.ts";
 import type { ClientAssignedProgram, AssignedNutritionPlan, Exercise, Workout, ProgramDay, ProgramWeek } from "../types";
 import type { TrainingDaySnapshot, NutritionDaySnapshot } from "../history/types";
+import type { CoachPlaybookContent } from "../coach/playbook";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -173,4 +174,42 @@ export function validateDailyActivityContent(raw: unknown): DailyActivityContent
   requireArray(raw.nutrition.periodsInPlan, "nutrition.periodsInPlan", what);
   if (!isRecord(raw.nutrition.targetsSnapshot)) fail(what, `"nutrition.targetsSnapshot" is not an object`);
   return raw as unknown as DailyActivityContent;
+}
+
+/** Validates a coach_playbooks.content payload (Phase 6.0C) — checks the
+ * sections lib/ai/context.ts's buildSystemPrompt and
+ * lib/coach/ai-authority.ts's resolver actually read, same "not exhaustive,
+ * just what the live engine reads" tradeoff this file's own header
+ * documents for program/nutrition content. A malformed row (hand-edited,
+ * foreign writer, storage corruption) throws here rather than silently
+ * assembling a broken or empty system prompt for a real client. */
+export function validatePlaybookContent(raw: unknown): CoachPlaybookContent {
+  const what = "coach playbook";
+  if (!isRecord(raw)) fail(what, "content is not an object");
+  if (!isRecord(raw.operatingModel)) fail(what, `"operatingModel" is not an object`);
+  const m = raw.operatingModel;
+  if (!isRecord(m.communication)) fail(what, `"operatingModel.communication" is not an object`);
+  requireString(m.communication.tone, "operatingModel.communication.tone", what);
+  requireString(m.communication.conciseness, "operatingModel.communication.conciseness", what);
+  if (!isRecord(m.programArchitecture)) fail(what, `"operatingModel.programArchitecture" is not an object`);
+  requireString(m.programArchitecture.substitutionLogic, "operatingModel.programArchitecture.substitutionLogic", what);
+  requireString(m.programArchitecture.proximityToFailure, "operatingModel.programArchitecture.proximityToFailure", what);
+  requireString(m.programArchitecture.progressionMethod, "operatingModel.programArchitecture.progressionMethod", what);
+  if (!isRecord(m.nutritionPhilosophy)) fail(what, `"operatingModel.nutritionPhilosophy" is not an object`);
+  requireString(m.nutritionPhilosophy.calorieTargetPhilosophy, "operatingModel.nutritionPhilosophy.calorieTargetPhilosophy", what);
+  requireString(m.nutritionPhilosophy.adherenceStandard, "operatingModel.nutritionPhilosophy.adherenceStandard", what);
+  if (!isRecord(m.safety)) fail(what, `"operatingModel.safety" is not an object`);
+  requireString(m.safety.painResponsePolicy, "operatingModel.safety.painResponsePolicy", what);
+  requireString(m.safety.injuryResponsePolicy, "operatingModel.safety.injuryResponsePolicy", what);
+  requireString(m.safety.medicalConcernPolicy, "operatingModel.safety.medicalConcernPolicy", what);
+  requireArray(m.safety.absoluteOverrideRules, "operatingModel.safety.absoluteOverrideRules", what);
+
+  if (!isRecord(raw.aiAuthority)) fail(what, `"aiAuthority" is not an object`);
+  if (!isRecord(raw.aiAuthority.global)) fail(what, `"aiAuthority.global" is not an object`);
+  requireString(raw.aiAuthority.global.level, "aiAuthority.global.level", what);
+  if (!isRecord(raw.aiAuthority.clientOverrides)) fail(what, `"aiAuthority.clientOverrides" is not an object`);
+
+  requireArray(raw.examples, "examples", what);
+
+  return raw as unknown as CoachPlaybookContent;
 }

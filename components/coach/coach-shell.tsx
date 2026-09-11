@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { Avatar } from "@/components/ui/avatar";
 import { CoachBottomNav } from "@/components/coach/coach-bottom-nav";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
+import type { AppMode } from "@/lib/production/mode";
 
 // Phase 5.5A — OPTIM is AI-first: training and nutrition are no longer
 // standalone top-level departments here. Each client's real
@@ -39,8 +40,20 @@ function isActivePath(pathname: string, href: string, exact: boolean): boolean {
  * the approved reference composition. Mobile keeps its own real bottom
  * navigation (see coach-bottom-nav.tsx) untouched — this is a desktop-only
  * structural change.
+ *
+ * Phase 6.0C fix: every value this component reads (activeContext,
+ * workspace, com) comes from the localStorage-backed demo prototype, which
+ * has no concept of a real Supabase session. A Supabase-mode proof page
+ * nested under app/coach/ (escalations, campaigns, assign-live) was
+ * previously swallowed entirely — `coachAccountId` derived from demo state
+ * that has no reason to reflect who's actually signed in, so this returned
+ * `null` and hid the real, correctly-fetched page content. Those pages are
+ * already intentionally self-contained (their own back link, their own
+ * minimal layout — see e.g. app/coach/escalations/page.tsx's own doc), so
+ * in Supabase mode this renders them bare, with no demo chrome, rather than
+ * trying to build a second real nav from data this component doesn't have.
  */
-export function CoachShell({ children }: { children: ReactNode }) {
+export function CoachShell({ children, appMode }: { children: ReactNode; appMode: AppMode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { activeContext } = usePrototypeState();
@@ -65,9 +78,11 @@ export function CoachShell({ children }: { children: ReactNode }) {
   const isGenuinelyNewCoach = workspace.isPlatformHydrated && calibrationStatus !== null && computeIsGenuinelyNewCoach({ calibrationStatus, clientCount: workspace.clients.length });
 
   useEffect(() => {
-    if (isGenuinelyNewCoach) router.replace("/coach-onboarding");
-  }, [isGenuinelyNewCoach, router]);
+    if (appMode === "supabase" || !isGenuinelyNewCoach) return;
+    router.replace("/coach-onboarding");
+  }, [appMode, isGenuinelyNewCoach, router]);
 
+  if (appMode === "supabase") return <>{children}</>;
   if (!coachAccountId) return null;
   if (isGenuinelyNewCoach) return null;
 
