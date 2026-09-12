@@ -31,8 +31,10 @@ import {
 import { universalProgramToClientAssignedProgram } from "../../lib/training/legacy-adapter";
 import { generateProgramDirectionSummaries } from "../../lib/coach/program-directions";
 import { buildUniversalProgramForDirection, buildPlaceholderProgrammingProfile } from "../../lib/coach/universal-program-generation";
-import { createDefaultCoachOperatingModel } from "../../lib/coach/operating-model";
 import { DAYS_OF_WEEK_ORDER } from "../../lib/coach/training";
+import { getOnboardingProgressForClient } from "../../lib/production/onboarding";
+import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
+import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { resolveClientLocalDateIso } from "../../lib/shared/local-date";
@@ -225,29 +227,44 @@ export async function saveMySupabaseDailyActivityAction(params: {
 // no longer a standalone "proof page").
 // ---------------------------------------------------------------------------
 
-// Phase 5 — a genuine, coach-methodology-aware default cadence (3
-// non-consecutive days) rather than an arbitrary single day, used only
-// until a real per-client available-days answer is wired into this action
-// (see buildPlaceholderProgrammingProfile's own doc). Not a demographic
-// assumption — just a common, safe starting cadence.
+// Phase 6B — this conservative, non-demographic default cadence is now
+// ONLY a genuine fallback: used exclusively when a client hasn't completed
+// real onboarding yet (see extractClientProgrammingProfile below). Every
+// client with real onboarding data gets their own real availableDays
+// instead.
 const DEFAULT_AVAILABLE_DAYS = [DAYS_OF_WEEK_ORDER[0], DAYS_OF_WEEK_ORDER[2], DAYS_OF_WEEK_ORDER[4]];
 
 /**
- * Phase 5 — replaces the old buildDraftProgramFromCatalog placeholder (a
+ * Phase 5 replaced the old buildDraftProgramFromCatalog placeholder (a
  * clone of the single hardcoded PUSH_WORKOUT catalog exercise) with real,
- * coach-methodology-aware, periodized universal generation
- * (lib/coach/universal-program-generation.ts) — the same real decision
- * logic (rep ranges, RPE, periodization, exercise selection) as the
- * demo-mode coach program composer, natively producing schemaVersion 2
- * content instead of legacy Workout/Exercise.
+ * periodized universal generation (lib/coach/universal-program-generation.ts).
+ * Phase 6B replaces THAT phase's own placeholder coach/client context with
+ * the real persisted equivalents:
  *
- * Real per-client/per-coach context (Supabase onboarding ->
- * ClientProgrammingProfile, coach_playbooks -> CoachOperatingModel) is not
- * yet wired into this specific action — see this phase's completion report
- * for why that's a deliberate, separate follow-up rather than a shortcut
- * taken here. createDefaultCoachOperatingModel/buildPlaceholderProgrammingProfile
- * are honest, safe, non-demographic starting defaults, never a fabricated
- * claim about this specific coach/client.
+ * - Coach methodology: this workspace's own approved Coach Playbook
+ *   (lib/production/playbooks.ts's getOrBootstrapApprovedPlaybook) — real
+ *   configured methodology when the coach has set one up, or an honest,
+ *   safe, bootstrapped default (never a fabricated claim about how this
+ *   coach actually coaches) when they haven't yet. Scoped by workspaceId,
+ *   matching this product's current "one coach, and that coach is the
+ *   workspace owner" reality (see docs/production/PILOT_RUNBOOK.md) — true
+ *   per-coach scoping is a real, separate question for a future
+ *   multi-coach workspace, not this phase's concern (see this phase's
+ *   completion report).
+ * - Client context: this client's own real onboarding answers, normalized
+ *   through the existing extractClientProgrammingProfile (never a raw
+ *   onboarding dump — that function already refuses to fabricate a missing
+ *   answer, flagging an honest assumption instead). Falls back to the same
+ *   conservative DEFAULT_AVAILABLE_DAYS-based placeholder ONLY when this
+ *   client genuinely hasn't completed onboarding yet — generation must
+ *   keep working safely for a legacy/incomplete client, never block on it.
+ *
+ * No Supabase-mode health-review system exists yet (a real, documented gap
+ * — see this phase's completion report), so `healthReview` is passed as
+ * null here; that's honest about the gap, not a fabricated "no injury"
+ * claim — the client's own self-reported injury/restriction answers still
+ * reach the profile and still influence exercise selection regardless (see
+ * avoidedTermsForProfile).
  *
  * Authorization is checked explicitly, here, before any generation work
  * happens — never relying solely on createDraftProgramVersion's own later
@@ -265,8 +282,17 @@ export async function createPublishAndAssignProgramAction(params: {
   if (!isWorkspaceStaffRole(membership.role)) throw new UnauthorizedError();
 
   const nowIso = new Date().toISOString();
-  const com = createDefaultCoachOperatingModel({ coachId: ctx.userId, workspaceId: params.workspaceId, nowIso, businessName: "your coach" });
-  const profile = buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+
+  const supabase = await getSupabaseServerClient();
+  const { data: workspaceRow, error: workspaceError } = await supabase.from("workspaces").select("business_name").eq("id", params.workspaceId).single();
+  if (workspaceError) throw new Error(`createPublishAndAssignProgramAction (workspace lookup) failed: ${workspaceError.message}`);
+  const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: workspaceRow.business_name as string });
+  const com = playbook.content.operatingModel;
+
+  const onboarding = await getOnboardingProgressForClient(params.clientProfileId);
+  const profileResult = extractClientProgrammingProfile(onboarding, null);
+  const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+
   const directions = generateProgramDirectionSummaries({ profile, com, durationWeeks: params.durationWeeks });
   const direction = directions.find((d) => d.kind === "best_fit") ?? directions[0];
   const { content } = buildUniversalProgramForDirection(direction, {

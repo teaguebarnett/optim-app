@@ -46,6 +46,7 @@
     "verify:program-periodization": "node --experimental-strip-types lib/coach/verify-program-periodization.mts",
     "verify:program-directions": "node --experimental-strip-types lib/coach/verify-program-directions.mts",
     "verify:universal-program-generation": "node --experimental-strip-types lib/coach/verify-universal-program-generation.mts",
+    "verify:personalized-generation": "node --experimental-strip-types lib/coach/verify-personalized-generation.mts",
     "verify:program-revision": "node --experimental-strip-types lib/coach/verify-program-revision.mts",
     "verify:program-composer-lifecycle": "node --experimental-strip-types lib/coach/verify-program-composer-lifecycle.mts",
     "verify:program-adaptation": "node --experimental-strip-types lib/coach/verify-program-adaptation.mts",

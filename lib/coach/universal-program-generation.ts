@@ -108,12 +108,28 @@ export function buildPlaceholderProgrammingProfile(availableDays: DayOfWeek[]): 
 
 // ---------------------------------------------------------------------------
 // Continuous-day placement — real context (available days beyond the
-// resistance split, and the client's own stated cardio preference), never a
-// goal/sex/age-based stereotype (spec section 9). No dedicated day exists ->
-// no continuous block is generated; honesty over coverage.
+// resistance split, the client's own stated cardio preference, and now
+// Phase 6B's coach-methodology gate below), never a goal/sex/age-based
+// stereotype (spec section 9). No dedicated day exists -> no continuous
+// block is generated; honesty over coverage.
 // ---------------------------------------------------------------------------
 
-function decideContinuousDays(profile: ClientProgrammingProfile, resistanceDayCount: number): DayOfWeek[] {
+/** Phase 6B — "rarely_used" is this coach's own explicit, real, stored
+ * methodology answer to "How do you use cardio in a training program?"
+ * (see lib/coach/coach-onboarding-questions.ts's program_cardio question) —
+ * a coach's explicit stored rule outranks the client's own soft preference
+ * here (spec section 6's authority hierarchy), so continuous work is never
+ * added regardless of schedule surplus or how much the client says they
+ * enjoy cardio. This was previously dead data: com was never even passed
+ * into decideContinuousDays, so a coach's real, configured cardio
+ * philosophy had zero effect on generation (spec section 17's own
+ * acceptance criterion — coach methodology must actually change output).
+ * The other three real cardioPhilosophy values never suppress client
+ * preference in the opposite direction — a client's own "avoids_cardio" is
+ * about their willingness, not something a coach's general programming
+ * style should silently override. */
+function decideContinuousDays(profile: ClientProgrammingProfile, com: CoachOperatingModel, resistanceDayCount: number): DayOfWeek[] {
+  if (com.programArchitecture.cardioPhilosophy === "rarely_used") return [];
   if (profile.cardioPreference === "avoids_cardio") return [];
   const extraDays = profile.availableDays.slice(resistanceDayCount);
   if (extraDays.length === 0) return [];
@@ -341,6 +357,25 @@ export function validateUniversalProgramHardConstraints(
  * InvalidPersistedContentError here if the structural shape is ever wrong,
  * which should only be reachable by a genuine bug in this function itself).
  */
+/** Phase 6B — a concise, real coach-review rationale (spec section 30),
+ * built entirely from fields ProgramDirectionSummary already computed —
+ * never a separate, independently-drifting description, and never a giant
+ * reasoning dump. Explains WHAT was chosen and WHY in the client's/coach's
+ * own real terms (split, schedule, coach-methodology fit, any continuous
+ * placement), not "AI chose this." */
+function buildGenerationRationale(direction: ProgramDirectionSummary, resistanceDayCount: number, continuousDays: DayOfWeek[]): string {
+  const lines: string[] = [
+    `${direction.splitName} (${resistanceDayCount}x/week) — ${direction.whyItFits}`,
+    direction.howItReflectsCoach,
+    direction.rankingRationale,
+  ];
+  if (continuousDays.length > 0) {
+    lines.push(`Added ${continuousDays.length} continuous-work day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching the client's own stated cardio preference.`);
+  }
+  if (direction.confidenceNote) lines.push(direction.confidenceNote);
+  return lines.filter((l) => l && l.trim().length > 0).join(" ");
+}
+
 export function buildUniversalProgramForDirection(direction: ProgramDirectionSummary, input: BuildUniversalProgramInput): GeneratedUniversalProgram {
   const { profile, com, durationWeeks } = input;
   // Phase 5 fix — resistance days are capped at the coach's own stated
@@ -360,7 +395,7 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
   const plan = resolveSplitPlanForDayCount(direction.splitKey, resistanceDayCount);
   const equipment = equipmentForClient(profile);
   const phases = computeProgramPhases(durationWeeks);
-  const continuousDays = decideContinuousDays(profile, resistanceDayCount);
+  const continuousDays = decideContinuousDays(profile, com, resistanceDayCount);
 
   const weeks: UniversalProgramWeek[] = [];
   for (let weekNumber = 1; weekNumber <= durationWeeks; weekNumber++) {
@@ -395,6 +430,7 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
     name: `${direction.label} — ${direction.splitName}`,
     durationWeeks,
     weeks,
+    generationRationale: buildGenerationRationale(direction, resistanceDayCount, continuousDays),
     status: "assigned",
     createdAtIso: input.nowIso,
     updatedAtIso: input.nowIso,

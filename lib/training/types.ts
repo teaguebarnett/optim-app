@@ -241,6 +241,16 @@ export interface UniversalTrainingProgramContent {
   name: string;
   durationWeeks: number;
   weeks: UniversalProgramWeek[];
+  /** Phase 6B — a concise, real (never fabricated post-hoc) explanation of
+   * why generation chose this structure for this client, surfaced for
+   * coach review (spec: "generated program proposals retain enough
+   * structured rationale that later coach review can explain relevant
+   * decisions"). Built directly from the real ProgramDirectionSummary the
+   * generator actually selected (lib/coach/program-directions.ts) — never
+   * a separate, independently-drifting description. Optional: absent for
+   * content that predates this field or wasn't produced through the
+   * direction-based generator. */
+  generationRationale?: string;
   status: "draft" | "assigned";
   createdAtIso: string;
   updatedAtIso: string;

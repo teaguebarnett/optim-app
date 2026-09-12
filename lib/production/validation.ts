@@ -307,6 +307,7 @@ export function validateUniversalTrainingProgramContent(raw: unknown): Universal
   requireString(raw.clientId, "clientId", what);
   requireString(raw.coachId, "coachId", what);
   if (raw.sourceTemplateId !== undefined) requireString(raw.sourceTemplateId, "sourceTemplateId", what);
+  if (raw.generationRationale !== undefined) requireString(raw.generationRationale, "generationRationale", what);
   requireString(raw.name, "name", what);
   requireNumber(raw.durationWeeks, "durationWeeks", what);
   const weeks = requireArray(raw.weeks, "weeks", what);
