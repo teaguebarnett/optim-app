@@ -4,28 +4,52 @@ import { CheckCircle2, Clock3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { completedWorkingSetCount } from "@/components/workout/live/helpers";
-import type { Exercise, WorkoutSession } from "@/lib/types";
+import { formatDistance, formatDurationMinutes } from "@/lib/workout/continuous";
+import type { WorkoutSession } from "@/lib/types";
+import type { TrainingItemInstance } from "@/lib/training/types";
+
+/** Phase 4 — a short, honest completion line for a finished continuous item,
+ * mirroring the resistance branch's own "state exactly what happened, never
+ * a fabricated split" discipline (see lib/workout-analysis.ts's
+ * describeContinuousExecution, which this intentionally matches). */
+function continuousCompletionLine(name: string, session: WorkoutSession, itemId: string): string {
+  const execution = session.continuousExecutions?.[itemId];
+  if (!execution) return `${name} logged.`;
+  const parts: string[] = [];
+  if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));
+  if (execution.actual?.distance) parts.push(formatDistance(execution.actual.distance));
+  const suffix = execution.status === "partial" ? " (partial)" : "";
+  return parts.length > 0 ? `${name}: ${parts.join(", ")} logged${suffix}.` : `${name} logged${suffix}.`;
+}
 
 /**
  * Phase 4.4B-2 §H — the short transition state between exercises. Never a
  * redundant "Mark exercise complete" button (the exercise already
  * auto-completed in canonical state the moment its final set resolved) —
  * this only summarizes what happened and introduces what's next.
+ *
+ * Phase 4 — now looks up both the finished and next item on the universal
+ * Session (session.resolvedSession) rather than the legacy Workout, since a
+ * continuous TrainingItemInstance has no legacy Exercise counterpart at
+ * all — see findTrainingItemById. A resistance item's `.name` is identical
+ * either way, so this is a strict generalization, not a behavior change for
+ * existing resistance-only sessions.
  */
 export function ExerciseTransitionPanel({
-  finishedExercise,
-  nextExercise,
+  finishedItem,
+  nextItem,
   session,
 }: {
-  finishedExercise: Exercise | undefined;
-  nextExercise: Exercise | undefined;
+  finishedItem: TrainingItemInstance | undefined;
+  nextItem: TrainingItemInstance | undefined;
   session: WorkoutSession;
 }) {
   const { dispatch } = usePrototypeState();
-  const wasDeferred = finishedExercise ? session.deferredExerciseIds.includes(finishedExercise.id) : false;
-  const finishedLog = finishedExercise ? session.exerciseLogs[finishedExercise.id] : undefined;
-  const completedCount = completedWorkingSetCount(finishedLog);
+  const wasDeferred = finishedItem ? session.deferredExerciseIds.includes(finishedItem.id) : false;
+  const finishedLog = finishedItem ? session.exerciseLogs[finishedItem.id] : undefined;
   const wasSkipped = finishedLog?.status === "skipped";
+  const isResistance = finishedItem?.prescription.family === "resistance";
+  const completedCount = isResistance ? completedWorkingSetCount(finishedLog) : 0;
 
   return (
     <div className="pc-panel-in rounded-[var(--radius-lg)] bg-charcoal p-5 shadow-[var(--shadow-subtle)] text-center">
@@ -38,20 +62,22 @@ export function ExerciseTransitionPanel({
         {wasDeferred ? <Clock3 size={22} /> : <CheckCircle2 size={22} />}
       </span>
 
-      {finishedExercise ? (
+      {finishedItem ? (
         <p className="mt-3 text-body text-off-white">
           {wasDeferred
-            ? `${finishedExercise.name} moved to later in the session.`
+            ? `${finishedItem.name} moved to later in the session.`
             : wasSkipped
-              ? `${finishedExercise.name} skipped.`
-              : `${completedCount} working set${completedCount === 1 ? "" : "s"} logged for ${finishedExercise.name}.`}
+              ? `${finishedItem.name} skipped.`
+              : isResistance
+                ? `${completedCount} working set${completedCount === 1 ? "" : "s"} logged for ${finishedItem.name}.`
+                : continuousCompletionLine(finishedItem.name, session, finishedItem.id)}
         </p>
       ) : null}
 
-      {nextExercise ? (
+      {nextItem ? (
         <div className="mt-4 border-t border-border pt-4 text-left">
           <p className="text-label text-neutral">Next</p>
-          <p className="mt-0.5 text-heading text-off-white">{nextExercise.name}</p>
+          <p className="mt-0.5 text-heading text-off-white">{nextItem.name}</p>
         </div>
       ) : null}
 

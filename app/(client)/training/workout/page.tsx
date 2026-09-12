@@ -15,8 +15,18 @@ import { ExerciseTransitionPanel } from "@/components/workout/live/exercise-tran
 import { SessionSummaryScreen } from "@/components/workout/live/session-summary-screen";
 import { PainReviewPanel } from "@/components/workout/live/pain-review-panel";
 import { ExercisePainCheckPanel } from "@/components/workout/live/exercise-pain-check-panel";
+import { ContinuousReadyPanel } from "@/components/workout/live/continuous-ready-panel";
+import { ContinuousLoggingPanel } from "@/components/workout/live/continuous-logging-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { findTrainingItemById } from "@/lib/workout/session-flow";
+import type { TrainingItemInstance } from "@/lib/training/types";
+
+/** Shared shape PainReviewPanel/ExercisePainCheckPanel actually need — see
+ * pain-review-panel.tsx's PainSafetyActivity doc for why this works
+ * identically for a resistance or continuous item. */
+function toPainSafetyActivity(item: TrainingItemInstance) {
+  return { id: item.id, name: item.name, approvedSubstituteExerciseId: item.substituteItemId };
+}
 
 // Phase 4.4B-2 — the live workout is now a guided, state-aware experience
 // rather than one long linear checklist page. This file is purely an
@@ -25,6 +35,13 @@ import { findTrainingItemById } from "@/lib/workout/session-flow";
 // live/ — no scheduling/business logic lives here. See lib/state.ts's
 // reducer for the actual phase-transition rules and lib/workout/
 // session-flow.ts for the pure queue logic behind them.
+//
+// Phase 4 — the current TrainingItemInstance's own prescription family
+// (looked up once, on the universal Session) is the ONE thing this file
+// branches on to decide whether the resistance panels (still rendered from
+// the legacy Exercise, unchanged) or the new continuous panels (rendered
+// from the universal item directly, since a continuous item has no legacy
+// Exercise counterpart at all) apply — see currentTrainingItem below.
 export default function ActiveWorkoutPage() {
   const router = useRouter();
   const { state, isHydrated, activeContext } = usePrototypeState();
@@ -53,13 +70,11 @@ export default function ActiveWorkoutPage() {
 
   const sessionExercises = session.resolvedWorkout?.exercises ?? [];
   const currentExercise = sessionExercises.find((e) => e.id === session.currentExerciseId);
-  // Phase 3 — the same current exercise, looked up on the universal Session
-  // this session was actually started against, for the one panel
-  // (SetFeedbackPanel) whose own internal calls now operate on the
-  // universal grammar. Every other panel here still renders off
-  // currentExercise (the legacy Exercise) unchanged — see lib/types.ts's
-  // WorkoutSession.resolvedSession doc for why both coexist during this
-  // phase.
+  // The same current item, looked up on the universal Session this session
+  // was actually started against — the one source both families can be
+  // rendered from. A resistance item's `.name`/etc. match currentExercise
+  // exactly; a continuous item has no legacy counterpart at all, so this is
+  // the only lookup that ever finds it.
   const currentTrainingItem = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
 
   const techniqueFlagCount = state.reviewRequests.filter(
@@ -72,13 +87,16 @@ export default function ActiveWorkoutPage() {
     // persisted, reducer-owned override on top of the normal flow (see
     // lib/state.ts's REPORT_PAIN) rather than a step within it. It must
     // never be bypassed by a refresh, a route re-entry, or any other phase
-    // branch below.
+    // branch below. Phase 4 — looked up on the universal Session so this
+    // works identically whether the interrupted item is resistance or
+    // continuous (the same OPTIM safety architecture either way, per spec
+    // section 12 — never a family-specific safety path).
     if (session.phase === "pain-review" && session.activePainInterruption) {
       const interruption = session.activePainInterruption;
-      const interruptedExercise = sessionExercises.find((e) => e.id === interruption.exerciseId);
+      const interruptedItem = findTrainingItemById(session.resolvedSession, interruption.exerciseId);
       const report = session.painReports.find((r) => r.id === interruption.painReportId);
-      return interruptedExercise ? (
-        <PainReviewPanel exercise={interruptedExercise} interruption={interruption} report={report} />
+      return interruptedItem ? (
+        <PainReviewPanel exercise={toPainSafetyActivity(interruptedItem)} interruption={interruption} report={report} />
       ) : null;
     }
 
@@ -87,9 +105,9 @@ export default function ActiveWorkoutPage() {
     // confirms it feels unaffected — see lib/state.ts's ENTER_EXERCISE_INTRO.
     if (session.phase === "exercise-pain-check" && session.activePainInterruption) {
       const interruption = session.activePainInterruption;
-      const gatedExercise = sessionExercises.find((e) => e.id === session.currentExerciseId);
+      const gatedItem = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
       const report = session.painReports.find((r) => r.id === interruption.painReportId);
-      return gatedExercise ? <ExercisePainCheckPanel exercise={gatedExercise} report={report} /> : null;
+      return gatedItem ? <ExercisePainCheckPanel exercise={toPainSafetyActivity(gatedItem)} report={report} /> : null;
     }
 
     if (session.phase === "session-warmup") {
@@ -101,19 +119,18 @@ export default function ActiveWorkoutPage() {
     }
 
     if (session.phase === "exercise-transition") {
-      const finishedExercise = sessionExercises.find((e) => e.id === session.lastResolvedExerciseId);
-      return <ExerciseTransitionPanel finishedExercise={finishedExercise} nextExercise={currentExercise} session={session} />;
+      const finishedItem = findTrainingItemById(session.resolvedSession, session.lastResolvedExerciseId);
+      return <ExerciseTransitionPanel finishedItem={finishedItem} nextItem={currentTrainingItem} session={session} />;
     }
 
-    if (!currentExercise) {
-      // Defensive fallback — canonical state has no current exercise but
-      // the phase implies one should exist (shouldn't happen through the
-      // normal reducer transitions). Route to the summary rather than
-      // rendering nothing.
+    if (!currentTrainingItem) {
+      // Defensive fallback — canonical state has no current item but the
+      // phase implies one should exist (shouldn't happen through the normal
+      // reducer transitions). Route to the summary rather than rendering
+      // nothing.
       return <SessionSummaryScreen session={session} techniqueFlagCount={techniqueFlagCount} />;
     }
 
-    const log = session.exerciseLogs[currentExercise.id];
     // Phase 4.4B-2.2 — a compact, persistent caution for as long as ANY
     // pain report remains active this session (including on an exercise
     // already confirmed unaffected) — never shown for the report's own
@@ -122,6 +139,24 @@ export default function ActiveWorkoutPage() {
     // render at all, currentExerciseRequiresPainCheck has already been
     // satisfied for whatever exercise this is.
     const painReportActive = Boolean(session.activePainInterruption);
+
+    // Phase 4 — continuous work has its own two phases and never touches
+    // any of the resistance-only panels below (which all render from the
+    // legacy Exercise, something a continuous item was never converted
+    // into — see lib/training/legacy-adapter.ts).
+    if (currentTrainingItem.prescription.family !== "resistance") {
+      switch (session.phase) {
+        case "continuous-ready":
+          return <ContinuousReadyPanel item={currentTrainingItem} painReportActive={painReportActive} />;
+        case "continuous-logging":
+          return <ContinuousLoggingPanel item={currentTrainingItem} painReportActive={painReportActive} />;
+        default:
+          return null;
+      }
+    }
+
+    if (!currentExercise) return null; // a resistance item always has a legacy counterpart; defensive only.
+    const log = session.exerciseLogs[currentExercise.id];
 
     switch (session.phase) {
       case "exercise-intro":

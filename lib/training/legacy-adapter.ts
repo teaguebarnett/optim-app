@@ -32,7 +32,7 @@
 // explicitly by its caller, who always has it (whoever is iterating a
 // day/week already knows the day and workspace) — see its `context` param.
 
-import type { DayOfWeek, Exercise, ExerciseBlockType, RpeValue, Workout } from "../types.ts";
+import type { CardioOption, CardioTarget, DayOfWeek, Exercise, ExerciseBlockType, RpeValue, Workout } from "../types.ts";
 import type { WorkspaceId } from "../tenancy/types.ts";
 import { buildPrescribedSets } from "../coach/training.ts";
 import type { Block, BlockKind, Prescription, Session, TrainingItemInstance } from "./types.ts";
@@ -327,4 +327,60 @@ export function sessionToLegacyWorkout(session: Session, context: { workspaceId:
     coachNote: session.coachNote ?? "",
     exercises,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — the existing daily-cardio-card concept bridge.
+//
+// lib/types.ts's CardioTarget/CardioOption/CardioPrescription/CardioLog
+// (AppState.cardio, AppState.dailyTrainingPlan.cardioTarget) are a
+// completely separate system from WorkoutSession/session-flow.ts — a single
+// independent "log today's cardio" card on the Today screen, never part of
+// the guided multi-phase workout engine. Phase 4's actual deliverable (a
+// live Session containing a continuous TrainingItemInstance, executed
+// through session-flow.ts) is a NEW capability alongside that card, not a
+// replacement for it — merging the daily card's UI/reducer onto the Session
+// engine would be a real, unrelated redesign of an already-working screen,
+// explicitly out of this phase's scope (spec section 19: "do not redesign
+// unrelated training pages").
+//
+// What IS in scope, per spec section 5 ("where they represent the same
+// concept... migrate/adapt them toward the universal grammar... temporary
+// adapters are acceptable"): proving the two concepts are structurally
+// compatible. CardioTarget's activity/durationMin/heartRateRange is exactly
+// a continuous-family Prescription's name/duration/heartRate — this
+// one-directional, pure mapping is that proof. It has no caller in the
+// daily-cardio-card code path (that card's own AppState.cardio/
+// dailyTrainingPlan.cardioTarget/CardioLog remain entirely legacy and
+// unmigrated in this phase, by deliberate choice, not oversight) — it exists
+// so a future phase CAN unify them without re-deriving this mapping, and so
+// this Phase 0 audit finding has a real, tested answer rather than staying
+// merely observed.
+
+/** Structural proof that CardioTarget (the daily cardio card's own
+ * prescription shape) is representable as a continuous-family Prescription —
+ * see this section's header for exactly what is and isn't migrated by this
+ * function's existence. Never called by the daily cardio card itself in
+ * this phase. */
+export function cardioTargetToContinuousPrescription(target: CardioTarget): Prescription {
+  return {
+    family: "continuous",
+    duration: { seconds: target.durationMin * 60 },
+    heartRate: { low: target.heartRateRangeLow, high: target.heartRateRangeHigh },
+  };
+}
+
+/** Same proof for a single coach-approved CardioOption (the richer, per-
+ * option shape a CardioPrescription lists several of) — heart-rate range is
+ * optional on CardioOption, unlike CardioTarget, so it's only carried across
+ * when actually present, never fabricated. */
+export function cardioOptionToContinuousPrescription(option: CardioOption): Prescription {
+  const prescription: Prescription = {
+    family: "continuous",
+    duration: { seconds: option.targetDurationMin * 60 },
+  };
+  if (option.heartRateRangeLow !== undefined && option.heartRateRangeHigh !== undefined) {
+    prescription.heartRate = { low: option.heartRateRangeLow, high: option.heartRateRangeHigh };
+  }
+  return prescription;
 }

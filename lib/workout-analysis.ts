@@ -1,7 +1,8 @@
 import { ALL_CLIENT_PROFILES, ALL_COACH_PROFILES, ALL_WORKSPACES } from "./tenancy/seed.ts";
 import { classifyEffort } from "./workout/effort-policy.ts";
+import { formatDistance, formatDurationMinutes } from "./workout/continuous.ts";
 import type { ExerciseLog, WorkoutSession, WorkoutSummary } from "./types";
-import type { Session, TrainingItemInstance } from "./training/types";
+import type { ExecutionRecord, Session, TrainingItemInstance } from "./training/types";
 
 /** Resolves the business/coach display names for the session's workspace and
  * client, so the zero-data message below never hardcodes a specific
@@ -66,6 +67,19 @@ export function canCompleteExercise(item: TrainingItemInstance, log: ExerciseLog
   return hasValidCompletion;
 }
 
+/** Phase 4 — a short, honest one-line description of one continuous item's
+ * outcome (e.g. "Bike: 22 min logged (partial)."), built strictly from real
+ * actual values — never a fabricated pace/split the client never recorded.
+ * Mirrors the resistance detail lines' own "state exactly what happened"
+ * discipline. */
+function describeContinuousExecution(name: string, execution: ExecutionRecord): string {
+  const parts: string[] = [];
+  if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));
+  if (execution.actual?.distance) parts.push(formatDistance(execution.actual.distance));
+  const suffix = execution.status === "partial" ? " (partial)" : "";
+  return parts.length > 0 ? `${name}: ${parts.join(", ")} logged${suffix}.` : `${name} logged${suffix}.`;
+}
+
 export function buildWorkoutSummary(
   trainingSession: Session | null,
   session: WorkoutSession,
@@ -81,10 +95,36 @@ export function buildWorkoutSummary(
   let anyLighterThanExpected = false;
   const rpeValues: number[] = [];
 
+  // Phase 4 — continuous work's own tallies, kept entirely separate from the
+  // resistance set-based ones above: neither family's metrics may corrupt
+  // the other's (spec section 21 — never a fake volume calculation, and
+  // never silently dropping a real continuous completion just because it
+  // has zero "working sets").
+  let continuousItemCount = 0;
+  let continuousCompletedCount = 0;
+  let continuousPartialCount = 0;
+  const continuousDescriptions: string[] = [];
+
   const items = trainingSession?.blocks.flatMap((b) => b.items) ?? [];
   for (const item of items) {
     const log = session.exerciseLogs[item.id];
     if (!log) continue;
+
+    if (item.prescription.family !== "resistance") {
+      continuousItemCount += 1;
+      if (log.status === "skipped") {
+        exercisesSkipped += 1;
+        continue;
+      }
+      const execution = session.continuousExecutions?.[item.id];
+      if (execution) {
+        exercisesCompleted += 1;
+        if (execution.status === "partial") continuousPartialCount += 1;
+        else continuousCompletedCount += 1;
+        continuousDescriptions.push(describeContinuousExecution(item.name, execution));
+      }
+      continue;
+    }
 
     skippedSetsCount += log.loggedSets.filter((s) => s.status === "skipped").length;
 
@@ -141,34 +181,45 @@ export function buildWorkoutSummary(
       ? Math.round((rpeValues.reduce((sum, v) => sum + v, 0) / rpeValues.length) * 10) / 10
       : null;
 
-  const missedMajorityOfWork = workingSetsCompleted < totalPrescribedWorkingSets(trainingSession) / 2;
+  const totalPrescribedSets = totalPrescribedWorkingSets(trainingSession);
+  const hasResistanceWork = totalPrescribedSets > 0;
+  const missedMajorityOfWork = hasResistanceWork && workingSetsCompleted < totalPrescribedSets / 2;
 
   // Fully completed means every prescribed working set was actually
   // addressed with a valid logged RPE, nothing anywhere in the session was
   // skipped, AND no exercise was simply left untouched (not-started) — the
   // last check matters for an ended-early session, which never marks
   // remaining exercises "skipped" but still hasn't done the full workout.
-  const fullyCompleted =
-    workingSetsCompleted > 0 &&
-    exercisesSkipped === 0 &&
-    skippedSetsCount === 0 &&
-    missingRpeCount === 0 &&
-    workingSetsCompleted >= totalPrescribedWorkingSets(trainingSession);
+  // Phase 4 generalizes this to a session that's entirely (or partly)
+  // continuous work: each family's own completeness is judged on its own
+  // terms, never forcing a "sets" concept onto continuous items or vice
+  // versa (spec section 21) — see resistanceFullyCompleted/
+  // continuousFullyCompleted below.
+  const resistanceFullyCompleted =
+    !hasResistanceWork ||
+    (workingSetsCompleted > 0 && skippedSetsCount === 0 && missingRpeCount === 0 && workingSetsCompleted >= totalPrescribedSets);
+  const continuousFullyCompleted = continuousItemCount === 0 || (continuousPartialCount === 0 && continuousCompletedCount === continuousItemCount);
+  const anyRealWorkPrescribed = hasResistanceWork || continuousItemCount > 0;
+
+  const fullyCompleted = anyRealWorkPrescribed && exercisesSkipped === 0 && resistanceFullyCompleted && continuousFullyCompleted;
 
   const needsReview =
     anyRpeAnomaly ||
     painReportCount > 0 ||
     exercisesSkipped > 0 ||
     skippedSetsCount > 0 ||
-    missedMajorityOfWork;
+    missedMajorityOfWork ||
+    continuousPartialCount > 0;
 
   let headline: string;
   let detail: string;
 
-  if (workingSetsCompleted === 0) {
+  const anyContinuousDataSubmitted = continuousCompletedCount + continuousPartialCount > 0;
+
+  if (workingSetsCompleted === 0 && !anyContinuousDataSubmitted) {
     const { businessName, coachName } = resolveSessionIdentity(session);
     headline = "No performance data submitted.";
-    detail = `No working-set data was submitted, so ${businessName} cannot evaluate today's performance. ${coachName} has been notified.`;
+    detail = `No performance data was submitted, so ${businessName} cannot evaluate today's session. ${coachName} has been notified.`;
   } else {
     headline = fullyCompleted
       ? "Workout completed."
@@ -176,9 +227,16 @@ export function buildWorkoutSummary(
         ? "Workout submitted — items flagged for review."
         : "Workout submitted.";
 
-    const detailParts: string[] = [
-      `${workingSetsCompleted} working set${workingSetsCompleted === 1 ? "" : "s"} logged across ${exercisesCompleted} exercise${exercisesCompleted === 1 ? "" : "s"}.`,
-    ];
+    const detailParts: string[] = [];
+
+    if (workingSetsCompleted > 0) {
+      const resistanceExercisesCompleted = exercisesCompleted - continuousCompletedCount - continuousPartialCount;
+      detailParts.push(
+        `${workingSetsCompleted} working set${workingSetsCompleted === 1 ? "" : "s"} logged across ${resistanceExercisesCompleted} exercise${resistanceExercisesCompleted === 1 ? "" : "s"}.`
+      );
+    }
+
+    detailParts.push(...continuousDescriptions);
 
     if (averageRpe !== null) {
       detailParts.push(`Average logged RPE was ${averageRpe}.`);

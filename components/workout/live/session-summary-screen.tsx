@@ -51,7 +51,11 @@ export function SessionSummaryScreen({
   const flaggedSignals = signals.filter((s) => s.forCoachReview);
   const otherSignals = signals.filter((s) => !s.forCoachReview);
 
-  const hasNoLoggedWork = preview.workingSetsCompleted === 0;
+  // Phase 4 — workingSetsCompleted alone would be wrong for a real,
+  // fully-completed pure continuous session (no "working sets" exist for
+  // that family at all) — see lib/state.ts's COMPLETE_WORKOUT guard, which
+  // this must never disagree with.
+  const hasNoLoggedWork = preview.workingSetsCompleted === 0 && preview.exercisesCompleted === 0;
   const postWorkoutMeal = dailyPlan.items.find((i) => i.id === "post-workout-meal");
 
   function handleComplete() {

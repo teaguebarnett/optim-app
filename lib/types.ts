@@ -7,7 +7,7 @@
 // re-imports the tenant-attribution types it needs to stamp onto records.
 
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
-import type { Session } from "./training/types";
+import type { ExecutionRecord, Session } from "./training/types";
 
 export type ClientId = ClientProfileId;
 
@@ -414,7 +414,21 @@ export type WorkoutSessionPhase =
    * involves the same painful area, so each one requires its own explicit,
    * once-per-exercise confirmation before it can begin. See
    * WorkoutSession.activePainInterruption.confirmedUnaffectedExerciseIds. */
-  | "exercise-pain-check";
+  | "exercise-pain-check"
+  /** Phase 4 — the continuous-work (e.g. Zone 2 bike, easy run) counterpart
+   * of "exercise-intro"/"set-ready" combined: shows the item's target
+   * (duration/distance/pace/heart-rate/effort, whichever the prescription
+   * actually specifies) and cue, with nothing to warm up into and no
+   * per-set concept — see lib/state.ts's entryPhaseForCurrentItem, which
+   * routes here instead of "exercise-intro" whenever the current
+   * TrainingItemInstance's prescription family isn't "resistance". */
+  | "continuous-ready"
+  /** Phase 4 — the client is actively recording what they actually did
+   * (duration/distance/heart-rate/effort, adaptively only for whatever the
+   * prescription specifies) before logging completion in one shot — see
+   * lib/state.ts's LOG_CONTINUOUS_EXECUTION. There is no per-set iteration
+   * here, unlike "set-logging"; one submission resolves the whole item. */
+  | "continuous-logging";
 
 export type WarmupOutcomeStatus = "not-started" | "completed" | "skipped";
 
@@ -534,6 +548,17 @@ export interface WorkoutSession {
   startedAtIso?: string;
   completedAtIso?: string;
   exerciseLogs: Record<string, ExerciseLog>;
+  /** Phase 4 — the continuous-family counterpart of exerciseLogs' per-item
+   * detail. A resistance item's real, granular execution data lives in
+   * exerciseLogs[id].loggedSets (LoggedSet[], unchanged); a continuous
+   * item's lives here instead, keyed the same way (by TrainingItemInstance
+   * id). exerciseLogs[id].status is still the one place BOTH families
+   * record "not-started/in-progress/completed/skipped" for queue/summary
+   * purposes — this field only ever holds the richer prescribed-vs-actual
+   * detail for continuous work. Optional so already-persisted sessions from
+   * before this phase still load without a migration step; treat a missing
+   * value the same as {} everywhere it's read. */
+  continuousExecutions?: Record<string, ExecutionRecord>;
   painReports: PainReport[];
   skipReason?: SkipReason;
   skipNote?: string;

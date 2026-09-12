@@ -20,7 +20,9 @@ import { resolveSessionWarmupConfigFromSession, resolveTrainingItemWarmupConfig 
 import { resolveScheduledWorkoutForStart } from "./workout/resolve-scheduled-workout.ts";
 import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { legacyWorkoutToSession } from "./training/legacy-adapter.ts";
-import type { Session } from "./training/types";
+import { classifyContinuousCompletion, continuousPerformedAsPrescribed, type ContinuousActual } from "./workout/continuous.ts";
+import { MIXED_SESSION_DEMO } from "./training/demo-fixtures.ts";
+import type { ExecutionRecord, Prescription, Session } from "./training/types";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
@@ -48,6 +50,7 @@ import type {
   Workout,
   WorkoutSession,
   WorkoutSessionEvent,
+  WorkoutSessionPhase,
   WorkoutSummary,
 } from "./types";
 
@@ -141,15 +144,89 @@ export interface AppState {
   consecutiveCleanWorkouts: number;
 }
 
-/** Not-started per-exercise warm-up outcomes for every exercise in a real,
- * resolved workout — shared by START_WORKOUT (below) and the v5->v6
- * migration's honest reconstruction of old PUSH_WORKOUT-only sessions. */
-function initialExerciseWarmups(workout: Workout): Record<string, WarmupOutcome> {
+/** Not-started per-item warm-up outcomes for every training item in a real,
+ * resolved universal session — shared by START_WORKOUT (below) and any other
+ * path that seeds a live session directly (Phase 4's demo mixed-session
+ * preset). Phase 4 — reads the universal Session rather than the legacy
+ * Workout, so this works correctly even when the session has no legacy
+ * counterpart at all (a continuous-only session); for a pure-resistance
+ * session this enumerates the exact same item ids as before. */
+function initialExerciseWarmups(trainingSession: Session): Record<string, WarmupOutcome> {
   const warmups: Record<string, WarmupOutcome> = {};
-  for (const exercise of workout.exercises) {
-    warmups[exercise.id] = { status: "not-started" };
+  for (const item of trainingSession.blocks.flatMap((b) => b.items)) {
+    warmups[item.id] = { status: "not-started" };
   }
   return warmups;
+}
+
+/** Phase 4 — where the entering-a-new-current-item transition should land:
+ * "exercise-intro" for resistance (unchanged), or the continuous-work
+ * counterpart otherwise. There is no warm-up-set/working-set concept for a
+ * non-resistance item, so it skips straight to its own ready phase. Shared
+ * by every reducer case that hands off to a new current item, so they can
+ * never disagree about which family gets which phase. */
+function entryPhaseForCurrentItem(session: WorkoutSession): WorkoutSessionPhase {
+  const item = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
+  return item && item.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
+}
+
+/** The one place a real live session's initial canonical state is actually
+ * built, whether it came from resolving this client's real assigned program
+ * (START_WORKOUT) or from a hand-authored universal Session fixture with no
+ * legacy Workout counterpart at all (Phase 4's LOAD_PRESET "mixed-session" —
+ * see lib/training/demo-fixtures.ts). Both callers converge here so there is
+ * exactly one place that can ever disagree about how a session starts.
+ * `resolvedWorkout` is null for a session with no legacy representation
+ * (continuous-only or mixed content is never producible as a legacy Workout —
+ * see lib/training/legacy-adapter.ts). */
+export function buildStartedWorkoutSession(params: {
+  existingSession: WorkoutSession;
+  workoutId: string;
+  resolvedWorkout: Workout | null;
+  trainingSession: Session;
+  nowIso: string;
+}): WorkoutSession {
+  const exerciseLogs: WorkoutSession["exerciseLogs"] = {};
+  for (const item of params.trainingSession.blocks.flatMap((b) => b.items)) {
+    exerciseLogs[item.id] = { exerciseId: item.id, status: "not-started", loggedSets: [] };
+  }
+
+  const initialFlow = buildInitialFlowState(params.trainingSession);
+  const sessionWarmupConfig = resolveSessionWarmupConfigFromSession(params.trainingSession);
+  // The very first current item might be continuous work, with no
+  // warm-up-set/working-set concept to route into — entryPhaseForCurrentItem
+  // can't be reused verbatim here since no WorkoutSession object exists yet
+  // at this exact point in construction, so the same rule is inlined.
+  const initialItem = findTrainingItemById(params.trainingSession, initialFlow.currentExerciseId);
+  const initialEntryPhase: WorkoutSessionPhase = initialItem && initialItem.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
+
+  return {
+    ...params.existingSession,
+    workoutId: params.workoutId,
+    // Snapshotted once, here — see WorkoutSession.resolvedWorkout's doc for
+    // why every later lookup in this session reads this exact object rather
+    // than re-resolving against the client's (possibly since-revised)
+    // assignedProgram. resolvedSession is the same resolution's universal
+    // counterpart, which the live engine's own logic actually navigates
+    // against.
+    resolvedWorkout: params.resolvedWorkout,
+    resolvedSession: params.trainingSession,
+    status: "in-progress",
+    startedAtIso: params.nowIso,
+    exerciseLogs,
+    continuousExecutions: {},
+    currentExerciseId: initialFlow.currentExerciseId,
+    exerciseQueue: initialFlow.exerciseQueue,
+    actualExerciseOrder: initialFlow.actualExerciseOrder,
+    deferredExerciseIds: [],
+    lastResolvedExerciseId: null,
+    currentSetNumber: null,
+    restStartedAtIso: undefined,
+    phase: sessionWarmupConfig.mode === "confirmation" ? "session-warmup" : initialEntryPhase,
+    sessionWarmup: { status: "not-started" },
+    exerciseWarmups: initialExerciseWarmups(params.trainingSession),
+    events: [...params.existingSession.events, { type: "started", atIso: params.nowIso } satisfies WorkoutSessionEvent],
+  };
 }
 
 /** A not-started-anything empty shell — genuinely no workout has been
@@ -170,6 +247,7 @@ export function createInitialWorkoutSession(
     resolvedSession: null,
     status: "not-started",
     exerciseLogs: {},
+    continuousExecutions: {},
     painReports: [],
     phase: "session-warmup",
     currentExerciseId: null,
@@ -376,8 +454,29 @@ export type Action =
   /** set-feedback -> next set-ready, or exercise-transition/session-summary
    * once the current exercise is resolved — decided from canonical state. */
   | { type: "CONTINUE_TO_NEXT_SET" }
-  /** exercise-transition -> exercise-intro for the new current exercise. */
+  /** exercise-transition -> exercise-intro (or "continuous-ready" for a
+   * non-resistance current item) for the new current exercise. */
   | { type: "ENTER_EXERCISE_INTRO" }
+  /** Phase 4 — continuous-ready -> continuous-logging for the current item. */
+  | { type: "BEGIN_CONTINUOUS_LOGGING" }
+  /** Phase 4 — the one-shot continuous-work completion: records what was
+   * actually done (only the primitives the prescription specifies —
+   * lib/workout/continuous.ts's continuousCaptureFields) against the
+   * prescription, exactly like LOG_SET does for a resistance working set,
+   * then resolves the item and advances (there is no per-set concept to
+   * iterate for continuous work, so this always resolves the whole item in
+   * one dispatch). `deviationReason` reuses the existing SkipReason
+   * taxonomy for the minimum useful "why different" question, exactly as
+   * section 11 of the Phase 4 spec asks — a genuinely pain-relevant
+   * deviation goes through REPORT_PAIN instead (unchanged, family-agnostic
+   * safety path), never a SkipReason value alone. */
+  | {
+      type: "LOG_CONTINUOUS_EXECUTION";
+      exerciseId: string;
+      actual: Partial<Prescription>;
+      note?: string;
+      deviationReason?: SkipReason;
+    }
   | { type: "WORKOUT_ROUTE_ENTERED" }
   | { type: "WORKOUT_ROUTE_LEFT" }
   | { type: "COMPLETE_WORKOUT"; summary: WorkoutSummary }
@@ -396,7 +495,14 @@ export type Action =
    * handling of its own. */
   | { type: "MARK_DAILY_ENTRANCE_SEEN" }
   | { type: "RESET_TODAY" }
-  | { type: "LOAD_PRESET"; preset: "completed-day" | "awaiting-review" };
+  /** Phase 4 — "mixed-session" seeds a live, in-progress session directly
+   * from a hand-authored universal Session (lib/training/demo-fixtures.ts's
+   * MIXED_SESSION_DEMO: a resistance block followed by a continuous block)
+   * rather than resolving this client's real assigned program — the
+   * smallest safe, repository-supported path to prove a mixed-modality live
+   * session end to end (spec section 18) without a generation engine or a
+   * new coach-authoring surface, neither of which is in this phase's scope. */
+  | { type: "LOAD_PRESET"; preset: "completed-day" | "awaiting-review" | "mixed-session" };
 
 function withMealMacros(
   meals: AppState["meals"],
@@ -446,6 +552,11 @@ const PAIN_BLOCKED_ACTIONS = new Set<Action["type"]>([
   "SKIP_EXERCISE_WARMUP",
   "CONFIRM_SESSION_WARMUP",
   "SKIP_SESSION_WARMUP",
+  // Phase 4 — continuous work's own progression actions, blocked on exactly
+  // the same terms as their resistance counterparts above: the same safety
+  // architecture, never a cardio-specific carve-out (Phase 4 spec section 12).
+  "BEGIN_CONTINUOUS_LOGGING",
+  "LOG_CONTINUOUS_EXECUTION",
 ]);
 
 /** True once there's an active pain report AND the current exercise is a
@@ -754,48 +865,25 @@ export function reducer(state: AppState, action: Action): AppState {
         return state;
       }
 
-      const exerciseLogs: WorkoutSession["exerciseLogs"] = {};
-      for (const exercise of workout.exercises) {
-        exerciseLogs[exercise.id] = { exerciseId: exercise.id, status: "not-started", loggedSets: [] };
-      }
-
-      const nowIso = new Date().toISOString();
-      const initialFlow = buildInitialFlowState(trainingSession);
-      const sessionWarmupConfig = resolveSessionWarmupConfigFromSession(trainingSession);
       return {
         ...state,
-        workoutSession: {
-          ...state.workoutSession,
+        workoutSession: buildStartedWorkoutSession({
+          existingSession: state.workoutSession,
           workoutId: workout.id,
-          // Snapshotted once, here — see WorkoutSession.resolvedWorkout's
-          // doc for why every later lookup in this session reads this
-          // exact object rather than re-resolving against the client's
-          // (possibly since-revised) assignedProgram. resolvedWorkout stays
-          // exactly what it always was, purely for existing component
-          // rendering; resolvedSession is the same resolution's Phase 3
-          // universal counterpart, which the live engine's own logic
-          // actually navigates against.
           resolvedWorkout: workout,
-          resolvedSession: trainingSession,
-          status: "in-progress",
-          startedAtIso: nowIso,
-          exerciseLogs,
-          currentExerciseId: initialFlow.currentExerciseId,
-          exerciseQueue: initialFlow.exerciseQueue,
-          actualExerciseOrder: initialFlow.actualExerciseOrder,
-          deferredExerciseIds: [],
-          lastResolvedExerciseId: null,
-          currentSetNumber: null,
-          restStartedAtIso: undefined,
-          phase: sessionWarmupConfig.mode === "confirmation" ? "session-warmup" : "exercise-intro",
-          sessionWarmup: { status: "not-started" },
-          exerciseWarmups: initialExerciseWarmups(workout),
-          events: [...state.workoutSession.events, { type: "started", atIso: nowIso } satisfies WorkoutSessionEvent],
-        },
+          trainingSession,
+          nowIso: new Date().toISOString(),
+        }),
       };
     }
 
     case "LOG_SET": {
+      // Phase 4 — a resistance-only action: a continuous item has no
+      // per-set concept, and must only ever be resolved through
+      // LOG_CONTINUOUS_EXECUTION, never accumulate stray LoggedSet entries
+      // that a naive "is this item resolved" check could misread later.
+      const loggedSetItem = findTrainingItemById(state.workoutSession.resolvedSession, action.exerciseId);
+      if (loggedSetItem && loggedSetItem.prescription.family !== "resistance") return state;
       const log = state.workoutSession.exerciseLogs[action.exerciseId];
       if (!log) return state;
       const existingIndex = log.loggedSets.findIndex(
@@ -861,6 +949,9 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "SKIP_SET": {
+      // Phase 4 — same resistance-only guard as LOG_SET above.
+      const skippedSetItem = findTrainingItemById(state.workoutSession.resolvedSession, action.exerciseId);
+      if (skippedSetItem && skippedSetItem.prescription.family !== "resistance") return state;
       const log = state.workoutSession.exerciseLogs[action.exerciseId];
       if (!log) return state;
       const nowIso = new Date().toISOString();
@@ -1065,7 +1156,7 @@ export function reducer(state: AppState, action: Action): AppState {
         workoutSession: {
           ...state.workoutSession,
           sessionWarmup: { status: "completed", completedAtIso: nowIso },
-          phase: "exercise-intro",
+          phase: entryPhaseForCurrentItem(state.workoutSession),
         },
       };
     }
@@ -1077,7 +1168,7 @@ export function reducer(state: AppState, action: Action): AppState {
         workoutSession: {
           ...state.workoutSession,
           sessionWarmup: { status: "skipped", skipReason: action.reason, skipNote: action.note, completedAtIso: nowIso },
-          phase: "exercise-intro",
+          phase: entryPhaseForCurrentItem(state.workoutSession),
         },
       };
     }
@@ -1164,6 +1255,61 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, workoutSession: { ...state.workoutSession, currentSetNumber: nextSetNumber, phase: "set-ready" } };
     }
 
+    case "BEGIN_CONTINUOUS_LOGGING": {
+      if (state.workoutSession.phase !== "continuous-ready") return state;
+      return { ...state, workoutSession: { ...state.workoutSession, phase: "continuous-logging" } };
+    }
+
+    // Phase 4 — the continuous-work counterpart of LOG_SET: one dispatch
+    // records the full prescribed-vs-actual comparison and resolves the
+    // item (there is no per-set concept to iterate). Completion status is
+    // DERIVED from actual-vs-prescribed via lib/workout/continuous.ts's
+    // classifier, never supplied by the client-side caller as a raw
+    // boolean/enum — this is the same "the system decides, the client
+    // reports reality" discipline LOG_SET's own performedAsPrescribed
+    // check enforces via withResolvedLogStatus, applied to a family with no
+    // per-set granularity to check instead.
+    case "LOG_CONTINUOUS_EXECUTION": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId) return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family === "resistance") return state;
+      const log = state.workoutSession.exerciseLogs[exerciseId];
+      if (!log) return state;
+
+      const continuousActual: ContinuousActual = {
+        durationSeconds: action.actual.duration?.seconds,
+        distanceValue: action.actual.distance?.value,
+        heartRateAvg: action.actual.heartRate?.low,
+        rpe: action.actual.rpe,
+      };
+      const status = classifyContinuousCompletion(item.prescription, continuousActual);
+      const performedAsPrescribed = continuousPerformedAsPrescribed(item.prescription, continuousActual);
+      const nowIso = new Date().toISOString();
+      const execution: ExecutionRecord = {
+        id: nextId("execution"),
+        trainingItemInstanceId: exerciseId,
+        status,
+        performedAsPrescribed,
+        actual: action.actual,
+        completedAtIso: nowIso,
+        note: action.note,
+        // deviationReason is deliberately folded into `note` rather than a
+        // dedicated field on ExecutionRecord (which has no such field) —
+        // see this action's own doc for why a genuinely safety-relevant
+        // deviation goes through REPORT_PAIN instead, never here.
+        skipReason: !performedAsPrescribed ? action.deviationReason : undefined,
+      };
+
+      const sessionWithExecution: WorkoutSession = {
+        ...state.workoutSession,
+        exerciseLogs: { ...state.workoutSession.exerciseLogs, [exerciseId]: { ...log, status: "completed" } },
+        continuousExecutions: { ...state.workoutSession.continuousExecutions, [exerciseId]: execution },
+      };
+      const advance = advanceAfterExerciseResolved(sessionWithExecution);
+      return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+    }
+
     // Phase 4.4B-2.2 — the one place that decides which of the three
     // possible next phases a new current exercise actually needs. Never
     // blocked by PAIN_BLOCKED_ACTIONS (see that set's doc comment) — this
@@ -1182,7 +1328,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if (interruption && exerciseId && !(interruption.confirmedUnaffectedExerciseIds ?? []).includes(exerciseId)) {
         return { ...state, workoutSession: { ...state.workoutSession, phase: "exercise-pain-check" } };
       }
-      return { ...state, workoutSession: { ...state.workoutSession, phase: "exercise-intro" } };
+      return { ...state, workoutSession: { ...state.workoutSession, phase: entryPhaseForCurrentItem(state.workoutSession) } };
     }
 
     // Phase 4.4B-2.2 — "This exercise feels unaffected," the one way past
@@ -1201,7 +1347,7 @@ export function reducer(state: AppState, action: Action): AppState {
       }
       const already = interruption.confirmedUnaffectedExerciseIds ?? [];
       if (already.includes(exerciseId)) {
-        return { ...state, workoutSession: { ...state.workoutSession, phase: "exercise-intro" } };
+        return { ...state, workoutSession: { ...state.workoutSession, phase: entryPhaseForCurrentItem(state.workoutSession) } };
       }
       const nowIso = new Date().toISOString();
       return {
@@ -1209,7 +1355,7 @@ export function reducer(state: AppState, action: Action): AppState {
         workoutSession: {
           ...state.workoutSession,
           activePainInterruption: { ...interruption, confirmedUnaffectedExerciseIds: [...already, exerciseId] },
-          phase: "exercise-intro",
+          phase: entryPhaseForCurrentItem(state.workoutSession),
           events: [
             ...state.workoutSession.events,
             { type: "exercise-continued-despite-pain", atIso: nowIso, exerciseId, painReportId: interruption.painReportId },
@@ -1242,9 +1388,14 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case "COMPLETE_WORKOUT": {
       // Defensive backstop: a workout can never be submitted as completed
-      // with zero logged working sets, even if something dispatches this
-      // action outside the normal gated UI flow.
-      if (action.summary.workingSetsCompleted === 0) return state;
+      // with genuinely nothing logged, even if something dispatches this
+      // action outside the normal gated UI flow. Phase 4 — workingSetsCompleted
+      // alone would incorrectly block a real, fully-completed PURE continuous
+      // session (a Zone 2 bike ride has no "working sets" at all by
+      // definition) — exercisesCompleted already counts a real logged
+      // continuous execution (see lib/workout-analysis.ts's buildWorkoutSummary),
+      // so checking both together is honest for either family alone or mixed.
+      if (action.summary.workingSetsCompleted === 0 && action.summary.exercisesCompleted === 0) return state;
       const reviewRequests = [...state.reviewRequests];
       const completeWorkoutNowIso = new Date().toISOString();
       if (action.summary.needsReview) {
@@ -1323,7 +1474,14 @@ export function reducer(state: AppState, action: Action): AppState {
         (sum, log) => sum + log.loggedSets.filter((s) => !s.isWarmup && s.status === "completed").length,
         0
       );
-      const endedEarly = workingSetsCompleted > 0;
+      // Phase 4 — the same "trained, just not to completion" principle
+      // applies to a client who logged real continuous work (any
+      // ExecutionRecord at all, completed or partial) before ending —
+      // workingSetsCompleted alone would misclassify that as a flat
+      // "skipped" session, exactly the distinction this module's own doc
+      // above says must never happen.
+      const anyContinuousExecutionLogged = Object.keys(state.workoutSession.continuousExecutions ?? {}).length > 0;
+      const endedEarly = workingSetsCompleted > 0 || anyContinuousExecutionLogged;
       const nowIso = new Date().toISOString();
       const skipCandidate = {
         workspaceId: state.workspaceId,
@@ -1429,9 +1587,9 @@ export function reducer(state: AppState, action: Action): AppState {
       return createInitialState({ workspaceId: state.workspaceId, clientId: state.clientId, primaryCoachId: state.primaryCoachId });
 
     case "LOAD_PRESET":
-      return action.preset === "completed-day"
-        ? buildCompletedDayPreset(state.workspaceId, state.clientId, state.primaryCoachId)
-        : buildAwaitingReviewPreset(state.workspaceId, state.clientId, state.primaryCoachId);
+      if (action.preset === "completed-day") return buildCompletedDayPreset(state.workspaceId, state.clientId, state.primaryCoachId);
+      if (action.preset === "awaiting-review") return buildAwaitingReviewPreset(state.workspaceId, state.clientId, state.primaryCoachId);
+      return buildMixedSessionPreset(state);
 
     default:
       return state;
@@ -1441,6 +1599,26 @@ export function reducer(state: AppState, action: Action): AppState {
 // ---------------------------------------------------------------------------
 // Presets for testable states (prototype settings menu)
 // ---------------------------------------------------------------------------
+
+/** Phase 4 — seeds a genuinely live, in-progress session (phase resolved by
+ * the same buildStartedWorkoutSession every real session starts through)
+ * from the hand-authored mixed resistance+continuous fixture, rather than a
+ * post-hoc "already summarized" state like the other two presets — this one
+ * exists specifically so a client/tester can walk the guided flow through
+ * both modalities, proving Session does not equal modality (spec section 13). */
+function buildMixedSessionPreset(state: AppState): AppState {
+  const nowIso = new Date().toISOString();
+  return {
+    ...state,
+    workoutSession: buildStartedWorkoutSession({
+      existingSession: createInitialWorkoutSession(state.workspaceId, state.clientId),
+      workoutId: MIXED_SESSION_DEMO.id,
+      resolvedWorkout: null,
+      trainingSession: MIXED_SESSION_DEMO,
+      nowIso,
+    }),
+  };
+}
 
 function buildCompletedDayPreset(
   workspaceId: WorkspaceId = DEMO_WORKSPACE_ID,

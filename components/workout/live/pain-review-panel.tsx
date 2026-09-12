@@ -7,7 +7,19 @@ import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { isSevereRating } from "@/lib/workout/pain-policy";
 import { cn } from "@/lib/cn";
-import type { Exercise, PainInterruption, PainReport } from "@/lib/types";
+import type { PainInterruption, PainReport } from "@/lib/types";
+
+/** Phase 4 — generalized from a full legacy Exercise to the minimal identity
+ * this panel actually needs, so a continuous TrainingItemInstance (which has
+ * no legacy Exercise counterpart at all) can participate in the exact same
+ * safety flow as a resistance one — see this panel's own doc and
+ * app/(client)/training/workout/page.tsx's lookup, which now sources this
+ * from the universal Session for either family identically. */
+export interface PainSafetyActivity {
+  id: string;
+  name: string;
+  approvedSubstituteExerciseId?: string;
+}
 
 const SYMPTOM_QUALITY_LABELS: Record<string, string> = {
   "sharp-pinching": "sharp or pinching pain",
@@ -39,7 +51,7 @@ export function PainReviewPanel({
   interruption,
   report,
 }: {
-  exercise: Exercise;
+  exercise: PainSafetyActivity;
   interruption: PainInterruption;
   report: PainReport | undefined;
 }) {

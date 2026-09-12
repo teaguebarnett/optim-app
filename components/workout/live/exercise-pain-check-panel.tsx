@@ -4,7 +4,8 @@ import Link from "next/link";
 import { AlertTriangle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import type { Exercise, PainReport } from "@/lib/types";
+import type { PainReport } from "@/lib/types";
+import type { PainSafetyActivity } from "@/components/workout/live/pain-review-panel";
 
 const SYMPTOM_QUALITY_LABELS: Record<string, string> = {
   "sharp-pinching": "sharp or pinching pain",
@@ -38,7 +39,7 @@ export function ExercisePainCheckPanel({
   exercise,
   report,
 }: {
-  exercise: Exercise;
+  exercise: PainSafetyActivity;
   report: PainReport | undefined;
 }) {
   const { dispatch, activeContext } = usePrototypeState();

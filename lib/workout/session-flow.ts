@@ -24,7 +24,7 @@
 // before this phase.
 
 import { canCompleteExercise, absoluteWorkingSetNumbers } from "../workout-analysis.ts";
-import type { Block, Session, TrainingItemInstance } from "../training/types.ts";
+import type { Block, ExecutionRecord, Session, TrainingItemInstance } from "../training/types.ts";
 import type { ExerciseLog, WorkoutSession, WorkoutSessionPhase } from "../types";
 
 /** The next prescribed working-set number this training item still needs
@@ -41,13 +41,25 @@ export function firstUnresolvedWorkingSetNumber(item: TrainingItemInstance, log:
   return null;
 }
 
-/** A training item is resolved once it's either explicitly skipped whole, or
- * every prescribed working set has been individually addressed (reuses
- * canCompleteExercise's exact "every prescribed set addressed, at least one
- * really completed" rule — never a second competing formula). */
-export function isExerciseResolved(item: TrainingItemInstance, log: ExerciseLog | undefined): boolean {
+/** A training item is resolved once it's either explicitly skipped whole,
+ * or:
+ *  - resistance: every prescribed working set has been individually
+ *    addressed (reuses canCompleteExercise's exact "every prescribed set
+ *    addressed, at least one really completed" rule — never a second
+ *    competing formula).
+ *  - any other family (Phase 4: continuous): a real ExecutionRecord has
+ *    been logged — there is no per-set concept to iterate, so one
+ *    submission (lib/state.ts's LOG_CONTINUOUS_EXECUTION) fully resolves
+ *    it, whether the outcome was "completed" or "partial". `continuousExecution`
+ *    is optional and simply ignored for a resistance item. */
+export function isExerciseResolved(
+  item: TrainingItemInstance,
+  log: ExerciseLog | undefined,
+  continuousExecution?: ExecutionRecord
+): boolean {
   if (!log) return false;
   if (log.status === "skipped") return true;
+  if (item.prescription.family !== "resistance") return continuousExecution !== undefined;
   return canCompleteExercise(item, log);
 }
 
