@@ -132,39 +132,44 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
   // Phase 5 — context.assignedProgram may now be either the legacy
   // ClientAssignedProgram or the universal UniversalTrainingProgramContent
   // (schemaVersion: 2). AppState.assignedProgram is still legacy-typed (the
-  // whole demo-shaped client engine — lib/workout/resolve-scheduled-workout.ts,
-  // lib/state.ts's START_WORKOUT — is built around it), so a schemaVersion 2
-  // program is converted through the legacy-compatibility read selector
-  // (universalProgramToClientAssignedProgram) when every session in it is
-  // representable that way (real, pure-resistance generated content always
-  // is), never assigned directly — see that function's own doc for exactly
-  // why a raw assignment here would silently corrupt the client's program.
-  //
-  // CRITICAL: resolveScheduledWorkoutForStart's own no-assignedProgram
-  // branch unconditionally falls back to the seeded demo fixture
-  // (PUSH_WORKOUT), on the documented assumption that "a real,
-  // coach-created client never reaches this far without one." Setting
-  // programEnrollment while leaving assignedProgram undefined would break
-  // that assumption for exactly the client this branch is meant to
-  // protect — a real client whose real, generated program simply isn't
-  // representable in the legacy shape yet (e.g. contains continuous work)
-  // would silently receive the demo PUSH_WORKOUT instead of an honest "not
-  // ready" state. So enrollment and assignedProgram are set together, or
-  // not at all — never one without the other.
+  // whole demo-shaped Today/planner/calculations surface —
+  // lib/workout/resolve-scheduled-workout.ts, lib/mock-data.ts's
+  // resolveWorkoutAvailabilityForDay — is built around it), so a
+  // schemaVersion 2 program is converted through the legacy-compatibility
+  // read selector (universalProgramToClientAssignedProgram) when every
+  // session in it is representable that way (real, pure-resistance
+  // generated content always is), never assigned directly — see that
+  // function's own doc for exactly why a raw assignment here would silently
+  // corrupt the client's program.
   let legacyCompatibleProgram: ClientAssignedProgram | undefined;
   if (context.assignedProgram) {
     if ("schemaVersion" in context.assignedProgram && context.assignedProgram.schemaVersion === 2) {
       legacyCompatibleProgram = universalProgramToClientAssignedProgram(context.assignedProgram) ?? undefined;
       // else: a real universal program exists but isn't legacy-representable
-      // yet — treated exactly like "not yet assigned" below, a documented
-      // remaining limitation (see this phase's completion report), never a
-      // corrupted or substituted program.
+      // (e.g. contains continuous work) — this legacy view of it stays
+      // undefined, a documented remaining limitation for Today/planner-style
+      // legacy-only surfaces (see this phase's completion report). It IS
+      // still fully executable through the universal path below.
     } else {
       legacyCompatibleProgram = context.assignedProgram;
     }
   }
-  if (context.enrollment && legacyCompatibleProgram) {
+  // Phase 6A — programEnrollment (dates/duration only, never program
+  // content) is schema-agnostic, so it's set whenever a real enrollment
+  // exists, independent of legacy-representability — CRITICAL: this used to
+  // be gated together with assignedProgram specifically to protect
+  // resolveScheduledWorkoutForStart's PUSH_WORKOUT fallback (calibrated for
+  // a genuinely assignment-less client, never a real one) from misfiring
+  // for a real client whose program simply wasn't legacy-representable.
+  // That protection now lives in lib/state.ts's START_WORKOUT itself (it
+  // checks assignedUniversalProgram before ever reaching the legacy path)
+  // and lib/history/build-daily-record.ts's own equivalent guard, so
+  // splitting this assignment is safe.
+  if (context.enrollment) {
     state.programEnrollment = context.enrollment;
+    state.assignedUniversalProgram = context.universalAssignedProgram ?? undefined;
+  }
+  if (context.enrollment && legacyCompatibleProgram) {
     state.assignedProgram = legacyCompatibleProgram;
   }
   if (context.nutritionPlan) {
@@ -186,10 +191,14 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
     clientDisplayName: identity.clientDisplayName,
     primaryCoachDisplayName: identity.primaryCoachDisplayName,
     email: ctx.profile.email,
-    // Phase 5 — also true when a real program/enrollment exists but isn't
-    // legacy-representable yet (see the assignedProgram/programEnrollment
-    // lockstep above) — the same honest "still being set up" state, never a
-    // silent fallback to demo content.
+    // Phase 5/6A — true whenever this client has no legacy-representable
+    // program view: still the correct gate for every legacy-only surface
+    // (Today, planner, calculations — see legacyCompatibleProgram above).
+    // Training (app/(client)/training/page.tsx) additionally checks
+    // state.assignedUniversalProgram itself and renders the real universal
+    // session experience even when this flag is true, since it no longer
+    // depends on the legacy view at all — see that page for the exact
+    // override logic.
     programNotYetAssigned: !context.enrollment || !legacyCompatibleProgram,
   };
 }

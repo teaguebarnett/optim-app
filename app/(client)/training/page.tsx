@@ -53,7 +53,16 @@ function TrainingScreen() {
   const [pickedDateIso, setPickedDateIso] = useState<string | null>(null);
 
   if (!isHydrated) return <ScreenSkeleton />;
-  if (supabaseProgramNotAssigned) return <AwaitingProgramSetup />;
+  // Phase 6A — supabaseProgramNotAssigned is true whenever this client has
+  // no legacy-representable program view (see app/actions/production-programs.ts's
+  // getMySupabaseAppStateAction), which no longer means "nothing to show"
+  // here: a real universal-grammar assignment (state.assignedUniversalProgram —
+  // resistance, continuous, or mixed) executes through Training's own
+  // universal-aware surfaces regardless. Today/planner-style legacy-only
+  // surfaces are unaffected and still gate on supabaseProgramNotAssigned
+  // alone (a documented remaining limitation — see this phase's completion
+  // report).
+  if (supabaseProgramNotAssigned && !state.assignedUniversalProgram) return <AwaitingProgramSetup />;
 
   // Phase 5.6A.4 — the same shared pre-start boundary Today already uses
   // (see app/(client)/today/page.tsx), applied here too: none of this

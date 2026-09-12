@@ -35,8 +35,10 @@ import {
   type TrainingProgramVersionContent,
 } from "./validation";
 import { DEFAULT_WEEK_STARTS_ON } from "../shared/local-date";
+import { resolveUniversalProgramContent } from "../training/legacy-adapter";
 import type { AssignedNutritionPlan } from "../types";
 import type { ProgramEnrollment } from "../scheduling/types";
+import type { UniversalTrainingProgramContent } from "../training/types";
 
 // ---------------------------------------------------------------------------
 // Reads
@@ -80,6 +82,20 @@ export interface ClientProgramContext {
   enrollment: ProgramEnrollment | null;
   /** Phase 5 — see ActiveProgramAssignment.content's doc; either shape. */
   assignedProgram: TrainingProgramVersionContent | null;
+  /** Phase 6A — the SAME real active assignment as `assignedProgram` above,
+   * but ALWAYS in the universal grammar regardless of its origin schema:
+   * schemaVersion 2 content passes through untouched; schemaVersion 1
+   * (legacy) content is forward-converted via
+   * lib/training/legacy-adapter.ts's legacyProgramToUniversalProgram. This
+   * is the canonical read-boundary representation real client execution
+   * should consume (see lib/workout/resolve-scheduled-session.ts and
+   * lib/state.ts's START_WORKOUT) — compatibility is centralized HERE, not
+   * scattered across UI components. Null whenever assignedProgram is null,
+   * or (rare, honest) when legacy content exists but genuinely can't
+   * convert (a real authoring gap — see legacyProgramToUniversalProgram's
+   * own doc) — never a fabricated or partial universal program in that
+   * case. */
+  universalAssignedProgram: UniversalTrainingProgramContent | null;
   nutritionPlan: AssignedNutritionPlan | null;
 }
 
@@ -170,7 +186,13 @@ export async function getClientProgramContext(params: {
     };
   }
 
-  return { enrollment, assignedProgram: assignedProgram?.content ?? null, nutritionPlan: nutritionPlan?.content ?? null };
+  // Phase 6A — the canonical universal read model, computed once, here, at
+  // the read boundary (spec: "compatibility belongs at the read boundary,"
+  // never scattered across UI components) — see
+  // resolveUniversalProgramContent's own doc for the dispatch rule.
+  const universalAssignedProgram = assignedProgram ? resolveUniversalProgramContent(assignedProgram.content) : null;
+
+  return { enrollment, assignedProgram: assignedProgram?.content ?? null, universalAssignedProgram, nutritionPlan: nutritionPlan?.content ?? null };
 }
 
 export async function getDailyActivity(clientProfileId: string, dateIso: string): Promise<DailyActivityContent | null> {

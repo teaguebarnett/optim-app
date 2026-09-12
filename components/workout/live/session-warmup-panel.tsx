@@ -5,22 +5,28 @@ import { Flame } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SkipReasonSheet } from "@/components/workout/skip-reason-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { resolveSessionWarmupConfig } from "@/lib/workout/warmup";
+import { resolveSessionWarmupConfigFromSession } from "@/lib/workout/warmup";
 import type { SkipReason } from "@/lib/types";
 
 /**
  * Phase 4.4B-2 §D — the once-per-session preparation routine, sourced from
- * the workout's own real `warmupOverview` text (never fabricated). Only
- * ever rendered when resolveSessionWarmupConfig reports "confirmation" —
- * ActiveSessionShell skips straight past this phase for a hypothetical
- * future workout with no session-level routine.
+ * the session's own real `warmupOverview` text (never fabricated). Only
+ * ever rendered when resolveSessionWarmupConfigFromSession reports
+ * "confirmation" — ActiveSessionShell skips straight past this phase for a
+ * hypothetical future session with no session-level routine.
+ *
+ * Phase 6A — reads resolvedSession (always present once a session is
+ * started, legacy or universal-origin alike) rather than resolvedWorkout
+ * (null for a continuous-only or mixed session) — this fixes a real bug: a
+ * universal-origin session with a real warmupOverview would enter this
+ * phase and then render nothing at all, with no way to proceed.
  */
 export function SessionWarmupPanel() {
   const { state, dispatch } = usePrototypeState();
   const [skipOpen, setSkipOpen] = useState(false);
-  const workout = state.workoutSession.resolvedWorkout;
-  if (!workout) return null;
-  const config = resolveSessionWarmupConfig(workout);
+  const trainingSession = state.workoutSession.resolvedSession;
+  if (!trainingSession) return null;
+  const config = resolveSessionWarmupConfigFromSession(trainingSession);
   if (config.mode !== "confirmation") return null;
 
   function handleSkipConfirm(reason: SkipReason, note?: string) {

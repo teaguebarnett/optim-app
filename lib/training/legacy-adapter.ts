@@ -39,7 +39,7 @@
 import type { CardioOption, CardioTarget, ClientAssignedProgram, DayOfWeek, Exercise, ExerciseBlockType, ProgramDay, ProgramWeek, RpeValue, Workout } from "../types.ts";
 import type { WorkspaceId } from "../tenancy/types.ts";
 import { buildPrescribedSets } from "../coach/training.ts";
-import type { Block, BlockKind, Prescription, Session, TrainingItemInstance, UniversalTrainingProgramContent } from "./types.ts";
+import type { Block, BlockKind, Prescription, Session, TrainingItemInstance, UniversalProgramDay, UniversalProgramWeek, UniversalTrainingProgramContent } from "./types.ts";
 
 /** Thrown when a legacy Workout/Exercise isn't real, complete, assignable
  * strength content this adapter is scoped to convert (an authoring
@@ -272,6 +272,51 @@ export function checkSessionLegacyCompatibility(session: Session): LegacyCompati
   return { compatible: true };
 }
 
+/** Converts ONE resistance TrainingItemInstance into its legacy Exercise
+ * representation, independent of whether the REST of the session it lives
+ * in is legacy-representable as a whole. Unlike sessionToLegacyWorkout
+ * (below — the whole-session persistence/compatibility boundary, gated by
+ * checkSessionLegacyCompatibility), this narrower per-item building block
+ * checks only THIS item's own compatibility (itemCompatibilityReason) and
+ * ignores block-level structure entirely (rounds, superset/circuit
+ * grouping), always producing a plain unblocked Exercise — safe because its
+ * only caller (Phase 6A's live workout page, rendering the resistance
+ * panels' `exercise` prop from a universal Session whose OTHER items may be
+ * non-resistance, so the session as a whole can never produce a legacy
+ * Workout) never reads Exercise.block. Returns null (never throws, never a
+ * partial/garbled Exercise) when this one item doesn't carry everything
+ * legacy Exercise requires. */
+export function trainingItemToLegacyExercise(item: TrainingItemInstance): Exercise | null {
+  if (itemCompatibilityReason(item)) return null;
+  const p = item.prescription;
+  const warmupSets = p.warmupSets ?? 0;
+  const workingSets = p.sets as number;
+  const targetRepsLow = p.reps!.low;
+  const targetRepsHigh = p.reps!.high;
+  const targetRpe = p.rpe as RpeValue;
+  const workingWeightLb = p.load?.value;
+
+  return {
+    id: item.id,
+    order: item.order,
+    name: item.name,
+    warmupSets,
+    workingSets,
+    targetRepsLow,
+    targetRepsHigh,
+    targetRpe,
+    restSeconds: p.restSeconds as number,
+    tempo: p.tempo ?? "",
+    cue: item.coachCue ?? "",
+    // Deliberately empty, never fabricated — see this module's header doc:
+    // execution history is out of scope for a Session/Prescription boundary.
+    previousPerformance: [],
+    prescribedSets: buildPrescribedSets({ warmupSets, workingSets, targetRepsLow, targetRepsHigh, targetRpe, workingWeightLb }),
+    ...(item.substituteItemId !== undefined ? { approvedSubstituteExerciseId: item.substituteItemId } : {}),
+    ...(p.warmupInstruction !== undefined ? { warmupInstruction: p.warmupInstruction } : {}),
+  };
+}
+
 /** Converts a universal Session back into a legacy Workout ONLY when
  * checkSessionLegacyCompatibility says it can be represented with zero
  * semantic loss — returns null otherwise (never a best-effort/lossy
@@ -289,36 +334,16 @@ export function sessionToLegacyWorkout(session: Session, context: { workspaceId:
   }
   entries.sort((a, b) => a.item.order - b.item.order);
 
-  const exercises: Exercise[] = entries.map(({ blockKind, blockId, item }) => {
-    const p = item.prescription;
-    const warmupSets = p.warmupSets ?? 0;
-    const workingSets = p.sets as number;
-    const targetRepsLow = p.reps!.low;
-    const targetRepsHigh = p.reps!.high;
-    const targetRpe = p.rpe as RpeValue;
-    const workingWeightLb = p.load?.value;
-
-    return {
-      id: item.id,
-      order: item.order,
-      name: item.name,
-      warmupSets,
-      workingSets,
-      targetRepsLow,
-      targetRepsHigh,
-      targetRpe,
-      restSeconds: p.restSeconds as number,
-      tempo: p.tempo ?? "",
-      cue: item.coachCue ?? "",
-      // Deliberately empty, never fabricated — see this module's header doc:
-      // execution history is out of scope for a Session/Prescription boundary.
-      previousPerformance: [],
-      prescribedSets: buildPrescribedSets({ warmupSets, workingSets, targetRepsLow, targetRepsHigh, targetRpe, workingWeightLb }),
-      ...(blockKind !== "straight" ? { block: { id: blockId, type: blockKind as Exclude<ExerciseBlockType, "straight"> } } : {}),
-      ...(item.substituteItemId !== undefined ? { approvedSubstituteExerciseId: item.substituteItemId } : {}),
-      ...(p.warmupInstruction !== undefined ? { warmupInstruction: p.warmupInstruction } : {}),
-    };
-  });
+  // checkSessionLegacyCompatibility above already proved every item here
+  // passes itemCompatibilityReason, so trainingItemToLegacyExercise can
+  // never return null in this whole-session context — the block-level
+  // grouping metadata (superset/circuit) it deliberately omits is added
+  // back on here, since sessionToLegacyWorkout (unlike the per-item helper)
+  // needs it.
+  const exercises: Exercise[] = entries.map(({ blockKind, blockId, item }) => ({
+    ...trainingItemToLegacyExercise(item)!,
+    ...(blockKind !== "straight" ? { block: { id: blockId, type: blockKind as Exclude<ExerciseBlockType, "straight"> } } : {}),
+  }));
 
   return {
     id: session.id,
@@ -447,4 +472,82 @@ export function universalProgramToClientAssignedProgram(content: UniversalTraini
     createdAtIso: content.createdAtIso,
     updatedAtIso: content.updatedAtIso,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6A — the FORWARD counterpart of universalProgramToClientAssignedProgram
+// above: every historical schemaVersion-1 (legacy, schemaVersion-less)
+// program a real Supabase client might still be assigned converts into the
+// universal grammar at the read boundary (see lib/production/programs.ts's
+// getClientProgramContext), so real client execution has exactly ONE
+// canonical shape to consume — Session — regardless of which schema the
+// persisted content actually is. This is the read-side mirror of
+// legacyWorkoutToSession (per-day), lifted to whole-program scope exactly
+// the way sessionToLegacyWorkout's whole-program counterpart above already
+// is. Never used as a generation/authoring target — real generation targets
+// the universal grammar natively (lib/coach/universal-program-generation.ts).
+// ---------------------------------------------------------------------------
+
+/**
+ * Converts a real legacy ClientAssignedProgram into its universal
+ * UniversalTrainingProgramContent representation, day by day, via
+ * legacyWorkoutToSession — the exact same per-day conversion Phase 2 proved
+ * lossless. Throws UnsupportedLegacyWorkoutError (never returns a partial or
+ * best-effort program) if any single training day's Workout can't convert —
+ * callers must treat that as "this program can't be safely resolved right
+ * now" (see getClientProgramContext's own try/catch), never patch over the
+ * gap with a fabricated day.
+ */
+export function legacyProgramToUniversalProgram(program: ClientAssignedProgram): UniversalTrainingProgramContent {
+  const weeks: UniversalProgramWeek[] = program.weeks.map((week) => {
+    const days: UniversalProgramDay[] = week.days.map((day): UniversalProgramDay => {
+      if (day.type === "rest") return { dayOfWeek: day.dayOfWeek, type: "rest" };
+      // A "training" day with no real workout behind it is a genuine
+      // authoring gap (see lib/mock-data.ts's WorkoutAvailability.isUnavailable
+      // for the same concept on the legacy read side) — never silently
+      // reinterpreted as an intentional rest day, which would misrepresent
+      // what was actually scheduled.
+      if (!day.workout) throw new UnsupportedLegacyWorkoutError(`Week ${week.weekNumber}, ${day.dayOfWeek} is a training day with no real workout assigned — cannot convert to a universal session.`);
+      return { dayOfWeek: day.dayOfWeek, type: "training", sessions: [legacyWorkoutToSession(day.workout)] };
+    });
+    return { weekNumber: week.weekNumber, days };
+  });
+
+  return {
+    schemaVersion: 2,
+    id: program.id,
+    workspaceId: program.workspaceId,
+    clientId: program.clientId,
+    coachId: program.coachId,
+    sourceTemplateId: program.sourceTemplateId,
+    name: program.name,
+    durationWeeks: program.durationWeeks,
+    weeks,
+    status: program.status,
+    createdAtIso: program.createdAtIso,
+    updatedAtIso: program.updatedAtIso,
+  };
+}
+
+/**
+ * The one, centralized schemaVersion dispatch for the universal client read
+ * model (spec: "compatibility belongs at the read boundary, not scattered
+ * across UI components") — schemaVersion 2 content passes through
+ * completely untouched (identity-preserving: never round-tripped through
+ * the legacy shape first, per this phase's explicit "avoid universal ->
+ * legacy -> universal" requirement); schemaVersion-1 (legacy) content is
+ * forward-converted via legacyProgramToUniversalProgram. Returns null,
+ * never a partial/fabricated program, when legacy content exists but
+ * genuinely can't convert (a real authoring gap) — see that function's own
+ * doc. lib/production/programs.ts's getClientProgramContext is this
+ * function's one real caller.
+ */
+export function resolveUniversalProgramContent(content: ClientAssignedProgram | UniversalTrainingProgramContent): UniversalTrainingProgramContent | null {
+  if ("schemaVersion" in content && content.schemaVersion === 2) return content;
+  try {
+    return legacyProgramToUniversalProgram(content);
+  } catch (err) {
+    if (err instanceof UnsupportedLegacyWorkoutError) return null;
+    throw err;
+  }
 }

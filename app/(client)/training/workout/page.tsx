@@ -19,6 +19,7 @@ import { ContinuousReadyPanel } from "@/components/workout/live/continuous-ready
 import { ContinuousLoggingPanel } from "@/components/workout/live/continuous-logging-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { findTrainingItemById } from "@/lib/workout/session-flow";
+import { trainingItemToLegacyExercise } from "@/lib/training/legacy-adapter";
 import type { TrainingItemInstance } from "@/lib/training/types";
 
 /** Shared shape PainReviewPanel/ExercisePainCheckPanel actually need — see
@@ -69,13 +70,23 @@ export default function ActiveWorkoutPage() {
   }
 
   const sessionExercises = session.resolvedWorkout?.exercises ?? [];
-  const currentExercise = sessionExercises.find((e) => e.id === session.currentExerciseId);
   // The same current item, looked up on the universal Session this session
   // was actually started against — the one source both families can be
   // rendered from. A resistance item's `.name`/etc. match currentExercise
   // exactly; a continuous item has no legacy counterpart at all, so this is
   // the only lookup that ever finds it.
   const currentTrainingItem = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
+  // Phase 6A — a real universal-origin session (resolvedWorkout null: a
+  // continuous-only or mixed session has no legacy Workout counterpart at
+  // all — see lib/training/legacy-adapter.ts) has nothing in
+  // sessionExercises to find. The resistance panels below still need an
+  // Exercise-shaped prop, so the current resistance item is converted
+  // on the fly, for display only, via the same per-item conversion
+  // sessionToLegacyWorkout itself uses — never a second, independently
+  // drifting mapping.
+  const currentExercise =
+    sessionExercises.find((e) => e.id === session.currentExerciseId) ??
+    (currentTrainingItem && currentTrainingItem.prescription.family === "resistance" ? (trainingItemToLegacyExercise(currentTrainingItem) ?? undefined) : undefined);
 
   const techniqueFlagCount = state.reviewRequests.filter(
     (r) => r.kind === "technique-flag" && (!session.startedAtIso || r.createdAtIso >= session.startedAtIso)

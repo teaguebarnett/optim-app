@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { SurfaceShell } from "@/components/training/surface-shell";
 import { WorkoutDetailsSheet } from "@/components/workout/workout-details-sheet";
 import { TrainingTimeSheet } from "@/components/today/training-time-sheet";
+import { UniversalTodaySessionCard } from "@/components/training/universal-today-session-card";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { resolveWorkoutAvailabilityForDay } from "@/lib/mock-data";
 import { deriveProgramWeek } from "@/lib/scheduling/enrollment";
@@ -57,6 +58,17 @@ export function TodaySessionCard() {
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
   const [previewOpen, setPreviewOpen] = useState(false);
   const [timeSheetOpen, setTimeSheetOpen] = useState(false);
+
+  // Phase 6A — a real Supabase client whose active assignment exists ONLY
+  // in the universal grammar (no legacy view — see AppState.assignedProgram's
+  // own doc) renders through a dedicated, simpler surface instead of falling
+  // through this component's resolveWorkoutAvailabilityForDay-based logic
+  // below, which would otherwise silently show this client the global demo
+  // catalog for today (that fallback is safe only for the genuinely
+  // assignment-less seeded demo client it was written for).
+  if (state.assignedUniversalProgram && !state.assignedProgram) {
+    return <UniversalTodaySessionCard assignedProgram={state.assignedUniversalProgram} coachName={coachName} />;
+  }
 
   const session = state.workoutSession;
   const todayDayOfWeek = localDateDayOfWeek(state.dateIso);

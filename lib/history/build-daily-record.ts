@@ -65,15 +65,29 @@ export function buildDailyRecordFromLiveState(state: AppState, enrollment: Progr
   // global demo-catalog lookup by id, which only ever recognized
   // PUSH_WORKOUT's own id and silently resolved to null for any real
   // client's own assigned program.
+  // Phase 6A — a real Supabase client whose real assignment exists only in
+  // the universal grammar (assignedUniversalProgram set, but assignedProgram
+  // undefined because the content isn't legacy-representable — e.g.
+  // continuous or mixed) must NEVER fall through to
+  // resolveScheduledWorkoutForStart's own no-assignedProgram branch: that
+  // branch's PUSH_WORKOUT fallback is calibrated for the genuinely
+  // assignment-less demo client (see that function's own doc), not for a
+  // real client whose real program this legacy-only resolver simply can't
+  // represent. Legacy (schemaVersion 1) Supabase clients are unaffected —
+  // assignedProgram is set for them, so this check is false and the
+  // existing resolution below runs exactly as before.
+  const universalOnlyRealClient = state.assignedUniversalProgram !== undefined && state.assignedProgram === undefined;
   const prescribedWorkout =
     trainingDayType === "scheduled_workout"
       ? (state.workoutSession.resolvedWorkout ??
-        resolveScheduledWorkoutForStart({
-          dateIso,
-          programEnrollment: enrollment,
-          assignedProgram: state.assignedProgram,
-          clientDeclaredRest,
-        }).workout)
+        (universalOnlyRealClient
+          ? null
+          : resolveScheduledWorkoutForStart({
+              dateIso,
+              programEnrollment: enrollment,
+              assignedProgram: state.assignedProgram,
+              clientDeclaredRest,
+            }).workout))
       : null;
 
   const training: TrainingDaySnapshot = {

@@ -216,7 +216,16 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
       setSupabaseProgramNotAssigned(result.programNotYetAssigned);
       const sessionWasStarted =
         result.dailyActivity && result.dailyActivity.training.sessionStatus && result.dailyActivity.training.sessionStatus !== "not-started";
-      if (sessionWasStarted && result.state.assignedProgram) {
+      // Phase 6A — this used to check only the legacy assignedProgram field,
+      // so a real universal-only client (continuous or mixed content — see
+      // AppState.assignedUniversalProgram's own doc) whose session status
+      // WAS genuinely persisted would silently lose it on every reload:
+      // START_WORKOUT was never re-dispatched, so state.workoutSession
+      // stayed at its "not-started" default even though a real completed/
+      // in-progress session existed. START_WORKOUT itself already checks
+      // assignedUniversalProgram before the legacy path (see lib/state.ts),
+      // so accepting either field here is enough to fix it.
+      if (sessionWasStarted && (result.state.assignedProgram || result.state.assignedUniversalProgram)) {
         // Re-run the same real START_WORKOUT initialization the reducer
         // always uses (queue/phase derived from the client's actual
         // resolved workout) before overlaying the persisted logs on top —
@@ -251,7 +260,15 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
   // Action on every state change once hydrated, instead of demo mode's
   // saveClientAppState/localStorage below. Never runs in demo mode.
   useEffect(() => {
-    if (appMode !== "supabase" || !isHydrated || supabaseNotProvisioned || supabaseProgramNotAssigned) return;
+    // Phase 6A — supabaseProgramNotAssigned alone used to gate this off
+    // entirely for a real universal-only client (continuous or mixed
+    // content — see AppState.assignedUniversalProgram's own doc), silently
+    // dropping every autosave for a client who's actively training: their
+    // real session status/logs were built correctly in memory but never
+    // reached daily_records at all. state.assignedUniversalProgram is the
+    // same override the Training page itself uses to render for this
+    // client in the first place.
+    if (appMode !== "supabase" || !isHydrated || supabaseNotProvisioned || (supabaseProgramNotAssigned && !state.assignedUniversalProgram)) return;
     const record = buildDailyRecordFromLiveState(state, state.programEnrollment, "live");
     saveMySupabaseDailyActivityAction({
       dateIso: state.dateIso,

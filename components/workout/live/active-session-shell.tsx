@@ -50,7 +50,11 @@ export function ActiveSessionShell({ session, children }: { session: WorkoutSess
   }, []);
 
   const elapsedMs = session.startedAtIso && now ? now - new Date(session.startedAtIso).getTime() : 0;
-  const totalExercises = session.resolvedWorkout?.exercises.length ?? 0;
+  // Phase 6A — resolvedSession (always present once a session is started,
+  // legacy or universal-origin alike) rather than resolvedWorkout (null for
+  // a continuous-only or mixed session, which would otherwise show a
+  // meaningless "Exercise 0 of 0" for the entire session).
+  const totalExercises = session.resolvedSession?.blocks.flatMap((b) => b.items).length ?? 0;
   const resolvedCount = totalExercises - session.exerciseQueue.length;
 
   return (
@@ -65,7 +69,7 @@ export function ActiveSessionShell({ session, children }: { session: WorkoutSess
             <X size={18} />
           </button>
           <div className="text-center">
-            <p className="text-sm font-semibold text-off-white">{session.resolvedWorkout?.name ?? "Workout"}</p>
+            <p className="text-sm font-semibold text-off-white">{session.resolvedSession?.name ?? "Workout"}</p>
             <p className="text-xs tabular-nums text-neutral">{formatElapsed(elapsedMs)}</p>
           </div>
           <button

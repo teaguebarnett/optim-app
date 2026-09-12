@@ -18,11 +18,12 @@ import {
 } from "./workout/session-flow.ts";
 import { resolveSessionWarmupConfigFromSession, resolveTrainingItemWarmupConfig } from "./workout/warmup.ts";
 import { resolveScheduledWorkoutForStart } from "./workout/resolve-scheduled-workout.ts";
+import { resolveScheduledSessionForStart } from "./workout/resolve-scheduled-session.ts";
 import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { legacyWorkoutToSession } from "./training/legacy-adapter.ts";
 import { classifyContinuousCompletion, continuousPerformedAsPrescribed, type ContinuousActual } from "./workout/continuous.ts";
 import { MIXED_SESSION_DEMO } from "./training/demo-fixtures.ts";
-import type { ExecutionRecord, Prescription, Session } from "./training/types";
+import type { ExecutionRecord, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
@@ -126,6 +127,17 @@ export interface AppState {
    * falls back to the global demo catalog exactly as it always has, so the
    * seeded demo client is completely unaffected by this field's addition. */
   assignedProgram?: ClientAssignedProgram;
+  /** Phase 6A — this Supabase-mode client's real active assignment, ALWAYS
+   * in the universal grammar regardless of its origin schema (a
+   * schemaVersion-1 legacy program is forward-converted; schemaVersion 2
+   * passes through natively) — see lib/production/programs.ts's
+   * getClientProgramContext. This is the canonical source START_WORKOUT
+   * (below) resolves live sessions from for a real Supabase client; it
+   * takes priority over the legacy assignedProgram/resolveScheduledWorkoutForStart
+   * path whenever present, so a program containing continuous or mixed
+   * content — which assignedProgram above can never represent — still
+   * executes correctly. Always undefined in demo mode. */
+  assignedUniversalProgram?: UniversalTrainingProgramContent;
   /** Phase 5.5A — this client's real, complete, coach-approved nutrition
    * prescription (see lib/coach/nutrition-directions.ts). Kept in sync
    * with `nutritionTargets` above (same numbers, richer detail) — never
@@ -831,6 +843,37 @@ export function reducer(state: AppState, action: Action): AppState {
       if (state.workoutSession.status !== "not-started") {
         return { ...state, workoutSession: { ...state.workoutSession, status: "in-progress" } };
       }
+      // Phase 6A — a real Supabase client's universal-grammar assignment
+      // (see AppState.assignedUniversalProgram's own doc) takes priority
+      // whenever present: resolved and executed DIRECTLY as a universal
+      // Session, never round-tripped through a legacy Workout first. This
+      // is the only path that can ever start a continuous or mixed session
+      // for a real client — resolveScheduledWorkoutForStart below has no
+      // way to represent one.
+      if (state.assignedUniversalProgram) {
+        const resolvedSession = resolveScheduledSessionForStart({
+          dateIso: state.dateIso,
+          programEnrollment: state.programEnrollment,
+          assignedProgram: state.assignedUniversalProgram,
+          clientDeclaredRest: state.dailyTrainingPlan?.status === "rest_day",
+        });
+        if (!resolvedSession.session) return state;
+        const trainingSession = resolvedSession.session;
+        return {
+          ...state,
+          workoutSession: buildStartedWorkoutSession({
+            existingSession: state.workoutSession,
+            workoutId: trainingSession.id,
+            // No legacy Workout snapshot exists for a real universal-origin
+            // session — see buildStartedWorkoutSession's own doc on why
+            // this is a legitimate, already-supported value, not a gap.
+            resolvedWorkout: null,
+            trainingSession,
+            nowIso: new Date().toISOString(),
+          }),
+        };
+      }
+
       // The one moment a real session is actually resolved against this
       // client's real approved program — see
       // lib/workout/resolve-scheduled-workout.ts. A day with nothing honest
