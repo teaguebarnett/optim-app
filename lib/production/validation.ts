@@ -30,6 +30,15 @@ import { InvalidPersistedContentError } from "./errors.ts";
 import type { ClientAssignedProgram, AssignedNutritionPlan, Exercise, Workout, ProgramDay, ProgramWeek } from "../types";
 import type { TrainingDaySnapshot, NutritionDaySnapshot } from "../history/types";
 import type { CoachPlaybookContent } from "../coach/playbook";
+import type {
+  UniversalTrainingProgramContent,
+  UniversalProgramWeek,
+  UniversalProgramDay,
+  Session,
+  Block,
+  TrainingItemInstance,
+  Prescription,
+} from "../training/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -52,6 +61,19 @@ function requireNumber(value: unknown, field: string, what: string): number {
 function requireArray(value: unknown, field: string, what: string): unknown[] {
   if (!Array.isArray(value)) fail(what, `"${field}" must be an array, got ${typeof value}`);
   return value;
+}
+
+function requireBoolean(value: unknown, field: string, what: string): boolean {
+  if (typeof value !== "boolean") fail(what, `"${field}" must be a boolean, got ${typeof value}`);
+  return value;
+}
+
+function requireOneOf<T extends string>(value: unknown, allowed: readonly T[], field: string, what: string): T {
+  const str = requireString(value, field, what);
+  if (!(allowed as readonly string[]).includes(str)) {
+    fail(what, `"${field}" must be one of ${allowed.join("/")}, got "${str}"`);
+  }
+  return str as T;
 }
 
 function validateExercise(raw: unknown, what: string): Exercise {
@@ -106,6 +128,207 @@ function validateProgramWeek(raw: unknown, what: string): ProgramWeek {
   if (days.length !== 7) fail(what, `week.days must have exactly 7 entries, got ${days.length}`);
   days.forEach((d) => validateProgramDay(d, what));
   return raw as unknown as ProgramWeek;
+}
+
+// ---------------------------------------------------------------------------
+// Universal training grammar (Phase 1) — validates a training_program_
+// versions.content payload shaped by lib/training/types.ts's
+// UniversalTrainingProgramContent (schemaVersion: 2). Additive only: no
+// existing call site produces or reads this shape yet — see
+// validateTrainingProgramVersionContent's own doc below for the dispatch
+// rule, and lib/training/types.ts's module doc for why no database
+// migration is required to introduce it.
+// ---------------------------------------------------------------------------
+
+const EXECUTION_FAMILIES = ["resistance", "continuous", "interval", "circuit", "quality"] as const;
+const BLOCK_KINDS = ["straight", "superset", "circuit", "interval", "warmup", "cooldown", "custom"] as const;
+const PRESCRIPTION_LOAD_UNITS = ["lb", "kg"] as const;
+const PRESCRIPTION_DISTANCE_UNITS = ["m", "mi", "km"] as const;
+const PRESCRIPTION_PACE_UNITS = ["min_per_mi", "min_per_km"] as const;
+const PRESCRIPTION_SIDES = ["left", "right", "alternating", "bilateral"] as const;
+
+function validatePrescriptionReps(raw: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"reps" is not an object`);
+  requireNumber(raw.low, "reps.low", what);
+  requireNumber(raw.high, "reps.high", what);
+}
+
+function validatePrescriptionLoad(raw: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"load" is not an object`);
+  requireNumber(raw.value, "load.value", what);
+  requireOneOf(raw.unit, PRESCRIPTION_LOAD_UNITS, "load.unit", what);
+  if (raw.percent1rm !== undefined) requireNumber(raw.percent1rm, "load.percent1rm", what);
+}
+
+function validatePrescriptionDuration(raw: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"duration" is not an object`);
+  requireNumber(raw.seconds, "duration.seconds", what);
+}
+
+function validatePrescriptionDistance(raw: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"distance" is not an object`);
+  requireNumber(raw.value, "distance.value", what);
+  requireOneOf(raw.unit, PRESCRIPTION_DISTANCE_UNITS, "distance.unit", what);
+}
+
+function validatePrescriptionPace(raw: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"pace" is not an object`);
+  requireNumber(raw.value, "pace.value", what);
+  requireOneOf(raw.unit, PRESCRIPTION_PACE_UNITS, "pace.unit", what);
+}
+
+function validatePrescriptionHeartRate(raw: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"heartRate" is not an object`);
+  requireNumber(raw.low, "heartRate.low", what);
+  requireNumber(raw.high, "heartRate.high", what);
+  if (raw.zoneLabel !== undefined) requireString(raw.zoneLabel, "heartRate.zoneLabel", what);
+}
+
+function validatePrescriptionPower(raw: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"power" is not an object`);
+  requireNumber(raw.watts, "power.watts", what);
+}
+
+function validatePrescriptionIntervalField(raw: unknown, field: string, what: string): void {
+  if (!isRecord(raw)) fail(what, `"${field}" is not an object`);
+  requireNumber(raw.seconds, `${field}.seconds`, what);
+}
+
+function validatePrescription(raw: unknown, what: string): Prescription {
+  if (!isRecord(raw)) fail(what, "prescription is not an object");
+  requireOneOf(raw.family, EXECUTION_FAMILIES, "prescription.family", what);
+  if (raw.sets !== undefined) requireNumber(raw.sets, "prescription.sets", what);
+  if (raw.reps !== undefined) validatePrescriptionReps(raw.reps, what);
+  if (raw.load !== undefined) validatePrescriptionLoad(raw.load, what);
+  if (raw.rpe !== undefined) requireNumber(raw.rpe, "prescription.rpe", what);
+  if (raw.rir !== undefined) requireNumber(raw.rir, "prescription.rir", what);
+  if (raw.duration !== undefined) validatePrescriptionDuration(raw.duration, what);
+  if (raw.distance !== undefined) validatePrescriptionDistance(raw.distance, what);
+  if (raw.pace !== undefined) validatePrescriptionPace(raw.pace, what);
+  if (raw.heartRate !== undefined) validatePrescriptionHeartRate(raw.heartRate, what);
+  if (raw.power !== undefined) validatePrescriptionPower(raw.power, what);
+  if (raw.rounds !== undefined) requireNumber(raw.rounds, "prescription.rounds", what);
+  if (raw.workInterval !== undefined) validatePrescriptionIntervalField(raw.workInterval, "prescription.workInterval", what);
+  if (raw.recoveryInterval !== undefined)
+    validatePrescriptionIntervalField(raw.recoveryInterval, "prescription.recoveryInterval", what);
+  if (raw.restSeconds !== undefined) requireNumber(raw.restSeconds, "prescription.restSeconds", what);
+  if (raw.tempo !== undefined) requireString(raw.tempo, "prescription.tempo", what);
+  if (raw.cadence !== undefined) requireNumber(raw.cadence, "prescription.cadence", what);
+  if (raw.amrap !== undefined) requireBoolean(raw.amrap, "prescription.amrap", what);
+  if (raw.completionTarget !== undefined) requireString(raw.completionTarget, "prescription.completionTarget", what);
+  if (raw.side !== undefined) requireOneOf(raw.side, PRESCRIPTION_SIDES, "prescription.side", what);
+  return raw as unknown as Prescription;
+}
+
+function validateTrainingItemInstance(raw: unknown, what: string): TrainingItemInstance {
+  if (!isRecord(raw)) fail(what, "training item instance is not an object");
+  requireString(raw.id, "item.id", what);
+  requireNumber(raw.order, "item.order", what);
+  requireString(raw.name, "item.name", what);
+  requireOneOf(raw.category, EXECUTION_FAMILIES, "item.category", what);
+  if (raw.catalogItemId !== undefined) requireString(raw.catalogItemId, "item.catalogItemId", what);
+  if (raw.coachCue !== undefined) requireString(raw.coachCue, "item.coachCue", what);
+  if (raw.substituteItemId !== undefined) requireString(raw.substituteItemId, "item.substituteItemId", what);
+  if (raw.prescription === undefined) fail(what, `"item.prescription" is missing`);
+  validatePrescription(raw.prescription, what);
+  return raw as unknown as TrainingItemInstance;
+}
+
+function validateBlock(raw: unknown, what: string): Block {
+  if (!isRecord(raw)) fail(what, "block is not an object");
+  requireString(raw.id, "block.id", what);
+  requireOneOf(raw.kind, BLOCK_KINDS, "block.kind", what);
+  requireNumber(raw.order, "block.order", what);
+  if (raw.rounds !== undefined) requireNumber(raw.rounds, "block.rounds", what);
+  if (raw.restBetweenItemsSeconds !== undefined) requireNumber(raw.restBetweenItemsSeconds, "block.restBetweenItemsSeconds", what);
+  if (raw.restBetweenRoundsSeconds !== undefined) requireNumber(raw.restBetweenRoundsSeconds, "block.restBetweenRoundsSeconds", what);
+  if (raw.timeCapSeconds !== undefined) requireNumber(raw.timeCapSeconds, "block.timeCapSeconds", what);
+  if (raw.completionRule !== undefined) requireString(raw.completionRule, "block.completionRule", what);
+  const items = requireArray(raw.items, "block.items", what);
+  if (items.length === 0) fail(what, `"block.items" must have at least one item`);
+  items.forEach((i) => validateTrainingItemInstance(i, what));
+  return raw as unknown as Block;
+}
+
+function validateSession(raw: unknown, what: string): Session {
+  if (!isRecord(raw)) fail(what, "session is not an object");
+  requireString(raw.id, "session.id", what);
+  requireString(raw.name, "session.name", what);
+  requireString(raw.focus, "session.focus", what);
+  requireNumber(raw.estimatedDurationMin, "session.estimatedDurationMin", what);
+  if (raw.warmupOverview !== undefined) requireString(raw.warmupOverview, "session.warmupOverview", what);
+  if (raw.coachNote !== undefined) requireString(raw.coachNote, "session.coachNote", what);
+  const blocks = requireArray(raw.blocks, "session.blocks", what);
+  if (blocks.length === 0) fail(what, `"session.blocks" must have at least one block`);
+  blocks.forEach((b) => validateBlock(b, what));
+  return raw as unknown as Session;
+}
+
+function validateUniversalProgramDay(raw: unknown, what: string): UniversalProgramDay {
+  if (!isRecord(raw)) fail(what, "program day is not an object");
+  requireString(raw.dayOfWeek, "day.dayOfWeek", what);
+  const type = requireString(raw.type, "day.type", what);
+  if (type !== "training" && type !== "rest") fail(what, `"day.type" must be "training" or "rest", got "${type}"`);
+  if (type === "training") {
+    const sessions = requireArray(raw.sessions, "day.sessions", what);
+    if (sessions.length === 0) fail(what, `day.type is "training" but "day.sessions" is empty`);
+    sessions.forEach((s) => validateSession(s, what));
+  }
+  return raw as unknown as UniversalProgramDay;
+}
+
+function validateUniversalProgramWeek(raw: unknown, what: string): UniversalProgramWeek {
+  if (!isRecord(raw)) fail(what, "program week is not an object");
+  requireNumber(raw.weekNumber, "week.weekNumber", what);
+  const days = requireArray(raw.days, "week.days", what);
+  if (days.length !== 7) fail(what, `"week.days" must have exactly 7 entries, got ${days.length}`);
+  days.forEach((d) => validateUniversalProgramDay(d, what));
+  return raw as unknown as UniversalProgramWeek;
+}
+
+/** Validates a training_program_versions.content payload shaped by
+ * lib/training/types.ts's UniversalTrainingProgramContent — same
+ * "not exhaustive, just structural" discipline as
+ * validateClientAssignedProgramContent below. Requires `schemaVersion` to be
+ * exactly 2; use validateTrainingProgramVersionContent to dispatch a raw
+ * payload of unknown shape to whichever of the two validators applies. */
+export function validateUniversalTrainingProgramContent(raw: unknown): UniversalTrainingProgramContent {
+  const what = "training program version (universal grammar)";
+  if (!isRecord(raw)) fail(what, "content is not an object");
+  if (raw.schemaVersion !== 2) fail(what, `"schemaVersion" must be 2, got ${JSON.stringify(raw.schemaVersion)}`);
+  requireString(raw.id, "id", what);
+  requireString(raw.workspaceId, "workspaceId", what);
+  requireString(raw.clientId, "clientId", what);
+  requireString(raw.coachId, "coachId", what);
+  if (raw.sourceTemplateId !== undefined) requireString(raw.sourceTemplateId, "sourceTemplateId", what);
+  requireString(raw.name, "name", what);
+  requireNumber(raw.durationWeeks, "durationWeeks", what);
+  const weeks = requireArray(raw.weeks, "weeks", what);
+  weeks.forEach((w) => validateUniversalProgramWeek(w, what));
+  const status = requireString(raw.status, "status", what);
+  if (status !== "draft" && status !== "assigned") fail(what, `"status" must be "draft" or "assigned", got "${status}"`);
+  requireString(raw.createdAtIso, "createdAtIso", what);
+  requireString(raw.updatedAtIso, "updatedAtIso", what);
+  return raw as unknown as UniversalTrainingProgramContent;
+}
+
+export type TrainingProgramVersionContent = ClientAssignedProgram | UniversalTrainingProgramContent;
+
+/** Dispatches a training_program_versions.content payload to the legacy
+ * (no schemaVersion field: ClientAssignedProgram/Exercise/Workout) or
+ * universal-grammar (schemaVersion: 2: UniversalTrainingProgramContent)
+ * validator, by that one tag. Purely additive — no existing call site uses
+ * this dispatcher yet; lib/production/programs.ts still calls
+ * validateClientAssignedProgramContent directly, unchanged, so every real
+ * read/write in production today behaves exactly as it did before this
+ * phase. This exists so a later phase can switch a read path over to this
+ * single dispatcher once a real writer produces schemaVersion: 2 content,
+ * without that path ever needing to branch on shape itself. */
+export function validateTrainingProgramVersionContent(raw: unknown): TrainingProgramVersionContent {
+  if (isRecord(raw) && raw.schemaVersion === 2) {
+    return validateUniversalTrainingProgramContent(raw);
+  }
+  return validateClientAssignedProgramContent(raw);
 }
 
 /** Validates a training_program_versions.content payload into a real
