@@ -86,6 +86,14 @@ const NOTIFICATION_CLAIM_PATTERNS: RegExp[] = [
   /\bi(?:'ve| have)?\s+(?:just\s+|already\s+)?reached out\b/i,
   /\b(?:has|have)\s+been\s+(?:notified|alerted|informed|sent|flagged|told)\b/i,
   /\bsent\s+(?:this|it|that|your (?:message|request|note))\s+to\b/i,
+  // Present-continuous claims that a handoff is happening right now — a real
+  // Anthropic response can write "I'm flagging this for <coach> now" instead
+  // of the past-tense "I've flagged this" the patterns above were written
+  // for. Same rule 2 violation (no escalation row exists yet at this point),
+  // different tense, so it needs its own pattern rather than a tweak to the
+  // "?:'ve| have)?" patterns above, which are anchored on the perfect tense.
+  /\bi(?:'m| am)\s+(?:currently\s+|now\s+|just\s+)?(?:sending|forwarding|passing|escalating|flagging|reporting|relaying|sharing|raising|notifying|messaging|pinging|alerting|contacting|looping)\b/i,
+  /\bi(?:'m| am)\s+(?:currently\s+|now\s+|just\s+)?reaching out\b/i,
 ];
 
 /** Removes any sentence asserting an unverified handoff. See rule 2. */

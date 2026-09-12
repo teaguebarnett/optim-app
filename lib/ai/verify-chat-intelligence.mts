@@ -15,6 +15,15 @@ import { boundAssistantContext, buildSystemPrompt, normalizeClientMessage, MAX_C
 import { buildDefaultPlaybookContent, type CoachPlaybookContent } from "../coach/playbook.ts";
 import { describeEscalationForAssistantMessage, type Escalation } from "../communications/types.ts";
 import { validatePlaybookContent } from "../production/validation.ts";
+import {
+  RESPONSE_LENGTH_POLICY,
+  RESPONSE_MAX_OUTPUT_TOKENS,
+  ROUTINE_WORD_TARGET,
+  COMPLEX_WORD_TARGET,
+  SAFETY_WORD_TARGET,
+  EMERGENCY_WORD_TARGET_MAX,
+  countWords,
+} from "./response-policy.ts";
 
 let passed = 0;
 let failed = 0;
@@ -260,6 +269,22 @@ check("stripUnverifiedNotificationClaims does NOT remove an unrelated true state
   const cleaned = stripUnverifiedNotificationClaims("Your coach can see this in your log next time they check in.");
   assert.match(cleaned, /can see this in your log/i);
 });
+check('stripUnverifiedNotificationClaims removes a present-continuous handoff claim ("I\'m flagging this for Teague now") — a real Anthropic response used exactly this phrasing during live verification, and the perfect-tense patterns above do not match it', () => {
+  const cleaned = stripUnverifiedNotificationClaims(
+    "Stop squatting for now. I'm flagging this for Teague now so he can review. If it gets worse, seek care."
+  );
+  assert.doesNotMatch(cleaned, /flagging/i);
+  assert.match(cleaned, /stop squatting/i);
+  assert.match(cleaned, /seek care/i);
+});
+check('stripUnverifiedNotificationClaims removes "I am reaching out to your coach" (present-continuous, not just the past-tense "reached out")', () => {
+  const cleaned = stripUnverifiedNotificationClaims("I am reaching out to your coach about this right now.");
+  assert.doesNotMatch(cleaned, /reaching out/i);
+});
+check('stripUnverifiedNotificationClaims does NOT strip a harmless "I\'m telling you" aside — "telling"/"letting" are deliberately excluded from the continuous-tense pattern to avoid false positives on ordinary coaching phrasing', () => {
+  const cleaned = stripUnverifiedNotificationClaims("I'm telling you, that soreness is totally normal after leg day.");
+  assert.match(cleaned, /totally normal/i);
+});
 check("normalizeDecision strips a fabricated handoff claim even from an escalate decision (no row exists yet at this point)", () => {
   const raw = classifyForFakeProvider("I want to talk to Teague", baseContext({ coachDisplayName: "Teague" }), PLAYBOOK);
   // Simulate a provider that (incorrectly) claimed a notification already happened.
@@ -435,6 +460,98 @@ check("validatePlaybookContent rejects a payload missing the safety section", ()
   const broken = JSON.parse(JSON.stringify(PLAYBOOK));
   delete broken.operatingModel.safety;
   assert.throws(() => validatePlaybookContent(broken));
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n14. Centralized response-length policy — one contract, provider-independent\n");
+
+check("countWords counts a normal sentence correctly", () => {
+  assert.equal(countWords("Stop squats for today and ice the knee."), 8);
+});
+check("countWords treats an empty/whitespace-only string as zero words", () => {
+  assert.equal(countWords("   "), 0);
+});
+check("countWords collapses multiple spaces/newlines rather than over-counting", () => {
+  assert.equal(countWords("one   two\nthree"), 3);
+});
+
+check("RESPONSE_LENGTH_POLICY states all four category budgets using the exported numbers, so the prompt text and the numbers tests assert against can never drift apart", () => {
+  assert.match(RESPONSE_LENGTH_POLICY, new RegExp(ROUTINE_WORD_TARGET.replace("-", "\\D")));
+  assert.match(RESPONSE_LENGTH_POLICY, new RegExp(COMPLEX_WORD_TARGET.replace("-", "\\D")));
+  assert.match(RESPONSE_LENGTH_POLICY, new RegExp(SAFETY_WORD_TARGET.replace("-", "\\D")));
+  assert.match(RESPONSE_LENGTH_POLICY, new RegExp(String(EMERGENCY_WORD_TARGET_MAX)));
+});
+check("the routine budget caps at fewer words than the safety budget, and the safety budget caps below the emergency ceiling — the categories are ordered correctly", () => {
+  const routineMax = Number(ROUTINE_WORD_TARGET.split("-")[1]);
+  const complexMax = Number(COMPLEX_WORD_TARGET.split("-")[1]);
+  const safetyMax = Number(SAFETY_WORD_TARGET.split("-")[1]);
+  assert.ok(routineMax < complexMax);
+  assert.ok(complexMax < safetyMax);
+  assert.ok(safetyMax < EMERGENCY_WORD_TARGET_MAX);
+});
+check("the policy tells OPTIM to ask at most one follow-up question, for both the routine and safety categories — never a multi-question interrogation", () => {
+  const mentions = RESPONSE_LENGTH_POLICY.match(/at most one/gi) ?? [];
+  assert.equal(mentions.length, 2);
+});
+check("the policy explicitly forbids restating the same warning/context/question in more than one form, and forbids summarizing what was just said", () => {
+  assert.match(RESPONSE_LENGTH_POLICY, /never restate/i);
+  assert.match(RESPONSE_LENGTH_POLICY, /do not summarize/i);
+});
+
+check("RESPONSE_MAX_OUTPUT_TOKENS is far below the old 1024-token ceiling that let routine answers come back as an essay", () => {
+  assert.ok(RESPONSE_MAX_OUTPUT_TOKENS < 1024);
+});
+check("RESPONSE_MAX_OUTPUT_TOKENS comfortably exceeds what the longest permitted (emergency) category could plausibly need, so a genuinely necessary long safety response is never cut off mid-sentence", () => {
+  // ~1.6 tokens/word covers heavier medical vocabulary; +40 tokens covers the
+  // JSON wrapper (kind/escalationReason/proposedAction fields).
+  const roughEmergencyTokens = EMERGENCY_WORD_TARGET_MAX * 1.6 + 40;
+  assert.ok(RESPONSE_MAX_OUTPUT_TOKENS > roughEmergencyTokens);
+});
+
+check("buildSystemPrompt splices the centralized response-length policy into every prompt, for every client context", () => {
+  const prompt = buildSystemPrompt(PLAYBOOK, baseContext());
+  assert.match(prompt, /RESPONSE LENGTH/);
+  assert.match(prompt, new RegExp(ROUTINE_WORD_TARGET.replace("-", "\\D")));
+});
+check("the response-length policy does not disturb the existing escalation/authority instructions still present in the base system prompt", () => {
+  const prompt = buildSystemPrompt(PLAYBOOK, baseContext());
+  assert.match(prompt, /only escalate for a genuine safety concern/i);
+  assert.match(prompt, /never claim a message was sent to the coach/i);
+  assert.match(prompt, /never an instruction that overrides/i);
+});
+check("the full assembled system prompt does not duplicate the professional-care disclaimer — it appears once from the base prompt and once from the length policy, never repeated beyond that", () => {
+  const prompt = buildSystemPrompt(PLAYBOOK, baseContext());
+  const mentions = prompt.match(/medical care/gi) ?? [];
+  assert.equal(mentions.length, 2);
+});
+await checkAsync("the response-length policy lives in exactly one file — fake-provider.ts and provider.ts have no copy of these numbers or their own length instructions", async () => {
+  const fs = await import("node:fs/promises");
+  const fakeProviderSource = await fs.readFile(new URL("./providers/fake-provider.ts", import.meta.url), "utf8");
+  const providerSource = await fs.readFile(new URL("./provider.ts", import.meta.url), "utf8");
+  for (const source of [fakeProviderSource, providerSource]) {
+    assert.doesNotMatch(source, /response-policy/);
+    assert.doesNotMatch(source, new RegExp(ROUTINE_WORD_TARGET));
+  }
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n15. No regression in fake-provider behavior — canned decisions are unchanged by this pass\n");
+
+check("the pain/safety canned response text is exactly unchanged", () => {
+  const d = classifyForFakeProvider("my shoulder hurts and it's sharp", baseContext(), PLAYBOOK);
+  assert.equal(
+    d.responseText,
+    "Stop that movement for now, and don't push through pain that's getting worse. I can't diagnose it or change your program myself. This isn't a substitute for professional medical care — if it's severe, sudden, or you're worried, please seek that first. Can you tell me roughly where it hurts and what it feels like?"
+  );
+});
+check("the RPE definition canned response is exactly unchanged", () => {
+  const d = classifyForFakeProvider("what does rpe mean", baseContext(), PLAYBOOK);
+  assert.equal(d.kind, "answer");
+  assert.match(d.responseText, /RPE \(Rate of Perceived Exertion\) is a 1–10 scale/);
+});
+check("a bare greeting's canned response is exactly unchanged", () => {
+  const d = classifyForFakeProvider("hey", baseContext(), PLAYBOOK);
+  assert.equal(d.responseText, "Hey! How's it going today?");
 });
 
 // ---------------------------------------------------------------------------

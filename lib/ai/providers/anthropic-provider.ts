@@ -26,6 +26,7 @@ import {
   type ChatModelProvider,
   type EscalationReason,
 } from "../provider.ts";
+import { RESPONSE_MAX_OUTPUT_TOKENS } from "../response-policy.ts";
 
 const VALID_KINDS: AssistantDecisionKind[] = ["answer", "clarify", "escalate", "propose_action"];
 const VALID_REASONS: EscalationReason[] = [
@@ -112,7 +113,7 @@ export class AnthropicChatModelProvider implements ChatModelProvider {
       const response = await this.client.messages.create(
         {
           model: this.modelId,
-          max_tokens: 1024,
+          max_tokens: RESPONSE_MAX_OUTPUT_TOKENS,
           system: `${request.systemPrompt}\n${DECISION_INSTRUCTIONS}`,
           messages,
           output_config: { effort: "medium" },
