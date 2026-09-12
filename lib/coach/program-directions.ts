@@ -54,7 +54,7 @@ const PERIODIZATION_METHOD_LABELS: Record<string, string> = {
  * exercise is never picked in the first place) and hard-constraint
  * VALIDATION (validateFullProgramHardConstraints) — the two can never
  * disagree about what counts as a conflict. */
-const INJURY_AREA_EXERCISE_CONFLICTS: Record<string, string[]> = {
+export const INJURY_AREA_EXERCISE_CONFLICTS: Record<string, string[]> = {
   knee: ["squat", "lunge", "leg press", "leg extension"],
   shoulder: ["overhead press", "bench press", "pull-up", "lateral raise", "push-up"],
   lower_back: ["deadlift", "row", "back extension"],
@@ -64,7 +64,7 @@ const INJURY_AREA_EXERCISE_CONFLICTS: Record<string, string[]> = {
   neck: ["overhead press"],
 };
 
-function exerciseConflictsWithArea(exerciseName: string, area: string): boolean {
+export function exerciseConflictsWithArea(exerciseName: string, area: string): boolean {
   const name = exerciseName.toLowerCase();
   return (INJURY_AREA_EXERCISE_CONFLICTS[area] ?? []).some((term) => name.includes(term));
 }
@@ -74,7 +74,7 @@ function exerciseConflictsWithArea(exerciseName: string, area: string): boolean 
  * exercise conflicting with a reported injury area. Never a full pattern
  * exclusion (a knee restriction still allows a hinge-pattern hamstring
  * exercise, for instance) — only the specific named conflicts above. */
-function avoidedTermsForProfile(profile: ClientProgrammingProfile, com: CoachOperatingModel): string[] {
+export function avoidedTermsForProfile(profile: ClientProgrammingProfile, com: CoachOperatingModel): string[] {
   const injuryTerms = profile.hasCurrentInjury ? profile.injuryBodyAreas.flatMap((area) => INJURY_AREA_EXERCISE_CONFLICTS[area] ?? []) : [];
   return [...com.programArchitecture.exercisesAvoided, ...injuryTerms];
 }

@@ -323,13 +323,11 @@ export type TrainingProgramVersionContent = ClientAssignedProgram | UniversalTra
 /** Dispatches a training_program_versions.content payload to the legacy
  * (no schemaVersion field: ClientAssignedProgram/Exercise/Workout) or
  * universal-grammar (schemaVersion: 2: UniversalTrainingProgramContent)
- * validator, by that one tag. Purely additive — no existing call site uses
- * this dispatcher yet; lib/production/programs.ts still calls
- * validateClientAssignedProgramContent directly, unchanged, so every real
- * read/write in production today behaves exactly as it did before this
- * phase. This exists so a later phase can switch a read path over to this
- * single dispatcher once a real writer produces schemaVersion: 2 content,
- * without that path ever needing to branch on shape itself. */
+ * validator, by that one tag. Phase 5 — lib/production/programs.ts's
+ * getActiveProgramAssignment now calls this directly (not
+ * validateClientAssignedProgramContent) so both legacy and real generated
+ * universal content read back correctly through the one production read
+ * path, without that path ever needing to branch on shape itself. */
 export function validateTrainingProgramVersionContent(raw: unknown): TrainingProgramVersionContent {
   if (isRecord(raw) && raw.schemaVersion === 2) {
     return validateUniversalTrainingProgramContent(raw);

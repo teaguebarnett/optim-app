@@ -267,9 +267,21 @@ const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frid
 /** Today's prescribed session, read out of the client's OWN active,
  * published program version — never a catalog/demo fixture. Returns null
  * when there's no program or the date falls outside it, which the prompt
- * renders honestly as "no active program" rather than inventing a session. */
+ * renders honestly as "no active program" rather than inventing a session.
+ *
+ * Phase 5 — reads either shape: a legacy day carries `workout`, a real
+ * universal (schemaVersion 2) day carries `sessions` instead — checking
+ * only `workout` would silently misreport every universal training day as
+ * a rest day (see this phase's completion report, "analytics/downstream
+ * consumers"). Both shapes structurally satisfy this loose inline type
+ * without a cast at the call site. */
 function resolveTodayFocusLabel(
-  program: { weeks: { weekNumber: number; days: { dayOfWeek: string; type: string; workout?: { name?: string; focus?: string } }[] }[] } | null,
+  program: {
+    weeks: {
+      weekNumber: number;
+      days: { dayOfWeek: string; type: string; workout?: { name?: string; focus?: string }; sessions?: { name?: string; focus?: string }[] }[];
+    }[];
+  } | null,
   weekNumber: number | null,
   dateIso: string
 ): string | null {
@@ -279,9 +291,11 @@ function resolveTodayFocusLabel(
   const dayName = DAY_NAMES[new Date(`${dateIso}T00:00:00Z`).getUTCDay()];
   const day = week.days.find((d) => d.dayOfWeek === dayName);
   if (!day) return null;
-  if (day.type !== "training" || !day.workout) return "Rest day";
-  const focus = day.workout.focus ? ` — ${day.workout.focus}` : "";
-  return `${day.workout.name ?? "Training"}${focus}`;
+  if (day.type !== "training") return "Rest day";
+  const primary = day.workout ?? day.sessions?.[0];
+  if (!primary) return "Rest day";
+  const focus = primary.focus ? ` — ${primary.focus}` : "";
+  return `${primary.name ?? "Training"}${focus}`;
 }
 
 /** A short, honest adherence/RPE sentence derived from this client's OWN
@@ -396,11 +410,7 @@ export async function assembleAssistantContext(params: {
     hasActiveProgram: programContext.assignedProgram !== null,
     hasActiveNutritionAssignment: programContext.nutritionPlan !== null,
     programWeekLabel,
-    todayFocusLabel: resolveTodayFocusLabel(
-      programContext.assignedProgram as Parameters<typeof resolveTodayFocusLabel>[0],
-      weekNumber,
-      todayIso
-    ),
+    todayFocusLabel: resolveTodayFocusLabel(programContext.assignedProgram, weekNumber, todayIso),
     goalSummary: (clientRow?.goal as string | null) ?? null,
     nutritionTargetsSummary,
     recentTrainingSummary: summarizeRecentActivity(activity),

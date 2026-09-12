@@ -13,13 +13,13 @@
 // lib/production/programs.ts or lib/supabase/* directly, keeping every real
 // Supabase query inside server-only code.
 
-import { getAuthenticatedContext } from "../../lib/production/auth";
+import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "../../lib/production/auth";
+import { UnauthorizedError } from "../../lib/production/errors";
 import { getSupabaseServerClient } from "../../lib/supabase/server";
 import {
   getClientProgramContext,
   getDailyActivity,
   saveDailyActivity,
-  buildDraftProgramFromCatalog,
   createDraftProgramVersion,
   publishProgramVersion,
   assignProgramVersionToClient,
@@ -28,11 +28,17 @@ import {
   assignNutritionVersionToClient,
   setClientProgramStartDate,
 } from "../../lib/production/programs";
+import { universalProgramToClientAssignedProgram } from "../../lib/training/legacy-adapter";
+import { generateProgramDirectionSummaries } from "../../lib/coach/program-directions";
+import { buildUniversalProgramForDirection, buildPlaceholderProgrammingProfile } from "../../lib/coach/universal-program-generation";
+import { createDefaultCoachOperatingModel } from "../../lib/coach/operating-model";
+import { DAYS_OF_WEEK_ORDER } from "../../lib/coach/training";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { resolveClientLocalDateIso } from "../../lib/shared/local-date";
 import type { AppState } from "../../lib/state";
 import type { DailyActivityContent } from "../../lib/production/validation";
+import type { ClientAssignedProgram } from "../../lib/types";
 
 interface OwnClientIdentity {
   clientProfileId: string;
@@ -123,8 +129,44 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
     primaryCoachId: identity.primaryCoachId ?? undefined,
   });
 
-  if (context.enrollment) state.programEnrollment = context.enrollment;
-  if (context.assignedProgram) state.assignedProgram = context.assignedProgram;
+  // Phase 5 — context.assignedProgram may now be either the legacy
+  // ClientAssignedProgram or the universal UniversalTrainingProgramContent
+  // (schemaVersion: 2). AppState.assignedProgram is still legacy-typed (the
+  // whole demo-shaped client engine — lib/workout/resolve-scheduled-workout.ts,
+  // lib/state.ts's START_WORKOUT — is built around it), so a schemaVersion 2
+  // program is converted through the legacy-compatibility read selector
+  // (universalProgramToClientAssignedProgram) when every session in it is
+  // representable that way (real, pure-resistance generated content always
+  // is), never assigned directly — see that function's own doc for exactly
+  // why a raw assignment here would silently corrupt the client's program.
+  //
+  // CRITICAL: resolveScheduledWorkoutForStart's own no-assignedProgram
+  // branch unconditionally falls back to the seeded demo fixture
+  // (PUSH_WORKOUT), on the documented assumption that "a real,
+  // coach-created client never reaches this far without one." Setting
+  // programEnrollment while leaving assignedProgram undefined would break
+  // that assumption for exactly the client this branch is meant to
+  // protect — a real client whose real, generated program simply isn't
+  // representable in the legacy shape yet (e.g. contains continuous work)
+  // would silently receive the demo PUSH_WORKOUT instead of an honest "not
+  // ready" state. So enrollment and assignedProgram are set together, or
+  // not at all — never one without the other.
+  let legacyCompatibleProgram: ClientAssignedProgram | undefined;
+  if (context.assignedProgram) {
+    if ("schemaVersion" in context.assignedProgram && context.assignedProgram.schemaVersion === 2) {
+      legacyCompatibleProgram = universalProgramToClientAssignedProgram(context.assignedProgram) ?? undefined;
+      // else: a real universal program exists but isn't legacy-representable
+      // yet — treated exactly like "not yet assigned" below, a documented
+      // remaining limitation (see this phase's completion report), never a
+      // corrupted or substituted program.
+    } else {
+      legacyCompatibleProgram = context.assignedProgram;
+    }
+  }
+  if (context.enrollment && legacyCompatibleProgram) {
+    state.programEnrollment = context.enrollment;
+    state.assignedProgram = legacyCompatibleProgram;
+  }
   if (context.nutritionPlan) {
     state.assignedNutritionPlan = context.nutritionPlan;
     state.nutritionTargets = context.nutritionPlan.targets;
@@ -144,7 +186,11 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
     clientDisplayName: identity.clientDisplayName,
     primaryCoachDisplayName: identity.primaryCoachDisplayName,
     email: ctx.profile.email,
-    programNotYetAssigned: !context.enrollment,
+    // Phase 5 — also true when a real program/enrollment exists but isn't
+    // legacy-representable yet (see the assignedProgram/programEnrollment
+    // lockstep above) — the same honest "still being set up" state, never a
+    // silent fallback to demo content.
+    programNotYetAssigned: !context.enrollment || !legacyCompatibleProgram,
   };
 }
 
@@ -170,26 +216,61 @@ export async function saveMySupabaseDailyActivityAction(params: {
 // no longer a standalone "proof page").
 // ---------------------------------------------------------------------------
 
+// Phase 5 — a genuine, coach-methodology-aware default cadence (3
+// non-consecutive days) rather than an arbitrary single day, used only
+// until a real per-client available-days answer is wired into this action
+// (see buildPlaceholderProgrammingProfile's own doc). Not a demographic
+// assumption — just a common, safe starting cadence.
+const DEFAULT_AVAILABLE_DAYS = [DAYS_OF_WEEK_ORDER[0], DAYS_OF_WEEK_ORDER[2], DAYS_OF_WEEK_ORDER[4]];
+
+/**
+ * Phase 5 — replaces the old buildDraftProgramFromCatalog placeholder (a
+ * clone of the single hardcoded PUSH_WORKOUT catalog exercise) with real,
+ * coach-methodology-aware, periodized universal generation
+ * (lib/coach/universal-program-generation.ts) — the same real decision
+ * logic (rep ranges, RPE, periodization, exercise selection) as the
+ * demo-mode coach program composer, natively producing schemaVersion 2
+ * content instead of legacy Workout/Exercise.
+ *
+ * Real per-client/per-coach context (Supabase onboarding ->
+ * ClientProgrammingProfile, coach_playbooks -> CoachOperatingModel) is not
+ * yet wired into this specific action — see this phase's completion report
+ * for why that's a deliberate, separate follow-up rather than a shortcut
+ * taken here. createDefaultCoachOperatingModel/buildPlaceholderProgrammingProfile
+ * are honest, safe, non-demographic starting defaults, never a fabricated
+ * claim about this specific coach/client.
+ *
+ * Authorization is checked explicitly, here, before any generation work
+ * happens — never relying solely on createDraftProgramVersion's own later
+ * internal check (defense in depth, matching this codebase's existing
+ * discipline elsewhere — e.g. lib/ai/context.ts).
+ */
 export async function createPublishAndAssignProgramAction(params: {
   workspaceId: string;
   clientProfileId: string;
   title: string;
   durationWeeks: number;
 }): Promise<{ assignmentId: string; versionId: string }> {
-  // coachId is the server-verified caller, never a client-supplied value —
-  // requireWorkspaceRole (called inside createDraftProgramVersion via
-  // requireCoachAuthority) independently re-checks this same identity holds
-  // real staff authority in params.workspaceId before anything is written.
   const ctx = await getAuthenticatedContext();
-  const content = buildDraftProgramFromCatalog({
-    workspaceId: params.workspaceId,
+  const membership = requireWorkspaceRole(ctx, params.workspaceId, ["workspace_owner", "platform_admin", "coach"]);
+  if (!isWorkspaceStaffRole(membership.role)) throw new UnauthorizedError();
+
+  const nowIso = new Date().toISOString();
+  const com = createDefaultCoachOperatingModel({ coachId: ctx.userId, workspaceId: params.workspaceId, nowIso, businessName: "your coach" });
+  const profile = buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+  const directions = generateProgramDirectionSummaries({ profile, com, durationWeeks: params.durationWeeks });
+  const direction = directions.find((d) => d.kind === "best_fit") ?? directions[0];
+  const { content } = buildUniversalProgramForDirection(direction, {
     clientId: params.clientProfileId,
+    workspaceId: params.workspaceId,
     coachId: ctx.userId,
-    name: params.title,
+    profile,
+    com,
     durationWeeks: params.durationWeeks,
-    nowIso: new Date().toISOString(),
+    nowIso,
   });
-  const { versionId } = await createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content });
+
+  const { versionId } = await createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content: { ...content, name: params.title } });
   await publishProgramVersion({ workspaceId: params.workspaceId, versionId });
   const assignmentId = await assignProgramVersionToClient({
     workspaceId: params.workspaceId,

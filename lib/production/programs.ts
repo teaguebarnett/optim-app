@@ -24,19 +24,18 @@
 // skipped.
 
 import "server-only";
-import { randomUUID } from "node:crypto";
 import { getSupabaseServerClient } from "../supabase/server";
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "./auth";
 import { UnauthorizedError } from "./errors";
 import {
-  validateClientAssignedProgramContent,
+  validateTrainingProgramVersionContent,
   validateAssignedNutritionPlanContent,
   validateDailyActivityContent,
   type DailyActivityContent,
+  type TrainingProgramVersionContent,
 } from "./validation";
-import { PUSH_WORKOUT } from "../mock-data";
 import { DEFAULT_WEEK_STARTS_ON } from "../shared/local-date";
-import type { ClientAssignedProgram, AssignedNutritionPlan, Workout, ProgramWeek, ProgramDay } from "../types";
+import type { AssignedNutritionPlan } from "../types";
 import type { ProgramEnrollment } from "../scheduling/types";
 
 // ---------------------------------------------------------------------------
@@ -47,7 +46,15 @@ export interface ActiveProgramAssignment {
   assignmentId: string;
   versionId: string;
   versionNumber: number;
-  content: ClientAssignedProgram;
+  /** Phase 5 — either the legacy ClientAssignedProgram (schemaVersion-less,
+   * historical content) or the universal UniversalTrainingProgramContent
+   * (schemaVersion: 2, real generated content from this phase onward) — see
+   * validateTrainingProgramVersionContent's own doc for the dispatch rule.
+   * Every reader of this field must handle both; see
+   * lib/workout/resolve-scheduled-workout.ts and
+   * app/actions/production-programs.ts's getMySupabaseAppStateAction for
+   * how each currently does. */
+  content: TrainingProgramVersionContent;
 }
 
 export interface ActiveNutritionAssignment {
@@ -71,7 +78,8 @@ export interface ActiveNutritionAssignment {
  * it. */
 export interface ClientProgramContext {
   enrollment: ProgramEnrollment | null;
-  assignedProgram: ClientAssignedProgram | null;
+  /** Phase 5 — see ActiveProgramAssignment.content's doc; either shape. */
+  assignedProgram: TrainingProgramVersionContent | null;
   nutritionPlan: AssignedNutritionPlan | null;
 }
 
@@ -94,7 +102,12 @@ export async function getActiveProgramAssignment(clientProfileId: string): Promi
   // published content.
   if (version.status !== "published") return null;
 
-  const content = validateClientAssignedProgramContent(version.content);
+  // Phase 5 — dispatches on the payload's own schemaVersion tag: legacy
+  // (schemaVersion-less) content still validates exactly as it always has;
+  // real generated content (schemaVersion: 2, from this phase onward) now
+  // reads back correctly too, rather than being forced through the legacy
+  // validator it would fail.
+  const content = validateTrainingProgramVersionContent(version.content);
   return {
     assignmentId: data.id as string,
     versionId: version.id,
@@ -210,56 +223,14 @@ export async function saveDailyActivity(params: {
 // Coach-side authoring/publish/assign
 // ---------------------------------------------------------------------------
 
-/** A real, honest draft built from this prototype's one actually-authored
- * catalog Workout (PUSH_WORKOUT — see lib/mock-data.ts's own doc: no other
- * day in this prototype has ever had real, loggable exercise content behind
- * it, only a display label). Every Monday of the requested duration gets a
- * deep, freshly-id'd clone; every other day is an honest rest day — never a
- * fabricated workout for a day this product has never actually authored
- * content for, matching resolveScheduledWorkoutForStart's own
- * "no_assignment" honesty principle. This is a deliberately minimal
- * content-authoring path (Part 7 forbids a broad new authoring UI in this
- * phase) proving the real persistence/publish/assign loop against real,
- * non-fabricated content — a fuller program composer wired to Supabase is
- * future work, not this vertical slice's job. */
-function cloneWorkoutWithFreshIds(workout: Workout): Workout {
-  return {
-    ...workout,
-    id: `workout-${randomUUID()}`,
-    exercises: workout.exercises.map((exercise) => ({ ...exercise, id: `exercise-${randomUUID()}` })),
-  };
-}
-
-export function buildDraftProgramFromCatalog(params: {
-  workspaceId: string;
-  clientId: string;
-  coachId: string;
-  name: string;
-  durationWeeks: number;
-  nowIso: string;
-}): ClientAssignedProgram {
-  const days: ProgramDay["dayOfWeek"][] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-  const weeks: ProgramWeek[] = Array.from({ length: params.durationWeeks }, (_, i) => ({
-    weekNumber: i + 1,
-    days: days.map((dayOfWeek): ProgramDay =>
-      dayOfWeek === "Monday"
-        ? { dayOfWeek, type: "training", workout: cloneWorkoutWithFreshIds(PUSH_WORKOUT) }
-        : { dayOfWeek, type: "rest" }
-    ),
-  }));
-  return {
-    id: `program-${randomUUID()}`,
-    workspaceId: params.workspaceId,
-    clientId: params.clientId,
-    coachId: params.coachId,
-    name: params.name,
-    durationWeeks: params.durationWeeks,
-    weeks,
-    status: "draft",
-    createdAtIso: params.nowIso,
-    updatedAtIso: params.nowIso,
-  };
-}
+// Phase 5 — the old buildDraftProgramFromCatalog placeholder (a clone of the
+// single hardcoded PUSH_WORKOUT catalog exercise onto every Monday) has been
+// removed entirely, not just replaced at its one call site: real program
+// authoring now happens natively in the universal grammar (see
+// lib/coach/universal-program-generation.ts, wired into the actual
+// production write path at app/actions/production-programs.ts's
+// createPublishAndAssignProgramAction) — this file's job is persistence,
+// not content authoring, exactly as its own module doc above states.
 
 async function requireCoachAuthority(workspaceId: string) {
   const ctx = await getAuthenticatedContext();
@@ -278,7 +249,12 @@ export async function createDraftProgramVersion(params: {
   workspaceId: string;
   programId?: string;
   title: string;
-  content: ClientAssignedProgram;
+  /** Phase 5 — accepts either shape; a caller writing new content should
+   * always pass UniversalTrainingProgramContent (schemaVersion: 2) now — see
+   * the module-level comment above (where buildDraftProgramFromCatalog used
+   * to live) for why the legacy shape remains accepted here (historical
+   * content only, never a new authoring target). */
+  content: TrainingProgramVersionContent;
 }): Promise<{ programId: string; versionId: string }> {
   const ctx = await requireCoachAuthority(params.workspaceId);
   const supabase = await getSupabaseServerClient();

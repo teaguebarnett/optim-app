@@ -9,9 +9,13 @@
 // proof against the app's actual authored fixture (lib/mock-data.ts's
 // PUSH_WORKOUT).
 //
-// Nothing in this file is imported by any UI, persistence, generation, or
-// AI code path — it exists purely as a tested compatibility boundary. No
-// production consumer is migrated onto it in this phase.
+// Through Phase 4, nothing in this file was imported by any UI, persistence,
+// generation, or AI code path — it existed purely as a tested compatibility
+// boundary. Phase 5 gives it its first real production consumer: the
+// universalProgramToClientAssignedProgram function at the bottom of this
+// file is called from app/actions/production-programs.ts's
+// getMySupabaseAppStateAction, as a read-side compatibility selector (see
+// that function's own doc block, below).
 //
 // Scope boundary (deliberate, not an oversight): Session/Prescription model
 // what is PRESCRIBED, never what was PERFORMED — exactly the separation
@@ -32,10 +36,10 @@
 // explicitly by its caller, who always has it (whoever is iterating a
 // day/week already knows the day and workspace) — see its `context` param.
 
-import type { CardioOption, CardioTarget, DayOfWeek, Exercise, ExerciseBlockType, RpeValue, Workout } from "../types.ts";
+import type { CardioOption, CardioTarget, ClientAssignedProgram, DayOfWeek, Exercise, ExerciseBlockType, ProgramDay, ProgramWeek, RpeValue, Workout } from "../types.ts";
 import type { WorkspaceId } from "../tenancy/types.ts";
 import { buildPrescribedSets } from "../coach/training.ts";
-import type { Block, BlockKind, Prescription, Session, TrainingItemInstance } from "./types.ts";
+import type { Block, BlockKind, Prescription, Session, TrainingItemInstance, UniversalTrainingProgramContent } from "./types.ts";
 
 /** Thrown when a legacy Workout/Exercise isn't real, complete, assignable
  * strength content this adapter is scoped to convert (an authoring
@@ -383,4 +387,64 @@ export function cardioOptionToContinuousPrescription(option: CardioOption): Pres
     prescription.heartRate = { low: option.heartRateRangeLow, high: option.heartRateRangeHigh };
   }
   return prescription;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — program-level read compatibility for the existing legacy-typed
+// client bootstrap (AppState.assignedProgram: ClientAssignedProgram — see
+// lib/state.ts). This is NOT the generation authoring path (real generation
+// now targets the universal grammar natively — see
+// lib/coach/universal-program-generation.ts) — it exists purely so a
+// genuinely universal program that HAPPENS to be fully legacy-representable
+// (pure resistance, one session per day) can still bootstrap and execute
+// through today's unmodified demo-shaped client engine, exactly mirroring
+// Phase 3's resolvedWorkout/resolvedSession coexistence philosophy one
+// level up (a compatibility READ selector at the program-bootstrap
+// boundary, not a permanent generation design).
+//
+// IMPORTANT TYPE-SAFETY NOTE this function exists to close: because every
+// field that actually differs between ClientAssignedProgram and
+// UniversalTrainingProgramContent (schemaVersion, ProgramDay.workout vs.
+// UniversalProgramDay.sessions) is optional on at least one side,
+// TypeScript's structural typing does NOT flag assigning a
+// UniversalTrainingProgramContent directly to a ClientAssignedProgram-typed
+// variable as an error — it silently "succeeds" while producing a
+// ProgramDay with no real workout content. Never assign
+// TrainingProgramVersionContent to a ClientAssignedProgram-typed field
+// without going through this function (or an explicit schemaVersion check)
+// first.
+export function universalProgramToClientAssignedProgram(content: UniversalTrainingProgramContent): ClientAssignedProgram | null {
+  const weeks: ProgramWeek[] = [];
+  for (const week of content.weeks) {
+    const days: ProgramDay[] = [];
+    for (const day of week.days) {
+      if (day.type === "rest") {
+        days.push({ dayOfWeek: day.dayOfWeek, type: "rest" });
+        continue;
+      }
+      // A legacy day can hold exactly one Workout — a universal day with
+      // more than one session (e.g. an AM/PM split) has no legacy
+      // equivalent, so the whole program is reported as not representable
+      // rather than silently dropping a session.
+      if (!day.sessions || day.sessions.length !== 1) return null;
+      const workout = sessionToLegacyWorkout(day.sessions[0], { workspaceId: content.workspaceId, dayOfWeek: day.dayOfWeek });
+      if (!workout) return null;
+      days.push({ dayOfWeek: day.dayOfWeek, type: "training", workout });
+    }
+    weeks.push({ weekNumber: week.weekNumber, days });
+  }
+
+  return {
+    id: content.id,
+    workspaceId: content.workspaceId,
+    clientId: content.clientId,
+    coachId: content.coachId,
+    sourceTemplateId: content.sourceTemplateId,
+    name: content.name,
+    durationWeeks: content.durationWeeks,
+    weeks,
+    status: content.status,
+    createdAtIso: content.createdAtIso,
+    updatedAtIso: content.updatedAtIso,
+  };
 }
