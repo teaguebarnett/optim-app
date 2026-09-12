@@ -191,6 +191,7 @@ test-client account for the pilot E2E check):
 ```bash
 SUPABASE_SERVICE_ROLE_KEY=<from `supabase status`> \
 NEXT_PUBLIC_SUPABASE_URL=<from `supabase status`> \
+NEXT_PUBLIC_SITE_URL=<against local Supabase: must be exactly http://127.0.0.1:3000, matching auth.site_url in supabase/config.toml — see PILOT_RUNBOOK.md §3; against a real project, the real deployed URL> \
 BOOTSTRAP_OWNER_EMAIL=teaguebarnett@gmail.com \
 BOOTSTRAP_TEST_CLIENT_EMAIL=<a real inbox you control> \
 node --experimental-strip-types scripts/bootstrap-workspace.mts

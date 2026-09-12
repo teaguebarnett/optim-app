@@ -53,9 +53,18 @@ pre-existing `rls_isolation.test.sql` / `storage_isolation.test.sql` /
 ```bash
 SUPABASE_SERVICE_ROLE_KEY=<service_role key from supabase status> \
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3000 \
 BOOTSTRAP_OWNER_EMAIL=teaguebarnett@gmail.com \
 node --experimental-strip-types scripts/bootstrap-workspace.mts
 ```
+
+`NEXT_PUBLIC_SITE_URL` must be exactly `http://127.0.0.1:3000` here — GoTrue only
+honors an invite's `redirectTo` when it matches `auth.site_url` or
+`auth.additional_redirect_urls` in `supabase/config.toml` (both `127.0.0.1`,
+not `localhost`); anything else is silently discarded, degrading the
+invitation email link (confirmed live) to a broken
+`{siteUrl}&token_hash=...&type=invite` with no path or `?` separator, which
+the browser can't route.
 
 **Deliberately omit `BOOTSTRAP_TEST_CLIENT_EMAIL` here.** That flag creates
 an already-active client membership + client_profiles row directly via the
@@ -79,10 +88,14 @@ APP_MODE=supabase \
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key from supabase status> \
 SUPABASE_SERVICE_ROLE_KEY=<service_role key from supabase status> \
-NEXT_PUBLIC_SITE_URL=http://localhost:3000 \
+NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3000 \
 ANTHROPIC_API_KEY=<only if you want the real chat/proposal calls in step 10 — see §9> \
 npm run dev
 ```
+
+Same `127.0.0.1`, not `localhost`, constraint as §3 — `NEXT_PUBLIC_SITE_URL`
+also drives `inviteToWorkspace`'s `redirectTo` for the real client invite in
+step 6.
 
 ## 5. Sign in as the pilot coach
 

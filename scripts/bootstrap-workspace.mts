@@ -21,6 +21,7 @@
 //
 //   SUPABASE_SERVICE_ROLE_KEY=... \
 //   NEXT_PUBLIC_SUPABASE_URL=... \
+//   NEXT_PUBLIC_SITE_URL=... \
 //   BOOTSTRAP_OWNER_EMAIL=teaguebarnett@gmail.com \
 //   BOOTSTRAP_TEST_CLIENT_EMAIL=<a real inbox you control for pilot testing> \
 //   node --experimental-strip-types scripts/bootstrap-workspace.mts
@@ -32,12 +33,13 @@ import { createClient } from "@supabase/supabase-js";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
 const ownerEmail = process.env.BOOTSTRAP_OWNER_EMAIL;
 const testClientEmail = process.env.BOOTSTRAP_TEST_CLIENT_EMAIL;
 
-if (!url || !serviceRoleKey || !ownerEmail) {
+if (!url || !serviceRoleKey || !siteUrl || !ownerEmail) {
   console.error(
-    "Missing required env vars. Set NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and BOOTSTRAP_OWNER_EMAIL " +
+    "Missing required env vars. Set NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_SITE_URL, and BOOTSTRAP_OWNER_EMAIL " +
       "(BOOTSTRAP_TEST_CLIENT_EMAIL is optional but recommended for the Phase 6.0A pilot verification step)."
   );
   process.exit(1);
@@ -67,7 +69,19 @@ async function ensureUser(email: string, displayName: string) {
     console.log(`  user already exists: ${email} (${existing.id})`);
     return existing;
   }
-  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, { data: { display_name: displayName } });
+  // supabase/templates/invite.html renders `{{ .RedirectTo }}&token_hash=...&type=invite` —
+  // it assumes .RedirectTo already ends in a `?query`, exactly like
+  // lib/production/invite.ts's own inviteToWorkspace call. Omitting redirectTo
+  // here left .RedirectTo as the bare configured site_url (no path, no `?`),
+  // producing a broken link the browser can't route
+  // (`http://host&token_hash=...&type=invite` — confirmed live). `?source=bootstrap`
+  // is a harmless placeholder query param that exists only to give the
+  // template's `&` append somewhere valid to land; app/auth/confirm/route.ts
+  // ignores any query param other than token_hash/type/invitation/next.
+  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
+    data: { display_name: displayName },
+    redirectTo: `${siteUrl}/auth/confirm?source=bootstrap`,
+  });
   if (error || !data.user) throw new Error(`inviteUserByEmail failed for ${email}: ${error?.message}`);
   console.log(`  invited: ${email} (${data.user.id}) — check that inbox for the confirmation email.`);
   return data.user;
