@@ -1,0 +1,26 @@
+<!--
+  Phase 6.0D-B live-verification fix. The stock `supabase init` default
+  invite template only ever renders {{ .ConfirmationURL }}, which points at
+  GoTrue's own hosted /auth/v1/verify?...&redirect_to=... endpoint — the
+  IMPLICIT flow (session tokens returned in the URL FRAGMENT after GoTrue's
+  own redirect). This app's app/auth/confirm/route.ts expects the opposite:
+  a direct link carrying `token_hash` + `type` as ordinary query params,
+  which it exchanges server-side via supabase.auth.verifyOtp({ type,
+  token_hash }) to establish a real cookie-based session (the same PKCE-
+  style confirmation flow FOUNDATION.md documents, and the only flow a
+  server-rendered Next.js app can actually consume — a URL fragment never
+  reaches the server at all).
+
+  Confirmed live: clicking the stock ConfirmationURL landed on /today with
+  #access_token=... in the fragment and no real server session — a client
+  invited through the actual app (lib/production/invite.ts's
+  inviteToWorkspace, not just the one-time bootstrap script) could never
+  actually accept their own invitation. `.RedirectTo` carries exactly the
+  `${siteUrl}/auth/confirm?invitation=<id>` URL inviteToWorkspace already
+  builds — appending token_hash/type here is the one change needed to make
+  it land where the app can actually verify it.
+-->
+<h2>You've been invited to OPTIM</h2>
+<p>{{ .Email }} has been invited to join a coaching workspace on OPTIM.</p>
+<p><a href="{{ .RedirectTo }}&token_hash={{ .TokenHash }}&type=invite">Accept your invitation</a></p>
+<p>This link expires in 14 days and can only be used once.</p>

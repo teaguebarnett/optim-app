@@ -23,6 +23,7 @@
 // exactly like daily_records vs. program_assignments already are.
 
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { getSupabaseServerClient } from "../supabase/server";
 import { getAuthenticatedContext, requireWorkspaceRole, resolveOwnStaffWorkspace } from "./auth";
 import { ActivationNotReadyError } from "./errors";
@@ -306,13 +307,26 @@ export async function inviteClient(params: { workspaceId: string; email: string;
   const supabase = await getSupabaseServerClient();
   const email = params.email.trim().toLowerCase();
 
-  const { data: clientRow, error: clientError } = await supabase
+  // Live-verification finding: chaining .select().single() onto this
+  // INSERT (forcing a RETURNING clause) triggers a real, reproducible
+  // PostgreSQL RLS defect — confirmed against a local Postgres 17.6 stack
+  // and matching the class of bug tracked upstream as postgresql.org bug
+  // #19015 ("STABLE function in SELECT policy doesn't see... with
+  // RETURNING"). client_profiles is the one table in this schema whose own
+  // SELECT policy (client_profiles_select -> can_access_client(id) ->
+  // client_workspace_id(id)) self-queries client_profiles itself for the
+  // row a RETURNING clause would expose — every other client-owned table's
+  // SELECT policy resolves through a FOREIGN KEY into an already-existing
+  // client_profiles row, never self-referentially into the table being
+  // inserted into, which is why this is the only insert path affected.
+  // Fixed by generating the id client-side and never asking Postgres to
+  // RETURNING it — a plain INSERT (no implicit SELECT-policy check at all)
+  // is all this needs, and the caller already knows the id it chose.
+  const clientProfileId = randomUUID();
+  const { error: clientError } = await supabase
     .from("client_profiles")
-    .insert({ workspace_id: params.workspaceId, invited_email: email, display_name: params.displayName.trim() || email, goal: params.goal.trim() || null })
-    .select("id")
-    .single();
+    .insert({ id: clientProfileId, workspace_id: params.workspaceId, invited_email: email, display_name: params.displayName.trim() || email, goal: params.goal.trim() || null });
   if (clientError) throw new Error(`inviteClient (client_profiles) failed: ${clientError.message}`);
-  const clientProfileId = clientRow.id as string;
 
   try {
     const { error: assignmentError } = await supabase

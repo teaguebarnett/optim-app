@@ -166,11 +166,12 @@ npm run dev
    proposed response.
 3. As the client, confirm the coach's reply appears in `/chat`.
 4. As the coach, resolve the thread from `/coach/escalations`.
-5. On the client's own `/coach/clients/<id>` page, confirm the full
-   conversation transcript (including the escalation and resolution) is
-   visible under "Conversation," and add a Personal Coach Note — confirm it
-   is real (persists on refresh) and never appears anywhere in the client's
-   own session.
+5. On the coach's `/coach/clients/<id>` page, confirm the full conversation
+   transcript (including the escalation and resolution) is visible under
+   "Conversation," and add a Personal Coach Note. As the client, confirm it
+   appears as a "Note from Teague" card at the top of `/chat` (a one-way,
+   coach-attributed message, not a DM thread — see
+   `components/chat/live-chat-screen.tsx`) and persists on refresh.
 
 ## 11. Isolation checks
 

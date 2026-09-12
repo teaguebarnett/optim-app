@@ -261,10 +261,16 @@ enable_signup = true
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
-# Uncomment to customize email template
-# [auth.email.template.invite]
-# subject = "You have been invited"
-# content_path = "./supabase/templates/invite.html"
+# Phase 6.0D-B live-verification fix: the stock default invite template's
+# {{ .ConfirmationURL }} points at GoTrue's own hosted implicit-flow verify
+# endpoint (fragment tokens), which app/auth/confirm/route.ts — a real
+# Next.js server route — can never consume (a URL fragment never reaches
+# the server). Confirmed live: a client invited through the real app could
+# not actually accept their own invitation without this fix. See
+# supabase/templates/invite.html's own header for the full story.
+[auth.email.template.invite]
+subject = "You've been invited to OPTIM"
+content_path = "./supabase/templates/invite.html"
 
 # Phase 6.0A-V live-run fix: app/auth/sign-in/page.tsx's UI asks the user
 # for "the 6-digit code sent to {email}" — the stock default template for

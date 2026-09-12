@@ -32,12 +32,17 @@ const DEMO_NAV_ITEMS: readonly CoachNavItem[] = [
 ];
 
 // Phase 6.0D-A — the Supabase-mode nav's own real item list: only routes
-// that actually exist and do something real in this mode (no Clients
-// roster, Library, or Settings surface yet in Supabase mode — never a
-// dead-end nav link). "Escalations" carries the real open-attention badge;
-// "Campaigns" has no badge concept yet.
+// that actually exist and do something real in this mode (no Library or
+// Settings surface yet in Supabase mode — never a dead-end nav link).
+// "Escalations" carries the real open-attention badge; "Campaigns" has no
+// badge concept yet.
+//
+// Phase 6.0D-B — "Clients" added back: components/coach/live-clients-page.tsx
+// is now a real, connected Supabase-mode roster (invite/lifecycle/detail),
+// not the dead end this comment used to describe.
 const SUPABASE_NAV_ITEMS: readonly CoachNavItem[] = [
   { href: "/coach", label: "Command Center", icon: LayoutGrid, exact: true },
+  { href: "/coach/clients", label: "Clients", icon: Users, exact: false },
   { href: "/coach/escalations", label: "Escalations", icon: AlertCircle, exact: false },
   { href: "/coach/campaigns", label: "Campaigns", icon: Megaphone, exact: false },
 ];

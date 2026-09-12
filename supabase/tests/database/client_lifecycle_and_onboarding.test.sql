@@ -1,21 +1,23 @@
 -- Phase 6.0D-B — Controlled Live-Client Pilot and Production Client Lifecycle.
 --
 -- pgTAP coverage for 20260911000013_client_onboarding_progress.sql (the new
--- client_onboarding_progress table + client_enrollments.archived_at) and
--- 20260911000014_coach_notes_privacy_fix.sql (the coach_notes visibility
--- defect fix). Same fixture-id convention and set-local-role/
--- request.jwt.claims mechanism as rls_isolation.test.sql and
--- program_publication_and_activity.test.sql — see those files' own headers
--- for why this proves the real policies rather than standing in for them.
+-- client_onboarding_progress table + client_enrollments.archived_at) and a
+-- regression guard for coach_notes' real, correct visibility (client +
+-- assigned coach + workspace admin — see 20260911000015's own header for
+-- the live-verification correction this reverts: 20260911000014 wrongly
+-- narrowed this to staff-only, based on a misreading of "Personal Coach
+-- Note" as private; it is a real client-visible feature). Same fixture-id
+-- convention and set-local-role/request.jwt.claims mechanism as
+-- rls_isolation.test.sql and program_publication_and_activity.test.sql —
+-- see those files' own headers for why this proves the real policies
+-- rather than standing in for them.
 --
--- STATUS: written, not executed in this environment — neither the Supabase
--- CLI nor Docker is available here (see this phase's final report). Run
--- with `supabase test db` once local Supabase is running, exactly the same
--- honest caveat Phase 6.0A's own FOUNDATION.md §9 already documented for
--- the original rls_isolation.test.sql/storage_isolation.test.sql suites.
+-- STATUS: executed live against a real local Supabase stack via
+-- `npx supabase test db` (Docker reachable via $HOME/.docker/bin) — see
+-- this phase's corrected final report. All assertions in this file pass.
 
 begin;
-select plan(16);
+select plan(18);
 
 set local role postgres;
 
@@ -148,9 +150,18 @@ select isnt(
 );
 
 -- ---------------------------------------------------------------------------
--- 3. coach_notes privacy fix (20260911000014) — the actual defect: a client
---    could previously SELECT their own coach_notes rows. Must now be
---    invisible to them, staff-only, exactly like escalations/campaigns.
+-- 3. coach_notes — REGRESSION GUARD for the live-verification correction
+--    (20260911000014 then reverted by 20260911000015): "Personal Coach
+--    Note" is a real, intentional CLIENT-VISIBLE feature (rendered in the
+--    client's own /chat via app/actions/chat.ts's getMyChatScreenStateAction
+--    + components/chat/live-chat-screen.tsx — "Note from {coach}" cards),
+--    never a private coach-only annotation. This file previously asserted
+--    the OPPOSITE (client sees zero) — that assertion was itself the
+--    defect, caught live against scripts/e2e-chat-intelligence.mts's own
+--    pre-existing "Client A can read the note" case. Isolation here is
+--    scoped exactly like every other client-owned table: the client
+--    themselves, their assigned coach, or a workspace admin — never an
+--    unrelated client or an unrelated workspace's coach.
 -- ---------------------------------------------------------------------------
 set local role postgres;
 insert into public.coach_notes (workspace_id, client_profile_id, author_user_id, body) values
@@ -160,15 +171,15 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated"}';
 
 select is(
-  (select count(*) from public.coach_notes where client_profile_id = '30000000-0000-0000-0000-000000000001')::int,
-  0,
-  'client A: sees ZERO of their own coach notes — the actual defect this phase fixed (was previously client-visible)'
+  (select body from public.coach_notes where client_profile_id = '30000000-0000-0000-0000-000000000001'),
+  'Watch her left knee on unilateral work.',
+  'client A: CAN read their own coach note — it is a real, intentional client-visible feature, not a private annotation'
 );
 
 select throws_ok(
   $$ insert into public.coach_notes (workspace_id, client_profile_id, author_user_id, body)
      values ('20000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000003', 'trying to write my own note') $$,
-  null, null, 'client A: cannot author a coach note about themselves (not staff)'
+  null, null, 'client A: cannot author a coach note about themselves (not staff — read-only for the client)'
 );
 
 set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000001","role":"authenticated"}';
@@ -176,7 +187,7 @@ set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000001","r
 select is(
   (select body from public.coach_notes where client_profile_id = '30000000-0000-0000-0000-000000000001'),
   'Watch her left knee on unilateral work.',
-  'coach A (assigned): can still read their own note about their own client'
+  'coach A (assigned): can also read their own note about their own client'
 );
 
 set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000004","role":"authenticated"}';
@@ -184,7 +195,7 @@ set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000004","r
 select is(
   (select count(*) from public.coach_notes where client_profile_id = '30000000-0000-0000-0000-000000000001')::int,
   0,
-  'client B: sees zero of client A''s coach notes'
+  'client B: sees zero of client A''s coach notes (cross-client isolation still holds)'
 );
 
 set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000002","role":"authenticated"}';
@@ -193,6 +204,43 @@ select is(
   (select count(*) from public.coach_notes where client_profile_id = '30000000-0000-0000-0000-000000000001')::int,
   0,
   'coach B (unrelated workspace): sees zero of client A''s coach notes'
+);
+
+-- ---------------------------------------------------------------------------
+-- 4. REGRESSION GUARD — live-verification finding: INSERT ... RETURNING on
+--    client_profiles, under a real authenticated (non-service-role)
+--    session, triggers a genuine PostgreSQL RLS defect (matching the class
+--    of bug tracked upstream as postgresql.org bug #19015 — a STABLE
+--    function in a SELECT policy misbehaving when an INSERT's implicit
+--    RETURNING-triggered visibility check runs against the very row being
+--    inserted). client_profiles is the one table in this schema whose own
+--    SELECT policy (client_profiles_select -> can_access_client(id) ->
+--    client_workspace_id(id)) self-queries client_profiles for the row a
+--    RETURNING clause would expose; every other client-owned table's SELECT
+--    policy resolves through a foreign key into an ALREADY-EXISTING
+--    client_profiles row instead, which is why this is the only INSERT path
+--    affected. lib/production/roster.ts's inviteClient is fixed to never
+--    chain .select() onto this specific insert (the id is generated
+--    client-side instead) — this pgTAP case proves the plain INSERT (no
+--    RETURNING) a real workspace_owner performs succeeds, and separately
+--    documents that adding RETURNING back would reproduce the failure (see
+--    this phase's final report for the full live investigation).
+-- ---------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000001","role":"authenticated"}';
+
+select lives_ok(
+  $$ insert into public.client_profiles (workspace_id, invited_email, display_name)
+     values ('20000000-0000-0000-0000-000000000001', 'zz-regression-fix@example.test', 'Regression Fix') $$,
+  'coach A: the FIXED insert pattern (no RETURNING) succeeds for a real workspace_owner session'
+);
+
+select throws_ok(
+  $$ insert into public.client_profiles (workspace_id, invited_email, display_name)
+     values ('20000000-0000-0000-0000-000000000001', 'zz-regression-broken@example.test', 'Regression Broken')
+     returning id $$,
+  '42501', null,
+  'REGRESSION DOCUMENTATION (not a desired outcome): the same insert WITH a RETURNING clause still fails under real RLS — proves why inviteClient must never add .select()/RETURNING back onto this specific statement'
 );
 
 select finish();

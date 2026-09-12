@@ -8,7 +8,7 @@
 -- the real policies rather than standing in for them.
 
 begin;
-select plan(24);
+select plan(29);
 
 set local role postgres;
 
@@ -230,6 +230,60 @@ select throws_ok(
 select throws_ok(
   $$ select public.assign_active_program_version('30000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000002') $$,
   null, null, 'anon: cannot call assign_active_program_version at all (no execute grant)'
+);
+
+-- ---------------------------------------------------------------------------
+-- 7. REGRESSION GUARD (Phase 6.0D-B live-verification correction) —
+--    nutrition_plan_versions publishing. prevent_published_version_mutation
+--    (this migration's own trigger, both tables) used to reference
+--    new.program_id/old.program_id unconditionally, a column
+--    nutrition_plan_versions doesn't have — publishing ANY nutrition plan
+--    version always raised `record "new" has no field "program_id"`, live-
+--    confirmed and fixed by 20260911000016_fix_version_immutability_trigger.sql.
+--    Never previously covered by any pgTAP or live E2E test.
+-- ---------------------------------------------------------------------------
+set local role postgres;
+insert into public.nutrition_plans (id, workspace_id, created_by, title) values
+  ('70000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Nutrition Plan A');
+
+insert into public.nutrition_plan_versions (id, plan_id, workspace_id, version_number, status, content, created_by) values
+  ('80000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 1, 'draft', '{"id":"n1","targets":{"calories":2200,"proteinG":160,"carbsG":220,"fatG":70},"usesTrainingRestSplit":false}'::jsonb, '10000000-0000-0000-0000-000000000001');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated"}';
+
+select is(
+  (select count(*) from public.nutrition_plan_versions where id = '80000000-0000-0000-0000-000000000001')::int,
+  0,
+  'client A: cannot see a draft nutrition plan version at all'
+);
+
+set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000001","role":"authenticated"}';
+
+select lives_ok(
+  $$ update public.nutrition_plan_versions set status = 'published', published_by = '10000000-0000-0000-0000-000000000001', published_at = now()
+     where id = '80000000-0000-0000-0000-000000000001' $$,
+  'coach A: publishing a nutrition plan version succeeds — the actual regression this migration fixes (was: record "new" has no field "program_id")'
+);
+
+select lives_ok(
+  $$ select public.assign_active_nutrition_plan_version('30000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001') $$,
+  'coach A: assign_active_nutrition_plan_version succeeds once published'
+);
+
+set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated"}';
+
+select is(
+  (select content->>'id' from public.nutrition_plan_versions where id = '80000000-0000-0000-0000-000000000001'),
+  'n1',
+  'client A: now sees the real assigned nutrition plan content'
+);
+
+set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000001","role":"authenticated"}';
+
+select throws_ok(
+  $$ update public.nutrition_plan_versions set content = '{"id":"n1-tampered"}'::jsonb where id = '80000000-0000-0000-0000-000000000001' $$,
+  null, null, 'coach A: cannot modify a published nutrition plan version''s content — immutability trigger still enforces this correctly for THIS table too'
 );
 
 select finish();

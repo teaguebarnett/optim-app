@@ -278,8 +278,9 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
       <section className="space-y-3">
         <SectionHeader title="Personal coach notes" />
         <Card>
+          <p className="mb-2 text-meta text-neutral">A one-way note, attributed to you, delivered to {detail.displayName}&apos;s own chat — not a DM thread.</p>
           <form action={addNoteAction} className="flex flex-col gap-2">
-            <textarea name="body" rows={2} placeholder="Private note about this client — never visible to them" className="rounded border border-border-strong bg-transparent px-2 py-1.5 text-sm text-off-white" />
+            <textarea name="body" rows={2} placeholder="Write a note to this client…" className="rounded border border-border-strong bg-transparent px-2 py-1.5 text-sm text-off-white" />
             <Button type="submit" variant="secondary" size="sm" className="self-start">Add note</Button>
           </form>
           {notes.length > 0 ? (
