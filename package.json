@@ -57,6 +57,7 @@
     "verify:coach-operations": "node --experimental-strip-types lib/production/verify-coach-operations.mts",
     "verify:production-validation": "node --experimental-strip-types lib/production/verify-validation.mts",
     "verify:roster": "node --experimental-strip-types lib/production/verify-roster.mts",
+    "verify:platform-stats": "node --experimental-strip-types lib/shared/verify-stats.mts",
     "test:db": "supabase test db"
   },
   "dependencies": {

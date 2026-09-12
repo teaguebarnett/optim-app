@@ -276,3 +276,131 @@ work:
   screenshot parser exists yet — those write *into* this schema in a later
   phase. No real client's data has been imported; the schema exists so a
   future import pipeline has somewhere correct to write.
+
+## 12. Phase 6.1A — Secure Founder Command Center (platform-role architecture)
+
+A second, genuinely separate authorization boundary on top of everything
+above: platform-wide administration (`/admin`), independent of workspace
+membership entirely. **Naming hazard worth stating plainly**: `app_role`
+(§4) already has a value literally spelled `platform_admin`, meaning "full
+admin authority inside *one* workspace." This phase's `platform_role` enum
+is unrelated — it is cross-workspace authority, held (or not) with zero
+dependency on any `workspace_memberships` row. A user can hold a platform
+role, a workspace role, both, or neither.
+
+**Schema** (`supabase/migrations/20260911000017_platform_roles.sql`):
+
+- `platform_role` enum: `platform_owner` / `platform_admin` / `platform_analyst`
+  (analyst is read-only everywhere platform data is exposed).
+- `platform_administrators` — one row per user holding platform authority
+  (`status: active | revoked`, `granted_by`, `granted_at`, `revoked_at`).
+- `platform_role_audit_log` — append-only record of every grant/revoke/
+  role-change.
+- `app_private.is_platform_admin` / `is_platform_owner` — SECURITY DEFINER
+  helpers, same discipline as every other `app_private` helper (§4).
+
+**Self-assignment is structurally impossible, not just app-checked**: there
+is no INSERT/UPDATE/DELETE policy for `authenticated` on either table, *and*
+the ordinary grants are revoked and re-granted SELECT-only. Even a real
+`platform_owner` session gets a permission-denied error (`42501`) attempting
+to write either table through the API — only the service-role key can, and
+the only code path holding that key for this purpose is
+`scripts/manage-platform-role.mts`.
+
+**Bootstrap / grant / revoke** (placeholders only — never a real identity
+committed anywhere):
+
+```bash
+SUPABASE_SERVICE_ROLE_KEY=<service_role key> \
+NEXT_PUBLIC_SUPABASE_URL=<project url> \
+PLATFORM_ROLE_ACTION=grant \
+PLATFORM_ROLE_EMAIL=<the new platform owner's email> \
+PLATFORM_ROLE=platform_owner \
+PLATFORM_ROLE_ACTOR_EMAIL=<optional: your own email, for the audit trail> \
+node --experimental-strip-types scripts/manage-platform-role.mts
+
+# Revoke:
+SUPABASE_SERVICE_ROLE_KEY=<service_role key> \
+NEXT_PUBLIC_SUPABASE_URL=<project url> \
+PLATFORM_ROLE_ACTION=revoke \
+PLATFORM_ROLE_EMAIL=<email to revoke> \
+node --experimental-strip-types scripts/manage-platform-role.mts
+```
+
+Idempotent (re-granting the same role, or revoking an already-revoked
+grant, is a safe no-op) and accepts `PLATFORM_ROLE_USER_ID` instead of
+`PLATFORM_ROLE_EMAIL` when the target has no confirmed email yet.
+Ownership is reassignable to a different real account later by running this
+same script again — no code change, ever.
+
+**Auth boundary** (`lib/production/platform-auth.ts`): `getPlatformAuthContext()`
+resolves the caller's platform role *only* through their own RLS-governed
+session (never the admin client), mirroring `lib/production/auth.ts`'s
+`getAuthenticatedContext` exactly. `requirePlatformAuth(allowedRoles)` is
+the one call every `/admin` page and repository method makes before
+touching any data.
+
+**Data access — one repository, explicit threat model**
+(`lib/production/platform-operations.ts`, `PlatformOperationsRepository`):
+same Demo/Supabase-adapter-plus-factory pattern as `FoundationRepository`
+and `CoachOperationsRepository`. The Supabase adapter's threat model,
+documented in full in that file's header: every method calls
+`requirePlatformAuth` first, through the caller's own RLS-governed session;
+*only after that has genuinely passed* does it reach for the service-role
+admin client to run the actual cross-workspace read. This is necessary
+(not just convenient) because a platform owner holds no
+`workspace_memberships` row in the general case — the ordinary RLS-governed
+client would show them zero rows in any workspace, which is correct RLS
+behavior but the wrong tool for a legitimately cross-tenant read. Every
+query in this file is read-only; no mutation, bulk action, impersonation, or
+destructive control exists in this phase.
+
+**Metric definitions** (deliberately precise labels, never "active
+coach"/"active client" without a defensible basis):
+
+| Label | Definition |
+|---|---|
+| Registered coaches | Distinct users holding an active `workspace_owner`/`coach`/`platform_admin` (workspace-scoped) membership, across all workspaces |
+| Coach workspaces | Count of `workspaces` rows |
+| Coaches with assigned clients | Distinct coaches with at least one `coach_client_assignments` row |
+| Total / invited / onboarding / awaiting-coach-setup / active / paused / archived clients | Derived via the same `deriveLifecycle` function every coach-facing roster already uses (`lib/coach/roster.ts`), never a second parallel definition |
+| Open / resolved escalations | `escalations.status` grouped exactly as `/coach/escalations` already groups them |
+| Conversations / client / assistant / coach messages | Row counts on `conversations`/`conversation_messages` |
+| Provider/model distribution, real vs. fake provider, latency (median/average) | Parsed from `conversation_messages.route_meta` (see `lib/ai/provider.ts`'s `RouteAuditMeta`) — never fabricated when a message has no route_meta |
+| "Coaches active in the last 30 days" | **Not implemented as a literal timestamp comparison in this phase** — no dedicated coach-session/login-activity table exists yet; the client detail/coach detail pages instead surface the most recent real client-affecting record (a new client, a resolved escalation) as `lastActivityIso`, honestly labeled, not a fabricated "last seen" |
+
+**Explicitly "Not connected"** (never inferred, never fabricated): billing,
+revenue, token cost, churn, retention. `/admin/system` lists these plainly
+rather than omitting them silently.
+
+**Navigation**: a dedicated shell (`components/admin/admin-shell.tsx`,
+mounted only by `app/admin/layout.tsx`) — never `CoachShell` reused with an
+extra tab. The admin nav is never rendered for an ordinary coach/client
+session; it doesn't exist anywhere in `CoachShell`'s own item lists.
+
+**Demo mode**: `/admin` renders in demo mode too, behind
+`DemoPlatformOperationsRepository` — deterministic seed fixtures
+(`lib/tenancy/seed.ts`), clearly flagged (`isDemoFixture: true`, a visible
+"Demo fixtures" badge in the shell), never mixed with real Supabase-mode
+metrics. Demo mode has no login system at all (same as `/coach`'s own demo
+branch) — `/admin`'s real, server-verified fail-closed guarantees apply in
+Supabase mode; that is where every test matrix item below actually proves
+anything.
+
+**Tests**: `supabase/tests/database/platform_roles.test.sql` (pgTAP, 17
+assertions) — self-select, admin-wide visibility, `platform_analyst`'s
+narrower visibility, zero visibility for ordinary coach/client sessions,
+self-assignment structurally blocked at the grant layer (not just RLS),
+audit-log read scoping, and anon denial. **Status: written, not yet
+executed** — same constraint as every prior phase in this environment (no
+`supabase`/`docker` binary here; see §9's own precedent). A pure-logic test
+for the one framework-independent piece of math this phase's AI-operations
+metric needs (`lib/shared/stats.ts`'s `median`) runs via
+`npm run verify:platform-stats` and is included in this repo's regular
+verify-suite run.
+
+**Future integration points**: a real coach/session-activity table (to
+answer "active in the last 30 days" honestly); per-request token usage +
+pricing input (to compute real AI cost); a billing/subscription table (to
+compute revenue/churn/retention) — none of these exist yet, and this phase
+deliberately does not invent placeholder numbers for any of them.

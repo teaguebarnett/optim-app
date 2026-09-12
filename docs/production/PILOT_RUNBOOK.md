@@ -197,6 +197,78 @@ supabase db reset   # wipes and re-applies migrations — the deterministic rese
 Then repeat from §3. `scripts/bootstrap-workspace.mts` and the invite flow
 are both idempotent/safe to re-run against a freshly reset database.
 
+## 13. Founder Command Center verification (Phase 6.1A)
+
+Run this after §2's migrations/pgTAP have applied cleanly (it adds
+`platform_roles.test.sql` to the same `supabase test db` run) and with the
+app running per §4.
+
+1. **Grant yourself platform_owner** — a separate, explicit step from
+   `bootstrap-workspace.mts` (§3), which only ever creates a
+   *workspace* owner:
+
+   ```bash
+   SUPABASE_SERVICE_ROLE_KEY=<service_role key from supabase status> \
+   NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+   PLATFORM_ROLE_ACTION=grant \
+   PLATFORM_ROLE_EMAIL=teaguebarnett@gmail.com \
+   PLATFORM_ROLE=platform_owner \
+   node --experimental-strip-types scripts/manage-platform-role.mts
+   ```
+
+2. Sign in as that account (§5's same OTP flow) and open `http://localhost:3000/admin`.
+   Confirm the Overview renders real counts, and that every nav item
+   (`/admin/coaches`, `/admin/clients`, `/admin/ai`, `/admin/system`) loads.
+3. Cross-check at least one displayed number against direct database truth,
+   e.g.:
+
+   ```sql
+   select count(*) from public.client_profiles;
+   select count(*) from public.escalations where status <> 'resolved';
+   ```
+
+   and confirm it matches what `/admin` shows.
+4. Open a client from `/admin/clients` and a coach from `/admin/coaches` —
+   confirm the detail page's numbers (assigned clients, lifecycle
+   breakdown) are consistent with the roster page they were opened from.
+5. **Sign in as the pilot coach** (§5, `workspace_owner` role only — no
+   platform role) and attempt `http://localhost:3000/admin` directly.
+   Confirm it renders "Not authorized," never any platform data.
+6. **Sign in as the pilot client** (§7) and attempt `/admin` directly.
+   Confirm the same fail-closed result.
+7. **Sign out entirely** (or use an incognito window) and attempt `/admin`
+   directly. Confirm it redirects/renders "Sign in required," never any
+   platform data or a client-side redirect flash of real content.
+8. **Bootstrap a second, unrelated workspace/coach** (§11.1) and confirm
+   that account — an ordinary coach with no platform role — also gets
+   "Not authorized" at `/admin`, exactly like the pilot coach in step 5.
+9. Refresh `/admin` and fully sign out/back in as the platform owner;
+   confirm the role persists across both (it is read from
+   `platform_administrators` on every request, never cached client-side).
+10. **Revoke the role** and confirm `/admin` immediately fails closed for
+    that same account on its very next request:
+
+    ```bash
+    SUPABASE_SERVICE_ROLE_KEY=<service_role key> \
+    NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+    PLATFORM_ROLE_ACTION=revoke \
+    PLATFORM_ROLE_EMAIL=teaguebarnett@gmail.com \
+    node --experimental-strip-types scripts/manage-platform-role.mts
+    ```
+
+    Re-grant it afterward if you want to keep using the Command Center.
+11. Attempt, as the platform owner, to `insert`/`update`
+    `public.platform_administrators` directly via the browser's network
+    tab or a raw PostgREST call (or simply trust §2's pgTAP run, which
+    already proves this) — confirm it fails with `42501`. There is no
+    in-app UI that attempts this; it should not exist anywhere in this
+    phase.
+12. Open DevTools → Sources / view-source on `/admin` and confirm no
+    Supabase service-role key, `.env.local` value, or any other credential
+    appears anywhere in the page source, a script chunk, or a network
+    response body. Every `/admin` value is either a plain count/label or a
+    boolean ("configured" / "not configured") — never a secret.
+
 ## Limitations honestly carried into this runbook
 
 - **No dev-only "open as client" switch in Supabase mode.** Demo mode's
@@ -214,3 +286,10 @@ are both idempotent/safe to re-run against a freshly reset database.
 - **No live server-push.** `/setup-status` and the "waiting on your coach"
   screens poll on focus/visibility, not a real-time channel — refresh or
   switch tabs back to see a state change made in the other session.
+- **The Command Center (`/admin`, Phase 6.1A) has no "active in the last 30
+  days" coach metric backed by a real session/login table** — it doesn't
+  exist yet. Coach detail pages show the most recent real client-affecting
+  record instead, honestly labeled, never a fabricated "last seen."
+  Billing, revenue, token cost, churn, and retention are not instrumented
+  anywhere in this schema and show as "Not connected" rather than an
+  invented number.
