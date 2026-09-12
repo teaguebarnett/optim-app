@@ -14,6 +14,7 @@ import {
   advanceAfterExerciseResolved,
   buildInitialFlowState,
   deferCurrentExercise,
+  findTrainingItemById,
   firstUnresolvedWorkingSetNumber,
   isExerciseResolved,
 } from "./session-flow.ts";
@@ -23,9 +24,16 @@ import { recommendRest } from "./rest-policy.ts";
 import { classifyEffort } from "./effort-policy.ts";
 import { classifyPainSeverity, isSevereRating } from "./pain-policy.ts";
 import { migrateStoredState } from "../tenancy/migrate.ts";
+import { legacyWorkoutToSession } from "../training/legacy-adapter.ts";
 import type { AppState } from "../state.ts";
 import type { Action } from "../state.ts";
 import type { Exercise, ExerciseLog, LoggedSet, PainSymptomQuality, WorkoutSession, WorkoutSummary } from "../types.ts";
+
+// The universal counterpart of PUSH_WORKOUT (Phase 3) — used wherever this
+// suite exercises session-flow.ts/workout-analysis.ts functions that now
+// take a TrainingItemInstance/Session instead of the legacy Exercise/Workout
+// those same real exercises still are, everywhere else in this file.
+const PUSH_SESSION = legacyWorkoutToSession(PUSH_WORKOUT);
 
 let passed = 0;
 let failed = 0;
@@ -154,7 +162,8 @@ check("Stepped warm-up steps must each be confirmed before set-ready, and comple
   state = reducer(state, { type: "ADVANCE_EXERCISE_WARMUP" });
   assert.equal(state.workoutSession.phase, "set-ready");
   assert.equal(state.workoutSession.exerciseWarmups[INCLINE_ID]?.status, "completed");
-  assert.equal(state.workoutSession.currentSetNumber, firstUnresolvedWorkingSetNumber(incline, state.workoutSession.exerciseLogs[INCLINE_ID]));
+  const inclineItem = findTrainingItemById(PUSH_SESSION, INCLINE_ID)!;
+  assert.equal(state.workoutSession.currentSetNumber, firstUnresolvedWorkingSetNumber(inclineItem, state.workoutSession.exerciseLogs[INCLINE_ID]));
 });
 
 function readyFirstSet(): AppState {
@@ -308,7 +317,7 @@ check("A deferred exercise is returned to before the session can reach summary",
 
 check("Session-flow queue helpers agree with the reducer's own advance logic (pure-function parity)", () => {
   const workout = PUSH_WORKOUT;
-  const initial = buildInitialFlowState(workout);
+  const initial = buildInitialFlowState(PUSH_SESSION);
   assert.equal(initial.currentExerciseId, workout.exercises[0].id);
   assert.equal(initial.exerciseQueue.length, workout.exercises.length);
 });
@@ -526,10 +535,10 @@ check("A material deviation from the prescription this session is surfaced as a 
 console.log("\n8. Exercise resolution parity (canCompleteExercise vs isExerciseResolved)\n");
 
 check("isExerciseResolved treats a whole-exercise skip as resolved even though canCompleteExercise alone would not", () => {
-  const incline = PUSH_WORKOUT.exercises.find((e) => e.id === INCLINE_ID)!;
+  const inclineItem = findTrainingItemById(PUSH_SESSION, INCLINE_ID)!;
   const skippedLog: ExerciseLog = { exerciseId: INCLINE_ID, status: "skipped", loggedSets: [] };
-  assert.equal(canCompleteExercise(incline, skippedLog), false);
-  assert.equal(isExerciseResolved(incline, skippedLog), true);
+  assert.equal(canCompleteExercise(inclineItem, skippedLog), false);
+  assert.equal(isExerciseResolved(inclineItem, skippedLog), true);
 });
 
 check("advanceAfterExerciseResolved and deferCurrentExercise never mutate the session they're given", () => {

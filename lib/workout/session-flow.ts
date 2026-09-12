@@ -1,46 +1,78 @@
 // Phase 4.4B-2 — pure queue/progression logic for the guided live workout.
-//
-// This is the one place "what happens next" is decided for exercise
-// sequencing, so lib/state.ts's reducer stays thin and every transition is
-// independently testable. Nothing here touches React, routing, or
-// timestamps beyond what's already on canonical session state — see
-// lib/state.ts for where these are wired into actual reducer cases.
+// Phase 3 (universal training grammar migration) — this is the one place
+// "what happens next" is decided for exercise sequencing, so lib/state.ts's
+// reducer stays thin and every transition is independently testable.
+// Nothing here touches React, routing, or timestamps beyond what's already
+// on canonical session state — see lib/state.ts for where these are wired
+// into actual reducer cases.
 //
 // Stable-id navigation only (Phase 4.4B-2 correction): every function here
-// works in terms of exercise ids, never array indices, so deferring or
-// reordering an exercise can never corrupt progress the way an index into
-// the coach's original array would.
+// works in terms of training-item ids, never array indices, so deferring or
+// reordering an item can never corrupt progress the way an index into the
+// coach's original array would.
+//
+// Phase 3 — this module's real internal domain is now the universal
+// Session/Block/TrainingItemInstance grammar (lib/training/types.ts), not
+// the legacy Workout/Exercise shape (lib/types.ts). lib/state.ts converts a
+// resolved legacy Workout into a Session exactly once, at START_WORKOUT (via
+// lib/training/legacy-adapter.ts's legacyWorkoutToSession) — every function
+// below consumes that already-converted Session, never re-converting or
+// reading Workout/Exercise directly. Item identity survives the conversion
+// unchanged (TrainingItemInstance.id === the source Exercise.id), so every
+// existing id-keyed piece of canonical session state (exerciseQueue,
+// exerciseLogs, exerciseWarmups, etc.) continues to mean exactly what it did
+// before this phase.
 
-import { canCompleteExercise } from "../workout-analysis.ts";
-import type { Exercise, ExerciseLog, Workout, WorkoutSession, WorkoutSessionPhase } from "../types";
+import { canCompleteExercise, absoluteWorkingSetNumbers } from "../workout-analysis.ts";
+import type { Block, Session, TrainingItemInstance } from "../training/types.ts";
+import type { ExerciseLog, WorkoutSession, WorkoutSessionPhase } from "../types";
 
-/** The next prescribed working-set number this exercise still needs
+/** The next prescribed working-set number this training item still needs
  * resolved (completed with a valid RPE, or skipped) — null once every
  * prescribed working set has been addressed. */
-export function firstUnresolvedWorkingSetNumber(exercise: Exercise, log: ExerciseLog | undefined): number | null {
-  const workingPrescribed = exercise.prescribedSets.filter((s) => !s.isWarmup).sort((a, b) => a.setNumber - b.setNumber);
+export function firstUnresolvedWorkingSetNumber(item: TrainingItemInstance, log: ExerciseLog | undefined): number | null {
+  const workingSetNumbers = absoluteWorkingSetNumbers(item);
   const loggedByNumber = new Map((log?.loggedSets ?? []).map((s) => [s.setNumber, s]));
-  for (const prescribed of workingPrescribed) {
-    const logged = loggedByNumber.get(prescribed.setNumber);
-    if (!logged) return prescribed.setNumber;
-    if (logged.status === "completed" && logged.rpe === null) return prescribed.setNumber;
+  for (const setNumber of workingSetNumbers) {
+    const logged = loggedByNumber.get(setNumber);
+    if (!logged) return setNumber;
+    if (logged.status === "completed" && logged.rpe === null) return setNumber;
   }
   return null;
 }
 
-/** An exercise is resolved once it's either explicitly skipped whole, or
+/** A training item is resolved once it's either explicitly skipped whole, or
  * every prescribed working set has been individually addressed (reuses
  * canCompleteExercise's exact "every prescribed set addressed, at least one
  * really completed" rule — never a second competing formula). */
-export function isExerciseResolved(exercise: Exercise, log: ExerciseLog | undefined): boolean {
+export function isExerciseResolved(item: TrainingItemInstance, log: ExerciseLog | undefined): boolean {
   if (!log) return false;
   if (log.status === "skipped") return true;
-  return canCompleteExercise(exercise, log);
+  return canCompleteExercise(item, log);
 }
 
-export function findExerciseById(workout: Workout, exerciseId: string | null): Exercise | undefined {
-  if (!exerciseId) return undefined;
-  return workout.exercises.find((e) => e.id === exerciseId);
+/** Tolerant of a missing Session (mirrors every other lookup in this module
+ * — a session not yet resolved, or from before this phase, simply has
+ * nothing to find). */
+export function findTrainingItemById(session: Session | null | undefined, itemId: string | null): TrainingItemInstance | undefined {
+  if (!session || !itemId) return undefined;
+  for (const block of session.blocks) {
+    const found = block.items.find((i) => i.id === itemId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Which Block a given training item belongs to — structural block
+ * awareness for the live queue (Phase 3 spec section 5/10): every real
+ * workout today converts to one independent item per "straight" block (see
+ * lib/training/legacy-adapter.ts), so this is currently always a
+ * single-item lookup in practice, but a coach-authored superset/circuit
+ * would genuinely group here. Exposed for a future phase to build real
+ * grouped-execution UX against — this phase does not change navigation
+ * rhythm based on it (see buildInitialFlowState's own doc). */
+export function findBlockForItem(session: Session, itemId: string): Block | undefined {
+  return session.blocks.find((b) => b.items.some((i) => i.id === itemId));
 }
 
 export interface InitialFlowState {
@@ -49,10 +81,35 @@ export interface InitialFlowState {
   actualExerciseOrder: string[];
 }
 
-/** The queue/current-exercise shape a brand-new session starts in — the
- * coach's own authored exercise order, untouched. */
-export function buildInitialFlowState(workout: Workout): InitialFlowState {
-  const exerciseQueue = workout.exercises.map((e) => e.id);
+/**
+ * The queue/current-item shape a brand-new session starts in — the coach's
+ * own authored order, untouched: blocks in `block.order`, items within each
+ * block in `item.order`. For every real strength workout today (each
+ * exercise its own independent "straight" block, per the legacy adapter),
+ * this produces the exact same sequence as the pre-Phase-3 flat
+ * `workout.exercises` order.
+ *
+ * Grouped items (a real coach-authored superset/circuit) land consecutively
+ * in this queue, since they share one block — the structural grouping
+ * survives navigation. What this deliberately does NOT do: cycle
+ * A1 -> A2 -> rest -> next round, or otherwise change resolution rhythm for
+ * a grouped block. No real current content uses grouping (confirmed in the
+ * Phase 0/2 audits), so there is no live behavior to preserve here, and
+ * inventing a new grouped-execution rhythm is an explicit Phase 4+ UX
+ * decision, not a Phase 3 migration-parity one — see this module's own
+ * header doc and the Phase 3 completion report's "block execution model"
+ * section for the full reasoning.
+ */
+export function buildInitialFlowState(session: Session): InitialFlowState {
+  const exerciseQueue = session.blocks
+    .slice()
+    .sort((a, b) => a.order - b.order)
+    .flatMap((block) =>
+      block.items
+        .slice()
+        .sort((a, b) => a.order - b.order)
+        .map((item) => item.id)
+    );
   const currentExerciseId = exerciseQueue[0];
   return { exerciseQueue, currentExerciseId, actualExerciseOrder: currentExerciseId ? [currentExerciseId] : [] };
 }
@@ -73,12 +130,16 @@ function appendIfNew(order: string[], id: string | null): string[] {
 }
 
 /**
- * Called once the CURRENT exercise has just become resolved (its final
+ * Called once the CURRENT training item has just become resolved (its final
  * working set was logged/skipped, or it was explicitly skipped whole).
  * Pops it from the queue and hands off to whatever remains — the next
- * not-yet-attempted or previously-deferred exercise, or the session summary
+ * not-yet-attempted or previously-deferred item, or the session summary
  * once nothing remains. Never used for a defer (see deferCurrentExercise) —
- * a deferred exercise is requeued, not resolved.
+ * a deferred item is requeued, not resolved.
+ *
+ * Operates purely on WorkoutSession's own id-keyed bookkeeping — genuinely
+ * agnostic to whether those ids came from a legacy Exercise[] or a universal
+ * Session's items, so nothing here needed to change for Phase 3.
  */
 export function advanceAfterExerciseResolved(session: WorkoutSession): QueueAdvanceResult {
   const resolvedId = session.currentExerciseId;
@@ -96,12 +157,15 @@ export function advanceAfterExerciseResolved(session: WorkoutSession): QueueAdva
 }
 
 /**
- * Moves the current exercise ("Do later") to the back of the queue instead
- * of resolving it. The session naturally returns to it once every other
- * queued exercise has been resolved, since it's still in exerciseQueue —
- * just at the end. A no-op (besides bookkeeping) when it's the only
- * exercise left, since there's nowhere else to go — callers should avoid
- * offering "Do later" in that case.
+ * Moves the current training item ("Do later") to the back of the queue
+ * instead of resolving it. The session naturally returns to it once every
+ * other queued item has been resolved, since it's still in exerciseQueue —
+ * just at the end. A no-op (besides bookkeeping) when it's the only item
+ * left, since there's nowhere else to go — callers should avoid offering
+ * "Do later" in that case.
+ *
+ * Same id-only bookkeeping as advanceAfterExerciseResolved above — no change
+ * needed for Phase 3.
  */
 export function deferCurrentExercise(session: WorkoutSession): QueueAdvanceResult {
   const currentId = session.currentExerciseId;
@@ -124,7 +188,7 @@ export function deferCurrentExercise(session: WorkoutSession): QueueAdvanceResul
     : [...session.deferredExerciseIds, currentId];
 
   if (nextId === currentId) {
-    // Only exercise left in the queue — nothing to hand off to.
+    // Only item left in the queue — nothing to hand off to.
     return {
       currentExerciseId: currentId,
       exerciseQueue: requeued,

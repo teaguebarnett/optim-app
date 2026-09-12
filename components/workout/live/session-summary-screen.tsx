@@ -29,9 +29,21 @@ export function SessionSummaryScreen({
 
   const preview = useMemo(
     () =>
-      buildWorkoutSummary(session.resolvedWorkout, session, session.startedAtIso ?? new Date().toISOString(), new Date().toISOString()),
+      buildWorkoutSummary(
+        session.resolvedSession ?? null,
+        session,
+        session.startedAtIso ?? new Date().toISOString(),
+        new Date().toISOString()
+      ),
     [session]
   );
+  // Phase 3 — deliberately still reads resolvedWorkout (unchanged), not
+  // resolvedSession: this signal set depends on Exercise.previousPerformance
+  // (real execution history OPTIM already has), which has no home in the
+  // Phase 1/2 universal Prescription grammar by design (prescription vs.
+  // execution — see lib/workout/guidance.ts's own module doc). Migrating
+  // this specific derivation is out of Phase 3's scope; see the Phase 3
+  // completion report's "prescription/execution semantics" section.
   const signals = useMemo(
     () => buildSessionGuidanceSignals(session.resolvedWorkout, session, { techniqueFlagCount }),
     [session, techniqueFlagCount]

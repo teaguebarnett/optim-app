@@ -10,6 +10,7 @@ import { prescribedWorkingSet, workingSetDisplayIndex } from "@/components/worko
 import { ActivePainBanner } from "@/components/workout/live/active-pain-banner";
 import { cn } from "@/lib/cn";
 import type { Exercise, ExerciseLog } from "@/lib/types";
+import type { TrainingItemInstance } from "@/lib/training/types";
 
 /**
  * Phase 4.4B-2.1 correction — this used to show a ticking "Resting 00:xx"
@@ -23,11 +24,18 @@ import type { Exercise, ExerciseLog } from "@/lib/types";
  */
 export function SetFeedbackPanel({
   exercise,
+  trainingItem,
   log,
   assistantName,
   painReportActive = false,
 }: {
   exercise: Exercise;
+  /** Phase 3 — the same item on the universal Session this session was
+   * started against; used only for the resolution/next-set calculations
+   * below, which now operate on the universal grammar (see
+   * lib/workout/session-flow.ts). Every other read here stays on `exercise`
+   * (unchanged rendering). */
+  trainingItem: TrainingItemInstance;
   log: ExerciseLog;
   assistantName: string;
   painReportActive?: boolean;
@@ -42,8 +50,8 @@ export function SetFeedbackPanel({
     lastSet.status === "completed"
       ? recommendRest(exercise.restSeconds, lastSet.rpe, exercise.targetRpe)
       : recommendRest(exercise.restSeconds, null, exercise.targetRpe);
-  const resolved = isExerciseResolved(exercise, log);
-  const nextSetNumber = resolved ? null : firstUnresolvedWorkingSetNumber(exercise, log);
+  const resolved = isExerciseResolved(trainingItem, log);
+  const nextSetNumber = resolved ? null : firstUnresolvedWorkingSetNumber(trainingItem, log);
   const nextPrescribed = nextSetNumber !== null ? prescribedWorkingSet(exercise, nextSetNumber) : undefined;
   const nextDisplayIndex = nextSetNumber !== null ? workingSetDisplayIndex(exercise, nextSetNumber) : -1;
 

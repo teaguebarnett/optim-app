@@ -1,6 +1,7 @@
 import { ALL_CLIENT_PROFILES, ALL_COACH_PROFILES, ALL_WORKSPACES } from "./tenancy/seed.ts";
 import { classifyEffort } from "./workout/effort-policy.ts";
-import type { Exercise, ExerciseLog, Workout, WorkoutSession, WorkoutSummary } from "./types";
+import type { ExerciseLog, WorkoutSession, WorkoutSummary } from "./types";
+import type { Session, TrainingItemInstance } from "./training/types";
 
 /** Resolves the business/coach display names for the session's workspace and
  * client, so the zero-data message below never hardcodes a specific
@@ -24,23 +25,37 @@ function resolveSessionIdentity(session: WorkoutSession): { businessName: string
 // submitted. Nothing here may claim a result, comparison, or trend that
 // isn't backed by logged data (see buildWorkoutSummary).
 
-export function totalPrescribedWorkingSets(workout: Workout | null): number {
-  return workout ? workout.exercises.reduce((n, e) => n + e.workingSets, 0) : 0;
+/** The absolute prescribed working-set numbers for a resistance training
+ * item — warm-up sets occupy 1..warmupSets, so working sets follow at
+ * warmupSets+1..warmupSets+sets, exactly mirroring the numbering
+ * lib/coach/training.ts's buildPrescribedSets already generates. Shared by
+ * lib/workout/session-flow.ts (which needs the same numbering to resolve
+ * "what's next") so the two can never independently drift. */
+export function absoluteWorkingSetNumbers(item: TrainingItemInstance): number[] {
+  const warmupSets = item.prescription.warmupSets ?? 0;
+  const workingSets = item.prescription.sets ?? 0;
+  return Array.from({ length: workingSets }, (_, i) => warmupSets + i + 1);
+}
+
+export function totalPrescribedWorkingSets(session: Session | null): number {
+  if (!session) return 0;
+  return session.blocks.reduce((n, b) => n + b.items.reduce((m, item) => m + (item.prescription.sets ?? 0), 0), 0);
 }
 
 /**
  * A prescribed working set only counts as addressed once the client submits
- * a valid RPE for it, or it's intentionally skipped. An exercise can only be
- * marked complete once every prescribed working set is addressed this way,
- * and at least one of them was actually completed (not every set skipped).
+ * a valid RPE for it, or it's intentionally skipped. A training item can
+ * only be marked complete once every prescribed working set is addressed
+ * this way, and at least one of them was actually completed (not every set
+ * skipped).
  */
-export function canCompleteExercise(exercise: Exercise, log: ExerciseLog): boolean {
-  const workingPrescribed = exercise.prescribedSets.filter((s) => !s.isWarmup);
+export function canCompleteExercise(item: TrainingItemInstance, log: ExerciseLog): boolean {
+  const workingSetNumbers = absoluteWorkingSetNumbers(item);
   const loggedByNumber = new Map(log.loggedSets.map((s) => [s.setNumber, s]));
 
   let hasValidCompletion = false;
-  for (const prescribed of workingPrescribed) {
-    const logged = loggedByNumber.get(prescribed.setNumber);
+  for (const setNumber of workingSetNumbers) {
+    const logged = loggedByNumber.get(setNumber);
     if (!logged) return false;
     if (logged.status === "completed") {
       if (logged.rpe === null) return false;
@@ -52,7 +67,7 @@ export function canCompleteExercise(exercise: Exercise, log: ExerciseLog): boole
 }
 
 export function buildWorkoutSummary(
-  workout: Workout | null,
+  trainingSession: Session | null,
   session: WorkoutSession,
   startedAtIso: string,
   completedAtIso: string
@@ -66,8 +81,9 @@ export function buildWorkoutSummary(
   let anyLighterThanExpected = false;
   const rpeValues: number[] = [];
 
-  for (const exercise of workout?.exercises ?? []) {
-    const log = session.exerciseLogs[exercise.id];
+  const items = trainingSession?.blocks.flatMap((b) => b.items) ?? [];
+  for (const item of items) {
+    const log = session.exerciseLogs[item.id];
     if (!log) continue;
 
     skippedSetsCount += log.loggedSets.filter((s) => s.status === "skipped").length;
@@ -84,25 +100,35 @@ export function buildWorkoutSummary(
     }
     workingSetsCompleted += completedWorkingSets.length;
 
+    // Every real resistance item always carries a target RPE (the legacy
+    // adapter requires it, mirroring Exercise.targetRpe's own required
+    // field) — this is only undefined for a structurally-permitted-but-
+    // never-real Prescription, in which case anomaly classification is
+    // honestly skipped rather than guessed (the RPE value itself still
+    // counts toward the average below).
+    const targetRpe = item.prescription.rpe;
+
     for (const set of completedWorkingSets) {
       if (set.rpe === null) {
         missingRpeCount += 1;
         continue;
       }
       rpeValues.push(set.rpe);
-      // Phase 4.4B-2.2 — goes through the same shared classifier the
-      // immediate post-set headline and rest recommendation use (see
-      // lib/workout/effort-policy.ts), so this summary can never disagree
-      // with what the client already saw mid-session. Only the SEVERE
-      // above-target tier counts as an anomaly worth flagging for review
-      // here — the milder "near-max effort" tier already gets its own
-      // supporting copy in real time (see buildImmediateSetFeedback) without
-      // itself triggering a coach-review flag, and that distinction is
-      // preserved rather than making every single-point RPE variance flag
-      // the whole session.
-      const effort = classifyEffort(set.rpe, exercise.targetRpe);
-      if (effort.tier === "above-target" && effort.severe) anyRpeAnomaly = true;
-      if (effort.tier === "below-target") anyLighterThanExpected = true;
+      if (targetRpe !== undefined) {
+        // Phase 4.4B-2.2 — goes through the same shared classifier the
+        // immediate post-set headline and rest recommendation use (see
+        // lib/workout/effort-policy.ts), so this summary can never disagree
+        // with what the client already saw mid-session. Only the SEVERE
+        // above-target tier counts as an anomaly worth flagging for review
+        // here — the milder "near-max effort" tier already gets its own
+        // supporting copy in real time (see buildImmediateSetFeedback)
+        // without itself triggering a coach-review flag, and that
+        // distinction is preserved rather than making every single-point
+        // RPE variance flag the whole session.
+        const effort = classifyEffort(set.rpe, targetRpe);
+        if (effort.tier === "above-target" && effort.severe) anyRpeAnomaly = true;
+        if (effort.tier === "below-target") anyLighterThanExpected = true;
+      }
     }
   }
 
@@ -115,7 +141,7 @@ export function buildWorkoutSummary(
       ? Math.round((rpeValues.reduce((sum, v) => sum + v, 0) / rpeValues.length) * 10) / 10
       : null;
 
-  const missedMajorityOfWork = workingSetsCompleted < totalPrescribedWorkingSets(workout) / 2;
+  const missedMajorityOfWork = workingSetsCompleted < totalPrescribedWorkingSets(trainingSession) / 2;
 
   // Fully completed means every prescribed working set was actually
   // addressed with a valid logged RPE, nothing anywhere in the session was
@@ -127,7 +153,7 @@ export function buildWorkoutSummary(
     exercisesSkipped === 0 &&
     skippedSetsCount === 0 &&
     missingRpeCount === 0 &&
-    workingSetsCompleted >= totalPrescribedWorkingSets(workout);
+    workingSetsCompleted >= totalPrescribedWorkingSets(trainingSession);
 
   const needsReview =
     anyRpeAnomaly ||

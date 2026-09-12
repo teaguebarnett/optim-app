@@ -16,6 +16,7 @@ import { SessionSummaryScreen } from "@/components/workout/live/session-summary-
 import { PainReviewPanel } from "@/components/workout/live/pain-review-panel";
 import { ExercisePainCheckPanel } from "@/components/workout/live/exercise-pain-check-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { findTrainingItemById } from "@/lib/workout/session-flow";
 
 // Phase 4.4B-2 — the live workout is now a guided, state-aware experience
 // rather than one long linear checklist page. This file is purely an
@@ -52,6 +53,14 @@ export default function ActiveWorkoutPage() {
 
   const sessionExercises = session.resolvedWorkout?.exercises ?? [];
   const currentExercise = sessionExercises.find((e) => e.id === session.currentExerciseId);
+  // Phase 3 — the same current exercise, looked up on the universal Session
+  // this session was actually started against, for the one panel
+  // (SetFeedbackPanel) whose own internal calls now operate on the
+  // universal grammar. Every other panel here still renders off
+  // currentExercise (the legacy Exercise) unchanged — see lib/types.ts's
+  // WorkoutSession.resolvedSession doc for why both coexist during this
+  // phase.
+  const currentTrainingItem = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
 
   const techniqueFlagCount = state.reviewRequests.filter(
     (r) => r.kind === "technique-flag" && (!session.startedAtIso || r.createdAtIso >= session.startedAtIso)
@@ -134,9 +143,10 @@ export default function ActiveWorkoutPage() {
           <SetLoggingPanel exercise={currentExercise} setNumber={session.currentSetNumber} painReportActive={painReportActive} />
         ) : null;
       case "set-feedback":
-        return log ? (
+        return log && currentTrainingItem ? (
           <SetFeedbackPanel
             exercise={currentExercise}
+            trainingItem={currentTrainingItem}
             log={log}
             assistantName={activeContext.assistantDisplayName}
             painReportActive={painReportActive}

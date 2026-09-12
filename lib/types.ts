@@ -7,6 +7,7 @@
 // re-imports the tenant-attribution types it needs to stamp onto records.
 
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
+import type { Session } from "./training/types";
 
 export type ClientId = ClientProfileId;
 
@@ -515,6 +516,20 @@ export interface WorkoutSession {
    * started (nothing resolved yet) and for any session honestly never
    * started at all. */
   resolvedWorkout: Workout | null;
+  /** Phase 3 — the SAME resolution converted once through
+   * lib/training/legacy-adapter.ts's legacyWorkoutToSession, at the exact
+   * moment resolvedWorkout above is set (see lib/state.ts's START_WORKOUT).
+   * This is the canonical value the live engine's own queue/ordering/
+   * resolution logic (lib/workout/session-flow.ts, lib/workout-analysis.ts)
+   * now reads — resolvedWorkout is kept, unconverted, purely so existing
+   * component rendering (exercise name/cue/tempo/previousPerformance, none
+   * of which changed) continues to work unmodified. Optional (rather than
+   * required-and-defaulted) so already-persisted sessions from before this
+   * phase still load without a migration step; treat a missing value the
+   * same as null everywhere it's read (never assume a session is resolvable
+   * when it's simply absent). Null under the exact same conditions as
+   * resolvedWorkout. */
+  resolvedSession?: Session | null;
   status: WorkoutSessionStatus;
   startedAtIso?: string;
   completedAtIso?: string;

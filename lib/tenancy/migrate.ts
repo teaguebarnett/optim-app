@@ -17,7 +17,13 @@
 import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID, resolveAssignedCoachId } from "./seed.ts";
 import { buildDemoDefaultProgramEnrollment } from "../scheduling/enrollment.ts";
 import { NUTRITION_TARGETS, PUSH_WORKOUT } from "../mock-data.ts";
+import { legacyWorkoutToSession } from "../training/legacy-adapter.ts";
 import type { AppState } from "../state";
+
+// Phase 3 — the universal counterpart of PUSH_WORKOUT, for the v14->v15
+// backfill below. Safe to compute eagerly: PUSH_WORKOUT is real, fully-usable
+// content, so this can never throw (see lib/training/verify-legacy-adapter.mts).
+const PUSH_SESSION = legacyWorkoutToSession(PUSH_WORKOUT);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
@@ -334,7 +340,15 @@ function migrateV13ToV14(stored: Record<string, unknown>): Record<string, unknow
  * that never started gets the same genuinely-empty shell a brand-new one
  * would (see createInitialWorkoutSession) — its old exerciseLogs/
  * exerciseWarmups were only ever the untouched not-started placeholders
- * anyway, so clearing them loses no real data. */
+ * anyway, so clearing them loses no real data.
+ *
+ * Phase 3 addition — also backfills the new resolvedSession alongside
+ * resolvedWorkout, same reasoning: the universal engine (lib/workout/
+ * session-flow.ts) now navigates a live session by resolvedSession, so an
+ * already-in-progress pre-v15 session needs it populated too, not just left
+ * to resolvedSession's own "missing means null" tolerance — a session this
+ * old that's still genuinely in progress when it's opened again should keep
+ * working, not silently stall on its next navigation action. */
 function migrateV14ToV15(stored: Record<string, unknown>): Record<string, unknown> {
   const migrated: Record<string, unknown> = { ...stored, version: 15 };
   const session = stored.workoutSession;
@@ -345,6 +359,7 @@ function migrateV14ToV15(stored: Record<string, unknown>): Record<string, unknow
       ...session,
       workoutId: "",
       resolvedWorkout: null,
+      resolvedSession: null,
       exerciseLogs: {},
       exerciseWarmups: {},
     };
@@ -353,6 +368,7 @@ function migrateV14ToV15(stored: Record<string, unknown>): Record<string, unknow
       ...session,
       workoutId: typeof session.workoutId === "string" && session.workoutId ? session.workoutId : PUSH_WORKOUT.id,
       resolvedWorkout: PUSH_WORKOUT,
+      resolvedSession: PUSH_SESSION,
     };
   }
   return migrated;

@@ -26,6 +26,7 @@ import {
   getTimeOfDay,
 } from "../calculations.ts";
 import { canCompleteExercise } from "../workout-analysis.ts";
+import { findTrainingItemById } from "../workout/session-flow.ts";
 import { cardioPrescriptionForClient, catalogWorkoutForDay, isCardioAssignedForDay, MEAL_OPTIONS, PUSH_WORKOUT, TRAINING_WEEK, trainingWeekEntryForDay } from "../mock-data.ts";
 import { CLIENT_PROFILE_DEMO, CLIENT_PROFILE_SECONDARY, WORKSPACE_ATLAS, WORKSPACE_OPTIM } from "../tenancy/seed.ts";
 import { localDateDayOfWeek, resolveClientLocalDateIso, resolveClientLocalTime24, startOfLocalWeek } from "../shared/local-date.ts";
@@ -309,8 +310,9 @@ console.log("\n23. Phase 1 completion/adherence rules still hold\n");
 check("An exercise with zero completed working sets still cannot be marked complete", () => {
   const state = reducer(createInitialState(), { type: "START_WORKOUT" });
   const exercise = PUSH_WORKOUT.exercises[0];
+  const item = findTrainingItemById(state.workoutSession.resolvedSession, exercise.id)!;
   const log = state.workoutSession.exerciseLogs[exercise.id];
-  assert.equal(canCompleteExercise(exercise, log), false);
+  assert.equal(canCompleteExercise(item, log), false);
 });
 
 check("COMPLETE_WORKOUT still refuses zero logged working sets", () => {
