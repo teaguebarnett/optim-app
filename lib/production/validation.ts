@@ -198,6 +198,7 @@ function validatePrescription(raw: unknown, what: string): Prescription {
   if (!isRecord(raw)) fail(what, "prescription is not an object");
   requireOneOf(raw.family, EXECUTION_FAMILIES, "prescription.family", what);
   if (raw.sets !== undefined) requireNumber(raw.sets, "prescription.sets", what);
+  if (raw.warmupSets !== undefined) requireNumber(raw.warmupSets, "prescription.warmupSets", what);
   if (raw.reps !== undefined) validatePrescriptionReps(raw.reps, what);
   if (raw.load !== undefined) validatePrescriptionLoad(raw.load, what);
   if (raw.rpe !== undefined) requireNumber(raw.rpe, "prescription.rpe", what);
@@ -217,6 +218,7 @@ function validatePrescription(raw: unknown, what: string): Prescription {
   if (raw.amrap !== undefined) requireBoolean(raw.amrap, "prescription.amrap", what);
   if (raw.completionTarget !== undefined) requireString(raw.completionTarget, "prescription.completionTarget", what);
   if (raw.side !== undefined) requireOneOf(raw.side, PRESCRIPTION_SIDES, "prescription.side", what);
+  if (raw.warmupInstruction !== undefined) requireString(raw.warmupInstruction, "prescription.warmupInstruction", what);
   return raw as unknown as Prescription;
 }
 
@@ -250,7 +252,11 @@ function validateBlock(raw: unknown, what: string): Block {
   return raw as unknown as Block;
 }
 
-function validateSession(raw: unknown, what: string): Session {
+/** Exported (Phase 2) so the legacy adapter's own verify suite
+ * (lib/training/verify-legacy-adapter.mts) can validate a bare converted
+ * Session directly, without wrapping it in a full program-content payload it
+ * doesn't otherwise need. */
+export function validateSession(raw: unknown, what: string): Session {
   if (!isRecord(raw)) fail(what, "session is not an object");
   requireString(raw.id, "session.id", what);
   requireString(raw.name, "session.name", what);

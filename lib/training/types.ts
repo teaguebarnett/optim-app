@@ -93,6 +93,14 @@ export type PrescriptionSide = "left" | "right" | "alternating" | "bilateral";
 export interface Prescription {
   family: ExecutionFamily;
   sets?: number;
+  /** Phase 2 addition — a ramp-up set count before `sets`' working sets
+   * begin, honest and general enough for any family (not legacy-only: a
+   * runner's easy-pace minutes before pace work is the same concept). Added
+   * while building the legacy adapter (lib/training/legacy-adapter.ts) to
+   * avoid silently dropping lib/types.ts's Exercise.warmupSets, which real,
+   * currently-working product behavior depends on (lib/workout/warmup.ts's
+   * stepped warm-up derivation). */
+  warmupSets?: number;
   reps?: PrescriptionReps;
   load?: PrescriptionLoad;
   rpe?: RpeValue;
@@ -111,6 +119,11 @@ export interface Prescription {
   amrap?: boolean;
   completionTarget?: string;
   side?: PrescriptionSide;
+  /** Phase 2 addition — mirrors lib/types.ts's Exercise.warmupInstruction: a
+   * free-text override for this item's warm-up guidance, general enough for
+   * any family. See the warmupSets doc above for why this was added here
+   * rather than dropped by the legacy adapter. */
+  warmupInstruction?: string;
 }
 
 // ---------------------------------------------------------------------------
