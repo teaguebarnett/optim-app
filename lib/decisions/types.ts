@@ -87,6 +87,13 @@ export const DECISION_TYPE_REGISTRY: Record<string, { domain: DecisionDomain; va
       optionalNumber(v.restSeconds, "restSeconds", t);
       optionalString(v.tempo, "tempo", t);
       optionalString(v.warmupInstruction, "warmupInstruction", t);
+      // Phase 9A — warmupSets is a real, already-editable field (Phase 8D's
+      // TrainingItemPatch.warmupSets) that this registry never validated;
+      // without it, a warmup-sets edit's evidence would carry an
+      // unvalidated key, and the pattern engine would have no registered
+      // field to trust it against. A tiny, safe registry completion, not
+      // a new capability.
+      optionalNumber(v.warmupSets, "warmupSets", t);
     },
   },
   // Phase 8C — the continuous-family counterpart, its own decision_type
@@ -207,6 +214,33 @@ export function validateDecisionEvidenceInput(input: DecisionEvidenceInput): Dec
   }
 
   return input;
+}
+
+/** The read shape of one persisted coach_decision_evidence row — moved
+ * here (Phase 9A) from lib/production/decision-evidence.ts (a
+ * `server-only` module) so pure analysis code (lib/patterns/*) can accept
+ * real evidence as typed input without depending on a server-only import
+ * even at the type level. lib/production/decision-evidence.ts's
+ * getMyDecisionEvidence is still the only place a real row is ever
+ * fetched — this is a pure data shape, not a new read path. */
+export interface DecisionEvidenceRecord {
+  id: string;
+  workspaceId: string;
+  coachUserId: string;
+  clientProfileId: string;
+  decisionDomain: DecisionDomain;
+  decisionType: string;
+  outcome: DecisionOutcome;
+  proposedValue: Record<string, unknown> | null;
+  chosenValue: Record<string, unknown> | null;
+  reason: string | null;
+  programAssignmentId: string | null;
+  escalationId: string | null;
+  trainingItemInstanceId: string | null;
+  observationIds: string[] | null;
+  sourceRef: string;
+  decidedAtIso: string;
+  recordedAtIso: string;
 }
 
 // ---------------------------------------------------------------------------

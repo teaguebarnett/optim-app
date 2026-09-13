@@ -27,7 +27,7 @@
 
 import "server-only";
 import { getSupabaseServerClient } from "../supabase/server.ts";
-import { validateDecisionEvidenceInput, type DecisionEvidenceInput, type DecisionDomain, type DecisionOutcome } from "../decisions/types.ts";
+import { validateDecisionEvidenceInput, type DecisionEvidenceInput, type DecisionDomain, type DecisionOutcome, type DecisionEvidenceRecord } from "../decisions/types.ts";
 
 export async function recordDecisionEvidence(input: DecisionEvidenceInput): Promise<void> {
   const validated = validateDecisionEvidenceInput(input);
@@ -53,26 +53,6 @@ export async function recordDecisionEvidence(input: DecisionEvidenceInput): Prom
   // Postgres error code 23505 = unique_violation — a real, expected retry
   // of the exact same decision instance, never a caller-visible failure.
   if (error && (error as { code?: string }).code !== "23505") throw new Error(`recordDecisionEvidence failed: ${error.message}`);
-}
-
-export interface DecisionEvidenceRecord {
-  id: string;
-  workspaceId: string;
-  coachUserId: string;
-  clientProfileId: string;
-  decisionDomain: DecisionDomain;
-  decisionType: string;
-  outcome: DecisionOutcome;
-  proposedValue: Record<string, unknown> | null;
-  chosenValue: Record<string, unknown> | null;
-  reason: string | null;
-  programAssignmentId: string | null;
-  escalationId: string | null;
-  trainingItemInstanceId: string | null;
-  observationIds: string[] | null;
-  sourceRef: string;
-  decidedAtIso: string;
-  recordedAtIso: string;
 }
 
 function rowToRecord(r: Record<string, unknown>): DecisionEvidenceRecord {
