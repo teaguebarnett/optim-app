@@ -200,6 +200,8 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
         {overview.sessionNames.length > 0 ? <p className="mt-1 text-xs text-neutral">{overview.sessionNames.join(" · ")}</p> : null}
       </div>
 
+      <RuleProvenanceSection proposal={proposal} />
+
       {proposal.changesSummary.length > 0 ? (
         <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
           <p className="text-xs font-medium text-off-white">
@@ -404,6 +406,56 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
         </Button>
       </form>
     </Card>
+  );
+}
+
+/** Phase 10A — subtle, bounded rule provenance (spec section 17/19/20).
+ * Renders nothing at all when the proposal carries no provenance — never
+ * a placeholder claiming OPTIM "used your preferences" when it didn't.
+ * Deliberately distinguishes a confirmed LEARNED preference (this
+ * section) from the coach's EXPLICIT methodology setup (never relabeled
+ * as "learned" — spec section 19): every base value a rule nudges was
+ * already methodology-derived before the rule ever touched it, so this
+ * only ever describes the nudge, never claims credit for the whole
+ * decision. Client-specific rules are labeled as such, never presented as
+ * general methodology (spec section 21). The methodology-conflict note is
+ * a separate, even quieter <details> — only rendered when a confirmed
+ * preference existed but explicit setup took priority (spec section 20:
+ * "default toward silence"). */
+function RuleProvenanceSection({ proposal }: { proposal: ProgramProposalReviewView }) {
+  if (proposal.appliedRuleProvenance.length === 0 && proposal.methodologyConflictedRuleProvenance.length === 0) return null;
+  return (
+    <>
+      {proposal.appliedRuleProvenance.length > 0 ? (
+        <details className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">
+            Based on {proposal.appliedRuleProvenance.length} confirmed coaching preference{proposal.appliedRuleProvenance.length === 1 ? "" : "s"}
+          </summary>
+          <ul className="mt-2 space-y-2">
+            {proposal.appliedRuleProvenance.map((rule) => (
+              <li key={rule.id} className="text-xs">
+                <p className="text-off-white">{rule.summary}</p>
+                <p className="mt-0.5 text-neutral">
+                  {rule.scope === "client_specific" ? "A coaching preference confirmed for this client specifically" : "A general confirmed coaching preference"}
+                  {rule.status !== "active" ? " — since turned off (this proposal still reflects it accurately, as generated)" : ""}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      {proposal.methodologyConflictedRuleProvenance.length > 0 ? (
+        <details className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs text-neutral">A confirmed preference wasn&apos;t applied here</summary>
+          <ul className="mt-2 space-y-1 text-xs text-neutral">
+            {proposal.methodologyConflictedRuleProvenance.map((rule) => (
+              <li key={rule.id}>{rule.summary} — not applied, because it falls outside your explicit coaching setup for this client.</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </>
   );
 }
 

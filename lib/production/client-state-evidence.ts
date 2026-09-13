@@ -31,6 +31,8 @@ import { analyzeClientState } from "../client-state/analyze-client-state.ts";
 import { scheduledTrainingDatesInWindow } from "../client-state/schedule.ts";
 import { ADHERENCE_BASELINE_WINDOW_DAYS, ADHERENCE_RECENT_WINDOW_DAYS, PERFORMANCE_LOOKBACK_DAYS } from "../client-state/windows.ts";
 import { addDaysToLocalDate } from "../shared/local-date.ts";
+import { formatObservationForDisplay, type EvidenceDetailLine } from "../client-state/evidence-display.ts";
+import { getSupabaseServerClient } from "../supabase/server.ts";
 import type { ClientStateAnalysis } from "../client-state/types.ts";
 import type { ClientStateEvidenceBundle, RawObservation } from "../client-state/evidence.ts";
 
@@ -90,4 +92,42 @@ export async function resolveClientStateEvidence(params: { workspaceId: string; 
 export async function analyzeClientStateForClient(params: { workspaceId: string; clientProfileId: string }): Promise<ClientStateAnalysis> {
   const evidence = await resolveClientStateEvidence(params);
   return analyzeClientState(evidence);
+}
+
+/** Phase 10A — the coach-facing evidence drill-down's one real read: given
+ * a finding's own bounded supportingEvidenceRefs/contradictingEvidenceRefs
+ * (already real client_observations row ids), fetches exactly those rows
+ * (RLS-scoped to the caller's own session — a coach can only ever resolve
+ * ids for a client they're actually authorized to read) and formats each
+ * one plainly (spec section 13: never a database id or raw JSON). Never
+ * fetches more than the ids given — no separate "load more evidence"
+ * query exists. Failure degrades to an empty list, never blocks the
+ * review surface. */
+export async function resolveEvidenceDetails(observationIds: string[]): Promise<EvidenceDetailLine[]> {
+  if (observationIds.length === 0) return [];
+  try {
+    const supabase = await getSupabaseServerClient();
+    const { data, error } = await supabase.from("client_observations").select("*").in("id", observationIds);
+    if (error) throw new Error(error.message);
+    const observations: RawObservation[] = (data ?? []).map((r) => ({
+      id: r.id as string,
+      category: r.category as string,
+      metricKey: r.metric_key as string,
+      sourceType: r.source_type as string,
+      value:
+        r.value_type === "numeric"
+          ? { valueType: "numeric" as const, valueNumeric: r.value_numeric as number }
+          : r.value_type === "boolean"
+            ? { valueType: "boolean" as const, valueBoolean: r.value_boolean as boolean }
+            : { valueType: r.value_type as "categorical" | "text", valueText: r.value_text as string },
+      unit: (r.unit as string | null) ?? null,
+      sourceRef: (r.source_ref as string | null) ?? null,
+      trainingItemInstanceId: (r.training_item_instance_id as string | null) ?? null,
+      observedAtIso: r.observed_at as string,
+    }));
+    return observations.map(formatObservationForDisplay).sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+  } catch (err) {
+    console.error(`resolveEvidenceDetails failed, showing no evidence detail: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
 }

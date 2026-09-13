@@ -308,6 +308,8 @@ export function validateUniversalTrainingProgramContent(raw: unknown): Universal
   requireString(raw.coachId, "coachId", what);
   if (raw.sourceTemplateId !== undefined) requireString(raw.sourceTemplateId, "sourceTemplateId", what);
   if (raw.generationRationale !== undefined) requireString(raw.generationRationale, "generationRationale", what);
+  if (raw.appliedLearnedRuleIds !== undefined) requireArray(raw.appliedLearnedRuleIds, "appliedLearnedRuleIds", what).forEach((id, i) => requireString(id, `appliedLearnedRuleIds[${i}]`, what));
+  if (raw.methodologyConflictedLearnedRuleIds !== undefined) requireArray(raw.methodologyConflictedLearnedRuleIds, "methodologyConflictedLearnedRuleIds", what).forEach((id, i) => requireString(id, `methodologyConflictedLearnedRuleIds[${i}]`, what));
   requireString(raw.name, "name", what);
   requireNumber(raw.durationWeeks, "durationWeeks", what);
   const weeks = requireArray(raw.weeks, "weeks", what);

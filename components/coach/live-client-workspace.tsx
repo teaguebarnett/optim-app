@@ -25,7 +25,8 @@ import {
   setProgramStartDateAction,
 } from "@/app/actions/production-programs";
 import { ProgramProposalReview } from "@/components/coach/program-proposal-review";
-import { getProgramProposalForReviewAction } from "@/app/actions/production-programs";
+import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction } from "@/app/actions/production-programs";
+import { ClientStateNoticeSection } from "@/components/coach/client-state-notice";
 import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
 import { formatHeightFromAnswers, describePrimaryGoal, formatFieldValue, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
@@ -42,11 +43,23 @@ async function loadDetail(clientId: string) {
 export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
   const detail = await loadDetail(clientId);
 
-  const [history, notes, pendingProposal] = await Promise.all([
+  const [history, notes, pendingProposal, clientStateFindings] = await Promise.all([
     getClientChatHistoryForCoachAction(clientId),
     getClientCoachNotesAction(clientId),
     getProgramProposalForReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
+    getClientWorkspaceIntelligenceAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
   ]);
+  // Bounded — clientStateFindings is already capped to a small set (see
+  // lib/client-state/presentation.ts) — eagerly resolving each one's own
+  // small evidence-ref list here keeps the review-evidence UI a plain
+  // <details> with zero client-side JS, matching this file's established
+  // server-component convention (same as components/coach/pattern-
+  // candidate-section.tsx's own evidence examples).
+  const clientStateEvidence = await Promise.all(
+    clientStateFindings.map((f) =>
+      Promise.all([getFindingEvidenceDetailAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, observationIds: f.finding.supportingEvidenceRefs }), getFindingEvidenceDetailAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, observationIds: f.finding.contradictingEvidenceRefs })])
+    )
+  ).then((pairs) => pairs.map(([supporting, contradicting]) => ({ supporting, contradicting })));
 
   const answers = (detail.onboarding?.answers ?? {}) as Partial<Record<OnboardingStepId, OnboardingStepAnswers>>;
   const hasOnboarding = detail.onboarding !== null;
@@ -158,6 +171,8 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
           <p className="text-sm text-neutral">This client hasn&apos;t started onboarding yet.</p>
         </Card>
       )}
+
+      <ClientStateNoticeSection findings={clientStateFindings} evidenceByFinding={clientStateEvidence} />
 
       <section className="space-y-3">
         <SectionHeader title="Program setup" />

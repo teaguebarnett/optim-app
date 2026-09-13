@@ -261,6 +261,31 @@ export interface UniversalTrainingProgramContent {
    * from a title that may no longer contain it. Optional: absent for
    * content that predates this field. */
   directionLabel?: string;
+  /** Phase 10A — the real, immutable historical record of which
+   * coach-confirmed learned rules (lib/coach/rule-application.ts) actually
+   * influenced THIS proposal at generation time. Frozen the moment this
+   * content is created (published content is already immutable — see the
+   * training_program_versions migration's prevent_published_version_mutation
+   * trigger) — never recomputed from "whichever rules are active now."
+   * A rule id here remains truthful provenance even after that rule is
+   * later deactivated/superseded: coach_learned_rules rows are never
+   * deleted (only their `status` changes), so a historical lookup by id
+   * still resolves the rule's own real, unchanged summary/scope/direction.
+   * Optional/absent for content generated before this field existed, or
+   * for a coach/client with no active learned rules at generation time —
+   * both read as "no rule provenance," never a fabricated one. Purely
+   * informational: nothing in program validation/execution/generation
+   * reads this field back. */
+  appliedLearnedRuleIds?: string[];
+  /** Phase 10A — a deliberately narrow, bounded subset of Phase 9C's own
+   * skippedRules diagnostics: only rule ids skipped for
+   * "explicit_methodology_conflict" (spec section 20's own guidance —
+   * "only surface skipped-rule information if it materially explains
+   * something surprising"; every other skip reason — context_mismatch,
+   * unsupported_rule_family, outranked_by_more_specific_rule — is
+   * mechanical/internal and not persisted here). Never a full diagnostics
+   * dump. */
+  methodologyConflictedLearnedRuleIds?: string[];
   status: "draft" | "assigned";
   createdAtIso: string;
   updatedAtIso: string;

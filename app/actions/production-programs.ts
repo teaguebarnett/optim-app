@@ -41,9 +41,11 @@ import { getOnboardingProgressForClient } from "../../lib/production/onboarding"
 import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
 import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
-import { resolveApplicableCoachRules } from "../../lib/production/rule-resolution";
-import { analyzeClientStateForClient } from "../../lib/production/client-state-evidence";
+import { resolveApplicableCoachRules, getLearnedRuleProvenance, type LearnedRuleProvenance } from "../../lib/production/rule-resolution";
+import { analyzeClientStateForClient, resolveEvidenceDetails } from "../../lib/production/client-state-evidence";
+import { selectFindingsForCoachUI, type PresentedFinding } from "../../lib/client-state/presentation";
 import type { ClientStateAnalysis } from "../../lib/client-state/types";
+import type { EvidenceDetailLine } from "../../lib/client-state/evidence-display";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { projectProgramApprovalDecision, projectProgramRejectionDecision, type ProgramProposalSummary } from "../../lib/decisions/project-program-generation";
@@ -340,7 +342,20 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
     console.log(`generateUniversalProgramProposalContent: rule application — applied ${ruleApplication.appliedRuleIds.length}, skipped ${ruleApplication.skippedRules.length} (${ruleApplication.skippedRules.map((s) => s.reason).join(", ")})`);
   }
 
-  return { content: { ...content, name: params.title }, direction, profile, com, nowIso, ruleApplication };
+  // Phase 10A — freeze the real, immutable historical provenance onto the
+  // content itself, at the exact moment it's generated, so a later review
+  // of THIS proposal never depends on whichever rules happen to be active
+  // "now" (spec section 18/41). Only ever set when non-empty — an absent
+  // field reads as "no provenance," identical to legacy content.
+  const methodologyConflictedLearnedRuleIds = ruleApplication.skippedRules.filter((s) => s.reason === "explicit_methodology_conflict").map((s) => s.ruleId);
+  const contentWithProvenance = {
+    ...content,
+    name: params.title,
+    ...(ruleApplication.appliedRuleIds.length > 0 ? { appliedLearnedRuleIds: ruleApplication.appliedRuleIds } : {}),
+    ...(methodologyConflictedLearnedRuleIds.length > 0 ? { methodologyConflictedLearnedRuleIds } : {}),
+  };
+
+  return { content: contentWithProvenance, direction, profile, com, nowIso, ruleApplication };
 }
 
 function proposalSummaryFrom(content: { durationWeeks: number; directionLabel?: string; generationRationale?: string }): ProgramProposalSummary {
@@ -423,6 +438,18 @@ export interface ProgramProposalReviewView {
    * current draft (spec section 15: "3 changes: ..."). Empty when nothing
    * has been edited yet. */
   changesSummary: string[];
+  /** Phase 10A — real, historically-accurate rule provenance resolved from
+   * this exact proposal's own frozen appliedLearnedRuleIds (never from
+   * "whichever rules are active now" — see lib/training/types.ts's own
+   * doc on the field). Empty whenever the proposal carries no provenance
+   * (legacy content, or a coach/client with no applicable rules at
+   * generation time) — never fabricated. */
+  appliedRuleProvenance: LearnedRuleProvenance[];
+  /** A deliberately narrow, bounded subset — see lib/training/types.ts's
+   * methodologyConflictedLearnedRuleIds doc: only the one skip reason
+   * that's materially coach-meaningful ("this would have applied but your
+   * explicit setup took priority"). */
+  methodologyConflictedRuleProvenance: LearnedRuleProvenance[];
 }
 
 /** Step 2: the coach's review surface reads this. Returns null when there
@@ -439,6 +466,15 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
   const original = pending.versionNumber > 1 ? await getOriginalProposalVersion(params.workspaceId, pending.programId) : pending;
   const changesSummary = original ? diffProgramProposal(original.content, pending.content).map(describeProgramDiffEntry) : [];
 
+  // Phase 10A — resolved from THIS proposal's own frozen ids, never
+  // re-derived from current rule state (spec section 18/41). A failure
+  // here degrades to no provenance shown, never blocks the review surface
+  // (spec section 34) — getLearnedRuleProvenance already swallows its own
+  // errors internally.
+  const appliedIds = pending.content.appliedLearnedRuleIds ?? [];
+  const methodologyConflictedIds = pending.content.methodologyConflictedLearnedRuleIds ?? [];
+  const [appliedRuleProvenance, methodologyConflictedRuleProvenance] = await Promise.all([getLearnedRuleProvenance(appliedIds), getLearnedRuleProvenance(methodologyConflictedIds)]);
+
   return {
     versionId: pending.versionId,
     programId: pending.programId,
@@ -447,6 +483,8 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     content: pending.content,
     restrictionWarnings: findRestrictionConflicts(pending.content, avoidedTerms),
     changesSummary,
+    appliedRuleProvenance,
+    methodologyConflictedRuleProvenance,
   };
 }
 
@@ -787,4 +825,35 @@ export async function setProgramStartDateAction(params: {
 export async function analyzeClientStateAction(params: { workspaceId: string; clientProfileId: string }): Promise<ClientStateAnalysis> {
   await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   return analyzeClientStateForClient(params);
+}
+
+/** Phase 10A — the client workspace's real "OPTIM noticed" surface: the
+ * same real analysis as analyzeClientStateAction, filtered and bounded
+ * through the ONE deterministic presentation filter
+ * (lib/client-state/presentation.ts) so the workspace only ever shows a
+ * small number of genuinely current, meaningful findings — never the raw
+ * five-domain dump the dev/QA panel shows. Failure degrades to an empty
+ * array (spec section 34) — the client workspace must render normally
+ * either way. */
+export async function getClientWorkspaceIntelligenceAction(params: { workspaceId: string; clientProfileId: string }): Promise<PresentedFinding[]> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  try {
+    const analysis = await analyzeClientStateForClient(params);
+    return selectFindingsForCoachUI(analysis);
+  } catch (err) {
+    console.error(`getClientWorkspaceIntelligenceAction failed, showing no findings: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
+/** Phase 10A — the evidence drill-down's one real entry point (spec
+ * section 13). `clientProfileId` re-authorizes the SAME coach-client
+ * relationship every other action in this file checks — the observation
+ * ids themselves are never trusted as sufficient authorization on their
+ * own (an id list a coach isn't authorized for resolves to nothing
+ * anyway via RLS, but this is the same defense-in-depth posture as every
+ * other action here). */
+export async function getFindingEvidenceDetailAction(params: { workspaceId: string; clientProfileId: string; observationIds: string[] }): Promise<EvidenceDetailLine[]> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  return resolveEvidenceDetails(params.observationIds);
 }

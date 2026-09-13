@@ -74,6 +74,7 @@
     "verify:platform-stats": "node --experimental-strip-types lib/shared/verify-stats.mts",
     "verify:rule-application": "node --experimental-strip-types lib/coach/verify-rule-application.mts",
     "verify:client-state": "node --experimental-strip-types lib/client-state/verify-client-state.mts",
+    "verify:client-state-presentation": "node --experimental-strip-types lib/client-state/verify-presentation.mts",
     "test:db": "supabase test db"
   },
   "dependencies": {
