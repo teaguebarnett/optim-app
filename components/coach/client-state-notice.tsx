@@ -14,6 +14,7 @@
 import { Card } from "@/components/ui/card";
 import type { PresentedFinding } from "@/lib/client-state/presentation";
 import type { EvidenceDetailLine } from "@/lib/client-state/evidence-display";
+import type { AdjustmentProvenance } from "@/lib/training/types";
 
 const FINDING_LABELS: Record<string, string> = {
   isolated_disruption: "Temporary disruption",
@@ -47,7 +48,7 @@ function EvidenceList({ title, lines }: { title: string; lines: EvidenceDetailLi
   );
 }
 
-function NoticeCard({ item, supportingEvidence, contradictingEvidence }: { item: PresentedFinding; supportingEvidence: EvidenceDetailLine[]; contradictingEvidence: EvidenceDetailLine[] }) {
+function NoticeCard({ item, supportingEvidence, contradictingEvidence, hasAdjustmentProposal }: { item: PresentedFinding; supportingEvidence: EvidenceDetailLine[]; contradictingEvidence: EvidenceDetailLine[]; hasAdjustmentProposal: boolean }) {
   const { finding, prominence } = item;
   const label = FINDING_LABELS[finding.findingType] ?? finding.findingType.replaceAll("_", " ");
   return (
@@ -67,11 +68,16 @@ function NoticeCard({ item, supportingEvidence, contradictingEvidence }: { item:
           </div>
         </details>
       ) : null}
+      {/* Phase 10B — spec section 23: ONLY when a real AdjustmentProposal
+          already exists for this exact finding, a restrained pointer to
+          the review below — never an action button here, never shown on
+          a finding with no real proposal. */}
+      {hasAdjustmentProposal ? <p className="mt-2 text-xs text-accent-strong">OPTIM has a proposed adjustment for this — see Training program below.</p> : null}
     </Card>
   );
 }
 
-export function ClientStateNoticeSection({ findings, evidenceByFinding }: { findings: PresentedFinding[]; evidenceByFinding: { supporting: EvidenceDetailLine[]; contradicting: EvidenceDetailLine[] }[] }) {
+export function ClientStateNoticeSection({ findings, evidenceByFinding, pendingAdjustment }: { findings: PresentedFinding[]; evidenceByFinding: { supporting: EvidenceDetailLine[]; contradicting: EvidenceDetailLine[] }[]; pendingAdjustment: AdjustmentProvenance | null }) {
   if (findings.length === 0) return null;
   return (
     <section className="space-y-3">
@@ -81,7 +87,13 @@ export function ClientStateNoticeSection({ findings, evidenceByFinding }: { find
       </div>
       <div className="space-y-3">
         {findings.map((item, i) => (
-          <NoticeCard key={`${item.finding.domain}-${item.finding.findingType}`} item={item} supportingEvidence={evidenceByFinding[i]?.supporting ?? []} contradictingEvidence={evidenceByFinding[i]?.contradicting ?? []} />
+          <NoticeCard
+            key={`${item.finding.domain}-${item.finding.findingType}`}
+            item={item}
+            supportingEvidence={evidenceByFinding[i]?.supporting ?? []}
+            contradictingEvidence={evidenceByFinding[i]?.contradicting ?? []}
+            hasAdjustmentProposal={!!pendingAdjustment && pendingAdjustment.sourceFindingDomain === item.finding.domain && pendingAdjustment.sourceFindingType === item.finding.findingType}
+          />
         ))}
       </div>
     </section>

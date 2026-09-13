@@ -27,7 +27,7 @@ import {
   type ProgramProposalReviewView,
 } from "@/app/actions/production-programs";
 import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch } from "@/lib/training/program-proposal-editing";
-import type { TrainingItemInstance, UniversalTrainingProgramContent } from "@/lib/training/types";
+import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance } from "@/lib/training/types";
 
 function numberOrUndefined(formData: FormData, key: string): number | undefined {
   const raw = formData.get(key);
@@ -172,13 +172,14 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
   }
 
   const overview = buildProgramOverview(proposal.content);
+  const adjustment = proposal.content.adjustmentProvenance;
 
   return (
     <Card className="border-l-2 border-l-accent">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-medium text-off-white">
-            Proposed program {proposal.wasEdited ? "(edited)" : "(as generated)"} — {proposal.content.durationWeeks} weeks
+            {adjustment ? "OPTIM proposes an adjustment" : `Proposed program ${proposal.wasEdited ? "(edited)" : "(as generated)"} — ${proposal.content.durationWeeks} weeks`}
           </p>
           <p className="mt-0.5 text-xs text-neutral">{proposal.content.directionLabel ?? proposal.content.name}</p>
           {proposal.content.generationRationale ? <p className="mt-1 text-xs text-neutral">{proposal.content.generationRationale}</p> : null}
@@ -191,6 +192,8 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
           </form>
         </div>
       </div>
+
+      {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
 
       <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
         <p className="text-xs font-medium uppercase tracking-wide text-neutral">What OPTIM built</p>
@@ -406,6 +409,44 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
         </Button>
       </form>
     </Card>
+  );
+}
+
+const ADJUSTMENT_SCOPE_LABELS: Record<string, string> = {
+  temporary: "Temporary — next session only",
+  current_block: "Current training block",
+  program_level: "Remainder of the program",
+};
+
+/** Phase 10B — the coach-facing "why/what/scope" summary for an
+ * adjustment proposal (spec section 22/58). Reuses the proposal's own
+ * real, already-conservative rationale text verbatim (never rewritten
+ * into a stronger claim) and lists exactly the real changes that were
+ * made — never a generic "OPTIM adjusted your program." The coach still
+ * approves/edits/rejects through the exact same controls as any other
+ * proposal below — this is explanation, not a second decision surface. */
+function AdjustmentProposalBanner({ adjustment }: { adjustment: AdjustmentProvenance }) {
+  return (
+    <div className="mb-3 space-y-2 rounded border border-border-strong bg-surface-raised px-3 py-2.5">
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wide text-neutral">Why</p>
+        <p className="mt-1 text-xs text-off-white">{adjustment.rationale}</p>
+      </div>
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wide text-neutral">Proposed</p>
+        <ul className="mt-1 space-y-0.5 text-xs text-off-white">
+          {adjustment.changeDescriptions.map((c, i) => (
+            <li key={i}>
+              • Week {c.weekNumber} / {c.dayOfWeek}: {c.description}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wide text-neutral">Scope</p>
+        <p className="mt-1 text-xs text-off-white">{ADJUSTMENT_SCOPE_LABELS[adjustment.scope] ?? adjustment.scope}</p>
+      </div>
+    </div>
   );
 }
 

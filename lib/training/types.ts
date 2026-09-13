@@ -286,7 +286,36 @@ export interface UniversalTrainingProgramContent {
    * mechanical/internal and not persisted here). Never a full diagnostics
    * dump. */
   methodologyConflictedLearnedRuleIds?: string[];
+  /** Phase 10B — present ONLY on a draft created by the adjustment-
+   * proposal engine (lib/adjustment/build-proposal.ts), never on a
+   * fresh-generation proposal. The real, immutable record of which
+   * ClientStateFinding produced this specific proposed change, against
+   * which exact active program version, and why — frozen at proposal
+   * build time, same additive-jsonb-field posture as
+   * appliedLearnedRuleIds above (no schema/column migration). Purely
+   * informational: nothing in generation/execution/validation reads this
+   * back to change behavior. */
+  adjustmentProvenance?: AdjustmentProvenance;
   status: "draft" | "assigned";
   createdAtIso: string;
   updatedAtIso: string;
+}
+
+export interface AdjustmentProvenanceChange {
+  weekNumber: number;
+  dayOfWeek: string;
+  description: string;
+}
+
+export interface AdjustmentProvenance {
+  adjustmentType: string;
+  scope: string;
+  rationale: string;
+  sourceFindingDomain: string;
+  sourceFindingType: string;
+  sourceEvidenceRefs: string[];
+  activeProgramVersionId: string;
+  learnedRuleIdsUsed: string[];
+  changeDescriptions: AdjustmentProvenanceChange[];
+  proposalSignature: string;
 }

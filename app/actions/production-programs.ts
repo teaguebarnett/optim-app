@@ -18,6 +18,7 @@ import { UnauthorizedError } from "../../lib/production/errors";
 import { getSupabaseServerClient } from "../../lib/supabase/server";
 import {
   getClientProgramContext,
+  getActiveProgramAssignment,
   getDailyActivity,
   saveDailyActivity,
   createDraftProgramVersion,
@@ -43,6 +44,7 @@ import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { resolveApplicableCoachRules, getLearnedRuleProvenance, type LearnedRuleProvenance } from "../../lib/production/rule-resolution";
 import { analyzeClientStateForClient, resolveEvidenceDetails } from "../../lib/production/client-state-evidence";
+import { resolveAdjustmentProposal, type AdjustmentResolution } from "../../lib/production/adjustment-proposals";
 import { selectFindingsForCoachUI, type PresentedFinding } from "../../lib/client-state/presentation";
 import type { ClientStateAnalysis } from "../../lib/client-state/types";
 import type { EvidenceDetailLine } from "../../lib/client-state/evidence-display";
@@ -692,6 +694,22 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   const original = await getOriginalProposalVersion(params.workspaceId, approved.programId);
   if (!original) throw new Error("approveProgramProposalAction: original proposal version missing");
 
+  // Phase 10B — an adjustment proposal (spec section 17/29) was built
+  // against one exact active program version. If the client's real active
+  // version has since changed (a different proposal was approved, or the
+  // coach otherwise reassigned the client, in the time between proposal
+  // creation and this approval), approving it now would silently apply a
+  // change computed against a program the client is no longer even on —
+  // never approve blindly against stale context. A fresh-generation
+  // proposal (no adjustmentProvenance) has no such staleness concept and
+  // is unaffected by this check.
+  if (approved.content.adjustmentProvenance) {
+    const currentActive = await getActiveProgramAssignment(params.clientProfileId);
+    if (!currentActive || currentActive.versionId !== approved.content.adjustmentProvenance.activeProgramVersionId) {
+      throw new Error("approveProgramProposalAction: this adjustment proposal was built against a program version that is no longer the client's active program — it is stale and cannot be approved. Reject it and let OPTIM re-evaluate against the current active program.");
+    }
+  }
+
   await publishProgramVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
   const assignmentId = await assignProgramVersionToClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, versionId: params.versionId });
 
@@ -856,4 +874,20 @@ export async function getClientWorkspaceIntelligenceAction(params: { workspaceId
 export async function getFindingEvidenceDetailAction(params: { workspaceId: string; clientProfileId: string; observationIds: string[] }): Promise<EvidenceDetailLine[]> {
   await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   return resolveEvidenceDetails(params.observationIds);
+}
+
+/** Phase 10B — the one coach-facing entry point for evidence-backed
+ * adjustment proposals. Read-mostly from the client workspace's own point
+ * of view: if nothing is currently pending, this evaluates the client's
+ * real current findings against the deterministic adjustment engine and,
+ * only when a genuinely eligible proposal exists, persists it as a real
+ * draft training_program_versions row (spec section 4/18) — the exact
+ * same "propose, never mutate the active program" posture
+ * createProgramProposalAction already has. Never creates a second
+ * pending draft when one already exists (spec section 57). Failure
+ * degrades to "no proposal" (spec section 51) — the client workspace and
+ * existing proposal review must both keep working regardless. */
+export async function resolveAdjustmentProposalAction(params: { workspaceId: string; clientProfileId: string }): Promise<AdjustmentResolution> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  return resolveAdjustmentProposal({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId });
 }

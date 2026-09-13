@@ -25,7 +25,7 @@ import {
   setProgramStartDateAction,
 } from "@/app/actions/production-programs";
 import { ProgramProposalReview } from "@/components/coach/program-proposal-review";
-import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction } from "@/app/actions/production-programs";
+import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction, resolveAdjustmentProposalAction } from "@/app/actions/production-programs";
 import { ClientStateNoticeSection } from "@/components/coach/client-state-notice";
 import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
@@ -43,12 +43,23 @@ async function loadDetail(clientId: string) {
 export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
   const detail = await loadDetail(clientId);
 
+  // Phase 10B — resolved BEFORE the pending-proposal read below: bounded,
+  // deterministic evaluation "on client workspace request" (spec section
+  // 53) that may persist a new adjustment draft when a real, eligible
+  // finding justifies one. Never creates a second pending draft when one
+  // already exists (existing_pending short-circuits inside the action
+  // itself) — so the subsequent getProgramProposalForReviewAction call
+  // below always reflects whatever is now actually pending, adjustment or
+  // fresh-generation alike, through the exact same existing review UI.
+  await resolveAdjustmentProposalAction({ workspaceId: detail.workspaceId, clientProfileId: clientId });
+
   const [history, notes, pendingProposal, clientStateFindings] = await Promise.all([
     getClientChatHistoryForCoachAction(clientId),
     getClientCoachNotesAction(clientId),
     getProgramProposalForReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
     getClientWorkspaceIntelligenceAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
   ]);
+  const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
   // lib/client-state/presentation.ts) — eagerly resolving each one's own
   // small evidence-ref list here keeps the review-evidence UI a plain
@@ -172,7 +183,7 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
         </Card>
       )}
 
-      <ClientStateNoticeSection findings={clientStateFindings} evidenceByFinding={clientStateEvidence} />
+      <ClientStateNoticeSection findings={clientStateFindings} evidenceByFinding={clientStateEvidence} pendingAdjustment={pendingAdjustmentProvenance} />
 
       <section className="space-y-3">
         <SectionHeader title="Program setup" />

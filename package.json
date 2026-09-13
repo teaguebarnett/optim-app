@@ -75,6 +75,7 @@
     "verify:rule-application": "node --experimental-strip-types lib/coach/verify-rule-application.mts",
     "verify:client-state": "node --experimental-strip-types lib/client-state/verify-client-state.mts",
     "verify:client-state-presentation": "node --experimental-strip-types lib/client-state/verify-presentation.mts",
+    "verify:adjustment-proposals": "node --experimental-strip-types lib/adjustment/verify-build-proposal.mts",
     "test:db": "supabase test db"
   },
   "dependencies": {
