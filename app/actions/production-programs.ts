@@ -35,6 +35,7 @@ import { DAYS_OF_WEEK_ORDER } from "../../lib/coach/training";
 import { getOnboardingProgressForClient } from "../../lib/production/onboarding";
 import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
 import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
+import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { resolveClientLocalDateIso } from "../../lib/shared/local-date";
@@ -259,12 +260,16 @@ const DEFAULT_AVAILABLE_DAYS = [DAYS_OF_WEEK_ORDER[0], DAYS_OF_WEEK_ORDER[2], DA
  *   client genuinely hasn't completed onboarding yet — generation must
  *   keep working safely for a legacy/incomplete client, never block on it.
  *
- * No Supabase-mode health-review system exists yet (a real, documented gap
- * — see this phase's completion report), so `healthReview` is passed as
- * null here; that's honest about the gap, not a fabricated "no injury"
- * claim — the client's own self-reported injury/restriction answers still
- * reach the profile and still influence exercise selection regardless (see
- * avoidedTermsForProfile).
+ * Phase 7A — `healthReview` is now resolved from the real Supabase-mode
+ * equivalent (lib/production/pain-safety.ts's resolveHealthReviewRecordForClient,
+ * read from the same escalations rows the coach's real attention inbox
+ * already shows), not a hardcoded null. The richer HealthReviewStatus
+ * vocabulary (discuss_with_client, proceed_with_limitations, etc.) has no
+ * Supabase-mode equivalent yet — see that function's own doc for the exact,
+ * documented, honest simplification (a real gap, not silently patched
+ * over). Either way, the client's own self-reported injury/restriction
+ * answers always reach the profile and always influence exercise selection
+ * (see avoidedTermsForProfile), independent of health-review status.
  *
  * Authorization is checked explicitly, here, before any generation work
  * happens — never relying solely on createDraftProgramVersion's own later
@@ -290,7 +295,8 @@ export async function createPublishAndAssignProgramAction(params: {
   const com = playbook.content.operatingModel;
 
   const onboarding = await getOnboardingProgressForClient(params.clientProfileId);
-  const profileResult = extractClientProgrammingProfile(onboarding, null);
+  const healthReview = await resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId);
+  const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
   const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
 
   const directions = generateProgramDirectionSummaries({ profile, com, durationWeeks: params.durationWeeks });

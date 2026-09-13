@@ -370,6 +370,17 @@ export interface PainReport {
    * when reasoning about older records rather than assuming it doesn't need
    * review. */
   requiresCoachReview?: boolean;
+  /** Phase 7A — Supabase mode only: the REAL, confirmed outcome of
+   * persisting this report into the coach review/attention system (see
+   * app/actions/production-safety.ts) — undefined until that async result
+   * comes back (or forever, in demo mode, where the equivalent write is
+   * synchronous and always succeeds — see lib/state.ts's REPORT_PAIN, which
+   * already appends the review item directly). true once confirmed
+   * persisted; false only on a confirmed failure. See
+   * components/workout/live/pain-review-panel.tsx's own doc for why this
+   * exists: the client must never be told a report reached their coach
+   * unless it actually did. */
+  escalationConfirmed?: boolean;
 }
 
 export type WorkoutSessionStatus =

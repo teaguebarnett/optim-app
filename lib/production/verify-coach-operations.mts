@@ -99,10 +99,17 @@ check("hasOpenCoachThread is true only while the temporary thread is genuinely o
   assert.equal(attentionItemFromEscalation(makeEscalation({ status: "resolved" })).hasOpenCoachThread, false);
 });
 
-check("a null sourceMessageBody falls back to the reason label as the summary, never a blank card", () => {
-  const item = attentionItemFromEscalation(makeEscalation({ sourceMessageBody: null, reasonCategory: "plan_change" }));
+check("a null sourceMessageBody falls back to the reason label as the summary, never a blank card, when there is also no proposedResponse", () => {
+  const item = attentionItemFromEscalation(makeEscalation({ sourceMessageBody: null, proposedResponse: null, reasonCategory: "plan_change" }));
   assert.equal(item.summary, "Plan change");
   assert.equal(item.sourceMessageBody, null);
+});
+
+check("Phase 7A: a null sourceMessageBody with a real proposedResponse (a pain_or_safety escalation with no originating chat message) shows the real proposedResponse as the summary, never the bare generic label", () => {
+  const item = attentionItemFromEscalation(
+    makeEscalation({ sourceMessageBody: null, reasonCategory: "pain_or_safety", proposedResponse: "Pain reported: left shoulder, 7/10, during Bench Press." })
+  );
+  assert.equal(item.summary, "Pain reported: left shoulder, 7/10, during Bench Press.");
 });
 
 // ---------------------------------------------------------------------------

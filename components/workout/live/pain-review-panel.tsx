@@ -111,7 +111,13 @@ export function PainReviewPanel({
       </div>
 
       <p className="mt-3 rounded-[var(--radius-sm)] bg-off-white/[0.04] px-3 py-2.5 text-meta text-neutral">
-        Saved and flagged for {coachName} to review.
+        {report.escalationConfirmed === false
+          ? // Phase 7A — only ever shown once Supabase-mode persistence has
+            // actually, confirmedly failed (see lib/production/pain-safety.ts) —
+            // never claim a coach notification that didn't really happen.
+            // The report itself is still saved in this session regardless.
+            `Saved on this device. I wasn't able to confirm this reached ${coachName} — please message them directly if this feels urgent.`
+          : `Saved and flagged for ${coachName} to review.`}
       </p>
 
       {interruption.severity === "resume-eligible" ? (

@@ -57,9 +57,13 @@ export interface AttentionItem {
   kindLabel: string;
   summary: string;
   /** The client's own message that triggered this item, when there is
-   * one — Supabase escalations always have one; demo review items don't
-   * carry the triggering message text in this shape (see
-   * attentionItemFromDemoQueueItem's own doc). */
+   * one — every CHAT-originated Supabase escalation has one; a
+   * pain_or_safety escalation created directly from onboarding or a live
+   * workout pain report (Phase 7A — see lib/production/onboarding.ts and
+   * app/actions/production-safety.ts) has no originating chat message, so
+   * this is null for those. Demo review items don't carry the triggering
+   * message text in this shape either (see attentionItemFromDemoQueueItem's
+   * own doc). */
   sourceMessageBody: string | null;
   /** What OPTIM (or the review pipeline) proposed doing about it, if
    * anything. */
@@ -111,7 +115,13 @@ export function attentionItemFromEscalation(escalation: EscalationLike): Attenti
     clientId: escalation.clientProfileId,
     clientDisplayName: escalation.clientDisplayName,
     kindLabel: label,
-    summary: escalation.sourceMessageBody ?? label,
+    // Phase 7A — a non-chat-originated escalation (onboarding/live-workout
+    // pain report) has no sourceMessageBody at all, but DOES carry a real,
+    // specific proposedResponse (what OPTIM actually recorded — see
+    // lib/production/onboarding.ts / app/actions/production-safety.ts) —
+    // showing that instead of the bare generic reason label is strictly
+    // more informative and never fabricated, so it's checked first.
+    summary: escalation.sourceMessageBody ?? escalation.proposedResponse ?? label,
     sourceMessageBody: escalation.sourceMessageBody,
     proposedResponse: escalation.proposedResponse,
     status: escalationStatusToAttentionStatus(escalation.status),

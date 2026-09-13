@@ -429,6 +429,14 @@ export type Action =
       symptomQuality: PainSymptomQuality;
       note?: string;
     }
+  /** Phase 7A — Supabase mode only: dispatched once
+   * app/actions/production-safety.ts's async result for this exact report
+   * comes back, so the client-facing "flagged for your coach" claim (see
+   * components/workout/live/pain-review-panel.tsx) can turn honest if the
+   * write actually failed. Never dispatched in demo mode. A no-op if the
+   * report id no longer exists (shouldn't happen — reports are
+   * append-only). */
+  | { type: "SET_PAIN_ESCALATION_STATUS"; painReportId: string; escalationCreated: boolean }
   /** Phase 4.4B-2.1 — mild/resume-eligible path only: the client has
    * explicitly confirmed the discomfort fully resolved. Does not itself
    * resume anything — "Continue this exercise" only becomes available
@@ -1143,6 +1151,13 @@ export function reducer(state: AppState, action: Action): AppState {
         },
         reviewRequests: reviewRequest ? [...state.reviewRequests, reviewRequest] : state.reviewRequests,
       };
+    }
+
+    case "SET_PAIN_ESCALATION_STATUS": {
+      const index = state.workoutSession.painReports.findIndex((r) => r.id === action.painReportId);
+      if (index === -1) return state;
+      const painReports = state.workoutSession.painReports.map((r, i) => (i === index ? { ...r, escalationConfirmed: action.escalationCreated } : r));
+      return { ...state, workoutSession: { ...state.workoutSession, painReports } };
     }
 
     case "CONFIRM_PAIN_RESOLVED": {

@@ -21,6 +21,7 @@
 import "server-only";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import { resolveOwnClientIdentity } from "./identity.ts";
+import { computeHealthReviewRequired } from "../coach/health-review.ts";
 import type { OnboardingProgress, OnboardingStepAnswers, OnboardingStepId } from "../coach/types";
 
 interface OnboardingProgressRow {
@@ -119,7 +120,18 @@ export async function saveOnboardingStep(params: {
  * (client-writable rows never do — see the new table's own header); the
  * coach's own review/activation is a completely separate, staff-only
  * transition (see setClientProgramStartDate / activateClientEnrollment in
- * lib/production/programs.ts). */
+ * lib/production/programs.ts).
+ *
+ * Phase 7A — also creates a real coach-review escalation when this
+ * client's own "health_finish" answers say one is needed, using the exact
+ * same structured-answer-only, non-diagnostic trigger demo mode already
+ * uses (lib/coach/health-review.ts's computeHealthReviewRequired — never a
+ * free-text/keyword classifier). Deduplicated per client
+ * (p_dedupe_existing: true): resubmitting onboarding must never spam a
+ * second review request for the same still-open concern. See
+ * create_health_safety_escalation's own migration doc
+ * (20260912000018_health_safety_escalations.sql) for why this reuses the
+ * existing escalations table/RLS rather than a new "health review" table. */
 export async function completeOnboarding(finalAnswers: OnboardingStepAnswers): Promise<OnboardingProgress> {
   const identity = await resolveOwnClientIdentity();
   const supabase = await getSupabaseServerClient();
@@ -142,5 +154,22 @@ export async function completeOnboarding(finalAnswers: OnboardingStepAnswers): P
     .select("current_step_index, answers, completed_at, updated_at, workspace_id")
     .single();
   if (error) throw new Error(`completeOnboarding failed: ${error.message}`);
+
+  const trigger = computeHealthReviewRequired(mergedAnswers.health_finish);
+  if (trigger.required) {
+    const summary = `Onboarding: ${trigger.reasons.join(" ")}`;
+    const { error: escalationError } = await supabase.rpc("create_health_safety_escalation", {
+      p_client_profile_id: identity.clientProfileId,
+      p_summary: summary,
+      p_dedupe_existing: true,
+    });
+    // A failed escalation write must never fail onboarding completion for
+    // the client (their real answers are already safely persisted above) —
+    // surfaced to the server console so it's visible, never silently lost,
+    // never falsely reported as success to any caller either (this
+    // function's return value never claims a review was created).
+    if (escalationError) console.error(`completeOnboarding: create_health_safety_escalation failed: ${escalationError.message}`);
+  }
+
   return rowToProgress(data, identity.clientProfileId, data.workspace_id as string);
 }

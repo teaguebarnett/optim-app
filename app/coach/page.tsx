@@ -56,7 +56,18 @@ async function LiveCoachDashboard() {
   const activeCampaigns = campaigns.filter((c) => c.status !== "published").length;
   const publishedCampaigns = campaigns.filter((c) => c.status === "published").length;
 
-  function actionsFor(escalationId: string) {
+  // Phase 7A — approve/editAndSend/respondPersonally all send an actual
+  // message to the client (approving/editing/replacing "what OPTIM
+  // proposed"). That only ever makes sense when there was a real client
+  // chat message to respond to in the first place — a pain_or_safety
+  // escalation created directly from onboarding or a live workout pain
+  // report (see lib/production/onboarding.ts, app/actions/production-safety.ts)
+  // has no such message, only a real recorded summary shown for context
+  // (see components/coach/escalation-card.tsx's "What OPTIM said / proposes"
+  // section). Gating these three actions on hasSourceMessage prevents a
+  // coach from ever "sending" that summary text to the client as if it were
+  // a chat reply.
+  function actionsFor(escalationId: string, hasSourceMessage: boolean) {
     async function approve() {
       "use server";
       await approveEscalationResponseAction({ workspaceId, escalationId });
@@ -88,7 +99,14 @@ async function LiveCoachDashboard() {
       const item = [focus, ...rest].find((i) => i?.id === escalationId);
       await proposePlaybookExampleAction({ escalationId, situation: item?.summary ?? "Client message", resolution });
     }
-    return { approve, editAndSend, respondPersonally, resolveThread, resolveSilently, proposeExample };
+    return {
+      approve: hasSourceMessage ? approve : undefined,
+      editAndSend: hasSourceMessage ? editAndSend : undefined,
+      respondPersonally: hasSourceMessage ? respondPersonally : undefined,
+      resolveThread,
+      resolveSilently,
+      proposeExample,
+    };
   }
 
   return (
@@ -116,7 +134,7 @@ async function LiveCoachDashboard() {
         />
         {focus ? (
           <>
-            <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id)} />
+            <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} />
             {rest.length > 0 && (
               <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-lg)] border border-border">
                 {rest.map((item) => (

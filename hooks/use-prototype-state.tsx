@@ -7,6 +7,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -48,6 +49,8 @@ import { resolveClientLocalDateIso } from "@/lib/shared/local-date";
 import { resolveRollover } from "@/lib/history/rollover";
 import { buildDailyRecordFromLiveState } from "@/lib/history/build-daily-record";
 import { getMySupabaseAppStateAction, saveMySupabaseDailyActivityAction } from "@/app/actions/production-programs";
+import { reportAcutePainAction } from "@/app/actions/production-safety";
+import { findTrainingItemById } from "@/lib/workout/session-flow";
 import type { PlatformState } from "@/lib/coach/platform-store";
 import type { ActiveAppContext, ClientProfileId, WorkspaceId } from "@/lib/tenancy/types";
 import type { DailyPlanResult, DailyTrainingPlan } from "@/lib/planning/types";
@@ -282,6 +285,51 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
       console.error("Supabase daily activity autosave failed:", err);
     });
   }, [appMode, state, isHydrated, supabaseNotProvisioned, supabaseProgramNotAssigned]);
+
+  // Phase 7A — Supabase mode's own acute-pain-report persistence: fires
+  // AFTER lib/state.ts's REPORT_PAIN reducer case has already, synchronously,
+  // activated the client-side safety gate (phase: "pain-review",
+  // activePainInterruption) — this effect never gates or delays that; it
+  // only makes sure the report also reaches the real coach review/attention
+  // system (see lib/production/pain-safety.ts's own doc). escalatedReportIdsRef
+  // tracks which of this tab's own painReports have already been sent, so a
+  // re-render (or the autosave effect above firing on the same state
+  // change) never re-submits the same report twice; it intentionally does
+  // NOT persist across a reload — a duplicate escalation for the exact same
+  // report on a rare reload-mid-request is a minor, honest annoyance, never
+  // a safety issue, and far preferable to a design that could silently drop
+  // a genuinely new report.
+  const escalatedReportIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (appMode !== "supabase" || !isHydrated) return;
+    const newReports = state.workoutSession.painReports.filter((r) => !escalatedReportIdsRef.current.has(r.id));
+    for (const report of newReports) {
+      escalatedReportIdsRef.current.add(report.id);
+      const item = report.exerciseId ? findTrainingItemById(state.workoutSession.resolvedSession, report.exerciseId) : undefined;
+      reportAcutePainAction({
+        location: report.location,
+        ratingZeroToTen: report.ratingZeroToTen,
+        onset: report.onset,
+        causedByMovement: report.causedByMovement,
+        continuedAfterSet: report.continuedAfterSet,
+        affectsOutsideGym: report.affectsOutsideGym,
+        symptomQuality: report.symptomQuality ?? "normal-fatigue",
+        itemName: item?.name,
+        note: report.note,
+      })
+        .then((result) => {
+          dispatch({ type: "SET_PAIN_ESCALATION_STATUS", painReportId: report.id, escalationCreated: result.escalationCreated });
+        })
+        .catch((err) => {
+          // Never surfaced as a client-facing error — the safety gate is
+          // already active regardless (see this effect's own doc) — but
+          // never silently lost, and the client-facing "flagged for your
+          // coach" claim must still turn honest on failure.
+          console.error("Supabase acute pain report persistence failed:", err);
+          dispatch({ type: "SET_PAIN_ESCALATION_STATUS", painReportId: report.id, escalationCreated: false });
+        });
+    }
+  }, [appMode, isHydrated, state.workoutSession.painReports, state.workoutSession.resolvedSession]);
 
   // One combined bootstrap — reads perspective, which client is currently
   // active, and that client's own AppState together, so there is never an

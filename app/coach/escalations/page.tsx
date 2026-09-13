@@ -43,7 +43,11 @@ export default async function CoachEscalationsPage() {
   );
   const threadFor = (id: string) => threads.find((t) => t.id === id)?.messages ?? [];
 
-  function actionsFor(escalationId: string) {
+  // Phase 7A — see app/coach/page.tsx's identical actionsFor for why these
+  // three are gated on hasSourceMessage: a pain_or_safety escalation with
+  // no originating chat message must never let a coach "send" its recorded
+  // summary text to the client as if it were a chat reply.
+  function actionsFor(escalationId: string, hasSourceMessage: boolean) {
     async function approve() {
       "use server";
       await approveEscalationResponseAction({ workspaceId, escalationId });
@@ -75,7 +79,14 @@ export default async function CoachEscalationsPage() {
       const item = inbox.open.find((i) => i.id === escalationId);
       await proposePlaybookExampleAction({ escalationId, situation: item?.summary ?? "Client message", resolution });
     }
-    return { approve, editAndSend, respondPersonally, resolveThread, resolveSilently, proposeExample };
+    return {
+      approve: hasSourceMessage ? approve : undefined,
+      editAndSend: hasSourceMessage ? editAndSend : undefined,
+      respondPersonally: hasSourceMessage ? respondPersonally : undefined,
+      resolveThread,
+      resolveSilently,
+      proposeExample,
+    };
   }
 
   return (
@@ -98,7 +109,7 @@ export default async function CoachEscalationsPage() {
         ) : (
           <div className="space-y-4">
             {inbox.open.map((item) => (
-              <EscalationCard key={item.id} item={item} threadMessages={threadFor(item.id)} actions={actionsFor(item.id)} />
+              <EscalationCard key={item.id} item={item} threadMessages={threadFor(item.id)} actions={actionsFor(item.id, item.sourceMessageBody !== null)} />
             ))}
           </div>
         )}
