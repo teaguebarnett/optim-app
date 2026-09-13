@@ -41,6 +41,7 @@ import { getOnboardingProgressForClient } from "../../lib/production/onboarding"
 import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
 import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
+import { resolveApplicableCoachRules } from "../../lib/production/rule-resolution";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { projectProgramApprovalDecision, projectProgramRejectionDecision, type ProgramProposalSummary } from "../../lib/decisions/project-program-generation";
@@ -315,7 +316,15 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
   const directions = generateProgramDirectionSummaries({ profile, com, durationWeeks: params.durationWeeks });
   const direction = directions.find((d) => d.kind === "best_fit") ?? directions[0];
   const nowIso = new Date().toISOString();
-  const { content } = buildUniversalProgramForDirection(direction, {
+  // Phase 9C — the coach's own real, active, applicable learned rules
+  // (coach-general + this-client's client-specific, never a
+  // PatternCandidate) resolved through the ONE centralized boundary (spec
+  // section 8/20). A failure here degrades to zero rules, never blocks
+  // generation (lib/production/rule-resolution.ts's own failure-semantics
+  // doc) — a coach with no learned rules yet generates exactly as before
+  // Phase 9C (spec section 36).
+  const applicableRules = await resolveApplicableCoachRules({ clientProfileId: params.clientProfileId });
+  const { content, ruleApplication } = buildUniversalProgramForDirection(direction, {
     clientId: params.clientProfileId,
     workspaceId: params.workspaceId,
     coachId: params.coachId,
@@ -323,9 +332,13 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
     com,
     durationWeeks: params.durationWeeks,
     nowIso,
+    applicableRules,
   });
+  if (ruleApplication.appliedRuleIds.length > 0 || ruleApplication.skippedRules.length > 0) {
+    console.log(`generateUniversalProgramProposalContent: rule application — applied ${ruleApplication.appliedRuleIds.length}, skipped ${ruleApplication.skippedRules.length} (${ruleApplication.skippedRules.map((s) => s.reason).join(", ")})`);
+  }
 
-  return { content: { ...content, name: params.title }, direction, profile, com, nowIso };
+  return { content: { ...content, name: params.title }, direction, profile, com, nowIso, ruleApplication };
 }
 
 function proposalSummaryFrom(content: { durationWeeks: number; directionLabel?: string; generationRationale?: string }): ProgramProposalSummary {

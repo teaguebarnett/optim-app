@@ -34,6 +34,15 @@ import {
   type ConstraintValidation,
 } from "./activation-generation.ts";
 import { computeProgramPhases, computeWeekParameters, shiftRepRange, applyRpeOffset, type WeekParameters } from "./program-periodization.ts";
+import {
+  applyResistanceRules,
+  applyContinuousRules,
+  resolveRulePrecedence,
+  reconcileContextMismatches,
+  mergeDiagnostics,
+  type ApplicableRule,
+  type RuleApplicationDiagnostics,
+} from "./rule-application.ts";
 import type { SplitPlan } from "./activation-generation.ts";
 import type { ClientProgrammingProfile, CardioPreference, DailyActivityLevel } from "./programming-profile.ts";
 import type { CoachOperatingModel } from "./operating-model.ts";
@@ -146,8 +155,9 @@ function decideContinuousDays(profile: ClientProgrammingProfile, com: CoachOpera
  * — see this phase's "issues discovered" section. Never fabricates a
  * heart-rate zone from age (no age-based max-HR formula is used anywhere
  * in this codebase, and this phase does not introduce one). */
-function buildUniversalContinuousSessionForDay(dayOfWeek: DayOfWeek): Session {
-  const durationMin = 30;
+function buildUniversalContinuousSessionForDay(dayOfWeek: DayOfWeek, rules: ApplicableRule[]): { session: Session; diagnostics: RuleApplicationDiagnostics } {
+  const baseDurationSeconds = 30 * 60;
+  const { durationSeconds, diagnostics } = applyContinuousRules(baseDurationSeconds, rules);
   const item: TrainingItemInstance = {
     id: `cardio-${dayOfWeek}-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
     order: 1,
@@ -156,19 +166,20 @@ function buildUniversalContinuousSessionForDay(dayOfWeek: DayOfWeek): Session {
     coachCue: "Keep the effort easy and conversational the whole way through.",
     prescription: {
       family: "continuous",
-      duration: { seconds: durationMin * 60 },
+      duration: { seconds: durationSeconds },
       completionTarget: "Easy, conversational effort",
     },
   };
   const block: Block = { id: `block-cardio-${dayOfWeek}`, kind: "straight", order: 1, items: [item] };
-  return {
+  const session: Session = {
     id: `session-cardio-${dayOfWeek}-${Date.now()}`,
     name: `${dayOfWeek} — Easy Cardio`,
     focus: "Aerobic conditioning",
-    estimatedDurationMin: durationMin,
+    estimatedDurationMin: Math.round(durationSeconds / 60),
     coachNote: "Low-intensity work — this should feel easy, not a second workout.",
     blocks: [block],
   };
+  return { session, diagnostics };
 }
 
 // ---------------------------------------------------------------------------
@@ -185,16 +196,18 @@ function buildUniversalResistanceSessionForDay(
   com: CoachOperatingModel,
   profile: ClientProgrammingProfile,
   params: WeekParameters,
-  maxSessionLengthMinutes: number
-): Session {
+  maxSessionLengthMinutes: number,
+  rules: ApplicableRule[]
+): { session: Session; diagnostics: RuleApplicationDiagnostics } {
   const baseRange = repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
-  const [repLow, repHigh] = shiftRepRange(baseRange, params.repRangeShift);
+  const [baseRepLow, baseRepHigh] = shiftRepRange(baseRange, params.repRangeShift);
   const baseRpe: RpeValue = com.programArchitecture.proximityToFailure === "0_1_reps_in_reserve" ? 9 : com.programArchitecture.proximityToFailure === "2_4_reps_in_reserve" ? 7 : 8;
-  const targetRpe = applyRpeOffset(baseRpe, params.intensityRpeOffset);
+  const baseTargetRpe = applyRpeOffset(baseRpe, params.intensityRpeOffset);
   const avoidedTerms = avoidedTermsForProfile(profile, com);
 
   const usedNames = new Set<string>();
   const items: TrainingItemInstance[] = [];
+  const itemDiagnostics: RuleApplicationDiagnostics[] = [];
   let order = 1;
   const maxExercises = Math.max(1, Math.floor(maxSessionLengthMinutes / MINUTES_PER_EXERCISE_BUDGET));
   const fittedPatterns = patterns.slice(0, maxExercises);
@@ -209,13 +222,27 @@ function buildUniversalResistanceSessionForDay(
     const warmupSets = isFirstCompound ? 2 : picked.isCompound ? 1 : 0;
     const restSeconds = picked.isCompound ? 150 : 75;
 
+    // Rules only ever nudge a base value that explicit methodology/
+    // periodization already computed — the item's own resolved
+    // MovementPattern (`pattern`) IS the same "item family" concept Phase
+    // 9A/9B's exercise-family resolution produces (see
+    // lib/patterns/exercise-family.ts), so no separate lookup is needed
+    // here: pickExercise itself guarantees picked.pattern === pattern.
+    const { result: nudged, diagnostics } = applyResistanceRules(
+      { sets: workingSets, repsLow: baseRepLow, repsHigh: baseRepHigh, rpe: baseTargetRpe, restSeconds, warmupSets },
+      pattern,
+      rules,
+      com
+    );
+    itemDiagnostics.push(diagnostics);
+
     const prescription: Prescription = {
       family: "resistance",
-      sets: workingSets,
-      warmupSets,
-      reps: { low: repLow, high: repHigh },
-      rpe: targetRpe,
-      restSeconds,
+      sets: nudged.sets,
+      warmupSets: nudged.warmupSets,
+      reps: { low: nudged.repsLow, high: nudged.repsHigh },
+      rpe: nudged.rpe,
+      restSeconds: nudged.restSeconds,
       tempo: "controlled",
     };
 
@@ -238,7 +265,7 @@ function buildUniversalResistanceSessionForDay(
       return sum + ((p.warmupSets ?? 0) + (p.sets ?? 0)) * ((p.restSeconds ?? 0) + 45);
     }, 0) / 60;
 
-  return {
+  const session: Session = {
     id: `session-${dayOfWeek}-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
     name: `${dayOfWeek} session — ${params.phase.label}`,
     focus: patterns.slice(0, 2).join(" / "),
@@ -247,6 +274,7 @@ function buildUniversalResistanceSessionForDay(
     coachNote: params.isDeload ? (params.isReassessmentWeek ? "Final week — deload and reassess how everything felt." : "Deload week — intentionally lighter. Trust the process.") : `${params.phase.label} phase: ${params.phase.purpose}`,
     blocks,
   };
+  return { session, diagnostics: mergeDiagnostics(itemDiagnostics) };
 }
 
 /** Resolves a real split plan for a POSSIBLY-REDUCED day count (see
@@ -276,11 +304,26 @@ export interface BuildUniversalProgramInput {
   com: CoachOperatingModel;
   durationWeeks: number;
   nowIso: string;
+  /** Phase 9C — the coach's real, ACTIVE, coach-confirmed learned rules
+   * already scoped to this exact coach+client (see
+   * lib/production/rule-resolution.ts) — never a PatternCandidate, never
+   * fetched by this pure function itself. Optional and defaults to empty:
+   * a coach/client with no learned rules yet must generate IDENTICALLY to
+   * pre-Phase-9C behavior (spec section 36's own regression requirement) —
+   * every existing caller that doesn't pass this continues to work
+   * unchanged. */
+  applicableRules?: ApplicableRule[];
 }
 
 export interface GeneratedUniversalProgram {
   content: UniversalTrainingProgramContent;
   constraints: ConstraintValidation;
+  /** Phase 9C — bounded, auditable provenance: which real active rules
+   * were actually used to shape this proposal, and which were considered
+   * but skipped, with one honest categorical reason each (spec section
+   * 14/30/39). Always present (empty when applicableRules was empty/absent)
+   * so callers never need to null-check it. */
+  ruleApplication: RuleApplicationDiagnostics;
 }
 
 /** Every real hard constraint program-directions.ts's own
@@ -413,6 +456,14 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
   const phases = computeProgramPhases(durationWeeks);
   const continuousDays = decideContinuousDays(profile, com, resistanceDayCount);
 
+  // Phase 9C — resolved ONCE per generation call, never re-derived per
+  // item/day (spec section 8: "centralize it"). `effective` already has
+  // client-specific-over-coach-general precedence applied; `precedenceSkips`
+  // and unsupported-family skips are already known before a single session
+  // is built.
+  const { effective: effectiveRules, skipped: precedenceSkips } = resolveRulePrecedence(input.applicableRules ?? []);
+  const sessionDiagnostics: RuleApplicationDiagnostics[] = [];
+
   const weeks: UniversalProgramWeek[] = [];
   for (let weekNumber = 1; weekNumber <= durationWeeks; weekNumber++) {
     const params = computeWeekParameters(weekNumber, durationWeeks, phases, com);
@@ -421,21 +472,23 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
     profile.availableDays.slice(0, resistanceDayCount).forEach((dayOfWeek, i) => {
       const idx = days.findIndex((d) => d.dayOfWeek === dayOfWeek);
       if (idx === -1) return;
-      days[idx] = {
-        dayOfWeek,
-        type: "training",
-        sessions: [buildUniversalResistanceSessionForDay(dayOfWeek, plan.dayPatterns[i], equipment, com, profile, params, profile.maxSessionLengthMinutes)],
-      };
+      const { session, diagnostics } = buildUniversalResistanceSessionForDay(dayOfWeek, plan.dayPatterns[i], equipment, com, profile, params, profile.maxSessionLengthMinutes, effectiveRules);
+      sessionDiagnostics.push(diagnostics);
+      days[idx] = { dayOfWeek, type: "training", sessions: [session] };
     });
 
     continuousDays.forEach((dayOfWeek) => {
       const idx = days.findIndex((d) => d.dayOfWeek === dayOfWeek);
       if (idx === -1 || days[idx].type === "training") return; // never overwrite a resistance day
-      days[idx] = { dayOfWeek, type: "training", sessions: [buildUniversalContinuousSessionForDay(dayOfWeek)] };
+      const { session, diagnostics } = buildUniversalContinuousSessionForDay(dayOfWeek, effectiveRules);
+      sessionDiagnostics.push(diagnostics);
+      days[idx] = { dayOfWeek, type: "training", sessions: [session] };
     });
 
     weeks.push({ weekNumber, days });
   }
+
+  const ruleApplication = reconcileContextMismatches(effectiveRules, mergeDiagnostics([{ appliedRuleIds: [], skippedRules: precedenceSkips }, ...sessionDiagnostics]));
 
   const content: UniversalTrainingProgramContent = {
     schemaVersion: 2,
@@ -459,5 +512,5 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
   // silently producing malformed content someone downstream has to catch.
   validateUniversalTrainingProgramContent(content);
 
-  return { content, constraints: validateUniversalProgramHardConstraints(content, profile, com) };
+  return { content, constraints: validateUniversalProgramHardConstraints(content, profile, com), ruleApplication };
 }
