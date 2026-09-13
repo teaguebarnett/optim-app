@@ -288,7 +288,7 @@ async function main() {
     : v1OriginalItem.item.prescription.sets === firstItem.prescription.sets && v1OriginalItem.item.prescription.rpe === firstItem.prescription.rpe;
   check("G: the ORIGINAL proposal's own stored content is completely untouched by the edit", originalUnchanged);
 
-  const deltas = diffProgramProposal(programC.content, patchedContent).filter((d) => d.itemId === editPath.itemId && d.weekNumber === 1);
+  const deltas = diffProgramProposal(programC.content, patchedContent).filter((d) => "itemId" in d && d.itemId === editPath.itemId && d.weekNumber === 1);
   const [group] = groupDeltasByItem(deltas);
   check("I: the domain-aware diff correctly identifies the changed field(s)", !!group && group.fields.length > 0);
 

@@ -453,6 +453,31 @@ export async function rejectProgramProposalVersion(params: { workspaceId: string
   if (error) throw new Error(`rejectProgramProposalVersion failed: ${error.message}`);
 }
 
+/** Phase 8D — archives every OTHER still-'draft' sibling version in the
+ * same program family once one version has been resolved (approved or
+ * rejected). Without this, an older draft left behind by an earlier edit
+ * (superseded by a LATER edit's own new draft, per createDraftProgramVersion's
+ * "always a new version, never mutate" discipline) would still satisfy
+ * getPendingProgramProposal's plain status='draft' filter — and get
+ * incorrectly rediscovered as "the pending proposal" even after the family
+ * was actually resolved (caught live during this phase's own manual
+ * verification, after several edits followed by one approval). Never
+ * touches the resolved version itself (its own caller already set its real
+ * status) or any already-published/archived row — real historical
+ * evidence, never deleted. */
+export async function archiveSiblingDraftVersions(params: { workspaceId: string; programId: string; resolvedVersionId: string }): Promise<void> {
+  await requireCoachAuthority(params.workspaceId);
+  const supabase = await getSupabaseServerClient();
+  const { error } = await supabase
+    .from("training_program_versions")
+    .update({ status: "archived" })
+    .eq("workspace_id", params.workspaceId)
+    .eq("program_id", params.programId)
+    .eq("status", "draft")
+    .neq("id", params.resolvedVersionId);
+  if (error) throw new Error(`archiveSiblingDraftVersions failed: ${error.message}`);
+}
+
 export async function publishProgramVersion(params: { workspaceId: string; versionId: string }): Promise<void> {
   const ctx = await requireCoachAuthority(params.workspaceId);
   const supabase = await getSupabaseServerClient();

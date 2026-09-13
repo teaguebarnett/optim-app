@@ -103,6 +103,37 @@ export const DECISION_TYPE_REGISTRY: Record<string, { domain: DecisionDomain; va
       optionalNumber(v.heartRateLow, "heartRateLow", t);
       optionalNumber(v.heartRateHigh, "heartRateHigh", t);
       optionalNumber(v.rpe, "rpe", t);
+      // Phase 8D — closes the pace gap Phase 8C documented (see
+      // lib/training/program-proposal-editing.ts's own doc for why this is
+      // completing existing grammar/execution support, not a new primitive).
+      optionalNumber(v.paceValue, "paceValue", t);
+      optionalString(v.paceUnit, "paceUnit", t);
+    },
+  },
+  // -- Phase 8D — bounded structural edits (spec section 9/10) ---------
+  training_item_removed: {
+    domain: "exercise_selection",
+    validateValue: (v, t) => {
+      requireString(v.exerciseName, "exerciseName", t);
+    },
+  },
+  training_item_added: {
+    domain: "exercise_selection",
+    validateValue: (v, t) => {
+      requireString(v.exerciseName, "exerciseName", t);
+      requireString(v.category, "category", t);
+    },
+  },
+  session_renamed: {
+    domain: "program_structure",
+    validateValue: (v, t) => {
+      requireString(v.name, "name", t);
+    },
+  },
+  training_day_converted_to_rest: {
+    domain: "scheduling",
+    validateValue: (v, t) => {
+      requireString(v.dayType, "dayType", t);
     },
   },
 };
@@ -201,6 +232,18 @@ export function buildHealthReviewDecisionRef(params: { escalationId: string; dec
 export function buildProgramVersionItemEditRef(params: { versionId: string; path: { weekNumber: number; dayOfWeek: string; sessionIndex: number; blockId: string; itemId: string } }): string {
   const { versionId, path } = params;
   return `program_version_item:${versionId}:${path.weekNumber}:${path.dayOfWeek}:${path.sessionIndex}:${path.blockId}:${path.itemId}`;
+}
+
+/** Phase 8D — one real session-level structural edit (rename), on one real
+ * edited version. */
+export function buildProgramVersionSessionRef(params: { versionId: string; weekNumber: number; dayOfWeek: string; sessionIndex: number }): string {
+  return `program_version_session:${params.versionId}:${params.weekNumber}:${params.dayOfWeek}:${params.sessionIndex}`;
+}
+
+/** Phase 8D — one real day-level structural edit (training -> rest), on
+ * one real edited version. */
+export function buildProgramVersionDayRef(params: { versionId: string; weekNumber: number; dayOfWeek: string }): string {
+  return `program_version_day:${params.versionId}:${params.weekNumber}:${params.dayOfWeek}`;
 }
 
 // ---------------------------------------------------------------------------

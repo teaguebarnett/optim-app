@@ -27,6 +27,7 @@ import {
   getProgramProposalVersion,
   getOriginalProposalVersion,
   rejectProgramProposalVersion,
+  archiveSiblingDraftVersions,
   createDraftNutritionVersion,
   publishNutritionVersion,
   assignNutritionVersionToClient,
@@ -45,13 +46,33 @@ import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { projectProgramApprovalDecision, projectProgramRejectionDecision, type ProgramProposalSummary } from "../../lib/decisions/project-program-generation";
 import { projectPrescriptionEditDecision } from "../../lib/decisions/project-prescription-edit";
 import { recordDecisionEvidence } from "../../lib/production/decision-evidence";
-import { locateTrainingItem, applyTrainingItemPatch, diffProgramProposal, groupDeltasByItem, findRestrictionConflicts, type TrainingItemPath, type TrainingItemPatch } from "../../lib/training/program-proposal-editing";
+import {
+  locateTrainingItem,
+  applyTrainingItemPatch,
+  removeTrainingItem,
+  addTrainingItem,
+  moveTrainingItem,
+  moveBlock,
+  renameSession,
+  convertTrainingDayToRest,
+  buildCoachAuthoredItem,
+  diffProgramProposal,
+  describeProgramDiffEntry,
+  groupDeltasByItem,
+  findRestrictionConflicts,
+  type TrainingItemPath,
+  type SessionPath,
+  type BlockPath,
+  type TrainingItemPatch,
+} from "../../lib/training/program-proposal-editing";
+import { projectItemRemovedDecision, projectItemAddedDecision, projectSessionRenamedDecision, projectDayConvertedToRestDecision } from "../../lib/decisions/project-structural-edit";
 import { validateUniversalTrainingProgramContent } from "../../lib/production/validation";
 import { resolveClientLocalDateIso } from "../../lib/shared/local-date";
 import type { AppState } from "../../lib/state";
 import type { DailyActivityContent } from "../../lib/production/validation";
 import type { ClientAssignedProgram } from "../../lib/types";
 import type { UniversalTrainingProgramContent } from "../../lib/training/types";
+import type { DayOfWeek } from "../../lib/types";
 
 interface OwnClientIdentity {
   clientProfileId: string;
@@ -311,6 +332,50 @@ function proposalSummaryFrom(content: { durationWeeks: number; directionLabel?: 
   return { durationWeeks: content.durationWeeks, directionLabel: content.directionLabel ?? "Unlabeled direction", rationale: content.generationRationale ?? "No rationale recorded." };
 }
 
+/** The same real onboarding + health-review + fallback resolution every
+ * proposal action needs — factored out once in Phase 8D (previously
+ * duplicated in the generation path and the review-read path, and about to
+ * be needed by every new structural-edit action too). */
+async function resolveClientProgrammingProfile(workspaceId: string, clientProfileId: string) {
+  const onboarding = await getOnboardingProgressForClient(clientProfileId);
+  const healthReview = await resolveHealthReviewRecordForClient(clientProfileId, workspaceId);
+  const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
+  return "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+}
+
+/** The one shared "apply a pure transform to the current draft, validate,
+ * and persist as a new version if it actually changed anything" step every
+ * proposal mutation (edit/remove/add/move/rename/convert) is built from.
+ * Returns `changed: false` (the SAME versionId, nothing new persisted) for
+ * a genuine no-op — e.g. a retried request producing byte-identical
+ * content, or moveTrainingItem's own no-op at a list boundary — so callers
+ * never create a redundant version or emit evidence for nothing. */
+async function saveProposalDraft(params: { workspaceId: string; clientProfileId: string; current: { programId: string; content: UniversalTrainingProgramContent; versionId: string }; nextContent: UniversalTrainingProgramContent }): Promise<{ versionId: string; changed: boolean }> {
+  validateUniversalTrainingProgramContent(params.nextContent);
+  if (JSON.stringify(params.nextContent) === JSON.stringify(params.current.content)) {
+    return { versionId: params.current.versionId, changed: false };
+  }
+  const { versionId } = await createDraftProgramVersion({
+    workspaceId: params.workspaceId,
+    programId: params.current.programId,
+    title: params.current.content.name,
+    content: params.nextContent,
+    proposedForClientProfileId: params.clientProfileId,
+  });
+  return { versionId, changed: true };
+}
+
+/** Loads the current draft + the immutable original proposal for the same
+ * family, or throws a clear error — the one authorization+existence check
+ * every mutation action performs before touching content. */
+async function loadDraftAndOriginal(workspaceId: string, versionId: string, actionName: string) {
+  const current = await getProgramProposalVersion(workspaceId, versionId);
+  if (!current || current.status !== "draft") throw new Error(`${actionName}: no pending draft proposal at that version`);
+  const original = await getOriginalProposalVersion(workspaceId, current.programId);
+  if (!original) throw new Error(`${actionName}: original proposal version missing`);
+  return { current, original };
+}
+
 /** Step 1 of the Phase 8C lifecycle: GENERATE a real, reviewable proposal.
  * Persists it as a real draft training_program_versions row, tagged with
  * WHO it's for (proposedForClientProfileId) so it survives navigation/
@@ -332,10 +397,17 @@ export interface ProgramProposalReviewView {
    * this to show "edited" rather than "as generated." */
   wasEdited: boolean;
   content: UniversalTrainingProgramContent;
-  /** Non-blocking — see lib/training/program-proposal-editing.ts's
-   * findRestrictionConflicts doc: coach authority remains final, but the
-   * coach must never be left unable to see an active restriction. */
+  /** Non-blocking, computed across the WHOLE proposal (every week, not
+   * just week 1 — spec section 20) — see
+   * lib/training/program-proposal-editing.ts's findRestrictionConflicts
+   * doc: coach authority remains final, but the coach must never be left
+   * unable to see an active restriction anywhere in the proposal. */
   restrictionWarnings: string[];
+  /** Phase 8D — one real, readable line per accumulated change so far,
+   * computed by diffing the immutable original proposal against the
+   * current draft (spec section 15: "3 changes: ..."). Empty when nothing
+   * has been edited yet. */
+  changesSummary: string[];
 }
 
 /** Step 2: the coach's review surface reads this. Returns null when there
@@ -345,12 +417,12 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
   const pending = await getPendingProgramProposal(params.workspaceId, params.clientProfileId);
   if (!pending) return null;
 
-  const onboarding = await getOnboardingProgressForClient(params.clientProfileId);
-  const healthReview = await resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId);
-  const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
-  const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+  const profile = await resolveClientProgrammingProfile(params.workspaceId, params.clientProfileId);
   const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: "" });
   const avoidedTerms = avoidedTermsForProfile(profile, playbook.content.operatingModel);
+
+  const original = pending.versionNumber > 1 ? await getOriginalProposalVersion(params.workspaceId, pending.programId) : pending;
+  const changesSummary = original ? diffProgramProposal(original.content, pending.content).map(describeProgramDiffEntry) : [];
 
   return {
     versionId: pending.versionId,
@@ -359,6 +431,7 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     wasEdited: pending.versionNumber > 1,
     content: pending.content,
     restrictionWarnings: findRestrictionConflicts(pending.content, avoidedTerms),
+    changesSummary,
   };
 }
 
@@ -373,38 +446,23 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
  * J). Idempotent: submitting the identical patch again (a literal retry)
  * produces byte-identical content and is detected as a no-op — no new
  * version, no duplicate evidence. */
-export async function editProgramProposalItemAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: TrainingItemPath; patch: TrainingItemPatch }): Promise<{ versionId: string; warnings: string[] }> {
+export async function editProgramProposalItemAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: TrainingItemPath; patch: TrainingItemPatch }): Promise<{ versionId: string }> {
   const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
-  const current = await getProgramProposalVersion(params.workspaceId, params.versionId);
-  if (!current || current.status !== "draft") throw new Error("editProgramProposalItemAction: no pending draft proposal at that version");
-
-  const original = await getOriginalProposalVersion(params.workspaceId, current.programId);
-  if (!original) throw new Error("editProgramProposalItemAction: original proposal version missing");
+  const { current, original } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "editProgramProposalItemAction");
 
   const beforeItem = locateTrainingItem(current.content, params.path);
   if (!beforeItem) throw new Error("editProgramProposalItemAction: no item at that path");
 
   const patchedContent = applyTrainingItemPatch(current.content, params.path, params.patch);
-  validateUniversalTrainingProgramContent(patchedContent);
-
-  if (JSON.stringify(patchedContent) === JSON.stringify(current.content)) {
-    // A genuine no-op retry (identical patch resubmitted) — never create a
-    // redundant version or duplicate evidence for a change that didn't
-    // actually change anything.
-    return { versionId: current.versionId, warnings: [] };
-  }
-
-  const { versionId: newVersionId } = await createDraftProgramVersion({
-    workspaceId: params.workspaceId,
-    programId: current.programId,
-    title: current.content.name,
-    content: patchedContent,
-    proposedForClientProfileId: params.clientProfileId,
-  });
+  const { versionId: newVersionId, changed } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent: patchedContent });
+  if (!changed) return { versionId: newVersionId };
 
   const originalItem = locateTrainingItem(original.content, params.path);
   if (originalItem) {
-    const deltas = diffProgramProposal(original.content, patchedContent).filter((d) => d.weekNumber === params.path.weekNumber && d.dayOfWeek === params.path.dayOfWeek && d.sessionIndex === params.path.sessionIndex && d.blockId === params.path.blockId && d.itemId === params.path.itemId);
+    const deltas = diffProgramProposal(original.content, patchedContent).filter(
+      (d): d is Extract<typeof d, { kind: "field" }> =>
+        d.kind === "field" && d.weekNumber === params.path.weekNumber && d.dayOfWeek === params.path.dayOfWeek && d.sessionIndex === params.path.sessionIndex && d.blockId === params.path.blockId && d.itemId === params.path.itemId
+    );
     const [group] = groupDeltasByItem(deltas);
     if (group) {
       const isContinuous = beforeItem.item.category === "continuous";
@@ -437,14 +495,135 @@ export async function editProgramProposalItemAction(params: { workspaceId: strin
     }
   }
 
-  const onboarding = await getOnboardingProgressForClient(params.clientProfileId);
-  const healthReview = await resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId);
-  const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
-  const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
-  const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: "" });
-  const warnings = findRestrictionConflicts(patchedContent, avoidedTermsForProfile(profile, playbook.content.operatingModel));
+  return { versionId: newVersionId };
+}
 
-  return { versionId: newVersionId, warnings };
+/** Removes one proposed item outright — "at minimum, removal/replacement
+ * should be practical" (spec section 9). Records a real, immediate
+ * rejection of that one item (never a fabricated replacement). */
+export async function removeProgramProposalItemAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: TrainingItemPath }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "removeProgramProposalItemAction");
+  const located = locateTrainingItem(current.content, params.path);
+  if (!located) throw new Error("removeProgramProposalItemAction: no item at that path");
+
+  const nextContent = removeTrainingItem(current.content, params.path);
+  const { versionId: newVersionId, changed } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
+  if (!changed) return { versionId: newVersionId };
+
+  try {
+    await recordDecisionEvidence(
+      projectItemRemovedDecision({ workspaceId: params.workspaceId, coachUserId: ctx.userId, clientProfileId: params.clientProfileId, editedVersionId: newVersionId, path: params.path, exerciseName: located.item.name, decidedAtIso: new Date().toISOString() })
+    );
+  } catch (evidenceError) {
+    console.error(`removeProgramProposalItemAction: decision evidence projection failed (canonical removal already saved): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
+  return { versionId: newVersionId };
+}
+
+/** Adds one new, coach-authored exercise to a session — a bounded
+ * addition (real minimal defaults, immediately editable via the standard
+ * per-item form), never a blank-canvas builder (spec section 9/26). Lands
+ * as its own new block, matching real generated content's own one-
+ * exercise-per-block shape (see lib/training/program-proposal-editing.ts's
+ * addTrainingItem doc) — never merged into an existing exercise's block as
+ * an unintended superset. */
+export async function addProgramProposalItemAction(params: { workspaceId: string; clientProfileId: string; versionId: string; sessionPath: SessionPath; name: string; category: "resistance" | "continuous" }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "addProgramProposalItemAction");
+  const week = current.content.weeks.find((w) => w.weekNumber === params.sessionPath.weekNumber);
+  const day = week?.days.find((d) => d.dayOfWeek === params.sessionPath.dayOfWeek);
+  const session = day?.sessions?.[params.sessionPath.sessionIndex];
+  if (!session) throw new Error("addProgramProposalItemAction: no session at that path");
+
+  const newItem = buildCoachAuthoredItem({ dayOfWeek: params.sessionPath.dayOfWeek, order: session.blocks.length + 1, name: params.name, category: params.category });
+  const nextContent = addTrainingItem(current.content, params.sessionPath, newItem);
+  const { versionId: newVersionId, changed } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
+  if (!changed) return { versionId: newVersionId };
+
+  const path: TrainingItemPath = { ...params.sessionPath, blockId: `block-${newItem.id}`, itemId: newItem.id };
+  try {
+    await recordDecisionEvidence(
+      projectItemAddedDecision({ workspaceId: params.workspaceId, coachUserId: ctx.userId, clientProfileId: params.clientProfileId, editedVersionId: newVersionId, path, exerciseName: newItem.name, category: params.category, decidedAtIso: new Date().toISOString() })
+    );
+  } catch (evidenceError) {
+    console.error(`addProgramProposalItemAction: decision evidence projection failed (canonical addition already saved): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
+  return { versionId: newVersionId };
+}
+
+/** Move-up/move-down reordering within a single block — meaningful only
+ * for a real multi-item block (a coach-authored superset/circuit); every
+ * block generation itself produces holds exactly one item. No decision
+ * evidence: reordering changes no value, only sequence, and order-
+ * preference evidence is a separate, undecided modeling question this
+ * phase does not resolve (see this phase's completion report). */
+export async function moveProgramProposalItemAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: TrainingItemPath; direction: "up" | "down" }): Promise<{ versionId: string }> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "moveProgramProposalItemAction");
+  const nextContent = moveTrainingItem(current.content, params.path, params.direction);
+  const { versionId } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
+  return { versionId };
+}
+
+/** Move-up/move-down reordering of a whole exercise (its block) within a
+ * session — the practical "reorder exercises" control for real content,
+ * since a real generated resistance session places one exercise per block
+ * (see lib/training/program-proposal-editing.ts's moveBlock doc). Same
+ * no-evidence-for-reordering rationale as moveProgramProposalItemAction. */
+export async function moveProgramProposalBlockAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: BlockPath; direction: "up" | "down" }): Promise<{ versionId: string }> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "moveProgramProposalBlockAction");
+  const nextContent = moveBlock(current.content, params.path, params.direction);
+  const { versionId } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
+  return { versionId };
+}
+
+/** Renames a session (cosmetic, bounded — never touches actual prescribed
+ * content). */
+export async function renameProgramProposalSessionAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: SessionPath; name: string }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "renameProgramProposalSessionAction");
+  const week = current.content.weeks.find((w) => w.weekNumber === params.path.weekNumber);
+  const day = week?.days.find((d) => d.dayOfWeek === params.path.dayOfWeek);
+  const session = day?.sessions?.[params.path.sessionIndex];
+  if (!session) throw new Error("renameProgramProposalSessionAction: no session at that path");
+  const fromName = session.name;
+
+  const nextContent = renameSession(current.content, params.path, params.name);
+  const { versionId: newVersionId, changed } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
+  if (!changed) return { versionId: newVersionId };
+
+  try {
+    await recordDecisionEvidence(
+      projectSessionRenamedDecision({ workspaceId: params.workspaceId, coachUserId: ctx.userId, clientProfileId: params.clientProfileId, editedVersionId: newVersionId, path: params.path, fromName, toName: params.name, decidedAtIso: new Date().toISOString() })
+    );
+  } catch (evidenceError) {
+    console.error(`renameProgramProposalSessionAction: decision evidence projection failed (canonical rename already saved): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
+  return { versionId: newVersionId };
+}
+
+/** Converts a scheduled training day into a real, honest rest day — one
+ * direction only (see lib/training/program-proposal-editing.ts's own doc
+ * for why the reverse isn't supported: it would require synthesizing real
+ * prescriptions from nothing, which is generation infrastructure, not an
+ * edit). */
+export async function convertProgramProposalDayToRestAction(params: { workspaceId: string; clientProfileId: string; versionId: string; weekNumber: number; dayOfWeek: DayOfWeek }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "convertProgramProposalDayToRestAction");
+  const nextContent = convertTrainingDayToRest(current.content, params.weekNumber, params.dayOfWeek);
+  const { versionId: newVersionId, changed } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
+  if (!changed) return { versionId: newVersionId };
+
+  try {
+    await recordDecisionEvidence(
+      projectDayConvertedToRestDecision({ workspaceId: params.workspaceId, coachUserId: ctx.userId, clientProfileId: params.clientProfileId, editedVersionId: newVersionId, weekNumber: params.weekNumber, dayOfWeek: params.dayOfWeek, decidedAtIso: new Date().toISOString() })
+    );
+  } catch (evidenceError) {
+    console.error(`convertProgramProposalDayToRestAction: decision evidence projection failed (canonical conversion already saved): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
+  return { versionId: newVersionId };
 }
 
 /** Step 3b: APPROVE — publishes and assigns whichever draft the coach is
@@ -462,6 +641,12 @@ export async function approveProgramProposalAction(params: { workspaceId: string
 
   await publishProgramVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
   const assignmentId = await assignProgramVersionToClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, versionId: params.versionId });
+
+  try {
+    await archiveSiblingDraftVersions({ workspaceId: params.workspaceId, programId: approved.programId, resolvedVersionId: params.versionId });
+  } catch (cleanupError) {
+    console.error(`approveProgramProposalAction: sibling draft cleanup failed (canonical approval already succeeded): ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+  }
 
   try {
     await recordDecisionEvidence(
@@ -496,6 +681,12 @@ export async function rejectProgramProposalAction(params: { workspaceId: string;
   if (!original) throw new Error("rejectProgramProposalAction: original proposal version missing");
 
   await rejectProgramProposalVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
+
+  try {
+    await archiveSiblingDraftVersions({ workspaceId: params.workspaceId, programId: rejected.programId, resolvedVersionId: params.versionId });
+  } catch (cleanupError) {
+    console.error(`rejectProgramProposalAction: sibling draft cleanup failed (canonical rejection already succeeded): ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+  }
 
   try {
     await recordDecisionEvidence(

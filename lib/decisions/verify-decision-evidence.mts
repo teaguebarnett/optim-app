@@ -21,6 +21,7 @@ import {
 } from "./types.ts";
 import { projectProgramApprovalDecision, projectProgramRejectionDecision } from "./project-program-generation.ts";
 import { projectHealthReviewDecision } from "./project-health-review-decision.ts";
+import { projectItemRemovedDecision, projectItemAddedDecision, projectSessionRenamedDecision, projectDayConvertedToRestDecision } from "./project-structural-edit.ts";
 
 let passed = 0;
 let failed = 0;
@@ -327,6 +328,51 @@ check("V: DECISION_TYPE_REGISTRY validators reject any extra, unregistered field
     assert.ok(value);
     assert.ok(!("reasoningTrace" in value!) && !("chainOfThought" in value!) && !("modelDeliberation" in value!));
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8D — bounded structural-edit projectors
+// ---------------------------------------------------------------------------
+
+console.log("\nPhase 8D — structural edit projectors (item removed/added, session renamed, day converted)\n");
+
+const structuralPath = { weekNumber: 4, dayOfWeek: "Monday" as const, sessionIndex: 0, blockId: "b1", itemId: "item-monday-1-overhead-press" };
+
+check("item removal projects outcome='rejected' with no fabricated chosenValue", () => {
+  const evidence = projectItemRemovedDecision({ workspaceId: WORKSPACE_ID, coachUserId: COACH_ID, clientProfileId: CLIENT_ID, editedVersionId: "v3", path: structuralPath, exerciseName: "Overhead Press", decidedAtIso: NOW_ISO });
+  validateDecisionEvidenceInput(evidence);
+  assert.equal(evidence.outcome, "rejected");
+  assert.equal(evidence.chosenValue, null);
+  assert.equal(evidence.decisionDomain, "exercise_selection");
+});
+
+check("item addition projects outcome='selected' with no proposedValue — OPTIM never proposed this item", () => {
+  const evidence = projectItemAddedDecision({ workspaceId: WORKSPACE_ID, coachUserId: COACH_ID, clientProfileId: CLIENT_ID, editedVersionId: "v3", path: structuralPath, exerciseName: "Cable Fly", category: "resistance", decidedAtIso: NOW_ISO });
+  validateDecisionEvidenceInput(evidence);
+  assert.equal(evidence.outcome, "selected");
+  assert.equal(evidence.proposedValue, null);
+});
+
+check("session rename projects outcome='edited' with the real before/after names", () => {
+  const evidence = projectSessionRenamedDecision({ workspaceId: WORKSPACE_ID, coachUserId: COACH_ID, clientProfileId: CLIENT_ID, editedVersionId: "v3", path: { weekNumber: 4, dayOfWeek: "Monday" as const, sessionIndex: 0 }, fromName: "Upper", toName: "Push Day", decidedAtIso: NOW_ISO });
+  validateDecisionEvidenceInput(evidence);
+  assert.deepEqual(evidence.proposedValue, { name: "Upper" });
+  assert.deepEqual(evidence.chosenValue, { name: "Push Day" });
+});
+
+check("day-to-rest conversion projects outcome='overridden' — a real structural override, not a mere edit", () => {
+  const evidence = projectDayConvertedToRestDecision({ workspaceId: WORKSPACE_ID, coachUserId: COACH_ID, clientProfileId: CLIENT_ID, editedVersionId: "v3", weekNumber: 6, dayOfWeek: "Sunday", decidedAtIso: NOW_ISO });
+  validateDecisionEvidenceInput(evidence);
+  assert.equal(evidence.outcome, "overridden");
+  assert.equal(evidence.decisionDomain, "scheduling");
+});
+
+check("structural edit source refs are deterministic and distinct per edited version — a retry never duplicates, a later edit is new evidence", () => {
+  const first = projectItemRemovedDecision({ workspaceId: WORKSPACE_ID, coachUserId: COACH_ID, clientProfileId: CLIENT_ID, editedVersionId: "v3", path: structuralPath, exerciseName: "Overhead Press", decidedAtIso: NOW_ISO });
+  const retry = projectItemRemovedDecision({ workspaceId: WORKSPACE_ID, coachUserId: COACH_ID, clientProfileId: CLIENT_ID, editedVersionId: "v3", path: structuralPath, exerciseName: "Overhead Press", decidedAtIso: NOW_ISO });
+  const laterEdit = projectItemRemovedDecision({ workspaceId: WORKSPACE_ID, coachUserId: COACH_ID, clientProfileId: CLIENT_ID, editedVersionId: "v4", path: structuralPath, exerciseName: "Overhead Press", decidedAtIso: NOW_ISO });
+  assert.equal(first.sourceRef, retry.sourceRef);
+  assert.notEqual(first.sourceRef, laterEdit.sourceRef);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
