@@ -42,6 +42,8 @@ import { extractClientProgrammingProfile } from "../../lib/coach/programming-pro
 import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { resolveApplicableCoachRules } from "../../lib/production/rule-resolution";
+import { analyzeClientStateForClient } from "../../lib/production/client-state-evidence";
+import type { ClientStateAnalysis } from "../../lib/client-state/types";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { projectProgramApprovalDecision, projectProgramRejectionDecision, type ProgramProposalSummary } from "../../lib/decisions/project-program-generation";
@@ -773,4 +775,16 @@ export async function setProgramStartDateAction(params: {
   timeZone: string;
 }): Promise<void> {
   await setClientProgramStartDate(params);
+}
+
+/** Phase 9D — the one coach-facing entry point for a real client's shadow
+ * client-state analysis: a read-only, evidence-backed interpretation of
+ * their recent adherence/performance/prescription-completion evidence.
+ * Gated by the same requireAssignedCoachAuthority every other real
+ * client-scoped coach action in this file uses. Intended for a
+ * developer/QA surface (app/dev/client-state) and a later Phase 10
+ * coach-facing summary — never exposed to clients (spec section 32). */
+export async function analyzeClientStateAction(params: { workspaceId: string; clientProfileId: string }): Promise<ClientStateAnalysis> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  return analyzeClientStateForClient(params);
 }
