@@ -68,20 +68,41 @@ export const DECISION_TYPE_REGISTRY: Record<string, { domain: DecisionDomain; va
       optionalString(v.documentedLimitations, "documentedLimitations", t);
     },
   },
-
-  // -- PROOF_OF_CONCEPT_ONLY: registered to prove edited/rejected/
-  // overridden outcomes and a structured prescription delta are
-  // representable without schema redesign, once a real production
-  // review-and-edit UI exists (spec section 24/25) — no current emitter
-  // ever produces this; covered only by verify-decision-evidence.mts. ---
-  prescription_revision: {
+  // Phase 8C — a real, wired resistance-item edit. Deliberately holds only
+  // the fields that actually changed (see lib/training/program-proposal-editing.ts's
+  // groupDeltasByItem) — never the item's full prescription snapshot, so
+  // "untouched fields do not generate fake evidence" (spec test J) is true
+  // by construction, not by convention.
+  item_prescription_edited: {
     domain: "prescription",
     validateValue: (v, t) => {
-      optionalNumber(v.sets, "sets", t);
-      optionalNumber(v.reps, "reps", t);
-      optionalNumber(v.loadLb, "loadLb", t);
-      optionalNumber(v.rpe, "rpe", t);
       optionalString(v.exerciseName, "exerciseName", t);
+      optionalNumber(v.sets, "sets", t);
+      optionalNumber(v.repsLow, "repsLow", t);
+      optionalNumber(v.repsHigh, "repsHigh", t);
+      optionalNumber(v.rpe, "rpe", t);
+      optionalNumber(v.rir, "rir", t);
+      optionalNumber(v.loadValue, "loadValue", t);
+      optionalString(v.loadUnit, "loadUnit", t);
+      optionalNumber(v.restSeconds, "restSeconds", t);
+      optionalString(v.tempo, "tempo", t);
+      optionalString(v.warmupInstruction, "warmupInstruction", t);
+    },
+  },
+  // Phase 8C — the continuous-family counterpart, its own decision_type
+  // (rather than overloading item_prescription_edited) so it can carry its
+  // own domain: "cardio_conditioning" (spec section 15's own taxonomy),
+  // never forced into "prescription".
+  continuous_item_edited: {
+    domain: "cardio_conditioning",
+    validateValue: (v, t) => {
+      optionalString(v.activityName, "activityName", t);
+      optionalNumber(v.durationSeconds, "durationSeconds", t);
+      optionalNumber(v.distanceValue, "distanceValue", t);
+      optionalString(v.distanceUnit, "distanceUnit", t);
+      optionalNumber(v.heartRateLow, "heartRateLow", t);
+      optionalNumber(v.heartRateHigh, "heartRateHigh", t);
+      optionalNumber(v.rpe, "rpe", t);
     },
   },
 };
@@ -169,6 +190,17 @@ export function buildProgramVersionDecisionRef(versionId: string): string {
 
 export function buildHealthReviewDecisionRef(params: { escalationId: string; decidedAtIso: string }): string {
   return `escalation_decision:${params.escalationId}:${params.decidedAtIso}`;
+}
+
+/** One real edit to one real item, on one real edited version — combined
+ * with decision_type, this is what lets the SAME edit (a retried request)
+ * upsert-safely absorb, while a genuinely later, different edit to the
+ * same item (a new versionId, since every edit produces a new draft
+ * version — see lib/training/program-proposal-editing.ts's own doc) is
+ * new evidence. */
+export function buildProgramVersionItemEditRef(params: { versionId: string; path: { weekNumber: number; dayOfWeek: string; sessionIndex: number; blockId: string; itemId: string } }): string {
+  const { versionId, path } = params;
+  return `program_version_item:${versionId}:${path.weekNumber}:${path.dayOfWeek}:${path.sessionIndex}:${path.blockId}:${path.itemId}`;
 }
 
 // ---------------------------------------------------------------------------

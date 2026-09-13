@@ -20,10 +20,12 @@ import { SectionHeader } from "@/components/coach/section-header";
 import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
 import { getClientDetailAction, setClientLifecycleActionServer, activateClientAction } from "@/app/actions/coach-roster";
 import {
-  createPublishAndAssignProgramAction,
+  createProgramProposalAction,
   createPublishAndAssignNutritionAction,
   setProgramStartDateAction,
 } from "@/app/actions/production-programs";
+import { ProgramProposalReview } from "@/components/coach/program-proposal-review";
+import { getProgramProposalForReviewAction } from "@/app/actions/production-programs";
 import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
 import { formatHeightFromAnswers, describePrimaryGoal, formatFieldValue, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
@@ -40,9 +42,10 @@ async function loadDetail(clientId: string) {
 export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
   const detail = await loadDetail(clientId);
 
-  const [history, notes] = await Promise.all([
+  const [history, notes, pendingProposal] = await Promise.all([
     getClientChatHistoryForCoachAction(clientId),
     getClientCoachNotesAction(clientId),
+    getProgramProposalForReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
   ]);
 
   const answers = (detail.onboarding?.answers ?? {}) as Partial<Record<OnboardingStepId, OnboardingStepAnswers>>;
@@ -69,11 +72,11 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
     await revalidate();
   }
 
-  async function createProgramFormAction(formData: FormData) {
+  async function createProgramProposalFormAction(formData: FormData) {
     "use server";
     const title = String(formData.get("title") ?? "Training program");
     const durationWeeks = Number(formData.get("durationWeeks") ?? 4);
-    await createPublishAndAssignProgramAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, title, durationWeeks });
+    await createProgramProposalAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, title, durationWeeks });
     await revalidate();
   }
 
@@ -179,18 +182,24 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
           <p className="mb-2 text-sm text-neutral">
             Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
           </p>
-          <form action={createProgramFormAction} className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col text-xs text-neutral">
-              Title
-              <input type="text" name="title" defaultValue="Training program" className="rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-            </label>
-            <label className="flex flex-col text-xs text-neutral">
-              Weeks
-              <input type="number" name="durationWeeks" defaultValue={4} min={1} max={20} className="w-20 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-            </label>
-            <Button type="submit" variant="primary" size="sm">Create, publish &amp; assign</Button>
-          </form>
+          {pendingProposal ? (
+            <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
+          ) : (
+            <form action={createProgramProposalFormAction} className="flex flex-wrap items-end gap-2">
+              <label className="flex flex-col text-xs text-neutral">
+                Title
+                <input type="text" name="title" defaultValue="Training program" className="rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+              </label>
+              <label className="flex flex-col text-xs text-neutral">
+                Weeks
+                <input type="number" name="durationWeeks" defaultValue={4} min={1} max={20} className="w-20 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+              </label>
+              <Button type="submit" variant="primary" size="sm">Generate proposal</Button>
+            </form>
+          )}
         </Card>
+
+        {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
 
         <Card>
           <h3 className="mb-2 text-sm font-medium text-off-white">Nutrition plan</h3>

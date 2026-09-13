@@ -251,6 +251,16 @@ export interface UniversalTrainingProgramContent {
    * content that predates this field or wasn't produced through the
    * direction-based generator. */
   generationRationale?: string;
+  /** Phase 8C — the real ProgramDirectionSummary.label this content was
+   * generated from (e.g. "Best fit — Push/Pull/Legs"), preserved the same
+   * way generationRationale already is: content.name may later be
+   * overwritten with a coach-chosen title (see
+   * app/actions/production-programs.ts's createProgramProposalAction), so
+   * this is what lets the review/approval decision-evidence flow recover
+   * "what direction did OPTIM actually propose" without re-deriving it
+   * from a title that may no longer contain it. Optional: absent for
+   * content that predates this field. */
+  directionLabel?: string;
   status: "draft" | "assigned";
   createdAtIso: string;
   updatedAtIso: string;

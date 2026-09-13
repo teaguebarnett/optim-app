@@ -24,7 +24,7 @@ import { extractClientProgrammingProfile } from "../lib/coach/programming-profil
 import { generateProgramDirectionSummaries } from "../lib/coach/program-directions.ts";
 import { buildUniversalProgramForDirection, buildPlaceholderProgrammingProfile } from "../lib/coach/universal-program-generation.ts";
 import { DAYS_OF_WEEK_ORDER } from "../lib/coach/training.ts";
-import { projectProgramGenerationDecision } from "../lib/decisions/project-program-generation.ts";
+import { projectProgramApprovalDecision } from "../lib/decisions/project-program-generation.ts";
 import { projectHealthReviewDecision } from "../lib/decisions/project-health-review-decision.ts";
 import { validateDecisionEvidenceInput, type DecisionEvidenceInput } from "../lib/decisions/types.ts";
 
@@ -214,15 +214,16 @@ async function main() {
 
   console.log("\n4. Coach A's real program-generation decision evidence is recorded exactly once\n");
 
-  const generationDecision = projectProgramGenerationDecision({
+  const proposalSummary = { durationWeeks, directionLabel: direction.label, rationale: content.generationRationale ?? "No rationale recorded." };
+  const generationDecision = projectProgramApprovalDecision({
     workspaceId,
     coachUserId: coachA.id,
     clientProfileId: clientAProfileId,
-    versionId: versionRow!.id as string,
+    originalVersionId: versionRow!.id as string,
     programAssignmentId: assignmentId as string,
-    durationWeeks,
-    directionLabel: direction.label,
-    rationale: content.generationRationale ?? "No rationale recorded.",
+    proposedSummary: proposalSummary,
+    chosenSummary: proposalSummary,
+    wasEdited: false,
     decidedAtIso: nowIso,
   });
   const firstInsert = await recordDecisionEvidenceAs(coachASession, generationDecision);

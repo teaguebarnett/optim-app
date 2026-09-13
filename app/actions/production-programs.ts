@@ -23,13 +23,17 @@ import {
   createDraftProgramVersion,
   publishProgramVersion,
   assignProgramVersionToClient,
+  getPendingProgramProposal,
+  getProgramProposalVersion,
+  getOriginalProposalVersion,
+  rejectProgramProposalVersion,
   createDraftNutritionVersion,
   publishNutritionVersion,
   assignNutritionVersionToClient,
   setClientProgramStartDate,
 } from "../../lib/production/programs";
 import { universalProgramToClientAssignedProgram } from "../../lib/training/legacy-adapter";
-import { generateProgramDirectionSummaries } from "../../lib/coach/program-directions";
+import { generateProgramDirectionSummaries, avoidedTermsForProfile } from "../../lib/coach/program-directions";
 import { buildUniversalProgramForDirection, buildPlaceholderProgrammingProfile } from "../../lib/coach/universal-program-generation";
 import { DAYS_OF_WEEK_ORDER } from "../../lib/coach/training";
 import { getOnboardingProgressForClient } from "../../lib/production/onboarding";
@@ -38,12 +42,16 @@ import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
-import { projectProgramGenerationDecision } from "../../lib/decisions/project-program-generation";
+import { projectProgramApprovalDecision, projectProgramRejectionDecision, type ProgramProposalSummary } from "../../lib/decisions/project-program-generation";
+import { projectPrescriptionEditDecision } from "../../lib/decisions/project-prescription-edit";
 import { recordDecisionEvidence } from "../../lib/production/decision-evidence";
+import { locateTrainingItem, applyTrainingItemPatch, diffProgramProposal, groupDeltasByItem, findRestrictionConflicts, type TrainingItemPath, type TrainingItemPatch } from "../../lib/training/program-proposal-editing";
+import { validateUniversalTrainingProgramContent } from "../../lib/production/validation";
 import { resolveClientLocalDateIso } from "../../lib/shared/local-date";
 import type { AppState } from "../../lib/state";
 import type { DailyActivityContent } from "../../lib/production/validation";
 import type { ClientAssignedProgram } from "../../lib/types";
+import type { UniversalTrainingProgramContent } from "../../lib/training/types";
 
 interface OwnClientIdentity {
   clientProfileId: string;
@@ -237,62 +245,44 @@ export async function saveMySupabaseDailyActivityAction(params: {
 // instead.
 const DEFAULT_AVAILABLE_DAYS = [DAYS_OF_WEEK_ORDER[0], DAYS_OF_WEEK_ORDER[2], DAYS_OF_WEEK_ORDER[4]];
 
-/**
- * Phase 5 replaced the old buildDraftProgramFromCatalog placeholder (a
- * clone of the single hardcoded PUSH_WORKOUT catalog exercise) with real,
- * periodized universal generation (lib/coach/universal-program-generation.ts).
- * Phase 6B replaces THAT phase's own placeholder coach/client context with
- * the real persisted equivalents:
- *
- * - Coach methodology: this workspace's own approved Coach Playbook
- *   (lib/production/playbooks.ts's getOrBootstrapApprovedPlaybook) — real
- *   configured methodology when the coach has set one up, or an honest,
- *   safe, bootstrapped default (never a fabricated claim about how this
- *   coach actually coaches) when they haven't yet. Scoped by workspaceId,
- *   matching this product's current "one coach, and that coach is the
- *   workspace owner" reality (see docs/production/PILOT_RUNBOOK.md) — true
- *   per-coach scoping is a real, separate question for a future
- *   multi-coach workspace, not this phase's concern (see this phase's
- *   completion report).
- * - Client context: this client's own real onboarding answers, normalized
- *   through the existing extractClientProgrammingProfile (never a raw
- *   onboarding dump — that function already refuses to fabricate a missing
- *   answer, flagging an honest assumption instead). Falls back to the same
- *   conservative DEFAULT_AVAILABLE_DAYS-based placeholder ONLY when this
- *   client genuinely hasn't completed onboarding yet — generation must
- *   keep working safely for a legacy/incomplete client, never block on it.
- *
- * Phase 7A — `healthReview` is now resolved from the real Supabase-mode
- * equivalent (lib/production/pain-safety.ts's resolveHealthReviewRecordForClient,
- * read from the same escalations rows the coach's real attention inbox
- * already shows), not a hardcoded null. The richer HealthReviewStatus
- * vocabulary (discuss_with_client, proceed_with_limitations, etc.) has no
- * Supabase-mode equivalent yet — see that function's own doc for the exact,
- * documented, honest simplification (a real gap, not silently patched
- * over). Either way, the client's own self-reported injury/restriction
- * answers always reach the profile and always influence exercise selection
- * (see avoidedTermsForProfile), independent of health-review status.
- *
- * Authorization is checked explicitly, here, before any generation work
- * happens — never relying solely on createDraftProgramVersion's own later
- * internal check (defense in depth, matching this codebase's existing
- * discipline elsewhere — e.g. lib/ai/context.ts).
- */
-export async function createPublishAndAssignProgramAction(params: {
-  workspaceId: string;
-  clientProfileId: string;
-  title: string;
-  durationWeeks: number;
-}): Promise<{ assignmentId: string; versionId: string }> {
+/** Phase 8C — the one authorization gate every proposal review/edit/
+ * approve/reject/regenerate action shares: workspace staff role AND,
+ * unless the caller is a workspace admin, genuinely assigned to THIS
+ * client (coach_client_assignments — the same relationship
+ * app_private.can_manage_client already enforces at the RPC layer for the
+ * final assign step). The underlying training_program_versions RLS
+ * policies remain workspace-staff-scoped (unchanged Phase 5/6A behavior,
+ * left alone rather than retrofitted here) — this app-layer gate is what
+ * actually makes "an unrelated coach in the same workspace cannot review/
+ * edit/approve/reject another coach's client's proposal" true for these
+ * specific actions, checked BEFORE any of them touch the database (defense
+ * in depth, matching this file's own established pattern). */
+async function requireAssignedCoachAuthority(workspaceId: string, clientProfileId: string) {
   const ctx = await getAuthenticatedContext();
-  const membership = requireWorkspaceRole(ctx, params.workspaceId, ["workspace_owner", "platform_admin", "coach"]);
+  const membership = requireWorkspaceRole(ctx, workspaceId, ["workspace_owner", "platform_admin", "coach"]);
   if (!isWorkspaceStaffRole(membership.role)) throw new UnauthorizedError();
+  if (membership.role === "coach") {
+    const supabase = await getSupabaseServerClient();
+    const { data } = await supabase.from("coach_client_assignments").select("coach_user_id").eq("client_profile_id", clientProfileId).eq("coach_user_id", ctx.userId).maybeSingle();
+    if (!data) throw new UnauthorizedError();
+  }
+  return ctx;
+}
 
-  const nowIso = new Date().toISOString();
-
+/**
+ * Phase 5/6B's real generation pipeline (Coach Playbook + real onboarding +
+ * real health review, normalized through extractClientProgrammingProfile),
+ * unchanged in substance — Phase 8C only extracts it into its own function
+ * so it can be called from createProgramProposalAction WITHOUT also
+ * publishing/assigning the result (see this phase's own completion report,
+ * "program lifecycle before vs after"). See the prior version of this file
+ * (git history) for the full original doc on why each of these context
+ * sources is resolved the way it is.
+ */
+async function generateUniversalProgramProposalContent(params: { workspaceId: string; clientProfileId: string; coachId: string; title: string; durationWeeks: number }) {
   const supabase = await getSupabaseServerClient();
   const { data: workspaceRow, error: workspaceError } = await supabase.from("workspaces").select("business_name").eq("id", params.workspaceId).single();
-  if (workspaceError) throw new Error(`createPublishAndAssignProgramAction (workspace lookup) failed: ${workspaceError.message}`);
+  if (workspaceError) throw new Error(`generateUniversalProgramProposalContent (workspace lookup) failed: ${workspaceError.message}`);
   const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: workspaceRow.business_name as string });
   const com = playbook.content.operatingModel;
 
@@ -303,47 +293,225 @@ export async function createPublishAndAssignProgramAction(params: {
 
   const directions = generateProgramDirectionSummaries({ profile, com, durationWeeks: params.durationWeeks });
   const direction = directions.find((d) => d.kind === "best_fit") ?? directions[0];
+  const nowIso = new Date().toISOString();
   const { content } = buildUniversalProgramForDirection(direction, {
     clientId: params.clientProfileId,
     workspaceId: params.workspaceId,
-    coachId: ctx.userId,
+    coachId: params.coachId,
     profile,
     com,
     durationWeeks: params.durationWeeks,
     nowIso,
   });
 
-  const { versionId } = await createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content: { ...content, name: params.title } });
-  await publishProgramVersion({ workspaceId: params.workspaceId, versionId });
-  const assignmentId = await assignProgramVersionToClient({
+  return { content: { ...content, name: params.title }, direction, profile, com, nowIso };
+}
+
+function proposalSummaryFrom(content: { durationWeeks: number; directionLabel?: string; generationRationale?: string }): ProgramProposalSummary {
+  return { durationWeeks: content.durationWeeks, directionLabel: content.directionLabel ?? "Unlabeled direction", rationale: content.generationRationale ?? "No rationale recorded." };
+}
+
+/** Step 1 of the Phase 8C lifecycle: GENERATE a real, reviewable proposal.
+ * Persists it as a real draft training_program_versions row, tagged with
+ * WHO it's for (proposedForClientProfileId) so it survives navigation/
+ * reload — but never publishes or assigns it. The client's currently
+ * active program (if any) is completely untouched: nothing here ever
+ * calls assign_active_program_version. No decision evidence is recorded
+ * yet either — nothing has been decided. */
+export async function createProgramProposalAction(params: { workspaceId: string; clientProfileId: string; title: string; durationWeeks: number }): Promise<{ programId: string; versionId: string; versionNumber: number }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { content } = await generateUniversalProgramProposalContent({ ...params, coachId: ctx.userId });
+  return createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content, proposedForClientProfileId: params.clientProfileId });
+}
+
+export interface ProgramProposalReviewView {
+  versionId: string;
+  programId: string;
+  versionNumber: number;
+  /** True once at least one real edit has been saved — the review UI uses
+   * this to show "edited" rather than "as generated." */
+  wasEdited: boolean;
+  content: UniversalTrainingProgramContent;
+  /** Non-blocking — see lib/training/program-proposal-editing.ts's
+   * findRestrictionConflicts doc: coach authority remains final, but the
+   * coach must never be left unable to see an active restriction. */
+  restrictionWarnings: string[];
+}
+
+/** Step 2: the coach's review surface reads this. Returns null when there
+ * is no pending proposal for this client (nothing to review right now). */
+export async function getProgramProposalForReviewAction(params: { workspaceId: string; clientProfileId: string }): Promise<ProgramProposalReviewView | null> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const pending = await getPendingProgramProposal(params.workspaceId, params.clientProfileId);
+  if (!pending) return null;
+
+  const onboarding = await getOnboardingProgressForClient(params.clientProfileId);
+  const healthReview = await resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId);
+  const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
+  const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+  const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: "" });
+  const avoidedTerms = avoidedTermsForProfile(profile, playbook.content.operatingModel);
+
+  return {
+    versionId: pending.versionId,
+    programId: pending.programId,
+    versionNumber: pending.versionNumber,
+    wasEdited: pending.versionNumber > 1,
+    content: pending.content,
+    restrictionWarnings: findRestrictionConflicts(pending.content, avoidedTerms),
+  };
+}
+
+/** Step 3a: EDIT — applies one real, bounded patch (spec section 8's V1
+ * field scope) to one real training item, validates the result as real
+ * universal-grammar content, and persists it as a NEW draft version (the
+ * original proposal, version_number 1, is never mutated — see
+ * lib/production/programs.ts's own doc). Emits exactly one decision-
+ * evidence record for the edited item, comparing the untouched ORIGINAL
+ * proposal's value for that item against what the coach just chose —
+ * never the whole program, never fields the coach didn't touch (spec test
+ * J). Idempotent: submitting the identical patch again (a literal retry)
+ * produces byte-identical content and is detected as a no-op — no new
+ * version, no duplicate evidence. */
+export async function editProgramProposalItemAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: TrainingItemPath; patch: TrainingItemPatch }): Promise<{ versionId: string; warnings: string[] }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const current = await getProgramProposalVersion(params.workspaceId, params.versionId);
+  if (!current || current.status !== "draft") throw new Error("editProgramProposalItemAction: no pending draft proposal at that version");
+
+  const original = await getOriginalProposalVersion(params.workspaceId, current.programId);
+  if (!original) throw new Error("editProgramProposalItemAction: original proposal version missing");
+
+  const beforeItem = locateTrainingItem(current.content, params.path);
+  if (!beforeItem) throw new Error("editProgramProposalItemAction: no item at that path");
+
+  const patchedContent = applyTrainingItemPatch(current.content, params.path, params.patch);
+  validateUniversalTrainingProgramContent(patchedContent);
+
+  if (JSON.stringify(patchedContent) === JSON.stringify(current.content)) {
+    // A genuine no-op retry (identical patch resubmitted) — never create a
+    // redundant version or duplicate evidence for a change that didn't
+    // actually change anything.
+    return { versionId: current.versionId, warnings: [] };
+  }
+
+  const { versionId: newVersionId } = await createDraftProgramVersion({
     workspaceId: params.workspaceId,
-    clientProfileId: params.clientProfileId,
-    versionId,
+    programId: current.programId,
+    title: current.content.name,
+    content: patchedContent,
+    proposedForClientProfileId: params.clientProfileId,
   });
 
-  // Phase 8B — best-effort decision-evidence projection, strictly AFTER
-  // the real canonical publish+assign above already succeeded. A failure
-  // here must never turn an already-successful program assignment into an
-  // apparent failure for the coach.
+  const originalItem = locateTrainingItem(original.content, params.path);
+  if (originalItem) {
+    const deltas = diffProgramProposal(original.content, patchedContent).filter((d) => d.weekNumber === params.path.weekNumber && d.dayOfWeek === params.path.dayOfWeek && d.sessionIndex === params.path.sessionIndex && d.blockId === params.path.blockId && d.itemId === params.path.itemId);
+    const [group] = groupDeltasByItem(deltas);
+    if (group) {
+      const isContinuous = beforeItem.item.category === "continuous";
+      const isSubstitution = group.fields.some((f) => f.field === "name");
+      const proposedFields: Record<string, unknown> = {};
+      const chosenFields: Record<string, unknown> = {};
+      for (const f of group.fields) {
+        const key = f.field === "name" ? (isContinuous ? "activityName" : "exerciseName") : f.field;
+        proposedFields[key] = f.from;
+        chosenFields[key] = f.to;
+      }
+      try {
+        await recordDecisionEvidence(
+          projectPrescriptionEditDecision({
+            workspaceId: params.workspaceId,
+            coachUserId: ctx.userId,
+            clientProfileId: params.clientProfileId,
+            editedVersionId: newVersionId,
+            path: params.path,
+            isContinuous,
+            proposedFields,
+            chosenFields,
+            isSubstitution,
+            decidedAtIso: new Date().toISOString(),
+          })
+        );
+      } catch (evidenceError) {
+        console.error(`editProgramProposalItemAction: decision evidence projection failed (canonical edit already saved): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+      }
+    }
+  }
+
+  const onboarding = await getOnboardingProgressForClient(params.clientProfileId);
+  const healthReview = await resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId);
+  const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
+  const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+  const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: "" });
+  const warnings = findRestrictionConflicts(patchedContent, avoidedTermsForProfile(profile, playbook.content.operatingModel));
+
+  return { versionId: newVersionId, warnings };
+}
+
+/** Step 3b: APPROVE — publishes and assigns whichever draft the coach is
+ * actually approving (the original, unedited proposal, or the latest
+ * edited draft), through the SAME unchanged canonical publish/assign
+ * lifecycle every prior phase already relies on. Records exactly one
+ * program-level decision-evidence entry, keyed to the ORIGINAL proposal's
+ * identity so a retry never duplicates it. */
+export async function approveProgramProposalAction(params: { workspaceId: string; clientProfileId: string; versionId: string }): Promise<{ assignmentId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const approved = await getProgramProposalVersion(params.workspaceId, params.versionId);
+  if (!approved || approved.status !== "draft") throw new Error("approveProgramProposalAction: no pending draft proposal at that version");
+  const original = await getOriginalProposalVersion(params.workspaceId, approved.programId);
+  if (!original) throw new Error("approveProgramProposalAction: original proposal version missing");
+
+  await publishProgramVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
+  const assignmentId = await assignProgramVersionToClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, versionId: params.versionId });
+
   try {
     await recordDecisionEvidence(
-      projectProgramGenerationDecision({
+      projectProgramApprovalDecision({
         workspaceId: params.workspaceId,
         coachUserId: ctx.userId,
         clientProfileId: params.clientProfileId,
-        versionId,
+        originalVersionId: original.versionId,
         programAssignmentId: assignmentId,
-        durationWeeks: params.durationWeeks,
-        directionLabel: direction.label,
-        rationale: content.generationRationale ?? "No rationale recorded.",
-        decidedAtIso: nowIso,
+        proposedSummary: proposalSummaryFrom(original.content),
+        chosenSummary: proposalSummaryFrom(approved.content),
+        wasEdited: approved.versionNumber > 1,
+        decidedAtIso: new Date().toISOString(),
       })
     );
   } catch (evidenceError) {
-    console.error(`createPublishAndAssignProgramAction: decision evidence projection failed (canonical assignment already succeeded): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+    console.error(`approveProgramProposalAction: decision evidence projection failed (canonical assignment already succeeded): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
   }
 
-  return { assignmentId, versionId };
+  return { assignmentId };
+}
+
+/** Step 3c: REJECT — the proposal (whichever draft the coach is currently
+ * looking at) becomes 'archived' and can never become active. It remains
+ * real historical evidence — never deleted, never overwritten. An optional
+ * concise reason is stored as-is; nothing here interprets it. */
+export async function rejectProgramProposalAction(params: { workspaceId: string; clientProfileId: string; versionId: string; reason?: string }): Promise<void> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const rejected = await getProgramProposalVersion(params.workspaceId, params.versionId);
+  if (!rejected || rejected.status !== "draft") return; // already decided (or gone) — a safe, idempotent no-op
+  const original = await getOriginalProposalVersion(params.workspaceId, rejected.programId);
+  if (!original) throw new Error("rejectProgramProposalAction: original proposal version missing");
+
+  await rejectProgramProposalVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
+
+  try {
+    await recordDecisionEvidence(
+      projectProgramRejectionDecision({
+        workspaceId: params.workspaceId,
+        coachUserId: ctx.userId,
+        clientProfileId: params.clientProfileId,
+        originalVersionId: original.versionId,
+        proposedSummary: proposalSummaryFrom(original.content),
+        reason: params.reason,
+        decidedAtIso: new Date().toISOString(),
+      })
+    );
+  } catch (evidenceError) {
+    console.error(`rejectProgramProposalAction: decision evidence projection failed (canonical rejection already saved): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
 }
 
 export async function createPublishAndAssignNutritionAction(params: {

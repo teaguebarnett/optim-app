@@ -298,7 +298,15 @@ export async function createDraftProgramVersion(params: {
    * to live) for why the legacy shape remains accepted here (historical
    * content only, never a new authoring target). */
   content: TrainingProgramVersionContent;
-}): Promise<{ programId: string; versionId: string }> {
+  /** Phase 8C — the client this draft is a real proposal FOR, so a coach
+   * can rediscover "my pending proposal for this client" after navigating
+   * away (see getPendingProgramProposal below). Never grants the named
+   * client any read access on its own — training_program_versions_select's
+   * existing RLS policy only ever gives a client visibility once a version
+   * is actually referenced by their own program_assignments row; this
+   * column plays no part in that policy. */
+  proposedForClientProfileId?: string;
+}): Promise<{ programId: string; versionId: string; versionNumber: number }> {
   const ctx = await requireCoachAuthority(params.workspaceId);
   const supabase = await getSupabaseServerClient();
 
@@ -331,12 +339,118 @@ export async function createDraftProgramVersion(params: {
       status: "draft",
       content: params.content,
       created_by: ctx.userId,
+      proposed_for_client_profile_id: params.proposedForClientProfileId ?? null,
     })
     .select("id")
     .single();
   if (insertError) throw new Error(`createDraftProgramVersion (version insert) failed: ${insertError.message}`);
 
-  return { programId, versionId: versionRow.id as string };
+  return { programId, versionId: versionRow.id as string, versionNumber: nextVersionNumber };
+}
+
+export interface ProgramProposalVersionRow {
+  versionId: string;
+  programId: string;
+  versionNumber: number;
+  status: "draft" | "published" | "archived";
+  content: UniversalTrainingProgramContent;
+  createdAtIso: string;
+}
+
+function rowToProposalVersion(row: Record<string, unknown>): ProgramProposalVersionRow {
+  return {
+    versionId: row.id as string,
+    programId: row.program_id as string,
+    versionNumber: row.version_number as number,
+    status: row.status as "draft" | "published" | "archived",
+    content: row.content as UniversalTrainingProgramContent,
+    createdAtIso: row.created_at as string,
+  };
+}
+
+/** The most recent still-pending (draft) proposal generated for this
+ * client, if any — what makes "generate now, review later" possible (spec
+ * section 4: "do not create a fake in-memory-only review step if the
+ * proposal needs to survive navigation/reload"). Coach-authorized read:
+ * training_program_versions_select's existing RLS is the real backstop
+ * (workspace-staff scoped); this function additionally confirms the
+ * caller genuinely holds a staff role before querying at all. */
+export async function getPendingProgramProposal(workspaceId: string, clientProfileId: string): Promise<ProgramProposalVersionRow | null> {
+  await requireCoachAuthority(workspaceId);
+  const supabase = await getSupabaseServerClient();
+  // Ordered by created_at, NOT version_number: version_number only
+  // disambiguates edits WITHIN one program family (it restarts at 1 for
+  // every new family — see createDraftProgramVersion), so ordering by it
+  // alone can't tell "the latest edit of an older proposal" apart from "an
+  // unrelated newer proposal's very first draft." created_at is the real
+  // "most recently generated/edited" signal across different families.
+  const { data, error } = await supabase
+    .from("training_program_versions")
+    .select("id, program_id, version_number, status, content, created_at")
+    .eq("workspace_id", workspaceId)
+    .eq("proposed_for_client_profile_id", clientProfileId)
+    .eq("status", "draft")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getPendingProgramProposal failed: ${error.message}`);
+  if (!data) return null;
+  return rowToProposalVersion(data);
+}
+
+/** Reads a single training_program_versions row by id, for the review/edit
+ * flow's own use (never client-facing). */
+export async function getProgramProposalVersion(workspaceId: string, versionId: string): Promise<ProgramProposalVersionRow | null> {
+  await requireCoachAuthority(workspaceId);
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("training_program_versions")
+    .select("id, program_id, version_number, status, content, created_at")
+    .eq("workspace_id", workspaceId)
+    .eq("id", versionId)
+    .maybeSingle();
+  if (error) throw new Error(`getProgramProposalVersion failed: ${error.message}`);
+  if (!data) return null;
+  return rowToProposalVersion(data);
+}
+
+/** The original (version_number === 1) proposal for the same program
+ * family a given (possibly-edited) version belongs to — always the real,
+ * untouched OPTIM output, never mutated by any later edit (spec section
+ * 10: preserve BOTH the original proposal and the final coach-selected
+ * content). */
+export async function getOriginalProposalVersion(workspaceId: string, programId: string): Promise<ProgramProposalVersionRow | null> {
+  await requireCoachAuthority(workspaceId);
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("training_program_versions")
+    .select("id, program_id, version_number, status, content, created_at")
+    .eq("workspace_id", workspaceId)
+    .eq("program_id", programId)
+    .eq("version_number", 1)
+    .maybeSingle();
+  if (error) throw new Error(`getOriginalProposalVersion failed: ${error.message}`);
+  if (!data) return null;
+  return rowToProposalVersion(data);
+}
+
+/** A coach's explicit rejection: the draft becomes 'archived' — a real,
+ * already-defined terminal status (plan_version_status) that, before this
+ * phase, no code path ever set — never published, never assignable, but
+ * never deleted either (the rejected proposal remains real historical
+ * evidence, per spec section 14). Idempotent: rejecting an
+ * already-archived version is a safe no-op, not an error, so a retried
+ * request never surfaces as a failure. */
+export async function rejectProgramProposalVersion(params: { workspaceId: string; versionId: string }): Promise<void> {
+  await requireCoachAuthority(params.workspaceId);
+  const supabase = await getSupabaseServerClient();
+  const { error } = await supabase
+    .from("training_program_versions")
+    .update({ status: "archived" })
+    .eq("id", params.versionId)
+    .eq("workspace_id", params.workspaceId)
+    .eq("status", "draft");
+  if (error) throw new Error(`rejectProgramProposalVersion failed: ${error.message}`);
 }
 
 export async function publishProgramVersion(params: { workspaceId: string; versionId: string }): Promise<void> {

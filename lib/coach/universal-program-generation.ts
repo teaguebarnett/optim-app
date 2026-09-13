@@ -447,6 +447,7 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
     durationWeeks,
     weeks,
     generationRationale: buildGenerationRationale(direction, resistanceDayCount, continuousDays),
+    directionLabel: direction.label,
     status: "assigned",
     createdAtIso: input.nowIso,
     updatedAtIso: input.nowIso,

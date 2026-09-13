@@ -19,7 +19,7 @@ import {
   InvalidDecisionEvidenceError,
   type DecisionEvidenceInput,
 } from "./types.ts";
-import { projectProgramGenerationDecision } from "./project-program-generation.ts";
+import { projectProgramApprovalDecision, projectProgramRejectionDecision } from "./project-program-generation.ts";
 import { projectHealthReviewDecision } from "./project-health-review-decision.ts";
 
 let passed = 0;
@@ -47,10 +47,10 @@ function baseInput(overrides: Partial<DecisionEvidenceInput> = {}): DecisionEvid
     coachUserId: COACH_ID,
     clientProfileId: CLIENT_ID,
     decisionDomain: "prescription",
-    decisionType: "prescription_revision",
+    decisionType: "item_prescription_edited",
     outcome: "edited",
-    proposedValue: { sets: 4, reps: 10, rpe: 8 },
-    chosenValue: { sets: 3, reps: 8, rpe: 7 },
+    proposedValue: { sets: 4, repsLow: 8, repsHigh: 10, rpe: 8 },
+    chosenValue: { sets: 3, repsLow: 6, repsHigh: 8, rpe: 7 },
     sourceRef: "test:1",
     decidedAtIso: NOW_ISO,
     ...overrides,
@@ -95,7 +95,7 @@ check("a missing sourceRef fails validation", () => {
 console.log("\nB/C/D/E. Approval, edit, rejection, and override/selection outcomes\n");
 
 check("B: an unchanged approval requires proposedValue and chosenValue, and permits them to be identical", () => {
-  const value = { sets: 3, reps: 8, rpe: 8 };
+  const value = { sets: 3, repsLow: 6, repsHigh: 8, rpe: 8 };
   const input = baseInput({ outcome: "approved", proposedValue: value, chosenValue: value });
   assert.deepEqual(validateClientEvidenceHelper(input).proposedValue, validateClientEvidenceHelper(input).chosenValue);
 });
@@ -143,8 +143,8 @@ console.log("\nF. Proposed vs chosen values both preserved, independently compar
 check("F: proposedValue and chosenValue survive validation as two genuinely distinct objects", () => {
   const input = baseInput();
   const result = validateDecisionEvidenceInput(input);
-  assert.deepEqual(result.proposedValue, { sets: 4, reps: 10, rpe: 8 });
-  assert.deepEqual(result.chosenValue, { sets: 3, reps: 8, rpe: 7 });
+  assert.deepEqual(result.proposedValue, { sets: 4, repsLow: 8, repsHigh: 10, rpe: 8 });
+  assert.deepEqual(result.chosenValue, { sets: 3, repsLow: 6, repsHigh: 8, rpe: 7 });
 });
 
 check("F: computeDecisionValueDelta reports only the fields that actually differ, domain-aware, never free-text diffing", () => {
@@ -220,18 +220,20 @@ check("M: nothing in this module computes a confidence score, a pattern count, o
 // Real projector: program generation (V1's only real, wired program decision)
 // ---------------------------------------------------------------------------
 
-console.log("\nReal projector — program generation (approved, unchanged, since no edit UI exists today)\n");
+console.log("\nReal projector — program proposal approval/rejection (Phase 8C)\n");
 
-check("a real program generation always projects outcome='approved' with identical proposed/chosen values, matching the real current production shape", () => {
-  const evidence = projectProgramGenerationDecision({
+const summary = { durationWeeks: 8, directionLabel: "Best fit — Push/Pull/Legs", rationale: "Chosen for 4 available days and a build_muscle goal." };
+
+check("an unchanged approval projects outcome='approved' with identical proposed/chosen values, keyed to the ORIGINAL proposal's version id", () => {
+  const evidence = projectProgramApprovalDecision({
     workspaceId: WORKSPACE_ID,
     coachUserId: COACH_ID,
     clientProfileId: CLIENT_ID,
-    versionId: "version-1",
+    originalVersionId: "version-1",
     programAssignmentId: "assignment-1",
-    durationWeeks: 8,
-    directionLabel: "Best fit — Push/Pull/Legs",
-    rationale: "Chosen for 4 available days and a build_muscle goal.",
+    proposedSummary: summary,
+    chosenSummary: summary,
+    wasEdited: false,
     decidedAtIso: NOW_ISO,
   });
   validateDecisionEvidenceInput(evidence);
@@ -239,6 +241,38 @@ check("a real program generation always projects outcome='approved' with identic
   assert.deepEqual(evidence.proposedValue, evidence.chosenValue);
   assert.equal(evidence.sourceRef, buildProgramVersionDecisionRef("version-1"));
   assert.equal(evidence.programAssignmentId, "assignment-1");
+});
+
+check("an approval after edits projects outcome='edited', still keyed to the ORIGINAL proposal's version id (not the edited version)", () => {
+  const evidence = projectProgramApprovalDecision({
+    workspaceId: WORKSPACE_ID,
+    coachUserId: COACH_ID,
+    clientProfileId: CLIENT_ID,
+    originalVersionId: "version-1",
+    programAssignmentId: "assignment-1",
+    proposedSummary: summary,
+    chosenSummary: summary,
+    wasEdited: true,
+    decidedAtIso: NOW_ISO,
+  });
+  assert.equal(evidence.outcome, "edited");
+  assert.equal(evidence.sourceRef, buildProgramVersionDecisionRef("version-1"), "keyed to the original, so re-approving after further edits never duplicates the program-level record's identity");
+});
+
+check("a rejection projects outcome='rejected' with no fabricated chosenValue, and an optional reason", () => {
+  const evidence = projectProgramRejectionDecision({
+    workspaceId: WORKSPACE_ID,
+    coachUserId: COACH_ID,
+    clientProfileId: CLIENT_ID,
+    originalVersionId: "version-2",
+    proposedSummary: summary,
+    reason: "too much volume",
+    decidedAtIso: NOW_ISO,
+  });
+  validateDecisionEvidenceInput(evidence);
+  assert.equal(evidence.outcome, "rejected");
+  assert.equal(evidence.chosenValue, null);
+  assert.equal(evidence.reason, "too much volume");
 });
 
 check("the program-generation source ref is deterministic — the same version id always resolves to the same ref", () => {
