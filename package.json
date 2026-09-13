@@ -50,6 +50,7 @@
     "verify:health-safety-escalation": "node --experimental-strip-types lib/coach/verify-health-safety-escalation.mts",
     "verify:health-review-decisions": "node --experimental-strip-types lib/coach/verify-health-review-decisions.mts",
     "verify:signals": "node --experimental-strip-types lib/signals/verify-signals.mts",
+    "verify:decision-evidence": "node --experimental-strip-types lib/decisions/verify-decision-evidence.mts",
     "verify:program-revision": "node --experimental-strip-types lib/coach/verify-program-revision.mts",
     "verify:program-composer-lifecycle": "node --experimental-strip-types lib/coach/verify-program-composer-lifecycle.mts",
     "verify:program-adaptation": "node --experimental-strip-types lib/coach/verify-program-adaptation.mts",

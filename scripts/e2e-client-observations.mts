@@ -213,7 +213,13 @@ async function main() {
   await recordObservationsAs(clientASession, observations);
   check("Client A (real session, RLS-governed): can write their own real projected observations", true);
 
-  const { data: afterFirstRun } = await coachSession.from("client_observations").select("id, metric_key, value_numeric, value_boolean, value_text, unit, recorded_at, updated_at").eq("client_profile_id", clientAProfileId);
+  // Scoped to this day's source_ref prefix, not the client's whole history —
+  // this script is safe to run repeatedly, and step 6/7 below deliberately
+  // create genuinely NEW pain/sleep evidence on every real run (a fresh
+  // escalation id each time), so a client-wide count would grow across
+  // repeated runs even though nothing is actually duplicated.
+  const dayRefPrefix = `daily_records:${clientAProfileId}:${dateIso}`;
+  const { data: afterFirstRun } = await coachSession.from("client_observations").select("id, metric_key, value_numeric, value_boolean, value_text, unit, recorded_at, updated_at").eq("client_profile_id", clientAProfileId).like("source_ref", `${dayRefPrefix}%`);
   const rpeRow = afterFirstRun?.find((r) => r.metric_key === "rpe");
   const loadRow = afterFirstRun?.find((r) => r.metric_key === "performed_load");
   const durationRow = afterFirstRun?.find((r) => r.metric_key === "continuous_duration");
@@ -229,7 +235,7 @@ async function main() {
   console.log("\n4. Idempotent replay — reprocessing the exact same source never duplicates\n");
 
   await recordObservationsAs(clientASession, observations);
-  const { data: afterSecondRun } = await coachSession.from("client_observations").select("id").eq("client_profile_id", clientAProfileId);
+  const { data: afterSecondRun } = await coachSession.from("client_observations").select("id").eq("client_profile_id", clientAProfileId).like("source_ref", `${dayRefPrefix}%`);
   check("I: reprocessing the identical source content twice leaves the exact same row COUNT — no duplicates", (afterSecondRun ?? []).length === (afterFirstRun ?? []).length);
 
   console.log("\n5. A genuine correction updates the same row (recorded_at fixed, updated_at advances)\n");

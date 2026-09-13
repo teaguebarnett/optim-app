@@ -30,6 +30,8 @@ import { RESOLVED_HEALTH_REVIEW_STATUSES } from "../coach/types";
 import type { HealthReviewRecord, HealthReviewStatus } from "../coach/types";
 import { projectAcutePainObservations } from "../signals/project-pain-report.ts";
 import { recordObservations } from "./signals.ts";
+import { projectHealthReviewDecision } from "../decisions/project-health-review-decision.ts";
+import { recordDecisionEvidence } from "./decision-evidence.ts";
 
 /** Decision states that mean "still needs coach action" for programming
  * purposes — the exact complement of RESOLVED_HEALTH_REVIEW_STATUSES (see
@@ -211,27 +213,46 @@ export async function recordHealthReviewDecision(input: HealthReviewDecisionInpu
 
   const supabase = await getSupabaseServerClient();
   const nowIso = new Date().toISOString();
-  const { error, count } = await supabase
+  const { data, error } = await supabase
     .from("escalations")
-    .update(
-      {
-        health_review_status: input.status,
-        // Only ever set when the coach actually typed one — never carries
-        // over a PRIOR decision's limitation text onto a status that
-        // doesn't call for one (e.g. switching to "reviewed_by_coach").
-        documented_limitations: input.status === "proceed_with_limitations" ? input.documentedLimitations!.trim() : null,
-        health_review_decided_by: ctx.userId,
-        health_review_decided_at: nowIso,
-        updated_at: nowIso,
-      },
-      { count: "exact" }
-    )
+    .update({
+      health_review_status: input.status,
+      // Only ever set when the coach actually typed one — never carries
+      // over a PRIOR decision's limitation text onto a status that
+      // doesn't call for one (e.g. switching to "reviewed_by_coach").
+      documented_limitations: input.status === "proceed_with_limitations" ? input.documentedLimitations!.trim() : null,
+      health_review_decided_by: ctx.userId,
+      health_review_decided_at: nowIso,
+      updated_at: nowIso,
+    })
     .eq("id", input.escalationId)
     .eq("workspace_id", input.workspaceId)
-    .eq("reason_category", "pain_or_safety");
+    .eq("reason_category", "pain_or_safety")
+    .select("client_profile_id");
   if (error) throw new Error(`recordHealthReviewDecision failed: ${error.message}`);
   // A zero-row update (wrong workspace, wrong id, or not actually a
   // pain_or_safety row) must surface as a real error, never a silent no-op
   // that looks like success to the caller.
-  if (count === 0) throw new Error(`recordHealthReviewDecision: no matching pain_or_safety escalation ${input.escalationId} in workspace ${input.workspaceId}`);
+  if (!data || data.length === 0) throw new Error(`recordHealthReviewDecision: no matching pain_or_safety escalation ${input.escalationId} in workspace ${input.workspaceId}`);
+
+  // Phase 8B — best-effort decision-evidence projection, strictly AFTER
+  // the real canonical update above already succeeded. A failure here must
+  // never turn an already-successful health-review decision into an
+  // apparent failure for the coach. References the canonical escalation by
+  // id rather than duplicating its lifecycle (spec section 27).
+  try {
+    await recordDecisionEvidence(
+      projectHealthReviewDecision({
+        workspaceId: input.workspaceId,
+        coachUserId: ctx.userId,
+        clientProfileId: data[0].client_profile_id as string,
+        escalationId: input.escalationId,
+        status: input.status,
+        documentedLimitations: input.status === "proceed_with_limitations" ? input.documentedLimitations!.trim() : undefined,
+        decidedAtIso: nowIso,
+      })
+    );
+  } catch (evidenceError) {
+    console.error(`recordHealthReviewDecision: decision evidence projection failed (canonical decision already recorded): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
 }

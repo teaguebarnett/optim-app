@@ -38,6 +38,8 @@ import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { createInitialState } from "../../lib/state";
 import { NUTRITION_TARGETS } from "../../lib/mock-data";
+import { projectProgramGenerationDecision } from "../../lib/decisions/project-program-generation";
+import { recordDecisionEvidence } from "../../lib/production/decision-evidence";
 import { resolveClientLocalDateIso } from "../../lib/shared/local-date";
 import type { AppState } from "../../lib/state";
 import type { DailyActivityContent } from "../../lib/production/validation";
@@ -318,6 +320,29 @@ export async function createPublishAndAssignProgramAction(params: {
     clientProfileId: params.clientProfileId,
     versionId,
   });
+
+  // Phase 8B — best-effort decision-evidence projection, strictly AFTER
+  // the real canonical publish+assign above already succeeded. A failure
+  // here must never turn an already-successful program assignment into an
+  // apparent failure for the coach.
+  try {
+    await recordDecisionEvidence(
+      projectProgramGenerationDecision({
+        workspaceId: params.workspaceId,
+        coachUserId: ctx.userId,
+        clientProfileId: params.clientProfileId,
+        versionId,
+        programAssignmentId: assignmentId,
+        durationWeeks: params.durationWeeks,
+        directionLabel: direction.label,
+        rationale: content.generationRationale ?? "No rationale recorded.",
+        decidedAtIso: nowIso,
+      })
+    );
+  } catch (evidenceError) {
+    console.error(`createPublishAndAssignProgramAction: decision evidence projection failed (canonical assignment already succeeded): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
+
   return { assignmentId, versionId };
 }
 
