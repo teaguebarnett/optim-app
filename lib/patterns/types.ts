@@ -72,6 +72,18 @@ export interface PatternCandidate {
   clientProfileId: string | null;
   contextSignature: ContextSignature;
   direction: PatternDirection;
+  /** Phase 9B — the dominant level-2 comparison key this candidate's
+   * support was grouped by (see analyze-coach-decision-patterns.ts's own
+   * Signal.comparisonKey doc). For a numeric field this always equals
+   * `direction` ("increase"/"decrease"); for a qualitative field
+   * (activityIdentity substitution pair, resolved family, rejection
+   * reason, approval outcome) it carries the SPECIFIC identity `direction`
+   * alone can't distinguish — e.g. two different substitution pairs both
+   * have direction "qualitative_change" but different
+   * dominantComparisonKey values. This is what makes a candidate
+   * signature (lib/patterns/candidate-signature.ts) stable and specific
+   * rather than colliding unrelated qualitative candidates together. */
+  dominantComparisonKey: string;
   /** A plain, neutral, deterministically-templated sentence — never
    * authored by an LLM (spec section 5) and never phrased as a settled
    * fact (spec section 20: this is a candidate, never a "rule",

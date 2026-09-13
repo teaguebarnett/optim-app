@@ -409,6 +409,7 @@ function buildCandidatesForGroup(scope: PatternScope, clientProfileId: string | 
     clientProfileId,
     contextSignature: sig,
     direction,
+    dominantComparisonKey: dominantKey,
     summary: buildSummary(scope, sig, direction, dominantKey),
     supportingEvidenceIds: dominantList.map((s) => s.evidenceId),
     contradictingEvidenceIds: contradicting.map((s) => s.evidenceId),

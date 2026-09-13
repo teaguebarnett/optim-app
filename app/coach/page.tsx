@@ -22,6 +22,8 @@ import { SectionHeader } from "@/components/coach/section-header";
 import { EmptyState } from "@/components/coach/empty-state";
 import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
 import { DemoCoachDashboard } from "@/components/coach/demo-coach-dashboard";
+import { PatternCandidateSection } from "@/components/coach/pattern-candidate-section";
+import { LearnedRulesList } from "@/components/coach/learned-rules-list";
 import { resolveAppMode } from "@/lib/production/mode";
 import { getCoachOperationsRepository } from "@/lib/production/coach-operations";
 import { getOnboardingProgressForClient } from "@/lib/production/onboarding";
@@ -36,6 +38,7 @@ import {
   recordHealthReviewDecisionAction,
   getCampaignsAction,
 } from "@/app/actions/coach-communications";
+import { getEligibleCandidatesForReviewAction, getMyLearnedRulesAction } from "@/app/actions/coach-learned-rules";
 import type { AttentionItem } from "@/lib/production/coach-operations";
 import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
@@ -84,6 +87,12 @@ async function LiveCoachDashboard() {
   const { campaigns } = await getCampaignsAction();
   const activeCampaigns = campaigns.filter((c) => c.status !== "published").length;
   const publishedCampaigns = campaigns.filter((c) => c.status === "published").length;
+
+  // Phase 9B — a light-touch, easily-ignored reflective section; never
+  // allowed to compete with real attention items above, so it renders
+  // after Campaigns rather than at the top of the page.
+  const patternCandidates = await getEligibleCandidatesForReviewAction({ workspaceId });
+  const learnedRules = await getMyLearnedRulesAction({ workspaceId });
 
   // Phase 7A — approve/editAndSend/respondPersonally all send an actual
   // message to the client (approving/editing/replacing "what OPTIM
@@ -205,6 +214,9 @@ async function LiveCoachDashboard() {
           </Card>
         )}
       </section>
+
+      <PatternCandidateSection workspaceId={workspaceId} candidates={patternCandidates} />
+      <LearnedRulesList workspaceId={workspaceId} rules={learnedRules} />
 
       {inbox.resolved.length > 0 && (
         <section className="space-y-3">
