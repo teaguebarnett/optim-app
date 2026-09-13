@@ -108,11 +108,17 @@ export function extractClientProgrammingProfile(onboarding: OnboardingProgress |
   const cardioPreferenceIsAssumed = typeof fuel.cardioPreference !== "string";
   const cardioPreference: CardioPreference = cardioPreferenceIsAssumed ? "neutral_on_cardio" : (fuel.cardioPreference as CardioPreference);
 
-  const hasCurrentInjury = health.hasInjuryHistory === true;
   const injuryBodyAreas = Array.isArray(health.injuryBodyAreas) ? (health.injuryBodyAreas as string[]) : [];
   const clientReportedRestriction = typeof health.injuryRestrictions === "string" && health.injuryRestrictions.trim() ? health.injuryRestrictions.trim() : null;
   const coachDocumentedLimitation = healthReview?.documentedLimitations?.trim() || null;
   const injuryRestrictions = [clientReportedRestriction, coachDocumentedLimitation].filter((v): v is string => !!v).join(" ") || null;
+  // A coach's own documented limitation (from a real "Proceed with
+  // limitations" decision) is a genuine current restriction even when the
+  // client's original onboarding never flagged an injury — e.g. an injury
+  // that happened during training, reported and reviewed after intake. See
+  // program-directions.ts's avoidedTermsForProfile, which is gated on this
+  // flag before it will act on either injuryBodyAreas or injuryRestrictions.
+  const hasCurrentInjury = health.hasInjuryHistory === true || !!coachDocumentedLimitation;
 
   const profile: ClientProgrammingProfile = {
     ...base.snapshot,

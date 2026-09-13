@@ -20,10 +20,11 @@ import { AlertTriangle, CheckCircle2, Megaphone } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/coach/section-header";
 import { EmptyState } from "@/components/coach/empty-state";
-import { EscalationCard } from "@/components/coach/escalation-card";
+import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
 import { DemoCoachDashboard } from "@/components/coach/demo-coach-dashboard";
 import { resolveAppMode } from "@/lib/production/mode";
 import { getCoachOperationsRepository } from "@/lib/production/coach-operations";
+import { getOnboardingProgressForClient } from "@/lib/production/onboarding";
 import {
   getCoachThreadMessagesAction,
   approveEscalationResponseAction,
@@ -32,8 +33,11 @@ import {
   resolveCoachThreadAction,
   resolveEscalationWithoutMessagingAction,
   proposePlaybookExampleAction,
+  recordHealthReviewDecisionAction,
   getCampaignsAction,
 } from "@/app/actions/coach-communications";
+import type { AttentionItem } from "@/lib/production/coach-operations";
+import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
 export default function CoachOverviewPage() {
   if (resolveAppMode() !== "supabase") return <DemoCoachDashboard />;
@@ -51,6 +55,31 @@ async function LiveCoachDashboard() {
   const focus = inbox.open[0] ?? null;
   const rest = inbox.open.slice(1);
   const focusThreadMessages = focus?.hasOpenCoachThread ? await getCoachThreadMessagesAction({ workspaceId, escalationId: focus.id }) : [];
+
+  // Phase 7B — pain_or_safety always sorts first (ESCALATION_PRIORITY,
+  // lib/production/chat.ts), so whenever one is open it IS the focus item;
+  // this never needs to look inside `rest`.
+  async function healthReviewFor(item: AttentionItem): Promise<EscalationHealthReview | undefined> {
+    if (item.escalationReason !== "pain_or_safety") return undefined;
+    const onboarding = await getOnboardingProgressForClient(item.clientId);
+    const clientReportedDetail = typeof onboarding?.answers.health_finish?.injuryRestrictions === "string" ? (onboarding.answers.health_finish.injuryRestrictions as string) : null;
+    const escalationId = item.id;
+    const record: HealthReviewRecord = {
+      clientId: item.clientId,
+      workspaceId,
+      status: item.healthReviewStatus ?? "review_needed",
+      reasons: item.proposedResponse ? [item.proposedResponse] : [],
+      createdAtIso: item.createdAtIso,
+      updatedAtIso: item.createdAtIso,
+      documentedLimitations: item.documentedLimitations ?? undefined,
+    };
+    async function onResolve(status: HealthReviewStatus, documentedLimitations?: string) {
+      "use server";
+      await recordHealthReviewDecisionAction({ workspaceId, escalationId, status, documentedLimitations });
+    }
+    return { clientFirstName: item.clientDisplayName.split(" ")[0], record, clientReportedDetail, onResolve };
+  }
+  const focusHealthReview = focus ? await healthReviewFor(focus) : undefined;
 
   const { campaigns } = await getCampaignsAction();
   const activeCampaigns = campaigns.filter((c) => c.status !== "published").length;
@@ -134,7 +163,7 @@ async function LiveCoachDashboard() {
         />
         {focus ? (
           <>
-            <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} />
+            <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} healthReview={focusHealthReview} />
             {rest.length > 0 && (
               <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-lg)] border border-border">
                 {rest.map((item) => (

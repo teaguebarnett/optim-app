@@ -17,9 +17,11 @@
 
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { SupabaseHealthReviewDecisionCard } from "@/components/coach/supabase-health-review-decision-card";
 import type { AttentionItem } from "@/lib/production/coach-operations";
 import type { ConversationMessageView } from "@/lib/production/chat";
 import { coachThreadLifecycle } from "@/lib/communications/types";
+import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
 export interface EscalationCardActions {
   approve?: () => Promise<void>;
@@ -30,14 +32,26 @@ export interface EscalationCardActions {
   proposeExample?: (formData: FormData) => Promise<void>;
 }
 
+export interface EscalationHealthReview {
+  clientFirstName: string;
+  record: HealthReviewRecord;
+  clientReportedDetail?: string | null;
+  onResolve: (status: HealthReviewStatus, documentedLimitations?: string) => Promise<void>;
+}
+
 export function EscalationCard({
   item,
   threadMessages = [],
   actions,
+  healthReview,
 }: {
   item: AttentionItem;
   threadMessages?: ConversationMessageView[];
   actions: EscalationCardActions;
+  /** Phase 7B — present only for a pain_or_safety item, rendering the
+   * coach's real health-review decision surface inside this SAME card
+   * (never a separate injury dashboard — spec section 15). */
+  healthReview?: EscalationHealthReview;
 }) {
   const lifecycle = item.escalationStatus ? coachThreadLifecycle(item.escalationStatus) : "unopened";
   const statusLabel = (item.escalationStatus ?? item.status).replaceAll("_", " ");
@@ -62,6 +76,17 @@ export function EscalationCard({
         <div className="mb-3">
           <p className="text-label text-neutral">What OPTIM said / proposes</p>
           <p className="mt-1 whitespace-pre-wrap text-body text-neutral">{item.proposedResponse}</p>
+        </div>
+      )}
+
+      {healthReview && (
+        <div className="mb-3">
+          <SupabaseHealthReviewDecisionCard
+            clientFirstName={healthReview.clientFirstName}
+            healthReview={healthReview.record}
+            clientReportedDetail={healthReview.clientReportedDetail}
+            onResolve={healthReview.onResolve}
+          />
         </div>
       )}
 

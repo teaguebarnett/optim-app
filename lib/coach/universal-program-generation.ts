@@ -19,6 +19,8 @@
 
 import {
   avoidedTermsForProfile,
+  exerciseConflictsWithArea,
+  termsMentionedInRestrictionText,
   type ProgramDirectionSummary,
 } from "./program-directions.ts";
 import {
@@ -323,6 +325,20 @@ export function validateUniversalProgramHardConstraints(
       id: "exercises_avoided_all_weeks",
       label: "Avoids exercises the coach never prescribes, in every week",
       passed: avoidedTerms.length === 0 || allTrainingDays.every((d) => resistanceItems(d).every((item) => !avoidedTerms.some((t) => item.name.toLowerCase().includes(t)))),
+    },
+    {
+      id: "movement_restrictions_all_weeks",
+      label: "Avoids exercises that conflict with a reported movement restriction, in every week",
+      passed:
+        !profile.hasCurrentInjury ||
+        allTrainingDays.every((d) =>
+          resistanceItems(d).every(
+            (item) =>
+              !profile.injuryBodyAreas.some((area) => exerciseConflictsWithArea(item.name, area)) &&
+              !termsMentionedInRestrictionText(profile.injuryRestrictions).some((t) => item.name.toLowerCase().includes(t))
+          )
+        ),
+      reason: "An exercise conflicts with a reported injury/movement restriction.",
     },
     {
       id: "usable_every_week",

@@ -12,7 +12,7 @@
 // imports and uses these, never redefines them.
 
 import { coachThreadLifecycle, type EscalationReason, type EscalationStatus } from "../communications/types.ts";
-import type { AttentionQueueItem, AttentionItemKind } from "./types.ts";
+import type { AttentionQueueItem, AttentionItemKind, HealthReviewStatus } from "./types.ts";
 
 /** A minimal structural shape covering exactly the EscalationView fields
  * (see lib/production/chat.ts) this mapping needs — kept as a local
@@ -30,6 +30,12 @@ export interface EscalationLike {
   proposedResponse: string | null;
   createdAtIso: string;
   priority: number;
+  /** Phase 7B — this specific escalation's own real health-review
+   * decision, present only for a pain_or_safety row (see
+   * lib/production/chat.ts's EscalationView doc for why this is per-row,
+   * not the client-wide aggregate). */
+  healthReviewStatus: HealthReviewStatus | null;
+  documentedLimitations: string | null;
 }
 
 /** The one cross-mode status vocabulary the shared UI renders against.
@@ -82,6 +88,12 @@ export interface AttentionItem {
   hasOpenCoachThread: boolean;
   escalationReason?: EscalationReason;
   escalationStatus?: EscalationStatus;
+  /** Phase 7B — present only for a Supabase pain_or_safety escalation; the
+   * real coach decision (or lack of one) on THIS specific report — see
+   * EscalationLike's own doc. Always undefined for a demo item, matching
+   * escalationReason/escalationStatus's own posture. */
+  healthReviewStatus?: HealthReviewStatus | null;
+  documentedLimitations?: string | null;
 }
 
 export interface CoachAttentionInbox {
@@ -130,6 +142,8 @@ export function attentionItemFromEscalation(escalation: EscalationLike): Attenti
     hasOpenCoachThread: coachThreadLifecycle(escalation.status) === "open",
     escalationReason: escalation.reasonCategory,
     escalationStatus: escalation.status,
+    healthReviewStatus: escalation.healthReviewStatus,
+    documentedLimitations: escalation.documentedLimitations,
   };
 }
 

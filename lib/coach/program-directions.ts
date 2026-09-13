@@ -69,14 +69,47 @@ export function exerciseConflictsWithArea(exerciseName: string, area: string): b
   return (INJURY_AREA_EXERCISE_CONFLICTS[area] ?? []).some((term) => name.includes(term));
 }
 
+/** The same fixed, already-trusted conflict vocabulary above, flattened and
+ * deduplicated — never a new medical/diagnostic vocabulary, just every term
+ * this codebase already treats as a real, well-known exercise conflict. */
+const ALL_INJURY_CONFLICT_TERMS = Array.from(new Set(Object.values(INJURY_AREA_EXERCISE_CONFLICTS).flat()));
+
+/**
+ * Phase 7B — finds which of those already-trusted conflict terms appear in
+ * a real human's own restriction text (a client's reported injuryRestrictions
+ * detail, or a coach's documented limitation from a "Proceed with
+ * limitations" health-review decision — see programming-profile.ts's
+ * injuryRestrictions field). This is NOT a general free-text/clinical-
+ * language parser: it never infers meaning, only checks literal
+ * containment of a small fixed term list, exactly the same trust model
+ * this file already applies to a coach's own exercisesAvoided free-text
+ * list (coach-onboarding-engine.ts's freeTextList) — a human wrote text
+ * meant to steer exercise selection, and selection matches on the literal
+ * terms, never on inferred intent.
+ *
+ * This is what lets "No loaded overhead pressing" (a coach's documented
+ * limitation) actually stop "Barbell Overhead Press" from being prescribed
+ * even when the client's onboarding never checked a "shoulder" injury box —
+ * an acute, coach-confirmed restriction reaches generation on its own
+ * words, not only via the pre-existing structured injuryBodyAreas path.
+ */
+export function termsMentionedInRestrictionText(text: string | null): string[] {
+  if (!text) return [];
+  const lower = text.toLowerCase();
+  return ALL_INJURY_CONFLICT_TERMS.filter((term) => lower.includes(term));
+}
+
 /** Every real, conservative term to exclude from exercise selection for
- * this client — the coach's own avoided-exercise list plus a term per
- * exercise conflicting with a reported injury area. Never a full pattern
- * exclusion (a knee restriction still allows a hinge-pattern hamstring
- * exercise, for instance) — only the specific named conflicts above. */
+ * this client — the coach's own avoided-exercise list, a term per exercise
+ * conflicting with a reported injury area, and a term per exercise
+ * conflicting with the client/coach's own restriction text. Never a full
+ * pattern exclusion (a knee restriction still allows a hinge-pattern
+ * hamstring exercise, for instance) — only the specific named conflicts
+ * above. */
 export function avoidedTermsForProfile(profile: ClientProgrammingProfile, com: CoachOperatingModel): string[] {
-  const injuryTerms = profile.hasCurrentInjury ? profile.injuryBodyAreas.flatMap((area) => INJURY_AREA_EXERCISE_CONFLICTS[area] ?? []) : [];
-  return [...com.programArchitecture.exercisesAvoided, ...injuryTerms];
+  const injuryAreaTerms = profile.hasCurrentInjury ? profile.injuryBodyAreas.flatMap((area) => INJURY_AREA_EXERCISE_CONFLICTS[area] ?? []) : [];
+  const restrictionTextTerms = profile.hasCurrentInjury ? termsMentionedInRestrictionText(profile.injuryRestrictions) : [];
+  return [...com.programArchitecture.exercisesAvoided, ...injuryAreaTerms, ...restrictionTextTerms];
 }
 
 const CARDIO_INTEGRATION_BY_PREFERENCE: Record<ClientProgrammingProfile["cardioPreference"], string> = {
@@ -481,7 +514,13 @@ export function validateFullProgramHardConstraints(program: ClientAssignedProgra
       label: "Avoids exercises that conflict with a reported movement restriction",
       passed:
         !profile.hasCurrentInjury ||
-        allTrainingDays.every((d) => (d.workout?.exercises ?? []).every((ex) => !profile.injuryBodyAreas.some((area) => exerciseConflictsWithArea(ex.name, area)))),
+        allTrainingDays.every((d) =>
+          (d.workout?.exercises ?? []).every(
+            (ex) =>
+              !profile.injuryBodyAreas.some((area) => exerciseConflictsWithArea(ex.name, area)) &&
+              !termsMentionedInRestrictionText(profile.injuryRestrictions).some((t) => ex.name.toLowerCase().includes(t))
+          )
+        ),
       reason: "An exercise conflicts with a reported injury/movement restriction.",
     },
     {

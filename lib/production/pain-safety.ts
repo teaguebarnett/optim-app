@@ -22,9 +22,21 @@
 
 import "server-only";
 import { getSupabaseServerClient } from "../supabase/server.ts";
+import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "./auth.ts";
+import { UnauthorizedError } from "./errors.ts";
 import { resolveOwnClientIdentity } from "./identity.ts";
 import { buildPainSummary, type AcutePainReportInput } from "../coach/pain-safety-summary.ts";
-import type { HealthReviewRecord } from "../coach/types";
+import { RESOLVED_HEALTH_REVIEW_STATUSES } from "../coach/types";
+import type { HealthReviewRecord, HealthReviewStatus } from "../coach/types";
+
+/** Decision states that mean "still needs coach action" for programming
+ * purposes — the exact complement of RESOLVED_HEALTH_REVIEW_STATUSES (see
+ * lib/coach/types.ts), reused rather than re-derived so this file can never
+ * silently disagree with the real domain vocabulary about which states
+ * count as resolved. */
+function isPendingHealthReviewStatus(status: HealthReviewStatus): boolean {
+  return !RESOLVED_HEALTH_REVIEW_STATUSES.has(status);
+}
 
 export type { AcutePainReportInput } from "../coach/pain-safety-summary.ts";
 
@@ -65,25 +77,39 @@ export async function reportAcutePainForClient(input: AcutePainReportInput): Pro
 /**
  * The real Supabase-mode equivalent of demo mode's HealthReviewRecord, read
  * back from the SAME escalations rows create_health_safety_escalation
- * writes (never a second, parallel "health review" store — see this
- * module's own doc). Feeds directly into the existing, unchanged
- * lib/coach/programming-profile.ts's extractClientProgrammingProfile /
- * resolveProgrammingProfileReadiness — this is what actually closes the
- * safety gap Phase 6B identified: a real client's unresolved pain_or_safety
- * escalation now genuinely blocks generation exactly like demo mode's
- * unresolved HealthReviewRecord always has.
+ * writes and lib/production/pain-safety.ts's own recordHealthReviewDecision
+ * updates (never a second, parallel "health review" store — see this
+ * module's own doc and the Phase 7B migration's header for why
+ * health_review_status/documented_limitations live as columns on
+ * escalations rather than a new table). Feeds directly into the existing,
+ * unchanged lib/coach/programming-profile.ts's extractClientProgrammingProfile.
  *
- * If this client has ANY unresolved pain_or_safety escalation, the whole
- * record reads as unresolved ("review_needed") — the conservative, safe
- * reading: generation must not treat a client as cleared while even one
- * real safety concern is still open. Only when every pain_or_safety
- * escalation for this client is resolved does it read as resolved.
- * `documentedLimitations`/the richer HealthReviewStatus vocabulary
- * (discuss_with_client, proceed_with_limitations, etc.) has no Supabase-mode
- * equivalent yet — a real, documented remaining gap (see this phase's
- * completion report) — every real escalation here reads as the coarser
- * "review_needed" / "reviewed_by_coach" pair, which is exactly what
- * resolveProgrammingProfileReadiness's own gate actually checks.
+ * Phase 7B — reads the REAL, explicit coach decision (health_review_status)
+ * rather than Phase 7A's coarse approximation from the generic escalation
+ * `status` column. Deliberately does NOT treat `status = 'resolved'` (the
+ * coach dismissing the item from their queue) as equivalent to a real
+ * health decision — an escalation can be resolved-from-the-queue with
+ * health_review_status still null, and that must still read as
+ * "review_needed" here (spec section 6: acknowledgement is not the same as
+ * a coaching decision).
+ *
+ * Policy, in order:
+ *   1. Any pain_or_safety report with NO decision recorded yet
+ *      (health_review_status is null) forces the whole client to read as
+ *      unresolved — conservative and safe: a real concern is still fully
+ *      unaddressed.
+ *   2. Any report whose real decision is itself still a pending state
+ *      (review_needed / discuss_with_client / professional_guidance_requested)
+ *      also forces unresolved — matching sections 10/11's explicit
+ *      requirement that these states never get silently treated as safe to
+ *      proceed.
+ *   3. Only once EVERY pain_or_safety report for this client has a real,
+ *      resolved decision does this resolve — using whichever decision was
+ *      made MOST RECENTLY (by decided-at, not report-created-at), since a
+ *      coach's later decision on any report — old or new — is their
+ *      current, authoritative word on this client's training boundary
+ *      (this is also how a limitation is later changed or cleared: the
+ *      coach records a new decision, which becomes the most recent one).
  *
  * Caller must already be authorized to read this client's data — this
  * function relies on the caller's own RLS-bound session
@@ -94,21 +120,93 @@ export async function resolveHealthReviewRecordForClient(clientProfileId: string
   const supabase = await getSupabaseServerClient();
   const { data, error } = await supabase
     .from("escalations")
-    .select("status, proposed_response, created_at, updated_at")
+    .select("proposed_response, health_review_status, documented_limitations, health_review_decided_at, created_at, updated_at")
     .eq("client_profile_id", clientProfileId)
     .eq("reason_category", "pain_or_safety")
     .order("created_at", { ascending: false });
   if (error) throw new Error(`resolveHealthReviewRecordForClient failed: ${error.message}`);
   if (!data || data.length === 0) return null;
 
-  const hasUnresolved = data.some((row) => row.status !== "resolved");
-  const mostRecent = data[0];
+  const reasons = data.map((row) => row.proposed_response as string).filter((r): r is string => !!r);
+  const mostRecentReport = data[0];
+  const nowIso = new Date().toISOString();
+
+  const undecided = data.some((row) => !row.health_review_status);
+  const stillPending = data.some((row) => row.health_review_status && isPendingHealthReviewStatus(row.health_review_status as HealthReviewStatus));
+  if (undecided || stillPending) {
+    return {
+      clientId: clientProfileId,
+      workspaceId,
+      status: "review_needed",
+      reasons,
+      createdAtIso: mostRecentReport.created_at as string,
+      updatedAtIso: mostRecentReport.updated_at as string,
+    };
+  }
+
+  const decided = data.filter((row) => row.health_review_decided_at);
+  const mostRecentDecision = decided.sort((a, b) => (b.health_review_decided_at as string).localeCompare(a.health_review_decided_at as string))[0];
   return {
     clientId: clientProfileId,
     workspaceId,
-    status: hasUnresolved ? "review_needed" : "reviewed_by_coach",
-    reasons: data.map((row) => row.proposed_response as string).filter((r): r is string => !!r),
-    createdAtIso: mostRecent.created_at as string,
-    updatedAtIso: mostRecent.updated_at as string,
+    status: mostRecentDecision.health_review_status as HealthReviewStatus,
+    reasons,
+    documentedLimitations: (mostRecentDecision.documented_limitations as string | null) ?? undefined,
+    createdAtIso: mostRecentReport.created_at as string,
+    updatedAtIso: (mostRecentDecision.health_review_decided_at as string) ?? nowIso,
   };
+}
+
+export interface HealthReviewDecisionInput {
+  escalationId: string;
+  workspaceId: string;
+  status: HealthReviewStatus;
+  /** Required, non-blank, whenever status is "proceed_with_limitations" —
+   * enforced here, not just in the UI, so no caller can ever persist that
+   * status with no real boundary attached (spec section 7). */
+  documentedLimitations?: string;
+}
+
+/** The one real write path for a coach's structured health-review decision
+ * — a normal authenticated `.update()` on the existing escalations row,
+ * exactly like lib/production/chat.ts's own resolveEscalationWithoutMessaging
+ * already does for the same table (no new RPC needed — escalations_update_staff's
+ * existing RLS policy already authorizes this). Deliberately independent of
+ * the escalation's own `status`/resolved_by/resolved_at (the QUEUE
+ * lifecycle) — a coach may record a real decision without also dismissing
+ * the item from their attention queue, or vice versa (spec section 6). */
+export async function recordHealthReviewDecision(input: HealthReviewDecisionInput): Promise<void> {
+  const ctx = await getAuthenticatedContext();
+  const membership = requireWorkspaceRole(ctx, input.workspaceId, ["workspace_owner", "platform_admin", "coach"]);
+  if (!isWorkspaceStaffRole(membership.role)) throw new UnauthorizedError();
+
+  if (input.status === "proceed_with_limitations" && !input.documentedLimitations?.trim()) {
+    throw new Error("recordHealthReviewDecision: documentedLimitations is required when status is proceed_with_limitations");
+  }
+
+  const supabase = await getSupabaseServerClient();
+  const nowIso = new Date().toISOString();
+  const { error, count } = await supabase
+    .from("escalations")
+    .update(
+      {
+        health_review_status: input.status,
+        // Only ever set when the coach actually typed one — never carries
+        // over a PRIOR decision's limitation text onto a status that
+        // doesn't call for one (e.g. switching to "reviewed_by_coach").
+        documented_limitations: input.status === "proceed_with_limitations" ? input.documentedLimitations!.trim() : null,
+        health_review_decided_by: ctx.userId,
+        health_review_decided_at: nowIso,
+        updated_at: nowIso,
+      },
+      { count: "exact" }
+    )
+    .eq("id", input.escalationId)
+    .eq("workspace_id", input.workspaceId)
+    .eq("reason_category", "pain_or_safety");
+  if (error) throw new Error(`recordHealthReviewDecision failed: ${error.message}`);
+  // A zero-row update (wrong workspace, wrong id, or not actually a
+  // pain_or_safety row) must surface as a real error, never a silent no-op
+  // that looks like success to the caller.
+  if (count === 0) throw new Error(`recordHealthReviewDecision: no matching pain_or_safety escalation ${input.escalationId} in workspace ${input.workspaceId}`);
 }

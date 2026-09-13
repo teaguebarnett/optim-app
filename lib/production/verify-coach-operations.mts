@@ -51,6 +51,8 @@ function makeEscalation(overrides: Partial<EscalationLike> = {}): EscalationLike
     proposedResponse: "Stop that movement for now.",
     createdAtIso: "2026-09-11T12:00:00.000Z",
     priority: 0,
+    healthReviewStatus: null,
+    documentedLimitations: null,
     ...overrides,
   };
 }

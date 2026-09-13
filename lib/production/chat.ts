@@ -48,6 +48,7 @@ import { resolveClientLocalDateIso } from "../shared/local-date.ts";
 import { describeEscalationForAssistantMessage, isValidEscalationTransition } from "../communications/types.ts";
 import type { AssistantDecisionKind } from "../ai/provider.ts";
 import type { EscalationReason, EscalationStatus, MessageActorType } from "../communications/types.ts";
+import type { HealthReviewStatus } from "../coach/types";
 import type { DailyActivityContent } from "./validation.ts";
 
 export class RateLimitExceededError extends Error {
@@ -717,6 +718,16 @@ export interface EscalationView {
    * escalations are triaged in exactly the same order a coach already
    * knows, rather than inventing a second notion of urgency. */
   priority: number;
+  /** Phase 7B — this specific escalation row's own real health-review
+   * decision, if a coach has made one (see
+   * lib/production/pain-safety.ts's recordHealthReviewDecision). Null on
+   * every non-pain_or_safety row, and on a pain_or_safety row no coach has
+   * decided on yet. Deliberately per-row, not the client-wide aggregate
+   * resolveHealthReviewRecordForClient computes for programming-readiness
+   * gating — this is what the coach's queue card reads/writes for THIS
+   * report. */
+  healthReviewStatus: HealthReviewStatus | null;
+  documentedLimitations: string | null;
 }
 
 /** Maps each escalation reason onto the priority the existing attention
@@ -744,7 +755,9 @@ export async function getWorkspaceEscalations(workspaceId: string, statuses?: Es
   const supabase = await getSupabaseServerClient();
   let query = supabase
     .from("escalations")
-    .select("id, client_profile_id, source_message_id, reason_category, status, proposed_response, created_at, client_profiles!inner(display_name), conversation_messages(body)")
+    .select(
+      "id, client_profile_id, source_message_id, reason_category, status, proposed_response, created_at, health_review_status, documented_limitations, client_profiles!inner(display_name), conversation_messages(body)"
+    )
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
   if (statuses && statuses.length > 0) query = query.in("status", statuses);
@@ -767,6 +780,8 @@ export async function getWorkspaceEscalations(workspaceId: string, statuses?: Es
         proposedResponse: (r.proposed_response as string | null) ?? null,
         createdAtIso: r.created_at as string,
         priority: ESCALATION_PRIORITY[reason],
+        healthReviewStatus: (r.health_review_status as HealthReviewStatus | null) ?? null,
+        documentedLimitations: (r.documented_limitations as string | null) ?? null,
       };
     })
     .sort((a, b) => a.priority - b.priority || b.createdAtIso.localeCompare(a.createdAtIso));

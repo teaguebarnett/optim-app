@@ -40,6 +40,7 @@ import {
 import { proposePlaybookExampleFromEscalation, getApprovedPlaybook, approvePlaybookVersion, listPlaybookVersions } from "../../lib/production/playbooks";
 import { resolveClientWorkspaceId } from "../../lib/production/identity";
 import { resolveOwnStaffWorkspace } from "../../lib/production/auth";
+import { recordHealthReviewDecision, type HealthReviewDecisionInput } from "../../lib/production/pain-safety";
 
 // Phase 6.0D-A: the unified coach dashboard (app/coach/page.tsx) now shows
 // the same escalation/campaign data these actions mutate, so every mutation
@@ -95,6 +96,18 @@ export async function resolveCoachThreadAction(params: { workspaceId: string; es
 
 export async function resolveEscalationWithoutMessagingAction(params: { workspaceId: string; escalationId: string }): Promise<void> {
   await resolveEscalationWithoutMessaging(params);
+  revalidateCoachSurfaces();
+}
+
+/** Phase 7B — the one write path for a coach's real, explicit health-review
+ * decision (see lib/production/pain-safety.ts's own doc for why this is
+ * independent of the escalation's queue status). Revalidates the same
+ * coach surfaces as every other escalation mutation here, plus the client's
+ * own program-relevant reads aren't revalidated from this action — the
+ * decision only takes effect for the CLIENT the next time a program is
+ * generated, never retroactively rewriting a program already in progress. */
+export async function recordHealthReviewDecisionAction(params: HealthReviewDecisionInput): Promise<void> {
+  await recordHealthReviewDecision(params);
   revalidateCoachSurfaces();
 }
 

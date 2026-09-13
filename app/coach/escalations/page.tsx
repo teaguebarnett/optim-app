@@ -15,9 +15,10 @@ import { notFound } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/coach/section-header";
-import { EscalationCard } from "@/components/coach/escalation-card";
+import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
 import { resolveAppMode } from "@/lib/production/mode";
 import { getCoachOperationsRepository } from "@/lib/production/coach-operations";
+import { getOnboardingProgressForClient } from "@/lib/production/onboarding";
 import {
   getCoachThreadMessagesAction,
   approveEscalationResponseAction,
@@ -26,7 +27,10 @@ import {
   resolveCoachThreadAction,
   resolveEscalationWithoutMessagingAction,
   proposePlaybookExampleAction,
+  recordHealthReviewDecisionAction,
 } from "@/app/actions/coach-communications";
+import type { AttentionItem } from "@/lib/production/coach-operations";
+import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
 export default async function CoachEscalationsPage() {
   if (resolveAppMode() !== "supabase") {
@@ -42,6 +46,32 @@ export default async function CoachEscalationsPage() {
     inbox.open.filter((item) => item.hasOpenCoachThread).map(async (item) => ({ id: item.id, messages: await getCoachThreadMessagesAction({ workspaceId, escalationId: item.id }) }))
   );
   const threadFor = (id: string) => threads.find((t) => t.id === id)?.messages ?? [];
+
+  // Phase 7B — a real health-review decision surface for every OPEN
+  // pain_or_safety item (never a separate injury dashboard — it renders
+  // inside this same EscalationCard, see that component's own doc).
+  async function healthReviewFor(item: AttentionItem): Promise<EscalationHealthReview | undefined> {
+    if (item.escalationReason !== "pain_or_safety") return undefined;
+    const onboarding = await getOnboardingProgressForClient(item.clientId);
+    const clientReportedDetail = typeof onboarding?.answers.health_finish?.injuryRestrictions === "string" ? (onboarding.answers.health_finish.injuryRestrictions as string) : null;
+    const escalationId = item.id;
+    const record: HealthReviewRecord = {
+      clientId: item.clientId,
+      workspaceId,
+      status: item.healthReviewStatus ?? "review_needed",
+      reasons: item.proposedResponse ? [item.proposedResponse] : [],
+      createdAtIso: item.createdAtIso,
+      updatedAtIso: item.createdAtIso,
+      documentedLimitations: item.documentedLimitations ?? undefined,
+    };
+    async function onResolve(status: HealthReviewStatus, documentedLimitations?: string) {
+      "use server";
+      await recordHealthReviewDecisionAction({ workspaceId, escalationId, status, documentedLimitations });
+    }
+    return { clientFirstName: item.clientDisplayName.split(" ")[0], record, clientReportedDetail, onResolve };
+  }
+  const healthReviews = await Promise.all(inbox.open.map(async (item) => ({ id: item.id, healthReview: await healthReviewFor(item) })));
+  const healthReviewForId = (id: string) => healthReviews.find((h) => h.id === id)?.healthReview;
 
   // Phase 7A — see app/coach/page.tsx's identical actionsFor for why these
   // three are gated on hasSourceMessage: a pain_or_safety escalation with
@@ -109,7 +139,13 @@ export default async function CoachEscalationsPage() {
         ) : (
           <div className="space-y-4">
             {inbox.open.map((item) => (
-              <EscalationCard key={item.id} item={item} threadMessages={threadFor(item.id)} actions={actionsFor(item.id, item.sourceMessageBody !== null)} />
+              <EscalationCard
+                key={item.id}
+                item={item}
+                threadMessages={threadFor(item.id)}
+                actions={actionsFor(item.id, item.sourceMessageBody !== null)}
+                healthReview={healthReviewForId(item.id)}
+              />
             ))}
           </div>
         )}

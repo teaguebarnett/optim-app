@@ -178,6 +178,8 @@ check("a pain_or_safety escalation with no source chat message shows its real re
     proposedResponse: "Pain reported: left shoulder, 7/10, during Bench Press. OPTIM paused this exercise for the client.",
     createdAtIso: "2026-01-01T00:00:00.000Z",
     priority: 0,
+    healthReviewStatus: null,
+    documentedLimitations: null,
   });
   assert.equal(item.summary, "Pain reported: left shoulder, 7/10, during Bench Press. OPTIM paused this exercise for the client.");
   assert.equal(item.kindLabel, "Pain / safety");
