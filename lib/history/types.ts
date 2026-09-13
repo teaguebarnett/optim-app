@@ -25,6 +25,7 @@ import type {
   SkipReason,
   Workout,
 } from "../types";
+import type { ExecutionRecord } from "../training/types";
 
 // ---------------------------------------------------------------------------
 // Training day
@@ -79,6 +80,16 @@ export interface TrainingDaySnapshot {
    * snapshot alone documents the outcome even if derivation logic changes. */
   workingSetsCompleted: number;
   workingSetsPrescribed: number;
+  /** Phase 8A — the continuous-family counterpart of exerciseLogs, mirrored
+   * directly from AppState.workoutSession.continuousExecutions (see that
+   * field's own doc in lib/types.ts). Previously computed live but silently
+   * dropped before reaching archival/persistence — a pre-existing gap this
+   * phase closes narrowly (carrying already-computed data through, not new
+   * capture) so a real completed continuous item (duration/distance/etc.)
+   * has somewhere durable to live, which lib/signals/project-training-day.ts
+   * depends on. Optional so every already-persisted record predating this
+   * field still loads unchanged; treat a missing value the same as {}. */
+  continuousExecutions?: Record<string, ExecutionRecord>;
 }
 
 // ---------------------------------------------------------------------------

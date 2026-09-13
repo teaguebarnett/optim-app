@@ -22,6 +22,8 @@ import "server-only";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import { resolveOwnClientIdentity } from "./identity.ts";
 import { computeHealthReviewRequired } from "../coach/health-review.ts";
+import { projectBaselineInjuryObservations } from "../signals/project-pain-report.ts";
+import { recordObservations } from "./signals.ts";
 import type { OnboardingProgress, OnboardingStepAnswers, OnboardingStepId } from "../coach/types";
 
 interface OnboardingProgressRow {
@@ -158,7 +160,7 @@ export async function completeOnboarding(finalAnswers: OnboardingStepAnswers): P
   const trigger = computeHealthReviewRequired(mergedAnswers.health_finish);
   if (trigger.required) {
     const summary = `Onboarding: ${trigger.reasons.join(" ")}`;
-    const { error: escalationError } = await supabase.rpc("create_health_safety_escalation", {
+    const { data: escalationId, error: escalationError } = await supabase.rpc("create_health_safety_escalation", {
       p_client_profile_id: identity.clientProfileId,
       p_summary: summary,
       p_dedupe_existing: true,
@@ -168,7 +170,32 @@ export async function completeOnboarding(finalAnswers: OnboardingStepAnswers): P
     // surfaced to the server console so it's visible, never silently lost,
     // never falsely reported as success to any caller either (this
     // function's return value never claims a review was created).
-    if (escalationError) console.error(`completeOnboarding: create_health_safety_escalation failed: ${escalationError.message}`);
+    if (escalationError) {
+      console.error(`completeOnboarding: create_health_safety_escalation failed: ${escalationError.message}`);
+    } else if (escalationId && mergedAnswers.health_finish?.hasInjuryHistory === true) {
+      // Phase 8A — best-effort observation projection, strictly AFTER the
+      // real canonical escalation write above already succeeded. Only a
+      // genuine reported body-area injury produces a pain_reported fact —
+      // a review triggered solely by a generic safety-screen answer (e.g.
+      // a pre-participation red flag with no reported injury) has no real
+      // "location" fact to report and correctly produces nothing here.
+      const injuryBodyAreas = Array.isArray(mergedAnswers.health_finish.injuryBodyAreas) ? (mergedAnswers.health_finish.injuryBodyAreas as string[]) : [];
+      if (injuryBodyAreas.length > 0) {
+        try {
+          await recordObservations(
+            projectBaselineInjuryObservations({
+              clientProfileId: identity.clientProfileId,
+              workspaceId: identity.workspaceId,
+              escalationId: escalationId as string,
+              injuryBodyAreas,
+              observedAtIso: nowIso,
+            })
+          );
+        } catch (projectionError) {
+          console.error(`completeOnboarding: observation projection failed (canonical escalation already created): ${projectionError instanceof Error ? projectionError.message : String(projectionError)}`);
+        }
+      }
+    }
   }
 
   return rowToProgress(data, identity.clientProfileId, data.workspace_id as string);

@@ -36,6 +36,8 @@ import {
 } from "./validation";
 import { DEFAULT_WEEK_STARTS_ON } from "../shared/local-date";
 import { resolveUniversalProgramContent } from "../training/legacy-adapter";
+import { projectTrainingDayObservations } from "../signals/project-training-day";
+import { recordObservations } from "./signals";
 import type { AssignedNutritionPlan } from "../types";
 import type { ProgramEnrollment } from "../scheduling/types";
 import type { UniversalTrainingProgramContent } from "../training/types";
@@ -239,6 +241,25 @@ export async function saveDailyActivity(params: {
     { onConflict: "client_profile_id,date_iso" }
   );
   if (error) throw new Error(`saveDailyActivity failed: ${error.message}`);
+
+  // Phase 8A — best-effort observation projection, strictly AFTER the real
+  // canonical write above already succeeded. Never allowed to turn this
+  // into a failed save from the client's point of view (spec section 26):
+  // this autosave fires on every live state change, most of which are
+  // genuinely in-progress and produce zero observations (the projector
+  // itself only emits for a terminal completed/skipped state — see its own
+  // doc), so the common case is a fast, real no-op.
+  try {
+    const observations = projectTrainingDayObservations({
+      clientProfileId: params.clientProfileId,
+      workspaceId: params.workspaceId,
+      dateIso: params.dateIso,
+      training: params.content.training,
+    });
+    await recordObservations(observations);
+  } catch (projectionError) {
+    console.error(`saveDailyActivity: observation projection failed (canonical write already succeeded): ${projectionError instanceof Error ? projectionError.message : String(projectionError)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

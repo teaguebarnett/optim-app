@@ -102,6 +102,7 @@ export function buildDailyRecordFromLiveState(state: AppState, enrollment: Progr
     painReports: deepClone(state.workoutSession.painReports),
     workingSetsCompleted: trainingDayType === "scheduled_workout" ? countWorkingSetsCompleted(state) : 0,
     workingSetsPrescribed: countWorkingSetsPrescribed(prescribedWorkout),
+    continuousExecutions: state.workoutSession.continuousExecutions ? deepClone(state.workoutSession.continuousExecutions) : undefined,
   };
 
   // Every day currently shows the same five meal periods — see

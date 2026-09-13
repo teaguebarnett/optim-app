@@ -28,6 +28,8 @@ import { resolveOwnClientIdentity } from "./identity.ts";
 import { buildPainSummary, type AcutePainReportInput } from "../coach/pain-safety-summary.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES } from "../coach/types";
 import type { HealthReviewRecord, HealthReviewStatus } from "../coach/types";
+import { projectAcutePainObservations } from "../signals/project-pain-report.ts";
+import { recordObservations } from "./signals.ts";
 
 /** Decision states that mean "still needs coach action" for programming
  * purposes — the exact complement of RESOLVED_HEALTH_REVIEW_STATUSES (see
@@ -71,7 +73,30 @@ export async function reportAcutePainForClient(input: AcutePainReportInput): Pro
     console.error(`reportAcutePainForClient: create_health_safety_escalation failed: ${error.message}`);
     return { escalationCreated: false, escalationId: null };
   }
-  return { escalationCreated: true, escalationId: (data as string | null) ?? null };
+
+  const escalationId = (data as string | null) ?? null;
+  // Phase 8A — best-effort observation projection, strictly AFTER the real
+  // canonical escalation write above already succeeded (spec section 26).
+  // A failure here must never turn an already-successful safety report
+  // into an apparent failure for the client.
+  if (escalationId) {
+    try {
+      await recordObservations(
+        projectAcutePainObservations({
+          clientProfileId: identity.clientProfileId,
+          workspaceId: identity.workspaceId,
+          escalationId,
+          location: input.location,
+          ratingZeroToTen: input.ratingZeroToTen,
+          observedAtIso: new Date().toISOString(),
+        })
+      );
+    } catch (projectionError) {
+      console.error(`reportAcutePainForClient: observation projection failed (canonical escalation already created): ${projectionError instanceof Error ? projectionError.message : String(projectionError)}`);
+    }
+  }
+
+  return { escalationCreated: true, escalationId };
 }
 
 /**
