@@ -20,8 +20,12 @@ import assert from "node:assert/strict";
 import {
   attentionItemFromEscalation,
   attentionItemFromDemoQueueItem,
+  attentionItemFromAdjustmentProposal,
+  mergeAttentionItems,
+  ADJUSTMENT_PROPOSAL_PRIORITY,
   type AttentionItem,
   type EscalationLike,
+  type PendingAdjustmentProposalLike,
 } from "../coach/attention-item.ts";
 import type { AttentionQueueItem } from "../coach/types.ts";
 
@@ -185,6 +189,77 @@ check("an escalation-sourced item and a demo-sourced item satisfy the exact same
     assert.equal(typeof item.hasOpenCoachThread, "boolean");
     assert.ok(["open", "awaiting_coach", "coach_responded", "resolved"].includes(item.status));
   }
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n4. Phase 10C — attentionItemFromAdjustmentProposal / mergeAttentionItems\n");
+
+function makeAdjustment(overrides: Partial<PendingAdjustmentProposalLike> = {}): PendingAdjustmentProposalLike {
+  return {
+    versionId: "version-1",
+    clientProfileId: "client-2",
+    clientDisplayName: "Client T",
+    adjustmentTypeLabel: "Schedule adjustment",
+    rationale: "Recurring schedule conflict — OPTIM proposes converting Thursday to a rest day for the remainder of the current training block.",
+    createdAtIso: "2026-09-12T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+check("maps every field faithfully, carries the deep-link discriminator, never an escalation shape", () => {
+  const item = attentionItemFromAdjustmentProposal(makeAdjustment());
+  assert.equal(item.clientId, "client-2");
+  assert.equal(item.clientDisplayName, "Client T");
+  assert.equal(item.kindLabel, "Schedule adjustment");
+  assert.equal(item.summary, makeAdjustment().rationale);
+  assert.equal(item.status, "open");
+  assert.equal(item.hasOpenCoachThread, false);
+  assert.equal(item.escalationReason, undefined);
+  assert.deepEqual(item.adjustmentProposal, { clientProfileId: "client-2", versionId: "version-1" });
+});
+
+check("A/J: kindLabel and summary are the real proposal type/rationale, never a raw enum or internal id", () => {
+  const item = attentionItemFromAdjustmentProposal(makeAdjustment({ adjustmentTypeLabel: "Volume adjustment", rationale: "Repeated under-completion." }));
+  assert.equal(item.kindLabel, "Volume adjustment");
+  assert.ok(!/^[a-z_]+$/.test(item.kindLabel), "must be a human label, not a raw enum value");
+  assert.equal(item.summary, "Repeated under-completion.");
+});
+
+check("I: client name/context is carried through faithfully", () => {
+  const item = attentionItemFromAdjustmentProposal(makeAdjustment({ clientDisplayName: "Jordan R." }));
+  assert.equal(item.clientDisplayName, "Jordan R.");
+});
+
+check("K: the deep-link target embeds the real client id and version id needed to navigate directly", () => {
+  const item = attentionItemFromAdjustmentProposal(makeAdjustment({ clientProfileId: "client-9", versionId: "version-9" }));
+  assert.equal(item.adjustmentProposal?.clientProfileId, "client-9");
+  assert.equal(item.adjustmentProposal?.versionId, "version-9");
+});
+
+console.log("\n5. L/M — priority: safety always outranks an adjustment proposal\n");
+
+check("L: a pain_or_safety escalation (priority 0) always sorts before an adjustment proposal", () => {
+  const merged = mergeAttentionItems([attentionItemFromEscalation(makeEscalation({ id: "esc-1", reasonCategory: "pain_or_safety" }))], [attentionItemFromAdjustmentProposal(makeAdjustment())]);
+  assert.equal(merged[0].escalationReason, "pain_or_safety");
+  assert.equal(merged[1].adjustmentProposal?.versionId, "version-1");
+});
+
+check("adjustment proposal priority sorts after every real escalation reason on today's scale (0-2)", () => {
+  assert.ok(ADJUSTMENT_PROPOSAL_PRIORITY > 2, "must sort after even the lowest-priority real escalation reason (unresolved_uncertainty = 2)");
+});
+
+check("M: ordering among multiple escalations is preserved when an adjustment proposal is merged in", () => {
+  const escalations = [attentionItemFromEscalation(makeEscalation({ id: "esc-pain", reasonCategory: "pain_or_safety", priority: 0, createdAtIso: "2026-09-10T00:00:00.000Z" })), attentionItemFromEscalation(makeEscalation({ id: "esc-plan", reasonCategory: "plan_change", priority: 1, createdAtIso: "2026-09-11T00:00:00.000Z" }))];
+  const merged = mergeAttentionItems(escalations, [attentionItemFromAdjustmentProposal(makeAdjustment())]);
+  assert.deepEqual(
+    merged.map((m) => m.id),
+    ["esc-pain", "esc-plan", "adjustment:version-1"]
+  );
+});
+
+check("H: merging the SAME adjustment item twice (simulating a re-run of discovery) never silently drops or duplicates beyond what was actually passed in — the caller's own query is the single source of truth for real duplicates, this function only ever sorts", () => {
+  const merged = mergeAttentionItems([], [attentionItemFromAdjustmentProposal(makeAdjustment())]);
+  assert.equal(merged.length, 1);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

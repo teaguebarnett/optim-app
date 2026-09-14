@@ -48,11 +48,12 @@ import "server-only";
 import { resolveAppMode } from "./mode.ts";
 import { resolveOwnStaffWorkspace } from "./auth.ts";
 import { getWorkspaceEscalations } from "./chat.ts";
+import { getPendingAdjustmentAttentionItems } from "./adjustment-proposals.ts";
 import { buildReviewQueueItems } from "../coach/attention-queue.ts";
 import { ALL_CLIENT_PROFILES, ALL_SAMPLE_REVIEW_REQUESTS } from "../tenancy/seed.ts";
 import { getDemoCoachSession } from "../tenancy/session.ts";
 import { resolveActiveContext } from "../tenancy/context.ts";
-import { attentionItemFromEscalation, attentionItemFromDemoQueueItem, type CoachAttentionInbox } from "../coach/attention-item.ts";
+import { attentionItemFromEscalation, attentionItemFromDemoQueueItem, attentionItemFromAdjustmentProposal, mergeAttentionItems, type CoachAttentionInbox } from "../coach/attention-item.ts";
 
 export type { AttentionItem, AttentionItemStatus, CoachAttentionInbox } from "../coach/attention-item.ts";
 
@@ -92,14 +93,22 @@ class DemoCoachOperationsRepository implements CoachOperationsRepository {
 class SupabaseCoachOperationsRepository implements CoachOperationsRepository {
   async getAttentionInbox(): Promise<CoachAttentionInbox> {
     const { workspaceId, coachDisplayName } = await resolveOwnStaffWorkspace();
-    const [open, resolved] = await Promise.all([
+    const [open, resolved, pendingAdjustments] = await Promise.all([
       getWorkspaceEscalations(workspaceId, ["pending", "proposed", "approved", "coach_responded"]),
       getWorkspaceEscalations(workspaceId, ["resolved"]),
+      // Phase 10C — a real, currently-actionable Phase 10B adjustment
+      // proposal is a genuine coach decision (spec section 2/4), so it
+      // belongs in `open` alongside escalations, re-sorted by the same
+      // shared priority scale. getPendingAdjustmentAttentionItems already
+      // degrades to [] on its own failure (spec section 16) — escalations
+      // must render regardless.
+      getPendingAdjustmentAttentionItems(workspaceId),
     ]);
+    const openItems = mergeAttentionItems(open.map(attentionItemFromEscalation), pendingAdjustments.map(attentionItemFromAdjustmentProposal));
     return {
       workspaceId,
       coachDisplayName,
-      open: open.map(attentionItemFromEscalation),
+      open: openItems,
       resolved: resolved.map(attentionItemFromEscalation),
     };
   }

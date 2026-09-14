@@ -94,6 +94,14 @@ export interface AttentionItem {
    * escalationReason/escalationStatus's own posture. */
   healthReviewStatus?: HealthReviewStatus | null;
   documentedLimitations?: string | null;
+  /** Phase 10C — present ONLY for a real, currently-pending Phase 10B
+   * adjustment proposal (never for an escalation-sourced item). The one
+   * discriminator app/coach/page.tsx uses to render the lightweight
+   * discovery/navigation card instead of the full EscalationCard (spec
+   * section 8: an attention item is discovery + navigation + status, not
+   * a second editor). `versionId` is the exact draft this item points
+   * at — never re-derived from a stale reference. */
+  adjustmentProposal?: { clientProfileId: string; versionId: string };
 }
 
 export interface CoachAttentionInbox {
@@ -101,6 +109,17 @@ export interface CoachAttentionInbox {
   coachDisplayName: string;
   open: AttentionItem[];
   resolved: AttentionItem[];
+}
+
+/** Phase 10C — the one shared merge/sort behind the "open" queue: reuses
+ * each item's own already-established priority number (never a second
+ * invented scale), lower first, real creation time as the tiebreaker —
+ * the exact same rule lib/production/chat.ts's getWorkspaceEscalations
+ * already sorts escalations by. Pure so this ordering (spec section 4:
+ * "do not let an ordinary schedule adjustment outrank a pain escalation")
+ * is directly unit-testable without a real Supabase-mode request. */
+export function mergeAttentionItems(...groups: AttentionItem[][]): AttentionItem[] {
+  return groups.flat().sort((a, b) => a.priority - b.priority || b.createdAtIso.localeCompare(a.createdAtIso));
 }
 
 export const ESCALATION_REASON_LABELS: Record<EscalationReason, string> = {
@@ -112,6 +131,55 @@ export const ESCALATION_REASON_LABELS: Record<EscalationReason, string> = {
   adherence_or_sensitive: "Adherence / sensitive",
   explicit_request: "Client asked for you",
 };
+
+/** Phase 10C — sorts after every real escalation reason (the highest,
+ * i.e. least urgent, real Supabase escalation priority today is
+ * unresolved_uncertainty at 2 — see lib/production/chat.ts's own
+ * ESCALATION_PRIORITY) so a pending adjustment proposal NEVER outranks a
+ * genuine safety/pain/uncertainty review (spec section 4's one hard
+ * requirement), while still surfacing as a real, undismissed item in the
+ * same queue. Matches the demo prototype's own pre-existing
+ * "adaptation-proposal" concept in spirit (lib/coach/attention-queue.ts's
+ * ATTENTION_PRIORITY already reserved a slot for exactly this idea) —
+ * this is the first phase to actually wire a real Supabase-mode item into
+ * that slot. */
+export const ADJUSTMENT_PROPOSAL_PRIORITY = 2.5;
+
+/** One real, structural fact about a pending Phase 10B adjustment
+ * proposal — deliberately NOT the full ProgramProposalReviewView (this is
+ * a discovery/navigation shape, not the review surface itself — spec
+ * section 8). */
+export interface PendingAdjustmentProposalLike {
+  versionId: string;
+  clientProfileId: string;
+  clientDisplayName: string;
+  /** e.g. "Schedule adjustment" — already a plain, human label (see
+   * lib/production/adjustment-proposals.ts's adjustmentTypeLabel), never
+   * the raw AdjustmentProposalType enum value. */
+  adjustmentTypeLabel: string;
+  /** The proposal's own already-bounded, product-safe rationale (spec
+   * section 5/6) — reused verbatim, never rewritten into a stronger or
+   * different claim. */
+  rationale: string;
+  createdAtIso: string;
+}
+
+export function attentionItemFromAdjustmentProposal(proposal: PendingAdjustmentProposalLike): AttentionItem {
+  return {
+    id: `adjustment:${proposal.versionId}`,
+    clientId: proposal.clientProfileId,
+    clientDisplayName: proposal.clientDisplayName,
+    kindLabel: proposal.adjustmentTypeLabel,
+    summary: proposal.rationale,
+    sourceMessageBody: null,
+    proposedResponse: null,
+    status: "open",
+    priority: ADJUSTMENT_PROPOSAL_PRIORITY,
+    createdAtIso: proposal.createdAtIso,
+    hasOpenCoachThread: false,
+    adjustmentProposal: { clientProfileId: proposal.clientProfileId, versionId: proposal.versionId },
+  };
+}
 
 function escalationStatusToAttentionStatus(status: EscalationStatus): AttentionItemStatus {
   if (status === "pending" || status === "proposed") return "open";

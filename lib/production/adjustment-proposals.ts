@@ -147,7 +147,7 @@ export async function resolveAdjustmentProposal(params: { workspaceId: string; c
   }
 }
 
-function adjustmentTypeLabel(type: string): string {
+export function adjustmentTypeLabel(type: string): string {
   switch (type) {
     case "schedule_redistribution":
       return "Schedule adjustment";
@@ -159,5 +159,73 @@ function adjustmentTypeLabel(type: string): string {
       return "Continuous-work adjustment";
     default:
       return "Adjustment";
+  }
+}
+
+/** Phase 10C — the cheapest real discovery source for the coach attention
+ * queue (spec section 17): ONE bounded, workspace-scoped query over
+ * already-persisted draft versions — never a per-client re-run of the
+ * adjustment engine or Phase 9D analysis (spec section 18: "discover, do
+ * not generate"). A pending adjustment proposal IS a real
+ * training_program_versions row with status='draft' and a real
+ * adjustmentProvenance (see lib/production/adjustment-proposals.ts's own
+ * resolveAdjustmentProposal) — approved rows become 'published', rejected
+ * rows become 'archived', so this query's own status filter already
+ * excludes both without any extra logic (spec section 3).
+ *
+ * Staleness (spec section 3/14/29): reuses the EXACT SAME truth Phase
+ * 10B's own approval staleness check uses — a proposal is only genuinely
+ * actionable while content.adjustmentProvenance.activeProgramVersionId
+ * still matches that client's real current active version. This is a
+ * second real query, but bounded by the number of PENDING adjustment
+ * drafts (typically zero or a handful), never the whole roster (spec
+ * section 17's actual concern is roster-wide N+1, not this). */
+export async function getPendingAdjustmentAttentionItems(workspaceId: string): Promise<{ versionId: string; clientProfileId: string; clientDisplayName: string; adjustmentTypeLabel: string; rationale: string; createdAtIso: string }[]> {
+  try {
+    const supabase = await getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from("training_program_versions")
+      .select("id, content, created_at, proposed_for_client_profile_id, client_profiles!proposed_for_client_profile_id(display_name)")
+      .eq("workspace_id", workspaceId)
+      .eq("status", "draft")
+      .not("proposed_for_client_profile_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+
+    const candidates = (data ?? [])
+      .map((row) => {
+        const content = row.content as { adjustmentProvenance?: AdjustmentProvenance };
+        if (!content.adjustmentProvenance) return null;
+        const clientProfile = row.client_profiles as unknown as { display_name: string } | null;
+        return {
+          versionId: row.id as string,
+          clientProfileId: row.proposed_for_client_profile_id as string,
+          clientDisplayName: clientProfile?.display_name ?? "Client",
+          adjustmentTypeLabel: adjustmentTypeLabel(content.adjustmentProvenance.adjustmentType),
+          rationale: content.adjustmentProvenance.rationale,
+          activeProgramVersionId: content.adjustmentProvenance.activeProgramVersionId,
+          createdAtIso: row.created_at as string,
+        };
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+
+    if (candidates.length === 0) return [];
+
+    const currentActiveByClient = new Map<string, string | null>();
+    await Promise.all(
+      candidates.map(async (c) => {
+        if (currentActiveByClient.has(c.clientProfileId)) return;
+        const { data: assignment } = await supabase.from("program_assignments").select("program_version_id").eq("client_profile_id", c.clientProfileId).eq("status", "active").maybeSingle();
+        currentActiveByClient.set(c.clientProfileId, (assignment?.program_version_id as string | null) ?? null);
+      })
+    );
+
+    return candidates
+      .filter((c) => currentActiveByClient.get(c.clientProfileId) === c.activeProgramVersionId)
+      .map((c) => ({ versionId: c.versionId, clientProfileId: c.clientProfileId, clientDisplayName: c.clientDisplayName, adjustmentTypeLabel: c.adjustmentTypeLabel, rationale: c.rationale, createdAtIso: c.createdAtIso }));
+  } catch (err) {
+    console.error(`getPendingAdjustmentAttentionItems failed, showing zero adjustment attention items: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
   }
 }

@@ -175,7 +175,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
   const adjustment = proposal.content.adjustmentProvenance;
 
   return (
-    <Card className="border-l-2 border-l-accent">
+    <Card id="proposal-review" className="border-l-2 border-l-accent">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-medium text-off-white">

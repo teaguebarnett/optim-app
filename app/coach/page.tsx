@@ -21,6 +21,7 @@ import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/coach/section-header";
 import { EmptyState } from "@/components/coach/empty-state";
 import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
+import { AdjustmentAttentionCard } from "@/components/coach/adjustment-attention-card";
 import { DemoCoachDashboard } from "@/components/coach/demo-coach-dashboard";
 import { PatternCandidateSection } from "@/components/coach/pattern-candidate-section";
 import { LearnedRulesList } from "@/components/coach/learned-rules-list";
@@ -172,16 +173,24 @@ async function LiveCoachDashboard() {
         />
         {focus ? (
           <>
-            <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} healthReview={focusHealthReview} />
+            {focus.adjustmentProposal ? <AdjustmentAttentionCard item={focus} /> : <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} healthReview={focusHealthReview} />}
             {rest.length > 0 && (
               <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-lg)] border border-border">
-                {rest.map((item) => (
-                  <div key={item.id} className="flex items-center gap-3 bg-charcoal px-4 py-3">
-                    <span className="rounded-full border border-border-strong px-2.5 py-0.5 text-label text-neutral">{item.kindLabel}</span>
-                    <p className="min-w-0 flex-1 truncate text-body text-off-white">{item.clientDisplayName}</p>
-                    <span className="shrink-0 text-meta text-neutral">{new Date(item.createdAtIso).toLocaleDateString()}</span>
-                  </div>
-                ))}
+                {rest.map((item) =>
+                  item.adjustmentProposal ? (
+                    <Link key={item.id} href={`/coach/clients/${item.adjustmentProposal.clientProfileId}#proposal-review`} className="flex items-center gap-3 bg-charcoal px-4 py-3 hover:bg-surface-raised">
+                      <span className="rounded-full border border-border-strong px-2.5 py-0.5 text-label text-neutral">{item.kindLabel}</span>
+                      <p className="min-w-0 flex-1 truncate text-body text-off-white">{item.clientDisplayName}</p>
+                      <span className="shrink-0 text-meta text-neutral">{new Date(item.createdAtIso).toLocaleDateString()}</span>
+                    </Link>
+                  ) : (
+                    <div key={item.id} className="flex items-center gap-3 bg-charcoal px-4 py-3">
+                      <span className="rounded-full border border-border-strong px-2.5 py-0.5 text-label text-neutral">{item.kindLabel}</span>
+                      <p className="min-w-0 flex-1 truncate text-body text-off-white">{item.clientDisplayName}</p>
+                      <span className="shrink-0 text-meta text-neutral">{new Date(item.createdAtIso).toLocaleDateString()}</span>
+                    </div>
+                  )
+                )}
               </div>
             )}
           </>
