@@ -117,7 +117,7 @@ export function CoachShell({
         <header className="sticky top-0 z-30 hidden border-b border-border bg-charcoal/95 backdrop-blur-md md:block">
           <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-6 px-8">
             <Link href="/coach" className="flex shrink-0 items-center gap-2.5">
-              <OptimMark size={26} strokeWidth={3} className="text-accent" />
+              <OptimMark size={26} className="text-accent" />
               <span className="text-subheading text-off-white">OPTIM</span>
             </Link>
 
@@ -161,7 +161,7 @@ export function CoachShell({
 
         <header className="flex items-center justify-between border-b border-border bg-charcoal px-4 py-3 pc-safe-top md:hidden">
           <div className="flex items-center gap-2">
-            <OptimMark size={20} strokeWidth={2.5} className="text-accent" />
+            <OptimMark size={20} className="text-accent" />
             <span className="text-sm font-semibold text-off-white">OPTIM</span>
           </div>
           <Avatar initials={initialsFromDisplayName(identity.coachDisplayName)} size="sm" />
