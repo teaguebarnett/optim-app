@@ -743,3 +743,369 @@ export const MIXED_SESSION_WITH_POWER_AND_MOBILITY_DEMO: Session = {
     },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Phase 11D — custom coach methods (AMRAP, EMOM/E2MOM, time-capped
+// circuit). Mirror the interval/circuit/power/mobility fixtures above
+// exactly (hand-authored universal Session, never a generation-engine
+// output), matching the Phase 11D spec's own required acceptance cases
+// verbatim (sections 41-46).
+// ---------------------------------------------------------------------------
+
+/** Spec section 41's exact acceptance case: "12-Minute Conditioning" —
+ * 12-minute AMRAP: 8 Goblet Squats, 10 Push-Ups, 12 cal Bike. */
+export const AMRAP_CONDITIONING_SESSION_DEMO: Session = {
+  id: "amrap-conditioning-session-demo",
+  name: "12-Minute Conditioning",
+  focus: "AMRAP conditioning",
+  estimatedDurationMin: 15,
+  coachNote: "Pace yourself — consistent rounds beat a fast start that fades.",
+  blocks: [
+    {
+      id: "block-amrap-conditioning",
+      kind: "circuit",
+      order: 1,
+      terminationMode: "time_cap",
+      timeCapSeconds: 12 * 60,
+      items: [
+        {
+          id: "amrap-goblet-squat",
+          order: 1,
+          name: "Goblet Squat",
+          category: "resistance",
+          coachCue: "Full depth, controlled tempo.",
+          prescription: { family: "resistance", reps: { low: 8, high: 8 }, load: { value: 35, unit: "lb" } },
+        },
+        {
+          id: "amrap-push-up",
+          order: 2,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion — knees down is fine.",
+          prescription: { family: "resistance", reps: { low: 10, high: 10 } },
+        },
+        {
+          id: "amrap-bike",
+          order: 3,
+          name: "Assault Bike",
+          category: "continuous",
+          coachCue: "Steady, sustainable pace.",
+          prescription: { family: "continuous", completionTarget: "12 calories" },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 44's exact acceptance case: a coach-named protocol —
+ * "Elon Death Set Finisher From Hell" — underneath which is a genuinely
+ * structured 10-minute AMRAP with 3 real items. Proves the name is pure
+ * display data: nothing in the runtime ever branches on it (spec section
+ * 30). */
+export const CUSTOM_NAMED_AMRAP_SESSION_DEMO: Session = {
+  id: "custom-named-amrap-session-demo",
+  name: "Finisher",
+  focus: "AMRAP conditioning finisher",
+  estimatedDurationMin: 12,
+  coachNote: "All-out effort for the full 10 minutes.",
+  blocks: [
+    {
+      id: "block-elon-death-set",
+      kind: "circuit",
+      order: 1,
+      name: "Elon Death Set Finisher From Hell",
+      terminationMode: "time_cap",
+      timeCapSeconds: 10 * 60,
+      items: [
+        {
+          id: "death-set-thruster",
+          order: 1,
+          name: "DB Thruster",
+          category: "resistance",
+          coachCue: "Full lockout overhead.",
+          prescription: { family: "resistance", reps: { low: 10, high: 10 }, load: { value: 25, unit: "lb" } },
+        },
+        {
+          id: "death-set-burpee",
+          order: 2,
+          name: "Burpee",
+          category: "resistance",
+          coachCue: "Chest to the floor, full jump at the top.",
+          prescription: { family: "resistance", reps: { low: 8, high: 8 } },
+        },
+        {
+          id: "death-set-bike",
+          order: 3,
+          name: "Bike",
+          category: "continuous",
+          coachCue: "Max sustainable effort.",
+          prescription: { family: "continuous", completionTarget: "12 calories" },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 42's exact acceptance case: a 10-minute EMOM alternating
+ * odd (Bike) and even (Burpees) windows. `items` is the real, distinct
+ * cycling pool — never pre-expanded per window (see
+ * lib/workout/emom.ts's own emomItemForWindow doc). */
+export const EMOM_ALTERNATING_SESSION_DEMO: Session = {
+  id: "emom-alternating-session-demo",
+  name: "10-Minute EMOM",
+  focus: "EMOM conditioning",
+  estimatedDurationMin: 10,
+  coachNote: "Get your work done early in the window — the rest is real recovery.",
+  blocks: [
+    {
+      id: "block-emom-alternating",
+      kind: "emom",
+      order: 1,
+      cadenceSeconds: 60,
+      rounds: 10,
+      items: [
+        {
+          id: "emom-bike",
+          order: 1,
+          name: "Bike",
+          category: "continuous",
+          coachCue: "Hard, controlled effort.",
+          prescription: { family: "continuous", completionTarget: "10 calories" },
+        },
+        {
+          id: "emom-burpee",
+          order: 2,
+          name: "Burpee",
+          category: "resistance",
+          coachCue: "Chest to the floor, full jump at the top.",
+          prescription: { family: "resistance", reps: { low: 8, high: 8 } },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 43's exact acceptance case: "Every 2 minutes x 6: 5 Box
+ * Jumps, 8 Push-Ups" — the SAME EMOM engine, generalized cadenceSeconds
+ * (120), no special E2MOM code (spec section 11). */
+export const E2MOM_SESSION_DEMO: Session = {
+  id: "e2mom-session-demo",
+  name: "E2MOM x 6",
+  focus: "E2MOM power/conditioning",
+  estimatedDurationMin: 12,
+  coachNote: "Full recovery within the 2-minute window before the next round.",
+  blocks: [
+    {
+      id: "block-e2mom",
+      kind: "emom",
+      order: 1,
+      cadenceSeconds: 120,
+      rounds: 6,
+      items: [
+        {
+          id: "e2mom-box-jump",
+          order: 1,
+          name: "Box Jump",
+          category: "power",
+          coachCue: "Maximum intent — stick each landing.",
+          prescription: { family: "power", reps: { low: 5, high: 5 } },
+        },
+        {
+          id: "e2mom-push-up",
+          order: 2,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion.",
+          prescription: { family: "resistance", reps: { low: 8, high: 8 } },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 45's exact acceptance case: "4 rounds OR 10-minute cap,
+ * whichever comes first." A completely ordinary fixed-round circuit
+ * otherwise — same restBetweenItemsSeconds/restBetweenRoundsSeconds
+ * semantics, same >=2-item rule, real rounds AND a real time cap. */
+export const TIME_CAPPED_CIRCUIT_SESSION_DEMO: Session = {
+  id: "time-capped-circuit-session-demo",
+  name: "Time-Capped Conditioning Circuit",
+  focus: "Time-capped circuit",
+  estimatedDurationMin: 15,
+  coachNote: "Push the pace — but if the clock runs out, wherever you are is where you finish.",
+  blocks: [
+    {
+      id: "block-time-capped-circuit",
+      kind: "circuit",
+      order: 1,
+      rounds: 4,
+      terminationMode: "rounds_or_time_cap",
+      timeCapSeconds: 10 * 60,
+      restBetweenItemsSeconds: 10,
+      restBetweenRoundsSeconds: 60,
+      items: [
+        {
+          id: "time-capped-kb-swing",
+          order: 1,
+          name: "Kettlebell Swing",
+          category: "resistance",
+          coachCue: "Drive through the hips.",
+          prescription: { family: "resistance", reps: { low: 15, high: 15 }, load: { value: 35, unit: "lb" } },
+        },
+        {
+          id: "time-capped-box-step",
+          order: 2,
+          name: "Box Step-Up",
+          category: "resistance",
+          coachCue: "Full extension at the top.",
+          prescription: { family: "resistance", reps: { low: 10, high: 10 } },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 46's exact acceptance case ("critical acceptance session"):
+ * mobility -> Box Jump power -> Bench Press resistance -> circuit -> AMRAP
+ * -> EMOM finisher -> mobility cooldown, ALL through the one universal
+ * Session engine — never a modality-specific workout shell, and never a
+ * separate "custom workout" runtime for the AMRAP/EMOM blocks. */
+export const MIXED_SESSION_WITH_CUSTOM_METHODS_DEMO: Session = {
+  id: "mixed-session-with-custom-methods-demo",
+  name: "Full Athletic Session with Finishers",
+  focus: "Power, strength, and conditioning",
+  estimatedDurationMin: 75,
+  coachNote: "Mobility first, then power, then strength, then two real conditioning finishers, then cool down.",
+  blocks: [
+    {
+      id: "block-warmup-mobility-methods",
+      kind: "warmup",
+      order: 1,
+      items: [
+        {
+          id: "warmup-hip-rotation-methods",
+          order: 1,
+          name: "90/90 Hip Rotation",
+          category: "mobility",
+          coachCue: "Control through the full range.",
+          prescription: { family: "mobility", sets: 1, reps: { low: 8, high: 8 }, side: "alternating" },
+        },
+      ],
+    },
+    {
+      id: "block-power-methods",
+      kind: "straight",
+      order: 2,
+      items: [
+        {
+          id: "power-box-jump-methods",
+          order: 1,
+          name: "Box Jump",
+          category: "power",
+          coachCue: "Maximum intent — stick each landing.",
+          prescription: { family: "power", sets: 3, reps: { low: 3, high: 3 }, restSeconds: 120 },
+        },
+      ],
+    },
+    {
+      id: "block-bench-methods",
+      kind: "straight",
+      order: 3,
+      items: [
+        {
+          id: "resistance-bench-methods",
+          order: 1,
+          name: "Barbell Bench Press",
+          category: "resistance",
+          coachCue: "Full range of motion, controlled descent.",
+          prescription: { family: "resistance", sets: 3, reps: { low: 6, high: 8 }, rpe: 8, restSeconds: 120, load: { value: 135, unit: "lb" } },
+        },
+      ],
+    },
+    {
+      id: "block-circuit-methods",
+      kind: "circuit",
+      order: 4,
+      rounds: 2,
+      restBetweenItemsSeconds: 15,
+      restBetweenRoundsSeconds: 60,
+      items: [
+        {
+          id: "circuit-methods-squat",
+          order: 1,
+          name: "Goblet Squat",
+          category: "resistance",
+          coachCue: "Sit between your heels, chest tall.",
+          prescription: { family: "resistance", reps: { low: 12, high: 12 }, load: { value: 35, unit: "lb" } },
+        },
+        {
+          id: "circuit-methods-pushup",
+          order: 2,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion — knees down is fine.",
+          prescription: { family: "resistance", reps: { low: 15, high: 15 } },
+        },
+      ],
+    },
+    {
+      id: "block-amrap-methods",
+      kind: "circuit",
+      order: 5,
+      name: "Conditioning AMRAP",
+      terminationMode: "time_cap",
+      timeCapSeconds: 6 * 60,
+      items: [
+        {
+          id: "amrap-methods-squat",
+          order: 1,
+          name: "Air Squat",
+          category: "resistance",
+          coachCue: "Full depth.",
+          prescription: { family: "resistance", reps: { low: 15, high: 15 } },
+        },
+        {
+          id: "amrap-methods-situp",
+          order: 2,
+          name: "Sit-Up",
+          category: "resistance",
+          coachCue: "Full range of motion.",
+          prescription: { family: "resistance", reps: { low: 10, high: 10 } },
+        },
+      ],
+    },
+    {
+      id: "block-emom-methods",
+      kind: "emom",
+      order: 6,
+      name: "EMOM Finisher",
+      cadenceSeconds: 60,
+      rounds: 4,
+      items: [
+        {
+          id: "emom-methods-burpee",
+          order: 1,
+          name: "Burpee",
+          category: "resistance",
+          coachCue: "Chest to the floor, full jump at the top.",
+          prescription: { family: "resistance", reps: { low: 8, high: 8 } },
+        },
+      ],
+    },
+    {
+      id: "block-cooldown-mobility-methods",
+      kind: "cooldown",
+      order: 7,
+      items: [
+        {
+          id: "cooldown-couch-stretch-methods",
+          order: 1,
+          name: "Couch Stretch",
+          category: "mobility",
+          coachCue: "Squeeze the glute on the stretched side.",
+          prescription: { family: "mobility", sets: 1, duration: { seconds: 45 }, side: "bilateral" },
+        },
+      ],
+    },
+  ],
+};

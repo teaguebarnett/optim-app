@@ -7,8 +7,9 @@ import { Sheet } from "@/components/ui/sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { RpeWheel } from "@/components/workout/live/rpe-wheel";
 import { ActivePainBanner } from "@/components/workout/live/active-pain-banner";
-import { circuitCaptureFields, describeCircuitItemTarget, hasRichCircuitCapture, totalCircuitRounds } from "@/lib/workout/circuit";
+import { circuitCaptureFields, describeCircuitItemTarget, hasRichCircuitCapture, isTimedCircuit, isUnboundedRounds, totalCircuitRounds } from "@/lib/workout/circuit";
 import { formatIntervalSeconds } from "@/lib/workout/interval";
+import { IntervalTimer } from "@/components/workout/live/interval-timer";
 import { SkipReasonSheet } from "@/components/workout/skip-reason-sheet";
 import { PainReportOverlay } from "@/components/workout/live/pain-report-overlay";
 import type { RpeValue, SkipReason } from "@/lib/types";
@@ -28,11 +29,15 @@ export function CircuitItemPanel({
   block,
   round,
   itemIndex,
+  blockStartedAtIso,
   painReportActive = false,
 }: {
   block: Block;
   round: number;
   itemIndex: number;
+  /** Phase 11D — only meaningful (and only rendered) for a genuine
+   * time-driven circuit — see Block.terminationMode's own doc. */
+  blockStartedAtIso?: string;
   painReportActive?: boolean;
 }) {
   const { dispatch, activeContext } = usePrototypeState();
@@ -51,9 +56,15 @@ export function CircuitItemPanel({
   const item = block.items[itemIndex];
   const nextItem = block.items[itemIndex + 1];
   const rounds = totalCircuitRounds(block);
+  const unbounded = isUnboundedRounds(block);
+  const timed = isTimedCircuit(block);
   const rich = hasRichCircuitCapture(item.prescription);
   const capture = circuitCaptureFields(item.prescription);
   const rpeSatisfied = !capture.rpe || rpe !== null || !rich;
+
+  function handleTimeExpired() {
+    dispatch({ type: "EXPIRE_TIMED_CIRCUIT", blockId: block.id });
+  }
 
   function buildActual(): Partial<Prescription> | undefined {
     if (!rich) return undefined;
@@ -101,11 +112,20 @@ export function CircuitItemPanel({
     <div className="pc-panel-in rounded-[var(--radius-lg)] bg-charcoal p-5 shadow-[var(--shadow-subtle)]">
       <ActivePainBanner active={painReportActive} />
       <div className="flex items-center justify-between">
-        <p className="text-label text-neutral">{block.name ?? "Circuit"}</p>
+        <p className="text-label text-neutral">{block.name ?? (unbounded ? "AMRAP" : "Circuit")}</p>
         <p className="text-label text-neutral">
-          Round {round} of {rounds} · Exercise {itemIndex + 1} of {block.items.length}
+          {unbounded ? `Round ${round}` : `Round ${round} of ${rounds}`} · Exercise {itemIndex + 1} of {block.items.length}
         </p>
       </div>
+
+      {timed && blockStartedAtIso && block.timeCapSeconds !== undefined ? (
+        <div className="mt-3 rounded-[var(--radius-md)] bg-off-white/[0.04] p-3">
+          <IntervalTimer phaseStartedAtIso={blockStartedAtIso} durationSeconds={block.timeCapSeconds} />
+          <Button className="mt-2 w-full" variant="outline" size="sm" onClick={handleTimeExpired}>
+            Time&apos;s up — finish {unbounded ? "AMRAP" : "circuit"}
+          </Button>
+        </div>
+      ) : null}
 
       <p className="mt-2 text-heading text-off-white">{item.name}</p>
       {item.coachCue ? <p className="mt-1 text-body text-off-white">{item.coachCue}</p> : null}

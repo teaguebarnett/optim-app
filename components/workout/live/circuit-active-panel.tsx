@@ -22,9 +22,11 @@ export function CircuitActivePanel({
   painReportActive?: boolean;
 }) {
   if (progress.phase === "round-rest") {
-    return <CircuitRoundRestPanel block={block} round={progress.round} restStartedAtIso={progress.restStartedAtIso} painReportActive={painReportActive} />;
+    return (
+      <CircuitRoundRestPanel block={block} round={progress.round} restStartedAtIso={progress.restStartedAtIso} blockStartedAtIso={progress.blockStartedAtIso} painReportActive={painReportActive} />
+    );
   }
   const currentItem: TrainingItemInstance | undefined = block.items[progress.itemIndex];
   if (!currentItem) return null;
-  return <CircuitItemPanel block={block} round={progress.round} itemIndex={progress.itemIndex} painReportActive={painReportActive} />;
+  return <CircuitItemPanel block={block} round={progress.round} itemIndex={progress.itemIndex} blockStartedAtIso={progress.blockStartedAtIso} painReportActive={painReportActive} />;
 }

@@ -104,7 +104,24 @@ export function findBlockById(session: Session | null | undefined, blockId: stri
  * rounds set has nothing to actually repeat and is left to plain flat
  * per-item navigation instead (the same posture superset already has). */
 export function isCircuitBlock(block: Block): boolean {
+  // Phase 11D — a genuine AMRAP deliberately has no `rounds` at all (see
+  // Block.terminationMode's own doc: "as many rounds as possible" has no
+  // real target to set) but is every bit as real a repeating circuit block
+  // as a fixed-round one — its own terminationMode is what makes it real,
+  // not a round count that doesn't exist.
+  if (block.kind === "circuit" && block.terminationMode === "time_cap") return true;
   return block.kind === "circuit" && block.rounds !== undefined && block.rounds > 0;
+}
+
+/** Phase 11D — a real, repeating cadence-window group (spec section 9:
+ * "the method must understand cadence window... current minute/window").
+ * Requires both a real positive cadence and a real positive window count,
+ * mirroring isCircuitBlock's own "must have something real to repeat"
+ * discipline — a `kind: "emom"` block missing either is left to plain flat
+ * per-item navigation instead (same posture as an under-specified circuit
+ * or superset). */
+export function isEmomBlock(block: Block): boolean {
+  return block.kind === "emom" && block.cadenceSeconds !== undefined && block.cadenceSeconds > 0 && block.rounds !== undefined && block.rounds > 0;
 }
 
 export interface InitialFlowState {
@@ -144,7 +161,7 @@ export function buildInitialFlowState(session: Session): InitialFlowState {
     .slice()
     .sort((a, b) => a.order - b.order)
     .flatMap((block) =>
-      isCircuitBlock(block)
+      isCircuitBlock(block) || isEmomBlock(block)
         ? [block.id]
         : block.items
             .slice()

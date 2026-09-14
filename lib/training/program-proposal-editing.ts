@@ -46,7 +46,7 @@
 // Deterministic, side-effect-free, and never mutates its inputs — every
 // function here returns a new value rather than editing in place.
 
-import type { UniversalTrainingProgramContent, TrainingItemInstance, Prescription, ExecutionFamily, Block, Session } from "./types.ts";
+import type { UniversalTrainingProgramContent, TrainingItemInstance, Prescription, ExecutionFamily, Block, BlockTerminationMode, Session } from "./types.ts";
 import type { DayOfWeek } from "../types";
 
 export interface TrainingItemPath {
@@ -236,6 +236,12 @@ export interface BlockPatch {
   restBetweenItemsSeconds?: number;
   restBetweenRoundsSeconds?: number;
   timeCapSeconds?: number;
+  /** Phase 11D — see Block.terminationMode/cadenceSeconds's own docs.
+   * Reuses the exact same block-level editor every other block field
+   * already goes through — no separate custom-method editor (spec section
+   * 29/30). */
+  terminationMode?: BlockTerminationMode;
+  cadenceSeconds?: number;
 }
 
 /** Returns a NEW content tree with exactly one block's own fields
@@ -253,6 +259,8 @@ export function applyBlockPatch(content: UniversalTrainingProgramContent, path: 
     restBetweenItemsSeconds: patch.restBetweenItemsSeconds ?? block.restBetweenItemsSeconds,
     restBetweenRoundsSeconds: patch.restBetweenRoundsSeconds ?? block.restBetweenRoundsSeconds,
     timeCapSeconds: patch.timeCapSeconds ?? block.timeCapSeconds,
+    terminationMode: patch.terminationMode ?? block.terminationMode,
+    cadenceSeconds: patch.cadenceSeconds ?? block.cadenceSeconds,
   }));
 }
 

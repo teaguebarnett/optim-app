@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { completedWorkingSetCount } from "@/components/workout/live/helpers";
 import { formatDistance, formatDurationMinutes } from "@/lib/workout/continuous";
-import { findBlockById } from "@/lib/workout/session-flow";
+import { findBlockById, isEmomBlock } from "@/lib/workout/session-flow";
 import type { WorkoutSession } from "@/lib/types";
 import type { Block, TrainingItemInstance } from "@/lib/training/types";
 
@@ -44,14 +44,18 @@ function continuousCompletionLine(name: string, session: WorkoutSession, itemId:
   return parts.length > 0 ? `${name}: ${parts.join(", ")} logged${suffix}.` : `${name} logged${suffix}.`;
 }
 
-/** Phase 11B — a short, honest completion line for a finished circuit
- * BLOCK: how many of its items resolved as genuinely completed vs
- * skipped, across the whole group — never per-round detail here (that
- * belongs to history, not this transient transition screen). */
+/** Phase 11B — a short, honest completion line for a finished circuit (or,
+ * Phase 11D, EMOM) BLOCK: how many of its items resolved as genuinely
+ * completed vs skipped, across the whole group — never per-round/window
+ * detail here (that belongs to history, not this transient transition
+ * screen). Distinct items only — an alternating EMOM's own items list may
+ * repeat the same TrainingItemInstance across several windows. */
 function circuitCompletionLine(block: Block, session: WorkoutSession): string {
-  const completedItems = block.items.filter((item) => session.continuousExecutions?.[item.id]?.status === "completed").length;
-  const suffix = completedItems < block.items.length ? " (partial)" : "";
-  return `${block.name ?? "Circuit"}: ${completedItems} of ${block.items.length} exercises completed${suffix}.`;
+  const distinctItems = [...new Map(block.items.map((i) => [i.id, i])).values()];
+  const completedItems = distinctItems.filter((item) => session.continuousExecutions?.[item.id]?.status === "completed").length;
+  const suffix = completedItems < distinctItems.length ? " (partial)" : "";
+  const label = block.name ?? (isEmomBlock(block) ? "EMOM" : "Circuit");
+  return `${label}: ${completedItems} of ${distinctItems.length} exercises completed${suffix}.`;
 }
 
 /**
@@ -112,7 +116,9 @@ export function ExerciseTransitionPanel({
         </p>
       ) : finishedCircuitBlock ? (
         <p className="mt-3 text-body text-off-white">
-          {wasDeferred ? `${finishedCircuitBlock.name ?? "Circuit"} moved to later in the session.` : circuitCompletionLine(finishedCircuitBlock, session)}
+          {wasDeferred
+            ? `${finishedCircuitBlock.name ?? (isEmomBlock(finishedCircuitBlock) ? "EMOM" : "Circuit")} moved to later in the session.`
+            : circuitCompletionLine(finishedCircuitBlock, session)}
         </p>
       ) : null}
 

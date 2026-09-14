@@ -33,14 +33,47 @@ export function totalCircuitRounds(block: Block): number {
   return block.rounds && block.rounds > 0 ? block.rounds : 1;
 }
 
+/** Phase 11D — true for a genuine AMRAP: `rounds` is deliberately absent
+ * (see Block.terminationMode's own doc) because there is no real target —
+ * "as many rounds as possible" is the whole point. The position state
+ * machine must never claim "complete" for a block like this on its own;
+ * only a real elapsed-time check (outside this pure module — see
+ * lib/state.ts's EXPIRE_TIMED_CIRCUIT) decides when it's actually over. */
+export function isUnboundedRounds(block: Block): boolean {
+  return block.terminationMode === "time_cap";
+}
+
+/** Phase 11D — true for ANY circuit whose end is time-driven, whether
+ * purely (AMRAP) or in addition to a real round target (a time-capped
+ * circuit, spec section 45) — the one flag the client UX needs to decide
+ * "show a whole-block countdown and a 'time's up, finish' affordance." */
+export function isTimedCircuit(block: Block): boolean {
+  return block.terminationMode === "time_cap" || block.terminationMode === "rounds_or_time_cap";
+}
+
 /**
  * The one deterministic state-machine transition circuit execution is
  * built on (spec test matrix J/K/L/M/N): given the phase that was JUST
  * resolved (an item logged, or round-rest finished), what comes next.
  * Pure — no Date.now(), no randomness, no side effect. Mirrors
  * lib/workout/interval.ts's nextIntervalProgress exactly in spirit.
+ *
+ * Phase 11D — a genuine AMRAP (isUnboundedRounds) never enters
+ * "round-rest" (real AMRAPs are continuous, unbroken work — spec section
+ * 7's own worked example shows no rest between rounds) and never resolves
+ * to "complete" on its own; the last item of a round flows straight into
+ * the first item of the next round, forever, until an external
+ * elapsed-time action (EXPIRE_TIMED_CIRCUIT) ends it.
  */
 export function nextCircuitPosition(block: Block, current: CircuitPosition): CircuitPosition | "complete" {
+  if (isUnboundedRounds(block)) {
+    if (current.phase === "item" && current.itemIndex + 1 < block.items.length) {
+      return { round: current.round, itemIndex: current.itemIndex + 1, phase: "item" };
+    }
+    // Last item of the round (or a stray round-rest, which AMRAP never
+    // itself enters) -> straight into the next round's first item, no rest.
+    return { round: current.round + 1, itemIndex: 0, phase: "item" };
+  }
   const rounds = totalCircuitRounds(block);
   if (current.phase === "item") {
     if (current.itemIndex + 1 < block.items.length) {
@@ -97,6 +130,12 @@ export function describeCircuitItemTarget(item: TrainingItemInstance): string {
   if (p.pace) parts.push(`Target pace ${formatPace(p.pace)}`);
   if (p.heartRate) parts.push(`Target HR ${formatHeartRate(p.heartRate)}`);
   if (p.rpe !== undefined) parts.push(`RPE ${p.rpe}`);
+  // Phase 11D — a calorie-based cardio target (e.g. "12 cal Bike", spec
+  // section 41's own worked example) has no structured duration/distance
+  // primitive to represent it honestly — completionTarget is real,
+  // coach-authored data; surfacing it beats silently falling back to a
+  // redundant repeat of the item's own name.
+  if (parts.length === 0 && p.completionTarget) parts.push(p.completionTarget);
   return parts.join(", ") || item.name;
 }
 
@@ -104,10 +143,21 @@ export function describeCircuitItemTarget(item: TrainingItemInstance): string {
  * review — round count plus each item's own name/target, never raw JSON
  * (spec section 25). */
 export function describeCircuitOverview(block: Block): string[] {
-  const rounds = totalCircuitRounds(block);
-  const lines = [`${rounds} round${rounds === 1 ? "" : "s"}`];
+  const lines: string[] = [];
+  if (isUnboundedRounds(block)) {
+    // Phase 11D — a genuine AMRAP: never claims a round count that
+    // doesn't exist (spec section 7: "do not flatten AMRAP into a guessed
+    // fixed number of rounds").
+    lines.push(`AMRAP — ${formatIntervalSeconds(block.timeCapSeconds ?? 0)} time cap`);
+  } else {
+    const rounds = totalCircuitRounds(block);
+    lines.push(`${rounds} round${rounds === 1 ? "" : "s"}`);
+    if (block.terminationMode === "rounds_or_time_cap" && block.timeCapSeconds !== undefined) {
+      lines.push(`or ${formatIntervalSeconds(block.timeCapSeconds)} time cap, whichever comes first`);
+    }
+  }
   block.items.forEach((item, i) => lines.push(`${i + 1}. ${item.name} — ${describeCircuitItemTarget(item)}`));
-  if (block.restBetweenRoundsSeconds !== undefined) lines.push(`${formatIntervalSeconds(block.restBetweenRoundsSeconds)} between rounds`);
+  if (!isUnboundedRounds(block) && block.restBetweenRoundsSeconds !== undefined) lines.push(`${formatIntervalSeconds(block.restBetweenRoundsSeconds)} between rounds`);
   return lines;
 }
 

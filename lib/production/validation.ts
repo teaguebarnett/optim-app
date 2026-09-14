@@ -141,7 +141,8 @@ function validateProgramWeek(raw: unknown, what: string): ProgramWeek {
 // ---------------------------------------------------------------------------
 
 const EXECUTION_FAMILIES = ["resistance", "continuous", "interval", "circuit", "quality", "power", "mobility"] as const;
-const BLOCK_KINDS = ["straight", "superset", "circuit", "interval", "warmup", "cooldown", "custom"] as const;
+const BLOCK_KINDS = ["straight", "superset", "circuit", "interval", "warmup", "cooldown", "custom", "emom"] as const;
+const BLOCK_TERMINATION_MODES = ["fixed_rounds", "time_cap", "rounds_or_time_cap"] as const;
 const PRESCRIPTION_LOAD_UNITS = ["lb", "kg"] as const;
 const PRESCRIPTION_DISTANCE_UNITS = ["m", "mi", "km"] as const;
 const PRESCRIPTION_PACE_UNITS = ["min_per_mi", "min_per_km"] as const;
@@ -284,20 +285,67 @@ function validateBlock(raw: unknown, what: string): Block {
   if (raw.restBetweenRoundsSeconds !== undefined) requireNumber(raw.restBetweenRoundsSeconds, "block.restBetweenRoundsSeconds", what);
   if (raw.timeCapSeconds !== undefined) requireNumber(raw.timeCapSeconds, "block.timeCapSeconds", what);
   if (raw.completionRule !== undefined) requireString(raw.completionRule, "block.completionRule", what);
+  if (raw.terminationMode !== undefined) requireOneOf(raw.terminationMode, BLOCK_TERMINATION_MODES, "block.terminationMode", what);
+  // Phase 11D — cadenceSeconds is the one generalized primitive covering
+  // EMOM(60)/E2MOM(120)/E3MOM(180) (spec section 11) — always a real
+  // positive number when present, regardless of which block kind uses it.
+  if (raw.cadenceSeconds !== undefined) {
+    if (typeof raw.cadenceSeconds !== "number" || !Number.isFinite(raw.cadenceSeconds) || raw.cadenceSeconds <= 0) {
+      fail(what, `"block.cadenceSeconds" must be a positive number, got ${JSON.stringify(raw.cadenceSeconds)}`);
+    }
+  }
   const items = requireArray(raw.items, "block.items", what);
   if (items.length === 0) fail(what, `"block.items" must have at least one item`);
   items.forEach((i) => validateTrainingItemInstance(i, what));
-  // Phase 11B — a real, repeating circuit (kind: "circuit" WITH rounds
-  // genuinely set — see lib/workout/session-flow.ts's isCircuitBlock,
-  // which draws the exact same line) must have a real positive round
-  // count and at least 2 DIFFERENT items (spec test matrix C: "invalid
-  // round count rejected"; spec section 3's own domain model: "MULTIPLE
-  // DIFFERENT TrainingItemInstances"). A `kind: "circuit"` block with no
-  // rounds set is left alone here — same posture as an equally
-  // unimplemented superset — never forced through this stricter gate.
-  if (raw.kind === "circuit" && raw.rounds !== undefined) {
+  // Phase 11B — a real, repeating FIXED-ROUND circuit (kind: "circuit"
+  // WITH rounds genuinely set, and terminationMode not "time_cap" — see
+  // lib/workout/session-flow.ts's isCircuitBlock, which draws the same
+  // line) must have a real positive round count and at least 2 DIFFERENT
+  // items (spec test matrix C: "invalid round count rejected"; spec
+  // section 3's own domain model: "MULTIPLE DIFFERENT
+  // TrainingItemInstances"). A `kind: "circuit"` block with no rounds set
+  // (and not a genuine AMRAP either) is left alone here — same posture as
+  // an equally unimplemented superset — never forced through this
+  // stricter gate.
+  if (raw.kind === "circuit" && raw.rounds !== undefined && raw.terminationMode !== "time_cap") {
     if (typeof raw.rounds !== "number" || raw.rounds <= 0) fail(what, `a "circuit" block's "rounds" must be a real positive number`);
     if (items.length < 2) fail(what, `a "circuit" block with rounds set must have at least 2 different items — a single repeated item is not a circuit`);
+  }
+  // Phase 11D — a real time-capped circuit (spec section 45: "4 rounds OR
+  // 10-minute cap") is otherwise a completely ordinary fixed-round circuit
+  // (same >=2-item rule above already applies via `raw.rounds !==
+  // undefined`) — this ADDS the requirement that a real, positive
+  // timeCapSeconds actually exists whenever a coach declares this
+  // termination mode; a "rounds_or_time_cap" circuit with no real time cap
+  // has nothing to race the round count against.
+  if (raw.kind === "circuit" && raw.terminationMode === "rounds_or_time_cap") {
+    if (raw.rounds === undefined) fail(what, `a "rounds_or_time_cap" circuit requires a real "rounds" target`);
+    if (typeof raw.timeCapSeconds !== "number" || raw.timeCapSeconds <= 0) fail(what, `a "rounds_or_time_cap" circuit requires a real, positive "timeCapSeconds"`);
+  }
+  // Phase 11D — a genuine AMRAP (spec test matrix A/B/C): requires a real
+  // positive time cap (matrix B: "AMRAP without time cap rejected") and at
+  // least one real item (matrix C: "empty AMRAP rejected" — never the
+  // stricter >=2-item fixed-circuit rule, since a single-exercise AMRAP,
+  // e.g. "AMRAP 10min: Burpees," is a genuine, common real-world format).
+  // `rounds` must be genuinely ABSENT — a real round target and "as many
+  // rounds as possible" are a contradiction this grammar never allows to
+  // persist (spec section 7: "do not flatten AMRAP into a guessed fixed
+  // number of rounds" cuts both ways — never accept one that was guessed
+  // either).
+  if (raw.kind === "circuit" && raw.terminationMode === "time_cap") {
+    if (raw.rounds !== undefined) fail(what, `an AMRAP ("time_cap" termination) must never also declare a "rounds" target — it is unbounded by definition`);
+    if (typeof raw.timeCapSeconds !== "number" || raw.timeCapSeconds <= 0) fail(what, `an AMRAP requires a real, positive "timeCapSeconds"`);
+    if (items.length < 1) fail(what, `an AMRAP requires at least one real item`);
+  }
+  // Phase 11D — a real EMOM (spec test matrix D/E): requires a real
+  // positive cadence, a real positive total-window count (reusing
+  // `rounds` — see Block.rounds's own doc), and at least one real item
+  // (matrix E covers the invalid-cadence case; an empty EMOM is already
+  // caught by the generic "block.items must have at least one item" check
+  // above, so no separate empty-EMOM branch is needed here).
+  if (raw.kind === "emom") {
+    if (typeof raw.cadenceSeconds !== "number" || raw.cadenceSeconds <= 0) fail(what, `an "emom" block requires a real, positive "cadenceSeconds"`);
+    if (typeof raw.rounds !== "number" || raw.rounds <= 0) fail(what, `an "emom" block requires a real, positive "rounds" (total cadence windows)`);
   }
   return raw as unknown as Block;
 }

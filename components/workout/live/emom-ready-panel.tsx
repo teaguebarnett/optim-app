@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { RefreshCw, AlertTriangle, Clock, HelpCircle } from "lucide-react";
+import { Timer, AlertTriangle, Clock, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { describeCircuitOverview, isUnboundedRounds } from "@/lib/workout/circuit";
+import { describeEmomOverview } from "@/lib/workout/emom";
 import { SkipReasonSheet } from "@/components/workout/skip-reason-sheet";
 import { PainReportOverlay } from "@/components/workout/live/pain-report-overlay";
 import { ActivePainBanner } from "@/components/workout/live/active-pain-banner";
@@ -13,18 +13,14 @@ import type { SkipReason } from "@/lib/types";
 import type { Block } from "@/lib/training/types";
 
 /**
- * Phase 11B — the circuit counterpart of IntervalReadyPanel: the block
- * overview (round count, each item's own name/target, round-rest
- * duration) before starting — a circuit is a BLOCK behavior, never a fake
- * exercise (spec section 3), so this reads from the whole Block, not one
- * item. "Need help?" offers the same two safety-relevant actions every
- * other ready panel does — reporting pain reuses the block's FIRST item as
- * the reported exercise (the most natural "what were you about to do"
- * answer before any item has actually started), and skipping the whole
- * activity dispatches SKIP_EXERCISE against the block's own id (see
- * lib/state.ts's circuit-aware SKIP_EXERCISE branch).
+ * Phase 11D — the EMOM counterpart of CircuitReadyPanel: the block
+ * overview (cadence label, total windows, each distinct assigned item)
+ * before starting — an EMOM is a BLOCK behavior, never a fake exercise,
+ * same discipline as circuit (spec section 3's own principle, extended).
+ * "Need help?" mirrors CircuitReadyPanel's own two safety-relevant
+ * actions exactly.
  */
-export function CircuitReadyPanel({
+export function EmomReadyPanel({
   block,
   painReportActive = false,
 }: {
@@ -37,7 +33,7 @@ export function CircuitReadyPanel({
   const [painOpen, setPainOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
 
-  const overviewLines = describeCircuitOverview(block);
+  const overviewLines = describeEmomOverview(block);
   const firstItem = block.items[0];
 
   function handleSkipConfirm(reason: SkipReason, note?: string) {
@@ -51,11 +47,11 @@ export function CircuitReadyPanel({
       <ActivePainBanner active={painReportActive} />
       <div className="flex items-start gap-3">
         <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brass-soft text-brass-strong">
-          <RefreshCw size={22} />
+          <Timer size={22} />
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-label text-neutral">Next up</p>
-          <p className="text-heading text-off-white">{block.name ?? (isUnboundedRounds(block) ? "AMRAP" : "Circuit")}</p>
+          <p className="text-heading text-off-white">{block.name ?? "EMOM"}</p>
         </div>
       </div>
 
@@ -69,8 +65,8 @@ export function CircuitReadyPanel({
         </div>
       ) : null}
 
-      <Button className="mt-4 w-full" onClick={() => dispatch({ type: "BEGIN_CIRCUIT_EXECUTION", blockId: block.id })}>
-        Begin {isUnboundedRounds(block) ? "AMRAP" : "Circuit"}
+      <Button className="mt-4 w-full" onClick={() => dispatch({ type: "BEGIN_EMOM_EXECUTION", blockId: block.id })}>
+        Begin {block.name ?? "EMOM"}
       </Button>
 
       <button
@@ -82,7 +78,7 @@ export function CircuitReadyPanel({
         Need help?
       </button>
 
-      <Sheet open={helpOpen} onClose={() => setHelpOpen(false)} title="Need help?" description="For this circuit.">
+      <Sheet open={helpOpen} onClose={() => setHelpOpen(false)} title="Need help?" description="For this EMOM.">
         <div className="space-y-2">
           <button
             type="button"
@@ -111,7 +107,7 @@ export function CircuitReadyPanel({
         open={skipOpen}
         onClose={() => setSkipOpen(false)}
         title="Skip this activity"
-        description={`This circuit will be marked skipped and flagged for ${coachName}.`}
+        description={`This EMOM will be marked skipped and flagged for ${coachName}.`}
         onConfirm={handleSkipConfirm}
       />
 

@@ -113,6 +113,11 @@ function describeContinuousExecution(name: string, execution: ExecutionRecord): 
     const completedExposures = execution.mobilitySetActuals.filter((s) => s.status === "completed").length;
     return `${name}: ${completedExposures} of ${execution.mobilitySetActuals.length} completed${suffix}.`;
   }
+  // Phase 11D — an EMOM item's own real window count.
+  if (execution.emomWindowActuals) {
+    const completedWindows = execution.emomWindowActuals.filter((w) => w.status === "completed").length;
+    return `${name}: ${completedWindows} of ${execution.emomWindowActuals.length} window${execution.emomWindowActuals.length === 1 ? "" : "s"} completed${suffix}.`;
+  }
   const parts: string[] = [];
   if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));
   if (execution.actual?.distance) parts.push(formatDistance(execution.actual.distance));
@@ -159,7 +164,11 @@ export function buildWorkoutSummary(
     // loggedSets/working-set model," which every circuit item genuinely
     // is not.
     const isCircuitExposure = session.continuousExecutions?.[item.id]?.circuitRoundActuals !== undefined;
-    if (item.prescription.family !== "resistance" || isCircuitExposure) {
+    // Phase 11D — an EMOM item's own resistance exposure has the exact
+    // same problem circuit's own resistance items did in Phase 11B (zero
+    // loggedSets — see lib/state.ts's ADVANCE_EMOM_WINDOW), same fix.
+    const isEmomExposure = session.continuousExecutions?.[item.id]?.emomWindowActuals !== undefined;
+    if (item.prescription.family !== "resistance" || isCircuitExposure || isEmomExposure) {
       continuousItemCount += 1;
       if (log.status === "skipped") {
         exercisesSkipped += 1;

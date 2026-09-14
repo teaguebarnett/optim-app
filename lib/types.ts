@@ -7,7 +7,7 @@
 // re-imports the tenant-attribution types it needs to stamp onto records.
 
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
-import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, MobilitySetActual, PowerSetActual, Session } from "./training/types";
+import type { CircuitRoundActual, EmomWindowActual, ExecutionRecord, IntervalRoundActual, MobilitySetActual, PowerSetActual, Session } from "./training/types";
 
 export type ClientId = ClientProfileId;
 
@@ -538,7 +538,35 @@ export type WorkoutSessionPhase =
    * returns — mobilityProgress is deliberately untouched by
    * DEFER_EXERCISE/REPORT_PAIN, exactly like every other family's own
    * progress map. */
-  | "mobility-active";
+  | "mobility-active"
+  /** Phase 11D — a genuine AMRAP or time-capped circuit reuses
+   * "circuit-ready"/"circuit-active" verbatim — see Block.terminationMode's
+   * own doc — so no new phase value exists for either. This EMOM-ready
+   * value is the cadence-window counterpart of "circuit-ready": the block
+   * overview (method name, cadence, total windows, first assigned item)
+   * before starting — see lib/state.ts's entryPhaseForCurrentItem, which
+   * routes here whenever the current queue entry is a real `kind:"emom"`
+   * Block id (an EMOM occupies exactly ONE flat-queue slot for its whole
+   * block, exactly like circuit — see lib/workout/session-flow.ts's
+   * buildInitialFlowState). Also re-entered (never "emom-active" directly)
+   * if the client defers the EMOM and later returns before starting it. */
+  | "emom-ready"
+  /** Phase 11D — the live EMOM flow, covering BOTH sub-states: the
+   * current cadence window's own assigned-item capture screen, and (once
+   * that window's exposure is recorded before the next cadence boundary)
+   * a "resting until next window" screen — spec section 9's "remaining
+   * time after completed work = rest." Unlike circuit's item/round-rest
+   * sub-phase (an explicit stored `phase` field), which sub-view renders
+   * is derived PURELY from real elapsed time vs. what's already been
+   * recorded (see lib/workout/emom.ts's currentEmomWindow) — there is
+   * nothing to desync on reload, since nothing but a start timestamp and
+   * the exposures already recorded is ever stored. See
+   * WorkoutSession.emomProgress for that state, and lib/workout/emom.ts
+   * for the pure cadence/window logic. Re-entered (never reset) if the
+   * client defers mid-EMOM and returns — emomProgress is deliberately
+   * untouched by DEFER_EXERCISE/REPORT_PAIN, exactly like every other
+   * family's own progress map. */
+  | "emom-active";
 
 export type WarmupOutcomeStatus = "not-started" | "completed" | "skipped";
 
@@ -653,6 +681,15 @@ export interface CircuitExecutionProgress {
    * is currently "up." Only meaningful while phase === "item". */
   itemIndex: number;
   phase: "item" | "round-rest";
+  /** Phase 11D — a real timestamp anchor for the WHOLE block, set once
+   * when BEGIN_CIRCUIT_EXECUTION fires and never touched again — the
+   * anchor a genuine time-capped circuit (terminationMode "time_cap" or
+   * "rounds_or_time_cap") derives its whole-block countdown from, the
+   * same timestamp-derived, drift-free discipline as every other timer
+   * anchor in this grammar. Set unconditionally (harmless/unused for an
+   * ordinary fixed-round circuit) rather than only for timed blocks, to
+   * avoid a second conditional shape for this type. */
+  blockStartedAtIso: string;
   /** A real timestamp anchor for the current round-rest phase only, reset
    * every time round-rest begins — same "never a mutable countdown"
    * discipline as IntervalExecutionProgress.phaseStartedAtIso. Absent
@@ -697,6 +734,27 @@ export interface MobilityExecutionProgress {
    * prescription shape for simplicity, just unused for a rep-based one. */
   holdStartedAtIso?: string;
   setActuals: MobilitySetActual[];
+}
+
+/** Phase 11D — see WorkoutSession.emomProgress's own doc. Deliberately
+ * minimal: the CURRENT window, the assigned item, and whether it's
+ * "active" or "resting" are all PURE FUNCTIONS of `startedAtIso` +
+ * real elapsed time + `exposuresByItemId` (see lib/workout/emom.ts's
+ * currentEmomWindow) — never separately stored, so there is nothing that
+ * can desync on reload/background (spec section 20/42's own "timer/state
+ * must reflect real elapsed time... do not reset the timer"). */
+export interface EmomExecutionProgress {
+  /** A real timestamp anchor for the WHOLE EMOM, set once when
+   * BEGIN_EMOM_EXECUTION fires and never touched again — every cadence
+   * window boundary is computed from this single anchor. */
+  startedAtIso: string;
+  /** Every window exposure resolved so far, keyed by TrainingItemInstance
+   * id — the exact shape the finalize step later fans out into each
+   * item's own real ExecutionRecord.emomWindowActuals. An item assigned to
+   * multiple windows (items.length < total windows, cycling) accumulates
+   * multiple entries here, exactly like CircuitExecutionProgress's own
+   * exposuresByItemId. */
+  exposuresByItemId: Record<string, EmomWindowActual[]>;
 }
 
 export interface WorkoutSession {
@@ -781,6 +839,13 @@ export interface WorkoutSession {
    * currently being executed, keyed by TrainingItemInstance id. Same
    * discipline as powerProgress/intervalProgress/circuitProgress. */
   mobilityProgress?: Record<string, MobilityExecutionProgress>;
+  /** Phase 11D — transient, in-progress cadence-window state for a real
+   * EMOM block currently being executed, keyed by the BLOCK's own id (an
+   * EMOM's queue slot is the block, exactly like circuit — see
+   * lib/workout/session-flow.ts's isEmomBlock/buildInitialFlowState). Same
+   * "separate from continuousExecutions until real finalize" discipline as
+   * circuitProgress/powerProgress/mobilityProgress. */
+  emomProgress?: Record<string, EmomExecutionProgress>;
   painReports: PainReport[];
   skipReason?: SkipReason;
   skipNote?: string;

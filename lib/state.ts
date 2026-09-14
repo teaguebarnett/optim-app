@@ -16,6 +16,7 @@ import {
   findTrainingItemById,
   firstUnresolvedWorkingSetNumber,
   isCircuitBlock,
+  isEmomBlock,
   isExerciseResolved,
 } from "./workout/session-flow.ts";
 import { resolveSessionWarmupConfigFromSession, resolveTrainingItemWarmupConfig } from "./workout/warmup.ts";
@@ -25,11 +26,21 @@ import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { legacyWorkoutToSession } from "./training/legacy-adapter.ts";
 import { classifyContinuousCompletion, continuousPerformedAsPrescribed, type ContinuousActual } from "./workout/continuous.ts";
 import { classifyIntervalActivityCompletion, intervalPerformedAsPrescribed, nextIntervalProgress } from "./workout/interval.ts";
-import { circuitItemPerformedAsPrescribed, classifyCircuitItemCompletion, nextCircuitPosition, totalCircuitRounds } from "./workout/circuit.ts";
+import { circuitItemPerformedAsPrescribed, classifyCircuitItemCompletion, isTimedCircuit, isUnboundedRounds, nextCircuitPosition, totalCircuitRounds } from "./workout/circuit.ts";
 import { classifyPowerItemCompletion, powerItemPerformedAsPrescribed, totalPowerSets } from "./workout/power.ts";
 import { classifyMobilityItemCompletion, mobilityItemPerformedAsPrescribed, nextMobilityPosition, requiresBothSides, totalMobilityExposures } from "./workout/mobility.ts";
+import {
+  classifyEmomItemCompletion,
+  currentEmomWindow,
+  emomCadenceSeconds,
+  emomItemForWindow,
+  emomItemPerformedAsPrescribed,
+  totalEmomWindows,
+  totalWindowsAssignedToItem,
+  windowsToAutoSkip,
+} from "./workout/emom.ts";
 import { MIXED_SESSION_DEMO } from "./training/demo-fixtures.ts";
-import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, MobilitySetActual, PowerSetActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
+import type { CircuitRoundActual, EmomWindowActual, ExecutionRecord, IntervalRoundActual, MobilitySetActual, PowerSetActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
@@ -38,6 +49,7 @@ import type {
   ChatMessage,
   ClientAssignedProgram,
   CircuitExecutionProgress,
+  EmomExecutionProgress,
   ExerciseLog,
   IntervalExecutionProgress,
   LoggedSet,
@@ -212,6 +224,12 @@ function entryPhaseForCurrentItem(session: WorkoutSession): WorkoutSessionPhase 
   if (circuitBlock && isCircuitBlock(circuitBlock)) {
     return session.circuitProgress?.[circuitBlock.id] ? "circuit-active" : "circuit-ready";
   }
+  // Phase 11D — same resume-in-place discipline as circuit, checked
+  // immediately alongside it (an EMOM block also occupies its own
+  // flat-queue slot keyed by BLOCK id).
+  if (circuitBlock && isEmomBlock(circuitBlock)) {
+    return session.emomProgress?.[circuitBlock.id] ? "emom-active" : "emom-ready";
+  }
   const item = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
   if (!item) return "exercise-intro";
   if (item.prescription.family === "interval") {
@@ -266,15 +284,17 @@ export function buildStartedWorkoutSession(params: {
   const initialEntryPhase: WorkoutSessionPhase =
     initialCircuitBlock && isCircuitBlock(initialCircuitBlock)
       ? "circuit-ready"
-      : initialItem?.prescription.family === "interval"
-        ? "interval-ready"
-        : initialItem?.prescription.family === "power"
-          ? "power-ready"
-          : initialItem?.prescription.family === "mobility"
-            ? "mobility-ready"
-            : initialItem && initialItem.prescription.family !== "resistance"
-              ? "continuous-ready"
-              : "exercise-intro";
+      : initialCircuitBlock && isEmomBlock(initialCircuitBlock)
+        ? "emom-ready"
+        : initialItem?.prescription.family === "interval"
+          ? "interval-ready"
+          : initialItem?.prescription.family === "power"
+            ? "power-ready"
+            : initialItem?.prescription.family === "mobility"
+              ? "mobility-ready"
+              : initialItem && initialItem.prescription.family !== "resistance"
+                ? "continuous-ready"
+                : "exercise-intro";
 
   return {
     ...params.existingSession,
@@ -295,6 +315,7 @@ export function buildStartedWorkoutSession(params: {
     circuitProgress: {},
     powerProgress: {},
     mobilityProgress: {},
+    emomProgress: {},
     currentExerciseId: initialFlow.currentExerciseId,
     exerciseQueue: initialFlow.exerciseQueue,
     actualExerciseOrder: initialFlow.actualExerciseOrder,
@@ -332,6 +353,7 @@ export function createInitialWorkoutSession(
     circuitProgress: {},
     powerProgress: {},
     mobilityProgress: {},
+    emomProgress: {},
     painReports: [],
     phase: "session-warmup",
     currentExerciseId: null,
@@ -661,6 +683,34 @@ export type Action =
       skipped?: boolean;
       skipReason?: SkipReason;
     }
+  /** Phase 11D — the client's own explicit "time's up" tap for a genuine
+   * time-driven circuit (AMRAP or a real time-capped circuit — see
+   * Block.terminationMode's own doc). Snapshots whatever was honestly
+   * accomplished and finalizes; see the reducer case's own extensive doc
+   * for exactly how this differs from ADVANCE_CIRCUIT_PHASE's own
+   * "complete" branch and from SKIP_EXERCISE's circuit interrupt. */
+  | { type: "EXPIRE_TIMED_CIRCUIT"; blockId: string }
+  /** Phase 11D — emom-ready -> emom-active: opens a real EMOM block (see
+   * lib/workout/session-flow.ts's isEmomBlock). `blockId` addresses the
+   * block directly, mirroring BEGIN_CIRCUIT_EXECUTION exactly — an EMOM
+   * has no single "exerciseId" of its own either. */
+  | { type: "BEGIN_EMOM_EXECUTION"; blockId: string }
+  /** Phase 11D — the one explicit action that resolves whatever the REAL,
+   * elapsed-time-derived CURRENT window's assigned work is (see
+   * lib/workout/emom.ts's currentEmomWindow) and records it. Auto-
+   * finalizes inline once the very last window is recorded — same "no
+   * separate logging step" discipline as every other family's own
+   * advance action. Any window that already fell behind real time before
+   * this tap (the client was too slow) is auto-marked "skipped" first,
+   * honestly, never fabricated as completed — see the reducer case's own
+   * doc. */
+  | {
+      type: "ADVANCE_EMOM_WINDOW";
+      blockId: string;
+      actual?: Partial<Prescription>;
+      skipped?: boolean;
+      skipReason?: SkipReason;
+    }
   | { type: "WORKOUT_ROUTE_ENTERED" }
   | { type: "WORKOUT_ROUTE_LEFT" }
   | { type: "COMPLETE_WORKOUT"; summary: WorkoutSummary }
@@ -757,6 +807,11 @@ const PAIN_BLOCKED_ACTIONS = new Set<Action["type"]>([
   "ADVANCE_POWER_SET",
   "BEGIN_MOBILITY_EXECUTION",
   "ADVANCE_MOBILITY_PHASE",
+  // Phase 11D — timed-circuit expiry and EMOM's own progression actions,
+  // same reasoning.
+  "EXPIRE_TIMED_CIRCUIT",
+  "BEGIN_EMOM_EXECUTION",
+  "ADVANCE_EMOM_WINDOW",
 ]);
 
 /** True once there's an active pain report AND the current exercise is a
@@ -1259,6 +1314,44 @@ export function reducer(state: AppState, action: Action): AppState {
         return { ...state, workoutSession: { ...sessionWithLog, ...advance } };
       }
 
+      // Phase 11D — a whole-EMOM skip, same reasoning/pattern as the
+      // circuit branch immediately above, scoped to windows instead of
+      // rounds. action.exerciseId is the BLOCK id here too.
+      const skippedEmomBlock = findBlockById(state.workoutSession.resolvedSession, action.exerciseId);
+      if (skippedEmomBlock && isEmomBlock(skippedEmomBlock)) {
+        const inProgressEmom = state.workoutSession.emomProgress?.[action.exerciseId];
+        const nowIso = new Date().toISOString();
+        let exerciseLogs = state.workoutSession.exerciseLogs;
+        let continuousExecutions = state.workoutSession.continuousExecutions;
+        const distinctItemIds = new Set(skippedEmomBlock.items.map((i) => i.id));
+        for (const itemId of distinctItemIds) {
+          const itemExposures = inProgressEmom?.exposuresByItemId[itemId] ?? [];
+          const totalAssigned = totalWindowsAssignedToItem(skippedEmomBlock, itemId);
+          const existingLog = exerciseLogs[itemId];
+          if (existingLog) exerciseLogs = { ...exerciseLogs, [itemId]: { ...existingLog, status: "skipped", skipReason: action.reason, skipNote: action.note } };
+          if (itemExposures.length > 0) {
+            const execution: ExecutionRecord = {
+              id: nextId("execution"),
+              trainingItemInstanceId: itemId,
+              status: classifyEmomItemCompletion(totalAssigned, itemExposures),
+              performedAsPrescribed: emomItemPerformedAsPrescribed(totalAssigned, itemExposures),
+              completedAtIso: nowIso,
+              skipReason: action.reason,
+              note: action.note,
+              emomWindowActuals: itemExposures,
+            };
+            continuousExecutions = { ...continuousExecutions, [itemId]: execution };
+          }
+        }
+        const remainingEmomProgress = Object.fromEntries(Object.entries(state.workoutSession.emomProgress ?? {}).filter(([id]) => id !== action.exerciseId));
+        const sessionWithLog: WorkoutSession = { ...state.workoutSession, exerciseLogs, continuousExecutions, emomProgress: remainingEmomProgress };
+        if (state.workoutSession.currentExerciseId !== action.exerciseId) {
+          return { ...state, workoutSession: sessionWithLog };
+        }
+        const advance = advanceAfterExerciseResolved(sessionWithLog);
+        return { ...state, workoutSession: { ...sessionWithLog, ...advance } };
+      }
+
       const log = state.workoutSession.exerciseLogs[action.exerciseId];
       if (!log) return state;
       const updatedLog: ExerciseLog = { ...log, status: "skipped", skipReason: action.reason, skipNote: action.note };
@@ -1498,7 +1591,13 @@ export function reducer(state: AppState, action: Action): AppState {
       // currently-active circuit block.
       const currentCircuitBlock = findBlockById(state.workoutSession.resolvedSession, state.workoutSession.currentExerciseId);
       const interruptionBelongsToCurrentCircuit = !!currentCircuitBlock && isCircuitBlock(currentCircuitBlock) && currentCircuitBlock.items.some((i) => i.id === interruption.exerciseId);
-      if (state.workoutSession.currentExerciseId !== interruption.exerciseId && !interruptionBelongsToCurrentCircuit) return state;
+      // Phase 11D — the exact same class of bug/fix as circuit's own
+      // Phase 11B fix immediately above, for the exact same reason: an
+      // EMOM's currentExerciseId is its BLOCK id, but REPORT_PAIN during
+      // an EMOM window always records the interruption against the real
+      // assigned item's id.
+      const interruptionBelongsToCurrentEmom = !!currentCircuitBlock && isEmomBlock(currentCircuitBlock) && currentCircuitBlock.items.some((i) => i.id === interruption.exerciseId);
+      if (state.workoutSession.currentExerciseId !== interruption.exerciseId && !interruptionBelongsToCurrentCircuit && !interruptionBelongsToCurrentEmom) return state;
       // Phase 11A fix — this reducer previously hardcoded "set-ready"
       // unconditionally, a latent gap this phase's own audit uncovered:
       // resuming a resume-eligible (mild) pain report on a non-resistance
@@ -1849,7 +1948,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const block = findBlockById(state.workoutSession.resolvedSession, blockId);
       if (!block || !isCircuitBlock(block)) return state;
       if (state.workoutSession.circuitProgress?.[blockId]) return state;
-      const progress: CircuitExecutionProgress = { round: 1, itemIndex: 0, phase: "item", exposuresByItemId: {} };
+      const progress: CircuitExecutionProgress = { round: 1, itemIndex: 0, phase: "item", exposuresByItemId: {}, blockStartedAtIso: new Date().toISOString() };
       return {
         ...state,
         workoutSession: {
@@ -1935,12 +2034,197 @@ export function reducer(state: AppState, action: Action): AppState {
         phase: next.phase,
         restStartedAtIso: next.phase === "round-rest" ? nowIso : undefined,
         exposuresByItemId,
+        blockStartedAtIso: progress.blockStartedAtIso,
       };
       return {
         ...state,
         workoutSession: {
           ...state.workoutSession,
           circuitProgress: { ...state.workoutSession.circuitProgress, [blockId]: nextProgress },
+        },
+      };
+    }
+
+    // Phase 11D — the ONE way a genuine time-driven circuit (AMRAP or a
+    // real time-capped circuit — Block.terminationMode "time_cap"/
+    // "rounds_or_time_cap") ends BEFORE its round target is (or could be)
+    // naturally reached: the client's own explicit "time's up" tap (spec
+    // section 21: "stop new work from being recorded... preserve current
+    // partial exposure honestly... finalize block state deterministically"
+    // — never a silent auto-completion). Snapshots exactly what was
+    // actually accomplished, honestly, then finalizes and advances —
+    // mirrors ADVANCE_CIRCUIT_PHASE's own "complete" branch almost
+    // exactly, with two deliberate differences: (1) the in-progress item
+    // the client was mid-way through when time ran out gets NO exposure
+    // recorded for itself (they didn't finish it), and (2) the honest
+    // classification denominator is "rounds actually reached" for a pure
+    // AMRAP (no real prescribed target exists to compare against — see
+    // Block.terminationMode's own doc) but stays the block's own real
+    // `rounds` target for a rounds_or_time_cap circuit (matching the
+    // EXACT same denominator SKIP_EXERCISE's own mid-round circuit
+    // interrupt already uses for a fixed-round circuit, Phase 11B).
+    case "EXPIRE_TIMED_CIRCUIT": {
+      const blockId = state.workoutSession.currentExerciseId;
+      if (!blockId || blockId !== action.blockId || state.workoutSession.phase !== "circuit-active") return state;
+      const block = findBlockById(state.workoutSession.resolvedSession, blockId);
+      if (!block || !isCircuitBlock(block) || !isTimedCircuit(block)) return state;
+      const progress = state.workoutSession.circuitProgress?.[blockId];
+      if (!progress) return state;
+
+      const effectiveTotalRounds = isUnboundedRounds(block) ? progress.round : totalCircuitRounds(block);
+      const nowIso = new Date().toISOString();
+      let exerciseLogs = state.workoutSession.exerciseLogs;
+      let continuousExecutions = state.workoutSession.continuousExecutions;
+      for (const item of block.items) {
+        const itemExposures = progress.exposuresByItemId[item.id] ?? [];
+        if (itemExposures.length === 0) {
+          // Genuinely never reached, even once — honestly "skipped", never
+          // a fabricated partial (mirrors classifyCircuitItemCompletion's
+          // own zero-exposure boundary, applied here at the exerciseLogs
+          // layer too — see this action's own doc for why this differs
+          // from SKIP_EXERCISE's blanket "skipped" status).
+          const existingLog = exerciseLogs[item.id];
+          if (existingLog) exerciseLogs = { ...exerciseLogs, [item.id]: { ...existingLog, status: "skipped" } };
+          continue;
+        }
+        const execution: ExecutionRecord = {
+          id: nextId("execution"),
+          trainingItemInstanceId: item.id,
+          status: classifyCircuitItemCompletion(effectiveTotalRounds, itemExposures),
+          performedAsPrescribed: circuitItemPerformedAsPrescribed(effectiveTotalRounds, itemExposures),
+          completedAtIso: nowIso,
+          circuitRoundActuals: itemExposures,
+        };
+        continuousExecutions = { ...continuousExecutions, [item.id]: execution };
+        // A real, honest completion of a time-bounded format — the client
+        // worked the whole time; this is not a "skip" (spec section 21's
+        // own "finalize block state deterministically" framing never
+        // calls a legitimate time-cap ending a skip).
+        const existingLog = exerciseLogs[item.id];
+        if (existingLog) exerciseLogs = { ...exerciseLogs, [item.id]: { ...existingLog, status: "completed" } };
+      }
+      const remainingCircuitProgress = Object.fromEntries(Object.entries(state.workoutSession.circuitProgress ?? {}).filter(([id]) => id !== blockId));
+      const sessionWithExecution: WorkoutSession = {
+        ...state.workoutSession,
+        exerciseLogs,
+        continuousExecutions,
+        circuitProgress: remainingCircuitProgress,
+      };
+      const advance = advanceAfterExerciseResolved(sessionWithExecution);
+      return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+    }
+
+    // Phase 11D — emom-ready -> emom-active: anchors the whole EMOM's
+    // cadence to a real start timestamp. A no-op if emomProgress already
+    // exists (defensive, mirrors BEGIN_CIRCUIT_EXECUTION's own guard).
+    case "BEGIN_EMOM_EXECUTION": {
+      const blockId = state.workoutSession.currentExerciseId;
+      if (!blockId || blockId !== action.blockId || state.workoutSession.phase !== "emom-ready") return state;
+      const block = findBlockById(state.workoutSession.resolvedSession, blockId);
+      if (!block || !isEmomBlock(block)) return state;
+      if (state.workoutSession.emomProgress?.[blockId]) return state;
+      const progress: EmomExecutionProgress = { startedAtIso: new Date().toISOString(), exposuresByItemId: {} };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          phase: "emom-active",
+          emomProgress: { ...state.workoutSession.emomProgress, [blockId]: progress },
+        },
+      };
+    }
+
+    // Phase 11D — EMOM's single real transition point. First "catches up"
+    // — honestly auto-skips any window whose real cadence boundary already
+    // passed with nothing recorded (spec section 22: never fabricate a
+    // completion for a window the client fell behind on) — then records
+    // the client's own tap against whatever window is REALLY current after
+    // that catch-up, exactly mirroring ADVANCE_CIRCUIT_PHASE's own "no
+    // separate logging step" discipline: auto-finalizes inline the moment
+    // the very last window is recorded.
+    case "ADVANCE_EMOM_WINDOW": {
+      const blockId = state.workoutSession.currentExerciseId;
+      if (!blockId || blockId !== action.blockId || state.workoutSession.phase !== "emom-active") return state;
+      const block = findBlockById(state.workoutSession.resolvedSession, blockId);
+      if (!block || !isEmomBlock(block)) return state;
+      const progress = state.workoutSession.emomProgress?.[blockId];
+      if (!progress) return state;
+
+      const cadenceSeconds = emomCadenceSeconds(block);
+      const totalWindows = totalEmomWindows(block);
+      const nowIso = new Date().toISOString();
+
+      const allExposures = Object.values(progress.exposuresByItemId).flat();
+      const resolvedWindows = new Set(allExposures.map((e) => e.window));
+      let nextUnresolvedWindow = 1;
+      while (resolvedWindows.has(nextUnresolvedWindow) && nextUnresolvedWindow <= totalWindows) nextUnresolvedWindow += 1;
+      if (nextUnresolvedWindow > totalWindows) return state; // already fully resolved — safe no-op.
+
+      const clockCurrentWindow = currentEmomWindow(cadenceSeconds, totalWindows, progress.startedAtIso, nowIso);
+      const autoSkipWindows = windowsToAutoSkip(nextUnresolvedWindow, clockCurrentWindow);
+
+      let exposuresByItemId = progress.exposuresByItemId;
+      for (const w of autoSkipWindows) {
+        const autoSkippedItem = emomItemForWindow(block, w);
+        const existing = exposuresByItemId[autoSkippedItem.id] ?? [];
+        const autoExposure: EmomWindowActual = { window: w, status: "skipped", completedAtIso: nowIso };
+        exposuresByItemId = { ...exposuresByItemId, [autoSkippedItem.id]: [...existing, autoExposure] };
+      }
+
+      // The client's own tap always applies to whatever window is REALLY
+      // current now, after the honest catch-up above.
+      const activeItem = emomItemForWindow(block, clockCurrentWindow);
+      const existingForActive = exposuresByItemId[activeItem.id] ?? [];
+      const exposure: EmomWindowActual = {
+        window: clockCurrentWindow,
+        status: action.skipped ? "skipped" : "completed",
+        actual: action.actual,
+        skipReason: action.skipped ? action.skipReason : undefined,
+        completedAtIso: nowIso,
+      };
+      exposuresByItemId = { ...exposuresByItemId, [activeItem.id]: [...existingForActive, exposure] };
+
+      if (clockCurrentWindow >= totalWindows) {
+        // Finalize inline — fan the accumulated exposures out into one
+        // real ExecutionRecord per DISTINCT assigned item (an alternating
+        // EMOM's own item may be assigned several windows — see
+        // lib/workout/emom.ts's totalWindowsAssignedToItem for the honest
+        // per-item denominator).
+        let exerciseLogs = state.workoutSession.exerciseLogs;
+        let continuousExecutions = state.workoutSession.continuousExecutions;
+        const distinctItemIds = new Set(block.items.map((i) => i.id));
+        for (const itemId of distinctItemIds) {
+          const itemExposures = exposuresByItemId[itemId] ?? [];
+          const totalAssigned = totalWindowsAssignedToItem(block, itemId);
+          const execution: ExecutionRecord = {
+            id: nextId("execution"),
+            trainingItemInstanceId: itemId,
+            status: classifyEmomItemCompletion(totalAssigned, itemExposures),
+            performedAsPrescribed: emomItemPerformedAsPrescribed(totalAssigned, itemExposures),
+            completedAtIso: nowIso,
+            emomWindowActuals: itemExposures,
+          };
+          continuousExecutions = { ...continuousExecutions, [itemId]: execution };
+          const existingLog = exerciseLogs[itemId];
+          if (existingLog) exerciseLogs = { ...exerciseLogs, [itemId]: { ...existingLog, status: "completed" } };
+        }
+        const remainingEmomProgress = Object.fromEntries(Object.entries(state.workoutSession.emomProgress ?? {}).filter(([id]) => id !== blockId));
+        const sessionWithExecution: WorkoutSession = {
+          ...state.workoutSession,
+          exerciseLogs,
+          continuousExecutions,
+          emomProgress: remainingEmomProgress,
+        };
+        const advance = advanceAfterExerciseResolved(sessionWithExecution);
+        return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+      }
+
+      const nextProgress: EmomExecutionProgress = { startedAtIso: progress.startedAtIso, exposuresByItemId };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          emomProgress: { ...state.workoutSession.emomProgress, [blockId]: nextProgress },
         },
       };
     }

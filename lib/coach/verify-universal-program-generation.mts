@@ -87,6 +87,10 @@ function allItems(content: UniversalTrainingProgramContent): TrainingItemInstanc
   return content.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items))));
 }
 
+function allBlocks(content: UniversalTrainingProgramContent) {
+  return content.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks)));
+}
+
 function trainingDays(content: UniversalTrainingProgramContent): UniversalProgramDay[] {
   return content.weeks.flatMap((w) => w.days.filter((d) => d.type === "training"));
 }
@@ -658,6 +662,56 @@ check("power/mobility generation never depends on profile.primaryGoal — a coac
     const hasMobility = allItems(content).some((i) => i.category === "mobility");
     assert.ok(hasPower && hasMobility, `power/mobility still generated regardless of primaryGoal="${primaryGoal}"`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 11D — real AMRAP generation, extending the SAME real coach
+// methodology alternation Phase 11A/11B already established (interval,
+// then circuit, then a genuine AMRAP for any FURTHER conditioning day) —
+// never randomly inserted, never a fabricated new signal (spec section 31:
+// "do not randomly place AMRAPs/EMOMs into programs").
+// ---------------------------------------------------------------------------
+
+console.log("\nPhase 11D — real AMRAP generation, extending the established conditioning alternation (AD)\n");
+
+check("AD: a conditioning-focused coach with exactly 3 real surplus days gets interval (day 1), circuit (day 2), and a genuine AMRAP (day 3) — unbounded, no rounds, a real time cap, never a 4th random format", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], { cardioPreference: "enjoys_cardio" });
+  const { content, constraints } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "prescribed_for_conditioning" }), 1);
+
+  const week1 = content.weeks[0];
+  const trainingDays = week1.days.filter((d) => d.type === "training");
+  const circuitShapedBlocks = trainingDays.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.filter((b) => b.kind === "circuit")));
+  const intervalItems = trainingDays.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.category === "interval"))));
+
+  const amrapBlocks = circuitShapedBlocks.filter((b) => b.terminationMode === "time_cap");
+  const fixedCircuitBlocks = circuitShapedBlocks.filter((b) => b.terminationMode !== "time_cap");
+
+  assert.equal(intervalItems.length, 1, "day 1 is still interval — Phase 11A's own unchanged trigger");
+  assert.equal(fixedCircuitBlocks.length, 1, "day 2 is still a real fixed-round circuit — Phase 11B's own unchanged trigger");
+  assert.equal(amrapBlocks.length, 1, "day 3 (the new, further surplus day) gets a genuine AMRAP");
+
+  const amrap = amrapBlocks[0];
+  assert.equal(amrap.rounds, undefined, "a real AMRAP never carries a fabricated round count");
+  assert.ok(amrap.timeCapSeconds && amrap.timeCapSeconds > 0, "a real, positive time cap");
+  assert.ok(amrap.items.length >= 1, "at least one real item");
+
+  assert.equal(constraints.passed, true, "AMRAP-bearing generated content must itself pass every real hard constraint");
+  validateUniversalTrainingProgramContent(content);
+  assert.match(content.generationRationale ?? "", /amrap/i, "the rationale honestly names the AMRAP placement in coaching language");
+});
+
+check("AD: a coach WITHOUT 'prescribed_for_conditioning' never generates an AMRAP block, even with real surplus days (unchanged behavior)", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], { cardioPreference: "enjoys_cardio" });
+  const { content } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "optional_low_intensity_supplemental" }), 1);
+  const amrapBlocks = allBlocks(content).filter((b) => b.terminationMode === "time_cap");
+  assert.equal(amrapBlocks.length, 0, "a coach whose methodology doesn't call for conditioning work must never receive an AMRAP");
+});
+
+check("a conditioning coach with only TWO real surplus days gets interval + circuit only — never a 3rd-tier AMRAP with nothing to alternate into", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], { cardioPreference: "enjoys_cardio" });
+  const { content } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "prescribed_for_conditioning" }), 1);
+  const amrapBlocks = allBlocks(content).filter((b) => b.terminationMode === "time_cap");
+  assert.equal(amrapBlocks.length, 0, "exactly two surplus days -> interval + circuit -> no third day exists to generate an AMRAP for");
 });
 
 // ---------------------------------------------------------------------------

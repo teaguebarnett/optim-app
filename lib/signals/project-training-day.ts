@@ -329,6 +329,28 @@ export function projectTrainingDayObservations(params: ProjectTrainingDayParams)
         observedAtIso: itemObservedAtIso,
       });
     }
+
+    // Phase 11D — EMOM-only: the SAME "completed_rounds" metric key,
+    // counting completed cadence windows. A genuine AMRAP/time-capped
+    // circuit needs no new projection code at all here — it is still a
+    // real `kind:"circuit"` block, so its items already carry
+    // circuitRoundActuals and are already covered by the branch above.
+    // No "MetCon score"/"work capacity score" anywhere (spec section 35).
+    if (execution.emomWindowActuals) {
+      const completedWindows = execution.emomWindowActuals.filter((w) => w.status === "completed").length;
+      observations.push({
+        clientProfileId,
+        workspaceId,
+        category: "training_performance",
+        metricKey: "completed_rounds",
+        sourceType: "workout_execution",
+        value: { valueType: "numeric", valueNumeric: completedWindows },
+        unit: null,
+        sourceRef: itemRef,
+        trainingItemInstanceId: itemId,
+        observedAtIso: itemObservedAtIso,
+      });
+    }
   }
 
   return observations;

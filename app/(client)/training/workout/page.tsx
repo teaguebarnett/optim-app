@@ -26,8 +26,10 @@ import { PowerReadyPanel } from "@/components/workout/live/power-ready-panel";
 import { PowerSetPanel } from "@/components/workout/live/power-set-panel";
 import { MobilityReadyPanel } from "@/components/workout/live/mobility-ready-panel";
 import { MobilitySetPanel } from "@/components/workout/live/mobility-set-panel";
+import { EmomReadyPanel } from "@/components/workout/live/emom-ready-panel";
+import { EmomActivePanel } from "@/components/workout/live/emom-active-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { findBlockById, findTrainingItemById, isCircuitBlock } from "@/lib/workout/session-flow";
+import { findBlockById, findTrainingItemById, isCircuitBlock, isEmomBlock } from "@/lib/workout/session-flow";
 import { trainingItemToLegacyExercise } from "@/lib/training/legacy-adapter";
 import type { TrainingItemInstance } from "@/lib/training/types";
 
@@ -160,6 +162,24 @@ export default function ActiveWorkoutPage() {
         case "circuit-active": {
           const progress = session.circuitProgress?.[currentCircuitBlock.id];
           return progress ? <CircuitActivePanel block={currentCircuitBlock} progress={progress} painReportActive={painReportActive} /> : null;
+        }
+        default:
+          return null;
+      }
+    }
+
+    // Phase 11D — same reasoning as the circuit branch immediately above,
+    // for a real EMOM block (its own flat-queue slot is its own BLOCK id
+    // too — see lib/workout/session-flow.ts's isEmomBlock/buildInitialFlowState).
+    const currentEmomBlock = findBlockById(session.resolvedSession, session.currentExerciseId);
+    if (currentEmomBlock && isEmomBlock(currentEmomBlock)) {
+      const painReportActive = Boolean(session.activePainInterruption);
+      switch (session.phase) {
+        case "emom-ready":
+          return <EmomReadyPanel block={currentEmomBlock} painReportActive={painReportActive} />;
+        case "emom-active": {
+          const progress = session.emomProgress?.[currentEmomBlock.id];
+          return progress ? <EmomActivePanel block={currentEmomBlock} progress={progress} painReportActive={painReportActive} /> : null;
         }
         default:
           return null;

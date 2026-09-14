@@ -211,6 +211,8 @@ function blockCompatibilityReason(block: Block): string | undefined {
     return `Block "${block.id}" prescribes restBetweenRoundsSeconds — legacy has nowhere to store it.`;
   if (block.timeCapSeconds !== undefined) return `Block "${block.id}" prescribes a timeCapSeconds — legacy has nowhere to store it.`;
   if (block.completionRule !== undefined) return `Block "${block.id}" prescribes a completionRule — legacy has nowhere to store it.`;
+  if (block.terminationMode !== undefined) return `Block "${block.id}" prescribes a terminationMode ("${block.terminationMode}") — legacy has nowhere to store it.`;
+  if (block.cadenceSeconds !== undefined) return `Block "${block.id}" prescribes a cadenceSeconds — legacy has nowhere to store it.`;
   if (block.kind === "straight" && block.items.length !== 1) {
     return `Block "${block.id}" is kind "straight" with ${block.items.length} items — legacy's independent (unlinked) exercises are always exactly one item per block.`;
   }

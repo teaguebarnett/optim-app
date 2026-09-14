@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { IntervalTimer } from "@/components/workout/live/interval-timer";
 import { ActivePainBanner } from "@/components/workout/live/active-pain-banner";
-import { totalCircuitRounds } from "@/lib/workout/circuit";
+import { isTimedCircuit, totalCircuitRounds } from "@/lib/workout/circuit";
 import type { Block } from "@/lib/training/types";
 
 /**
@@ -20,15 +20,22 @@ export function CircuitRoundRestPanel({
   block,
   round,
   restStartedAtIso,
+  blockStartedAtIso,
   painReportActive = false,
 }: {
   block: Block;
   round: number;
   restStartedAtIso?: string;
+  /** Phase 11D — only meaningful (and only rendered) for a real
+   * time-capped circuit (terminationMode "rounds_or_time_cap") — a pure
+   * AMRAP never enters round-rest in the first place (see
+   * lib/workout/circuit.ts's own nextCircuitPosition doc). */
+  blockStartedAtIso?: string;
   painReportActive?: boolean;
 }) {
   const { dispatch } = usePrototypeState();
   const rounds = totalCircuitRounds(block);
+  const timed = isTimedCircuit(block);
 
   return (
     <div className="pc-panel-in rounded-[var(--radius-lg)] bg-charcoal p-5 text-center shadow-[var(--shadow-subtle)]">
@@ -50,6 +57,21 @@ export function CircuitRoundRestPanel({
       <Button className="mt-4 w-full" size="lg" onClick={() => dispatch({ type: "ADVANCE_CIRCUIT_PHASE", blockId: block.id })}>
         Continue to Round {round + 1}
       </Button>
+
+      {timed && blockStartedAtIso && block.timeCapSeconds !== undefined ? (
+        <>
+          <div className="mt-4">
+            <IntervalTimer phaseStartedAtIso={blockStartedAtIso} durationSeconds={block.timeCapSeconds} />
+          </div>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: "EXPIRE_TIMED_CIRCUIT", blockId: block.id })}
+            className="mt-2 w-full text-center text-action text-neutral hover:text-off-white"
+          >
+            Time&apos;s up — finish circuit
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }

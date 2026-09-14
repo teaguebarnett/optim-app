@@ -369,6 +369,54 @@ function buildUniversalCircuitSessionForDay(dayOfWeek: DayOfWeek): { session: Se
   return { session, diagnostics: emptyDiagnostics() };
 }
 
+/** Phase 11D — a bounded, sane V1 AMRAP default (spec section 41's own
+ * acceptance-shaped example: bodyweight items, a real time cap, genuinely
+ * unbounded rounds — `rounds` deliberately absent, `terminationMode:
+ * "time_cap"`, see Block.terminationMode's own doc). Same "document the
+ * capability, do not block execution" posture and "no rule-application
+ * pathway" reasoning as buildUniversalCircuitSessionForDay immediately
+ * above — bodyweight-only since this generator call site has no
+ * per-client equipment context available. */
+function buildUniversalAmrapSessionForDay(dayOfWeek: DayOfWeek): { session: Session; diagnostics: RuleApplicationDiagnostics } {
+  const timeCapSeconds = 12 * 60;
+  const items: TrainingItemInstance[] = [
+    {
+      id: `amrap-${dayOfWeek}-squat-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+      order: 1,
+      name: "Goblet Squat",
+      category: "resistance",
+      coachCue: "Full depth, controlled tempo.",
+      prescription: { family: "resistance", reps: { low: 8, high: 8 } },
+    },
+    {
+      id: `amrap-${dayOfWeek}-pushup-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+      order: 2,
+      name: "Push-Up",
+      category: "resistance",
+      coachCue: "Full range of motion — knees down is fine.",
+      prescription: { family: "resistance", reps: { low: 10, high: 10 } },
+    },
+    {
+      id: `amrap-${dayOfWeek}-bike-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+      order: 3,
+      name: "Assault Bike",
+      category: "continuous",
+      coachCue: "Steady, sustainable pace — this repeats for the whole time cap.",
+      prescription: { family: "continuous", duration: { seconds: 30 } },
+    },
+  ];
+  const block: Block = { id: `block-amrap-${dayOfWeek}`, kind: "circuit", order: 1, name: "Conditioning AMRAP", terminationMode: "time_cap", timeCapSeconds, items };
+  const session: Session = {
+    id: `session-amrap-${dayOfWeek}-${Date.now()}`,
+    name: `${dayOfWeek} — Conditioning AMRAP`,
+    focus: "Anaerobic conditioning",
+    estimatedDurationMin: Math.round(timeCapSeconds / 60),
+    coachNote: "Move at a sustainable pace — the goal is consistent rounds, not a fast start that fades.",
+    blocks: [block],
+  };
+  return { session, diagnostics: emptyDiagnostics() };
+}
+
 // ---------------------------------------------------------------------------
 // Resistance-day generation — the exact same decision logic as
 // program-directions.ts's buildPeriodizedWorkoutForDay (rep range, RPE,
@@ -635,15 +683,20 @@ function buildGenerationRationale(
   ];
   if (continuousDays.length > 0) {
     if (isIntervalConditioning) {
-      // Phase 11B — honestly names BOTH formats when both are actually
-      // present (the first conditioning day is interval, any further one
-      // is circuit — see the real day-building loop above), never a
-      // blanket "interval" label that would misdescribe a circuit day.
+      // Phase 11B/11D — honestly names EVERY format actually present (the
+      // first conditioning day is interval, the second is circuit, any
+      // further one is AMRAP — see the real day-building loop above),
+      // never a blanket "interval" label that would misdescribe a
+      // circuit/AMRAP day.
       const intervalDays = continuousDays.slice(0, 1);
-      const circuitDays = continuousDays.slice(1);
+      const circuitDays = continuousDays.slice(1, 2);
+      const amrapDays = continuousDays.slice(2);
       lines.push(`Added ${intervalDays.length} interval-conditioning day${intervalDays.length === 1 ? "" : "s"} (${intervalDays.join(", ")}) — real schedule surplus beyond the resistance split, matching this coach's own stored conditioning methodology.`);
       if (circuitDays.length > 0) {
         lines.push(`Added ${circuitDays.length} conditioning-circuit day${circuitDays.length === 1 ? "" : "s"} (${circuitDays.join(", ")}) — additional real schedule surplus, for format variety within the same conditioning methodology.`);
+      }
+      if (amrapDays.length > 0) {
+        lines.push(`Added ${amrapDays.length} conditioning-AMRAP day${amrapDays.length === 1 ? "" : "s"} (${amrapDays.join(", ")}) — additional real schedule surplus, for further format variety within the same conditioning methodology.`);
       }
     } else {
       lines.push(`Added ${continuousDays.length} continuous-work day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching the client's own stated cardio preference.`);
@@ -736,11 +789,23 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
       // a deterministic, reproducible choice that gives a
       // conditioning-focused coach with real schedule surplus genuine
       // format variety, never a coin flip.
+      //
+      // Phase 11D — the SAME extension, one more step: no real
+      // coach-collected signal distinguishes "wants circuits" from "wants
+      // AMRAP" either (the identical, already-documented onboarding gap —
+      // still the ONE real signal doing the work, never a fabricated new
+      // one), so a THIRD conditioning day gets a genuine AMRAP instead of
+      // a second circuit — deterministic, reproducible, never randomly
+      // inserted (spec section 31: "do not randomly place AMRAPs/EMOMs
+      // into programs" — this is gated on the exact same real methodology
+      // signal every other conditioning format already requires).
       const { session, diagnostics } = !usesIntervalConditioning(com)
         ? buildUniversalContinuousSessionForDay(dayOfWeek, effectiveRules)
         : conditioningIndex === 0
           ? buildUniversalIntervalSessionForDay(dayOfWeek)
-          : buildUniversalCircuitSessionForDay(dayOfWeek);
+          : conditioningIndex === 1
+            ? buildUniversalCircuitSessionForDay(dayOfWeek)
+            : buildUniversalAmrapSessionForDay(dayOfWeek);
       sessionDiagnostics.push(diagnostics);
       days[idx] = { dayOfWeek, type: "training", sessions: [session] };
     });

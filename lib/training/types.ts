@@ -175,7 +175,24 @@ export interface TrainingItemInstance {
  * "circuit", never actually read by lib/workout/session-flow.ts today) into
  * a first-class composition object instead of a same-session sibling-linking
  * hack. */
-export type BlockKind = "straight" | "superset" | "circuit" | "interval" | "warmup" | "cooldown" | "custom";
+export type BlockKind = "straight" | "superset" | "circuit" | "interval" | "warmup" | "cooldown" | "custom" | "emom";
+
+/** Phase 11D — how a `kind:"circuit"` block decides it's finished. Absent
+ * (or "fixed_rounds") preserves Phase 11B's exact existing behavior byte
+ * for byte: the block ends once `rounds` real rounds are completed, with
+ * no time enforcement even if `timeCapSeconds` happens to also be set
+ * (advisory-only in that case — this codebase never silently repurposes
+ * an existing field's meaning just because a new one now exists nearby).
+ * "time_cap" is a genuine AMRAP: `rounds` is deliberately left undefined
+ * (unbounded — "as many rounds as possible"), and the block ends only
+ * when the client's own real elapsed time reaches `timeCapSeconds`
+ * (spec section 7: "do not flatten AMRAP into a guessed fixed number of
+ * rounds"). "rounds_or_time_cap" is a real time-capped circuit (spec
+ * section 45): a genuine `rounds` target is ALSO set, and the block ends
+ * at whichever real condition — full rounds, or the time cap — is
+ * reached first. See lib/workout/circuit.ts's own doc for the execution
+ * mechanics each mode drives. */
+export type BlockTerminationMode = "fixed_rounds" | "time_cap" | "rounds_or_time_cap";
 
 export interface Block {
   id: string;
@@ -188,13 +205,36 @@ export interface Block {
    * additive: no schema/DB migration, same posture as every other field
    * added directly onto this already-flexible, jsonb-backed grammar.
    * Optional and never required — a block with no name falls back to a
-   * generic "Circuit" label wherever it's displayed. */
+   * generic "Circuit" label wherever it's displayed. Phase 11D extends
+   * this same principle to AMRAP/EMOM/custom-named protocols (spec
+   * section 6/30: "Elon Death Set Finisher From Hell" is pure display
+   * data — it never appears as a hard-coded string anywhere in product
+   * logic, and never influences execution semantics). */
   name?: string;
+  /** For a `kind:"circuit"` block: the real round target (Phase 11B),
+   * intentionally left undefined for a `terminationMode:"time_cap"` AMRAP
+   * (see BlockTerminationMode's own doc). For a `kind:"emom"` block
+   * (Phase 11D): reused as the real total CADENCE WINDOW count (e.g.
+   * "EMOM x 10" -> rounds: 10) — a window is this format's own natural
+   * "one full repeat" unit, exactly the same concept `rounds` already
+   * expresses for circuit/AMRAP, so this deliberately does not introduce
+   * a separately-named `totalWindows` field for what is semantically the
+   * identical "how many times does this block's content repeat" number. */
   rounds?: number;
   restBetweenItemsSeconds?: number;
   restBetweenRoundsSeconds?: number;
   timeCapSeconds?: number;
   completionRule?: string;
+  /** Phase 11D — see BlockTerminationMode's own doc. Only meaningful for
+   * `kind:"circuit"`; absent/ignored for every other block kind. */
+  terminationMode?: BlockTerminationMode;
+  /** Phase 11D — the real cadence, in seconds, between one EMOM window's
+   * start and the next (60 for a plain EMOM, 120 for E2MOM, 180 for
+   * E3MOM, spec section 11's own "a bounded cadenceSeconds concept may be
+   * cleaner than three separate method types" — audited and adopted
+   * rather than hard-coding three near-identical execution engines). Only
+   * meaningful for `kind:"emom"`. */
+  cadenceSeconds?: number;
   items: TrainingItemInstance[];
 }
 
@@ -306,6 +346,17 @@ export interface ExecutionRecord {
    * another repetition concept" discipline as powerSetActuals/
    * roundActuals/circuitRoundActuals. */
   mobilitySetActuals?: MobilitySetActual[];
+  /** Phase 11D — present ONLY for an item assigned to one or more windows
+   * of a real `kind:"emom"` block: the real, per-window history (spec
+   * section 10's acceptance case: "Minutes 1-7 completed, Minute 8
+   * partial [i.e. skipped], Minutes 9-10 not reached"). A window an item
+   * was never assigned to (the cadence cycled to a different item that
+   * window) simply never appears here — same "never fabricate" discipline
+   * as every other *Actual type. Deliberately distinct from
+   * circuitRoundActuals even though structurally identical, because an
+   * EMOM window is a cadence-timed unit, never a circuit round (spec
+   * section 33: "do not confuse a circuit round with an EMOM window"). */
+  emomWindowActuals?: EmomWindowActual[];
 }
 
 /** Phase 11B — see ExecutionRecord.circuitRoundActuals's own doc. A round
@@ -349,6 +400,21 @@ export interface PowerSetActual {
 export interface MobilitySetActual {
   setNumber: number;
   side?: "left" | "right";
+  status: "completed" | "skipped";
+  actual?: Partial<Prescription>;
+  skipReason?: SkipReason;
+  completedAtIso?: string;
+}
+
+/** Phase 11D — see ExecutionRecord.emomWindowActuals's own doc. `window`
+ * is the real, 1-indexed cadence window this exposure belongs to — never
+ * inferred from array position (spec section 39: "do not use display name
+ * as identity" extends to "never depend on array position alone" for
+ * every repeated-exposure concept in this grammar). A window simply
+ * absent means it was never reached/attempted — honest, never a
+ * fabricated completion (spec section 22). */
+export interface EmomWindowActual {
+  window: number;
   status: "completed" | "skipped";
   actual?: Partial<Prescription>;
   skipReason?: SkipReason;
