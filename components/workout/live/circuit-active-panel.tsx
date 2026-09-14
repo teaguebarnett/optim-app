@@ -28,5 +28,14 @@ export function CircuitActivePanel({
   }
   const currentItem: TrainingItemInstance | undefined = block.items[progress.itemIndex];
   if (!currentItem) return null;
-  return <CircuitItemPanel block={block} round={progress.round} itemIndex={progress.itemIndex} blockStartedAtIso={progress.blockStartedAtIso} painReportActive={painReportActive} />;
+  return (
+    <CircuitItemPanel
+      block={block}
+      round={progress.round}
+      itemIndex={progress.itemIndex}
+      blockStartedAtIso={progress.blockStartedAtIso}
+      painReportActive={painReportActive}
+      currentSide={progress.currentSide}
+    />
+  );
 }

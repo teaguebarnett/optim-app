@@ -18,6 +18,7 @@
 import type { Block, Prescription, TrainingItemInstance } from "../training/types.ts";
 import { formatDistance, formatHeartRate, formatPace } from "./continuous.ts";
 import { formatIntervalSeconds } from "./interval.ts";
+import { requiresBothSides } from "./mobility.ts";
 
 export type CircuitPhaseKind = "item" | "round-rest";
 
@@ -169,6 +170,10 @@ export function describeCircuitOverview(block: Block): string[] {
 export interface CircuitExposureLike {
   roundNumber: number;
   status: "completed" | "skipped";
+  /** Phase 12B — present only for a bilateral/alternating item's exposure
+   * (see CircuitRoundActual.side's own doc). Absent for every other
+   * circuit item, exactly as today. */
+  side?: "left" | "right";
 }
 
 /**
@@ -176,13 +181,22 @@ export interface CircuitExposureLike {
  * block has a real "completed" exposure recorded for that round — a round
  * with even one item skipped or missing is not a completed round (spec
  * section 13's own "do not mark Round 2 complete" when only 2 of 4 items
- * were done).
+ * were done). Phase 12B: a bilateral/alternating item needs BOTH its left
+ * AND right exposure completed for that round to count for it — a single
+ * resolved side is only half the real work, never enough to call the round
+ * done for that item (spec test matrix I).
  */
 export function completedCircuitRounds(block: Block, exposuresByItemId: Record<string, CircuitExposureLike[]>): number {
   const rounds = totalCircuitRounds(block);
   let completed = 0;
   for (let round = 1; round <= rounds; round++) {
-    const allItemsDoneThisRound = block.items.every((item) => (exposuresByItemId[item.id] ?? []).some((e) => e.roundNumber === round && e.status === "completed"));
+    const allItemsDoneThisRound = block.items.every((item) => {
+      const exposuresThisRound = (exposuresByItemId[item.id] ?? []).filter((e) => e.roundNumber === round);
+      if (requiresBothSides(item.prescription)) {
+        return exposuresThisRound.some((e) => e.side === "left" && e.status === "completed") && exposuresThisRound.some((e) => e.side === "right" && e.status === "completed");
+      }
+      return exposuresThisRound.some((e) => e.status === "completed");
+    });
     if (allItemsDoneThisRound) completed += 1;
     else break; // rounds are sequential — a later round can't be "complete" if an earlier one isn't (never a gap).
   }
@@ -196,12 +210,16 @@ export function classifyCircuitCompletion(block: Block, exposuresByItemId: Recor
 /** Honest performed-as-prescribed: every round of every item completed,
  * with zero skipped exposures anywhere — mirrors
  * intervalPerformedAsPrescribed's own "never invent, only record"
- * discipline. */
+ * discipline. Phase 12B: a bilateral/alternating item genuinely owes TWO
+ * exposures per round (left and right), so its expected count doubles —
+ * see circuitItemPerformedAsPrescribed's own doc for why this can't stay a
+ * bare `rounds` comparison once an item has a side concept. */
 export function circuitPerformedAsPrescribed(block: Block, exposuresByItemId: Record<string, CircuitExposureLike[]>): boolean {
   const rounds = totalCircuitRounds(block);
   return block.items.every((item) => {
     const exposures = exposuresByItemId[item.id] ?? [];
-    return exposures.length === rounds && exposures.every((e) => e.status === "completed");
+    const expected = requiresBothSides(item.prescription) ? rounds * 2 : rounds;
+    return exposures.length === expected && exposures.every((e) => e.status === "completed");
   });
 }
 
@@ -210,18 +228,27 @@ export function circuitPerformedAsPrescribed(block: Block, exposuresByItemId: Re
  * Zero exposures at all (the item was never reached, including a
  * whole-circuit skip before starting) is honestly "skipped," never
  * "partial" — mirrors classifyContinuousCompletion's own boundary
- * discipline, scoped to one item instead of the whole activity. */
-export function classifyCircuitItemCompletion(totalRounds: number, exposures: CircuitExposureLike[]): "completed" | "skipped" | "partial" {
+ * discipline, scoped to one item instead of the whole activity.
+ *
+ * `exposuresPerRound` defaults to 1 (every existing call site/behavior
+ * unchanged) — the caller passes 2 for a bilateral/alternating item (spec
+ * section 14: two real, separately-resolved side exposures per round, not
+ * one), so "every round, both sides" is what "completed" now honestly
+ * requires for that item. */
+export function classifyCircuitItemCompletion(totalRounds: number, exposures: CircuitExposureLike[], exposuresPerRound = 1): "completed" | "skipped" | "partial" {
+  const expected = totalRounds * exposuresPerRound;
   const completedCount = exposures.filter((e) => e.status === "completed").length;
-  if (completedCount >= totalRounds) return "completed";
+  if (completedCount >= expected) return "completed";
   if (completedCount === 0) return "skipped";
   return "partial";
 }
 
 /** Honest per-item performed-as-prescribed: every round for THIS item was
- * both attempted and completed. */
-export function circuitItemPerformedAsPrescribed(totalRounds: number, exposures: CircuitExposureLike[]): boolean {
-  return exposures.length === totalRounds && exposures.every((e) => e.status === "completed");
+ * both attempted and completed. See classifyCircuitItemCompletion's own
+ * doc for why exposuresPerRound exists and defaults to 1. */
+export function circuitItemPerformedAsPrescribed(totalRounds: number, exposures: CircuitExposureLike[], exposuresPerRound = 1): boolean {
+  const expected = totalRounds * exposuresPerRound;
+  return exposures.length === expected && exposures.every((e) => e.status === "completed");
 }
 
 /** Whether an item's own family has rich, family-specific per-exposure

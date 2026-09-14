@@ -701,6 +701,18 @@ export interface CircuitExecutionProgress {
    * later fans out into each item's own real ExecutionRecord.circuitRoundActuals
    * once the whole circuit resolves. */
   exposuresByItemId: Record<string, CircuitRoundActual[]>;
+  /** Phase 12B — which side is still pending for the CURRENT item-round
+   * exposure (only meaningful while phase === "item"), mirroring
+   * MobilityExecutionProgress.currentSide exactly: "left" while a
+   * bilateral/alternating item's left side is still owed, "right" once
+   * left resolves and right is now owed, null once the current item needs
+   * no second side (either it has no side concept at all, or it's a fixed
+   * single side) — see lib/workout/mobility.ts's requiresBothSides, the
+   * one shared predicate ADVANCE_CIRCUIT_PHASE reuses rather than
+   * re-deciding this itself. Recomputed fresh from scratch for whichever
+   * item becomes current next (a new item/round never inherits the
+   * previous item's side state). */
+  currentSide: "left" | "right" | null;
 }
 
 /** Phase 11C — see WorkoutSession.powerProgress's own doc for why this is

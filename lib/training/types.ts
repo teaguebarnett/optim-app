@@ -368,6 +368,19 @@ export interface ExecutionRecord {
 export interface CircuitRoundActual {
   roundNumber: number;
   status: "completed" | "skipped";
+  /** Phase 12B — which side this exposure resolved, only ever present when
+   * the item's own prescription genuinely has a side concept (mirrors
+   * MobilitySetActual.side exactly, same "left"/"right" vocabulary, no new
+   * type introduced). A bilateral/alternating item contributes TWO
+   * CircuitRoundActual entries sharing one roundNumber (side "left" then
+   * side "right" — see lib/workout/mobility.ts's requiresBothSides, the
+   * one shared source of truth for which items need this, reused as-is
+   * rather than re-decided here); a fixed left-only/right-only item
+   * contributes its one real exposure honestly labeled with that side;
+   * absent entirely for an item with no side concept at all — identical to
+   * every non-sided circuit item today (resistance/continuous/interval/
+   * power/unsided mobility), so this field changes nothing for them. */
+  side?: "left" | "right";
   /** Only the primitives that actually differ from the item's own
    * prescription — same discipline as ExecutionRecord.actual itself,
    * never a full duplicate. */

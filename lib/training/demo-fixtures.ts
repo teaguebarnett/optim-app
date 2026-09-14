@@ -629,6 +629,57 @@ export const CIRCUIT_WITH_POWER_ITEM_DEMO: Session = {
   ],
 };
 
+/** Phase 12B's own worked example: a circuit containing a bilateral/
+ * alternating mobility item (Couch Stretch, / side) alongside a power item
+ * and a resistance item — proves a sided mobility item's left/right
+ * exposures resolve distinctly inside a real circuit round, exactly the
+ * fidelity standalone mobility execution already had (see
+ * COUCH_STRETCH_MOBILITY_SESSION_DEMO's own doc), never collapsed into one
+ * generic per-round record. */
+export const CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO: Session = {
+  id: "circuit-with-sided-mobility-item-demo",
+  name: "Mobility-Athletic Circuit",
+  focus: "Power, mobility, and conditioning circuit",
+  estimatedDurationMin: 18,
+  coachNote: "Both sides, every round — don't rush the stretch.",
+  blocks: [
+    {
+      id: "block-sided-mobility-circuit",
+      kind: "circuit",
+      order: 1,
+      rounds: 3,
+      restBetweenItemsSeconds: 15,
+      restBetweenRoundsSeconds: 90,
+      items: [
+        {
+          id: "circuit-sided-pogo-jump",
+          order: 1,
+          name: "Pogo Jump",
+          category: "power",
+          coachCue: "Quick, springy contacts.",
+          prescription: { family: "power", contacts: 15 },
+        },
+        {
+          id: "circuit-sided-couch-stretch",
+          order: 2,
+          name: "Couch Stretch",
+          category: "mobility",
+          coachCue: "Squeeze the glute on the stretched side.",
+          prescription: { family: "mobility", duration: { seconds: 30 }, side: "bilateral" },
+        },
+        {
+          id: "circuit-sided-push-up",
+          order: 3,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion — knees down is fine.",
+          prescription: { family: "resistance", reps: { low: 10, high: 10 } },
+        },
+      ],
+    },
+  ],
+};
+
 /** Spec section 38's own "critical acceptance session": mobility warm-up
  * -> Box Jump power -> Squat resistance -> conditioning circuit -> bike
  * intervals -> mobility cooldown, ALL through the one universal Session

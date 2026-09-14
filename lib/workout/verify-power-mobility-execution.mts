@@ -21,7 +21,16 @@ import { buildWorkoutSummary } from "../workout-analysis.ts";
 import { projectTrainingDayObservations } from "../signals/project-training-day.ts";
 import { findTrainingItemById } from "./session-flow.ts";
 import { applyTrainingItemPatch, type TrainingItemPath } from "../training/program-proposal-editing.ts";
-import { describeCircuitItemTarget, hasRichCircuitCapture } from "./circuit.ts";
+import {
+  circuitItemPerformedAsPrescribed,
+  circuitPerformedAsPrescribed,
+  classifyCircuitCompletion,
+  classifyCircuitItemCompletion,
+  completedCircuitRounds,
+  describeCircuitItemTarget,
+  hasRichCircuitCapture,
+  totalCircuitRounds,
+} from "./circuit.ts";
 import { classifyPowerItemCompletion, describePowerOverview, describePowerSetTarget, powerCaptureFields } from "./power.ts";
 import {
   describeMobilityOverview,
@@ -37,6 +46,7 @@ import {
   COUCH_STRETCH_MOBILITY_SESSION_DEMO,
   HIP_ROTATION_MOBILITY_SESSION_DEMO,
   CIRCUIT_WITH_POWER_ITEM_DEMO,
+  CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO,
   MIXED_SESSION_WITH_POWER_AND_MOBILITY_DEMO,
   MIXED_SESSION_DEMO,
   BIKE_INTERVALS_SESSION_DEMO,
@@ -825,6 +835,251 @@ check("resolvedSession's own JSON is byte-identical before and after a full powe
   for (let i = 0; i < 4; i++) state = reducer(state, { type: "ADVANCE_POWER_SET", exerciseId: "power-box-jump", actual: { reps: { low: 2, high: 2 } } });
   const after = JSON.stringify(state.workoutSession.resolvedSession);
   assert.equal(before, after);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 12B — sided mobility execution fidelity inside a circuit. Before
+// this phase, a bilateral/alternating mobility item embedded in a circuit
+// collapsed to one generic exposure per round (CircuitRoundActual had no
+// side identity at all) — losing exactly the left/right truth standalone
+// mobility execution already preserved (Phase 11C, section 6/7 above).
+// This section proves the same fidelity now holds inside a real circuit
+// round too, reusing requiresBothSides (lib/workout/mobility.ts) as the
+// one shared source of truth for which items need it — never a second,
+// circuit-specific interpretation of bilateral/alternating.
+// ---------------------------------------------------------------------------
+
+console.log("\n17. Sided mobility item inside a circuit — left/right fidelity matches standalone mobility (Phase 12B)\n");
+
+const SIDED_CIRCUIT_BLOCK_ID = "block-sided-mobility-circuit";
+
+check("A: a bilateral mobility item inside a circuit produces two distinct, correctly-sided exposures per round — the round cannot advance until both resolve, and the next item begins only once it does", () => {
+  let state = startFromFixture(CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO);
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump round 1
+  let progress = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID];
+  assert.equal(progress?.itemIndex, 1, "Couch Stretch is now current");
+  assert.equal(progress?.currentSide, "left", "a bilateral item always opens on LEFT");
+
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT
+  progress = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID];
+  assert.equal(progress?.itemIndex, 1, "I: still on Couch Stretch — the round does not advance until RIGHT is also resolved");
+  assert.equal(progress?.round, 1);
+  assert.equal(progress?.currentSide, "right");
+
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch RIGHT
+  progress = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID];
+  assert.equal(progress?.itemIndex, 2, "J: Push-Up begins only now that the mobility exposure fully resolved");
+
+  const exposures = progress?.exposuresByItemId["circuit-sided-couch-stretch"];
+  assert.equal(exposures?.length, 2, "exactly two distinct exposures, never a collapsed single record");
+  assert.deepEqual(exposures?.map((e) => [e.roundNumber, e.side, e.status]), [
+    [1, "left", "completed"],
+    [1, "right", "completed"],
+  ]);
+});
+
+check("B: an alternating mobility item inside a circuit uses the exact same requiresBothSides semantics as bilateral — no second interpretation", () => {
+  const alternatingSession = {
+    ...CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO,
+    blocks: [
+      {
+        ...CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO.blocks[0],
+        items: CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO.blocks[0].items.map((item) =>
+          item.id === "circuit-sided-couch-stretch" ? { ...item, prescription: { ...item.prescription, side: "alternating" as const } } : item,
+        ),
+      },
+    ],
+  };
+  let state = startFromFixture(alternatingSession);
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch RIGHT
+  const exposures = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID]?.exposuresByItemId["circuit-sided-couch-stretch"];
+  assert.deepEqual(exposures?.map((e) => e.side), ["left", "right"]);
+});
+
+function fixedSideSession(side: "left" | "right") {
+  return {
+    ...CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO,
+    blocks: [
+      {
+        ...CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO.blocks[0],
+        items: CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO.blocks[0].items.map((item) =>
+          item.id === "circuit-sided-couch-stretch" ? { ...item, prescription: { ...item.prescription, side } } : item,
+        ),
+      },
+    ],
+  };
+}
+
+check("C/D: a fixed-side (left-only or right-only) mobility item inside a circuit requires exactly ONE honestly-labeled exposure per round, never a second side", () => {
+  for (const side of ["left", "right"] as const) {
+    let state = startFromFixture(fixedSideSession(side));
+    state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+    assert.equal(state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID]?.currentSide, null, "a fixed side never toggles — requiresBothSides is false");
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch — one exposure
+    const progress = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID];
+    assert.equal(progress?.itemIndex, 2, "advances straight to Push-Up — no second side owed");
+    const exposures = progress?.exposuresByItemId["circuit-sided-couch-stretch"];
+    assert.equal(exposures?.length, 1);
+    assert.equal(exposures?.[0].side, side, "the one real exposure is honestly labeled with the fixed side");
+  }
+});
+
+check("E: an unsided mobility item inside a circuit is completely unaffected — remains exactly one exposure, no side field at all", () => {
+  const unsided = {
+    ...CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO,
+    blocks: [
+      {
+        ...CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO.blocks[0],
+        items: CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO.blocks[0].items.map((item) =>
+          item.id === "circuit-sided-couch-stretch" ? { ...item, prescription: { family: "mobility" as const, duration: { seconds: 30 } } } : item,
+        ),
+      },
+    ],
+  };
+  let state = startFromFixture(unsided);
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch
+  const exposures = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID]?.exposuresByItemId["circuit-sided-couch-stretch"];
+  assert.equal(exposures?.length, 1);
+  assert.equal(exposures?.[0].side, undefined, "no side concept at all — field absent, identical to every pre-Phase-12B circuit item");
+});
+
+check("F: LEFT complete / RIGHT skipped remains truthful — both actuals stay distinct, never collapsed into one generic skipped record", () => {
+  let state = startFromFixture(CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO);
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT — completed
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID, skipped: true, skipReason: "pain-or-discomfort" }); // Couch Stretch RIGHT — skipped
+  const exposures = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID]?.exposuresByItemId["circuit-sided-couch-stretch"];
+  assert.deepEqual(exposures?.map((e) => [e.side, e.status]), [
+    ["left", "completed"],
+    ["right", "skipped"],
+  ]);
+  assert.equal(exposures?.[1].skipReason, "pain-or-discomfort");
+});
+
+check("G: reload after LEFT resumes at RIGHT — never LEFT again, never the next item, never the next round; prior work stays intact (plain JSON round-trip, same convention as section 11's own T test)", () => {
+  let state = startFromFixture(CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO);
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT
+  const roundTripped = JSON.parse(JSON.stringify(state.workoutSession.circuitProgress));
+  assert.equal(roundTripped[SIDED_CIRCUIT_BLOCK_ID].itemIndex, 1);
+  assert.equal(roundTripped[SIDED_CIRCUIT_BLOCK_ID].round, 1);
+  assert.equal(roundTripped[SIDED_CIRCUIT_BLOCK_ID].currentSide, "right");
+  assert.equal(roundTripped[SIDED_CIRCUIT_BLOCK_ID].exposuresByItemId["circuit-sided-couch-stretch"].length, 1, "LEFT survives the round-trip untouched");
+});
+
+check("H: pain reported during RIGHT preserves LEFT, activates the existing safety flow, and never fabricates RIGHT's completion; resuming lands back on RIGHT", () => {
+  let state = startFromFixture(CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO);
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT — completed
+
+  state = reportPain(state, "circuit-sided-couch-stretch", { ratingZeroToTen: 2, continuedAfterSet: false, affectsOutsideGym: false });
+  assert.equal(state.workoutSession.phase, "pain-review", "the existing safety flow activates — no new architecture");
+  const blocked = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  assert.equal(blocked.workoutSession.phase, "pain-review", "must never silently continue past an active pain interruption");
+  assert.equal(
+    blocked.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID]?.exposuresByItemId["circuit-sided-couch-stretch"]?.length,
+    1,
+    "RIGHT is never fabricated as completed",
+  );
+
+  state = reducer(state, { type: "CONFIRM_PAIN_RESOLVED" });
+  state = reducer(state, { type: "RESUME_AFTER_PAIN" });
+  assert.equal(state.workoutSession.phase, "circuit-active");
+  const progress = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID];
+  assert.equal(progress?.itemIndex, 1, "still on Couch Stretch");
+  assert.equal(progress?.currentSide, "right", "resumes at the exact next side, never re-asking the completed LEFT side");
+  assert.equal(progress?.exposuresByItemId["circuit-sided-couch-stretch"]?.length, 1, "LEFT's completion survives the interruption untouched");
+});
+
+check("K/L: repeated rounds preserve side identity independently — round 2 opens fresh at LEFT, round 1's exposures are untouched, and the item's own prescription is never mutated", () => {
+  let state = startFromFixture(CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO);
+  const block = state.workoutSession.resolvedSession!.blocks[0];
+  const prescriptionBefore = JSON.stringify(block.items[1].prescription);
+
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  for (let round = 1; round <= 3; round++) {
+    // Between-round rest is its own phase (no exposure of its own) — a
+    // later round's Pogo Jump only becomes current once that round-rest is
+    // itself resolved (round 1 needs no such step; it starts on Pogo Jump
+    // directly from BEGIN_CIRCUIT_EXECUTION).
+    if (round > 1) state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // resolve round-rest -> this round's Pogo Jump is now current
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+    const openingSide = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID]?.currentSide;
+    assert.equal(openingSide, "left", `round ${round}: Couch Stretch always opens fresh at LEFT, never inheriting a prior round's side state`);
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch RIGHT
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Push-Up
+  }
+  assert.equal(state.workoutSession.phase, "session-summary", "all 3 rounds finalized");
+
+  const execution = state.workoutSession.continuousExecutions?.["circuit-sided-couch-stretch"];
+  assert.equal(execution!.circuitRoundActuals?.length, 6, "3 rounds x 2 sides — every round's own independent LEFT/RIGHT pair");
+  assert.deepEqual(
+    execution!.circuitRoundActuals!.map((e) => [e.roundNumber, e.side, e.status]),
+    [
+      [1, "left", "completed"],
+      [1, "right", "completed"],
+      [2, "left", "completed"],
+      [2, "right", "completed"],
+      [3, "left", "completed"],
+      [3, "right", "completed"],
+    ],
+  );
+
+  // N: the item's own prescription was never mutated by any of this.
+  const prescriptionAfter = JSON.stringify(block.items[1].prescription);
+  assert.equal(prescriptionBefore, prescriptionAfter);
+});
+
+check("O: history/observation classification honestly reflects sided completion — completedCircuitRounds/classifyCircuitCompletion/circuitPerformedAsPrescribed and buildWorkoutSummary's own description all account for both required sides, never just one", () => {
+  let state = startFromFixture(CIRCUIT_WITH_SIDED_MOBILITY_ITEM_DEMO);
+  state = reducer(state, { type: "BEGIN_CIRCUIT_EXECUTION", blockId: SIDED_CIRCUIT_BLOCK_ID });
+  // Round 1: Couch Stretch LEFT completed, RIGHT skipped — only a HALF-done
+  // round for this item, never enough to count the round as complete.
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID, skipped: true, skipReason: "out-of-time" }); // Couch Stretch RIGHT skipped
+
+  const block = state.workoutSession.resolvedSession!.blocks[0];
+  const midExposures = state.workoutSession.circuitProgress?.[SIDED_CIRCUIT_BLOCK_ID]?.exposuresByItemId ?? {};
+  assert.equal(completedCircuitRounds(block, midExposures), 0, "a single resolved side is only half the real work — the round is not done for this item");
+  assert.equal(classifyCircuitCompletion(block, midExposures), "partial");
+  assert.equal(circuitPerformedAsPrescribed(block, midExposures), false);
+
+  // Finish round 1, then complete rounds 2-3 normally — reaching the real
+  // inline finalize path (never SKIP_EXERCISE, which short-circuits
+  // buildWorkoutSummary's own per-item description step via the coarse
+  // exerciseLogs.status="skipped" for EVERY item in the block — see
+  // section 12's own established, accepted note on that ambiguity, an
+  // unrelated pre-existing behavior this test must not depend on).
+  state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Push-Up round 1 -> round-rest
+  for (let round = 2; round <= 3; round++) {
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // resolve round-rest -> this round's Pogo Jump
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Pogo Jump
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch LEFT
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Couch Stretch RIGHT
+    state = reducer(state, { type: "ADVANCE_CIRCUIT_PHASE", blockId: SIDED_CIRCUIT_BLOCK_ID }); // Push-Up
+  }
+  assert.equal(state.workoutSession.phase, "session-summary", "all 3 rounds finalized via the real inline finalize path");
+
+  const execution = state.workoutSession.continuousExecutions?.["circuit-sided-couch-stretch"];
+  assert.equal(execution!.circuitRoundActuals?.length, 6, "3 rounds x 2 sides");
+  assert.equal(execution!.status, "partial", "5 of 6 expected exposures completed (round 1's RIGHT skipped) — honestly partial, never 'completed'");
+  assert.equal(circuitItemPerformedAsPrescribed(totalCircuitRounds(block), execution!.circuitRoundActuals!, 2), false);
+  assert.equal(classifyCircuitItemCompletion(totalCircuitRounds(block), execution!.circuitRoundActuals!, 2), "partial");
+
+  const summary = buildWorkoutSummary(state.workoutSession.resolvedSession ?? null, state.workoutSession, "2026-01-01T00:00:00.000Z", "2026-01-01T00:05:00.000Z");
+  assert.match(summary.detail, /Couch Stretch: 5 of 6 completed/, "the honest 'X of Y' unit — never a misleading 'rounds completed' count for a sided item");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

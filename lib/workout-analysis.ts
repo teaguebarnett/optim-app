@@ -98,8 +98,15 @@ export function canCompleteExercise(item: TrainingItemInstance, log: ExerciseLog
 function describeContinuousExecution(name: string, execution: ExecutionRecord): string {
   const suffix = execution.status === "partial" ? " (partial)" : "";
   if (execution.circuitRoundActuals) {
-    const completedRounds = execution.circuitRoundActuals.filter((r) => r.status === "completed").length;
-    return `${name}: ${completedRounds} round${completedRounds === 1 ? "" : "s"} completed${suffix}.`;
+    const completedCount = execution.circuitRoundActuals.filter((r) => r.status === "completed").length;
+    // Phase 12B — a bilateral/alternating item's exposures are real
+    // side-resolved units, not rounds (two per round) — "rounds completed"
+    // would misstate the unit, so describe it the same honest "X of Y
+    // completed" way mobilitySetActuals already does just below.
+    if (execution.circuitRoundActuals.some((r) => r.side !== undefined)) {
+      return `${name}: ${completedCount} of ${execution.circuitRoundActuals.length} completed${suffix}.`;
+    }
+    return `${name}: ${completedCount} round${completedCount === 1 ? "" : "s"} completed${suffix}.`;
   }
   if (execution.roundActuals) {
     const completedRounds = execution.roundActuals.filter((r) => r.status === "completed").length;

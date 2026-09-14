@@ -1292,11 +1292,12 @@ export function reducer(state: AppState, action: Action): AppState {
           const existingLog = exerciseLogs[item.id];
           if (existingLog) exerciseLogs = { ...exerciseLogs, [item.id]: { ...existingLog, status: "skipped", skipReason: action.reason, skipNote: action.note } };
           if (itemExposures.length > 0) {
+            const exposuresPerRound = requiresBothSides(item.prescription) ? 2 : 1;
             const execution: ExecutionRecord = {
               id: nextId("execution"),
               trainingItemInstanceId: item.id,
-              status: classifyCircuitItemCompletion(totalRounds, itemExposures),
-              performedAsPrescribed: circuitItemPerformedAsPrescribed(totalRounds, itemExposures),
+              status: classifyCircuitItemCompletion(totalRounds, itemExposures, exposuresPerRound),
+              performedAsPrescribed: circuitItemPerformedAsPrescribed(totalRounds, itemExposures, exposuresPerRound),
               completedAtIso: nowIso,
               skipReason: action.reason,
               note: action.note,
@@ -1948,7 +1949,15 @@ export function reducer(state: AppState, action: Action): AppState {
       const block = findBlockById(state.workoutSession.resolvedSession, blockId);
       if (!block || !isCircuitBlock(block)) return state;
       if (state.workoutSession.circuitProgress?.[blockId]) return state;
-      const progress: CircuitExecutionProgress = { round: 1, itemIndex: 0, phase: "item", exposuresByItemId: {}, blockStartedAtIso: new Date().toISOString() };
+      const firstItem = block.items[0];
+      const progress: CircuitExecutionProgress = {
+        round: 1,
+        itemIndex: 0,
+        phase: "item",
+        exposuresByItemId: {},
+        blockStartedAtIso: new Date().toISOString(),
+        currentSide: firstItem && requiresBothSides(firstItem.prescription) ? "left" : null,
+      };
       return {
         ...state,
         workoutSession: {
@@ -1979,15 +1988,36 @@ export function reducer(state: AppState, action: Action): AppState {
       if (progress.phase === "item") {
         const currentItem = block.items[progress.itemIndex];
         if (!currentItem) return state;
+        // Phase 12B — the side THIS exposure resolves: progress.currentSide
+        // while a bilateral/alternating item still owes a side (left, then
+        // right); otherwise the item's own fixed side when it has one
+        // (left-only/right-only); otherwise absent — exact same fallback
+        // ADVANCE_MOBILITY_PHASE already uses for MobilitySetActual.side.
+        const resolvedSide = progress.currentSide ?? (currentItem.prescription.side === "left" || currentItem.prescription.side === "right" ? currentItem.prescription.side : undefined);
         const existing = exposuresByItemId[currentItem.id] ?? [];
         const exposure: CircuitRoundActual = {
           roundNumber: progress.round,
+          side: resolvedSide,
           status: action.skipped ? "skipped" : "completed",
           actual: action.actual,
           skipReason: action.skipped ? action.skipReason : undefined,
           completedAtIso: new Date().toISOString(),
         };
         exposuresByItemId = { ...exposuresByItemId, [currentItem.id]: [...existing, exposure] };
+
+        // Phase 12B — a bilateral/alternating item's LEFT side just
+        // resolved (completed or skipped — same "still advances to the
+        // next side either way" discipline as ADVANCE_MOBILITY_PHASE):
+        // stay on this exact item/round and flip to RIGHT instead of
+        // calling nextCircuitPosition, so the round cannot advance until
+        // both sides are genuinely resolved (spec test matrix I).
+        if (requiresBothSides(currentItem.prescription) && progress.currentSide === "left") {
+          const heldProgress: CircuitExecutionProgress = { ...progress, currentSide: "right", exposuresByItemId };
+          return {
+            ...state,
+            workoutSession: { ...state.workoutSession, circuitProgress: { ...state.workoutSession.circuitProgress, [blockId]: heldProgress } },
+          };
+        }
       }
 
       const next = nextCircuitPosition(block, { round: progress.round, itemIndex: progress.itemIndex, phase: progress.phase });
@@ -2004,11 +2034,12 @@ export function reducer(state: AppState, action: Action): AppState {
         let continuousExecutions = state.workoutSession.continuousExecutions;
         for (const item of block.items) {
           const itemExposures = exposuresByItemId[item.id] ?? [];
+          const exposuresPerRound = requiresBothSides(item.prescription) ? 2 : 1;
           const execution: ExecutionRecord = {
             id: nextId("execution"),
             trainingItemInstanceId: item.id,
-            status: classifyCircuitItemCompletion(totalRounds, itemExposures),
-            performedAsPrescribed: circuitItemPerformedAsPrescribed(totalRounds, itemExposures),
+            status: classifyCircuitItemCompletion(totalRounds, itemExposures, exposuresPerRound),
+            performedAsPrescribed: circuitItemPerformedAsPrescribed(totalRounds, itemExposures, exposuresPerRound),
             completedAtIso: nowIso,
             circuitRoundActuals: itemExposures,
           };
@@ -2028,6 +2059,10 @@ export function reducer(state: AppState, action: Action): AppState {
       }
 
       const nowIso = new Date().toISOString();
+      // Phase 12B — a fresh item/round never inherits the previous item's
+      // side state; recompute from scratch for whichever item is current
+      // now (only meaningful once phase is back to "item").
+      const upcomingItem = next.phase === "item" ? block.items[next.itemIndex] : undefined;
       const nextProgress: CircuitExecutionProgress = {
         round: next.round,
         itemIndex: next.itemIndex,
@@ -2035,6 +2070,7 @@ export function reducer(state: AppState, action: Action): AppState {
         restStartedAtIso: next.phase === "round-rest" ? nowIso : undefined,
         exposuresByItemId,
         blockStartedAtIso: progress.blockStartedAtIso,
+        currentSide: upcomingItem && requiresBothSides(upcomingItem.prescription) ? "left" : null,
       };
       return {
         ...state,

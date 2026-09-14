@@ -31,6 +31,7 @@ export function CircuitItemPanel({
   itemIndex,
   blockStartedAtIso,
   painReportActive = false,
+  currentSide = null,
 }: {
   block: Block;
   round: number;
@@ -39,6 +40,11 @@ export function CircuitItemPanel({
    * time-driven circuit — see Block.terminationMode's own doc. */
   blockStartedAtIso?: string;
   painReportActive?: boolean;
+  /** Phase 12B — which side this exposure is currently resolving, only
+   * ever non-null for a bilateral/alternating item (mirrors
+   * mobility-set-panel.tsx's own sideLabel exactly, same "LEFT"/"RIGHT"
+   * text convention). */
+  currentSide?: "left" | "right" | null;
 }) {
   const { dispatch, activeContext } = usePrototypeState();
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
@@ -61,6 +67,7 @@ export function CircuitItemPanel({
   const rich = hasRichCircuitCapture(item.prescription);
   const capture = circuitCaptureFields(item.prescription);
   const rpeSatisfied = !capture.rpe || rpe !== null || !rich;
+  const sideLabel = currentSide ? currentSide.toUpperCase() : null;
 
   function handleTimeExpired() {
     dispatch({ type: "EXPIRE_TIMED_CIRCUIT", blockId: block.id });
@@ -127,7 +134,10 @@ export function CircuitItemPanel({
         </div>
       ) : null}
 
-      <p className="mt-2 text-heading text-off-white">{item.name}</p>
+      <div className="mt-2 flex items-center justify-between">
+        <p className="text-heading text-off-white">{item.name}</p>
+        {sideLabel ? <p className="text-label text-brass-strong">{sideLabel}</p> : null}
+      </div>
       {item.coachCue ? <p className="mt-1 text-body text-off-white">{item.coachCue}</p> : null}
       <p className="mt-1 text-meta text-neutral">{describeCircuitItemTarget(item)}</p>
 
@@ -221,14 +231,14 @@ export function CircuitItemPanel({
       </Button>
 
       <button type="button" onClick={() => setSkipItemOpen(true)} className="mt-2 w-full text-center text-action text-neutral hover:text-off-white">
-        Skip this exercise
+        Skip {sideLabel ? "this side" : "this exercise"}
       </button>
 
       <SkipReasonSheet
         open={skipItemOpen}
         onClose={() => setSkipItemOpen(false)}
-        title="Skip this exercise"
-        description={`${item.name} (round ${round}) will be marked skipped — the rest of the circuit continues.`}
+        title={`Skip ${sideLabel ? "this side" : "this exercise"}`}
+        description={`${item.name} (round ${round}${sideLabel ? `, ${sideLabel}` : ""}) will be marked skipped — the rest of the circuit continues.`}
         onConfirm={(reason) => handleSkipItem(reason)}
       />
 

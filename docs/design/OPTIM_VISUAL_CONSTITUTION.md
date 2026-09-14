@@ -1,21 +1,27 @@
-# OPTIM Visual Constitution v1
+# OPTIM Visual Constitution v2
 
-> **Phase 5.3B update — palette superseded.** The "Warm Stone + Brass"
-> palette described throughout this document (sections referencing
-> `--pc-near-black` as stone/putty, ivory-on-stone cards, brass as a
-> frequent accent) has been replaced app-wide by **Pearl Ivory** (light)
-> and **Midnight Navy** (dark), with **electric cobalt** (`#3157F6`) as the
-> primary interactive/accent color and a shared deep-navy (`#071A34`)
-> "signature surface" reserved for singular focal moments (the coach
-> Command Center's top-priority decision). Brass survives only as a rare,
-> restrained micro-accent (progress fills, a chapter icon) — never a
-> dominant wash. See `app/globals.css`'s `:root` and `:root[data-theme=
-> "dark"]` blocks for the authoritative token values, and
-> `components/app-shell/theme-provider.tsx` for the explicit, per-account,
-> user-selected light/dark mechanism (never inferred from the OS). The
-> philosophy, hierarchy, typography, and motion principles below remain
-> current; only the literal color values and the "warm stone" framing are
-> out of date.
+> **Document status (Phase 12B).** This constitution mixes two different
+> kinds of content, and they carry different weight:
+>
+> - **Current foundational direction** — the palette in Section 4, the
+>   brand mark concept in Section 23, and the philosophy/hierarchy/
+>   composition/typography/motion principles in Sections 1-3 and 5-22.
+>   These are the real starting point for the upcoming Product Experience
+>   / Design System phase, not a draft.
+> - **Details still to be finalized** — exact per-page component styling,
+>   final navigation structure, and final typography scale tuning are
+>   deliberately NOT decided by this document. Sections 5, 10, and 17-18
+>   describe principles and ranges to design within, not finished specs.
+>   Treat anything read as a specific finished decision on those fronts as
+>   a mistake to raise, not a rule to follow.
+>
+> **Palette history.** An earlier "Warm Stone + Brass" palette (stone/
+> putty canvas, brass as a frequent accent) was fully replaced app-wide —
+> see Section 4 for the real, current palette. See `app/globals.css`'s
+> `:root` and `:root[data-theme="dark"]` blocks for the authoritative
+> token values, and `components/app-shell/theme-provider.tsx` for the
+> explicit, per-account, user-selected light/dark mechanism (never
+> inferred from the OS).
 
 ## 1. Purpose
 
@@ -108,68 +114,78 @@ The product should feel visually outstanding without becoming visually exhaustin
 
 # 4. Primary Visual Direction
 
-## Warm Stone + Brass
+## Pearl Ivory + Midnight Navy + Electric Cobalt
 
-This is the primary OPTIM design language.
+This is the primary OPTIM design language — premium, minimal, restrained.
+It replaces the earlier "Warm Stone + Brass" direction entirely (see the
+document status note above); this section is the authoritative palette
+description, not the superseded one.
 
 ### Canvas
 
-Warm stone / light beige / soft putty.
+**Pearl Ivory** in light theme — bright, crisp ivory-white. Never
+yellow-beige, never a warm putty/stone tone.
+
+**Midnight Navy** in dark theme — a deep, near-black navy foundation, not
+a flat gray or true black.
+
+Which theme is active is always the user's own explicit, per-account
+choice (`components/app-shell/theme-provider.tsx`) — never inferred from
+the OS, and both are first-class, equally-finished experiences, not a
+"light theme plus an inverted afterthought."
 
 Avoid:
 
-* cold gray
-* clinical white
-* blue-gray corporate backgrounds
-
-The canvas should feel warm and physical.
+* cold, sterile gray
+* warm putty/stone/beige (the superseded direction)
+* generic SaaS-blue corporate backgrounds
 
 ### Surfaces
 
-Ivory / cream / warm off-white.
+Light theme: warm-white/ivory card surfaces sitting just above the Pearl
+Ivory canvas. Dark theme: navy panel surfaces sitting just above the
+Midnight Navy canvas. In both themes, cards must visibly separate from
+the canvas through real surface contrast — never a flat wash with only a
+border to distinguish it.
 
-Cards should visibly separate from the canvas without looking like floating white rectangles on a gray dashboard.
+### Electric Cobalt — the functional accent
 
-### Structural dark
+One primary interactive color, used deliberately and sparingly: primary
+actions, active/selected states, and interactive focus. Never a
+decorative wash across large surfaces, and never applied broadly enough
+to read as a generic "SaaS blue" brand identity — its restraint is what
+keeps it feeling like a precision instrument rather than a template.
 
-Deep charcoal or extremely dark navy.
+### Signature navy surface
 
-Used for:
+A single deep-navy "signature surface," independent of which theme is
+active, reserved for rare, genuinely singular focal moments — the coach
+Command Center's single top-priority decision is the canonical example,
+not a general-purpose panel background.
 
-* primary actions
-* important structural contrast
-* dominant text where appropriate
-* selected states
+### Brass — a rare micro-accent only
 
-Avoid pure black unless required for legibility.
-
-### Brass
-
-Muted architectural brass.
-
-Used selectively for:
-
-* progress
-* active states
-* meaningful highlights
-* important moments
-* data visualization
-* refined micro-details
-
-Brass must never become bright metallic gold or luxury-brand decoration.
-
-It is an **accent**, not the product.
+Brass survives only as a restrained, occasional micro-accent (a progress
+fill, a chapter icon) — never a dominant wash, never bright metallic gold
+or luxury-brand decoration, and never the primary interactive color. This
+is a significant demotion from the superseded direction, where brass was
+a frequent accent throughout the interface.
 
 ### Status colors
 
-Functional colors may exist when semantically necessary:
+Functional colors may exist when semantically necessary (completion,
+warning, error, success). They should remain restrained and harmonize
+with Pearl Ivory / Midnight Navy / Electric Cobalt, in both themes.
 
-* completion
-* warning
-* error
-* success
+### Explicitly avoid
 
-They should remain restrained and harmonize with the Warm Stone + Brass system.
+* a neon/gaming aesthetic
+* generic SaaS blue as the brand — Electric Cobalt is a functional accent
+  used sparingly, never the dominant identity of a screen
+* the stone/brass motif as a primary visual language (brass is now a rare
+  micro-accent only, per above)
+* random mountains, lifestyle photography, or other decorative imagery as
+  core UI language
 
 ---
 
@@ -444,9 +460,9 @@ OPTIM must never become a sterile laboratory interface.
 
 Warmth should come from:
 
-* warm stone surfaces
-* ivory rather than clinical white
-* softened charcoal typography
+* Pearl Ivory rather than clinical white (light theme); a genuine deep
+  navy rather than flat gray or true black (dark theme)
+* softened, never-sterile-black typography ink in both themes
 * subtle physical depth
 * human coaching language
 * thoughtful imagery when appropriate
@@ -568,15 +584,16 @@ The experience presented to the client should feel effortless.
 
 # 21. OPTIM Must Never Become
 
-* a generic SaaS dashboard
+* a generic SaaS dashboard, or built around generic SaaS blue as its brand identity
 * a grid of analytics widgets
 * a calorie tracker
 * a spreadsheet
-* a dark racing-themed application
+* a dark racing-themed application, or any other neon/gaming aesthetic
 * an AI chatbot with fitness features attached
 * sterile corporate healthcare software
 * excessively rounded lifestyle UI
 * decorative luxury UI
+* decorated with random mountains, lifestyle photography, or other stock-style imagery as core UI language
 * cluttered
 * visually repetitive
 * difficult to navigate
@@ -600,3 +617,30 @@ Before approving any OPTIM screen, ask:
 10. Would removing the OPTIM logo still leave a recognizable product?
 
 If several answers are no, the screen is not finished.
+
+---
+
+# 23. Brand Identity (Concept)
+
+This section records the current brand-identity direction as a concept
+only. No logo or favicon asset exists in the repository yet (`public/` is
+empty), and producing one is explicitly out of scope until the upcoming
+Product Experience / Design System phase — this is the intended starting
+point for that work, not a finished asset or an instruction to build one
+now.
+
+**Name:** OPTIM.
+
+**Canonical mark concept:** the "cut-O" — a circular ring with exactly two
+diagonal cuts:
+
+* upper-right
+* lower-left
+
+**Palette:** the mark and wordmark draw from Section 4's real palette
+(Pearl Ivory / Midnight Navy / Electric Cobalt) — never the superseded
+Warm Stone + Brass direction.
+
+Final mark geometry, stroke weight, wordmark pairing, and every other
+implementation detail remain undecided and belong to the design-system
+phase, not this document.
