@@ -12,8 +12,10 @@ import {
   advanceAfterExerciseResolved,
   buildInitialFlowState,
   deferCurrentExercise,
+  findBlockById,
   findTrainingItemById,
   firstUnresolvedWorkingSetNumber,
+  isCircuitBlock,
   isExerciseResolved,
 } from "./workout/session-flow.ts";
 import { resolveSessionWarmupConfigFromSession, resolveTrainingItemWarmupConfig } from "./workout/warmup.ts";
@@ -23,8 +25,9 @@ import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { legacyWorkoutToSession } from "./training/legacy-adapter.ts";
 import { classifyContinuousCompletion, continuousPerformedAsPrescribed, type ContinuousActual } from "./workout/continuous.ts";
 import { classifyIntervalActivityCompletion, intervalPerformedAsPrescribed, nextIntervalProgress } from "./workout/interval.ts";
+import { circuitItemPerformedAsPrescribed, classifyCircuitItemCompletion, nextCircuitPosition, totalCircuitRounds } from "./workout/circuit.ts";
 import { MIXED_SESSION_DEMO } from "./training/demo-fixtures.ts";
-import type { ExecutionRecord, IntervalRoundActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
+import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
@@ -32,6 +35,7 @@ import type {
   CardioLog,
   ChatMessage,
   ClientAssignedProgram,
+  CircuitExecutionProgress,
   ExerciseLog,
   IntervalExecutionProgress,
   LoggedSet,
@@ -173,9 +177,10 @@ function initialExerciseWarmups(trainingSession: Session): Record<string, Warmup
   return warmups;
 }
 
-/** Phase 4/11A — where the entering-a-new-current-item transition should
- * land: "exercise-intro" for resistance (unchanged), "interval-ready" or
- * "interval-active" for interval (see below), or the plain continuous-work
+/** Phase 4/11A/11B — where the entering-a-new-current-item transition
+ * should land: "exercise-intro" for resistance (unchanged), "interval-ready"
+ * or "interval-active" for interval, "circuit-ready" or "circuit-active"
+ * for a circuit block (see below), or the plain continuous-work
  * counterpart for any other family. There is no warm-up-set/working-set
  * concept for a non-resistance item, so it skips straight to its own ready
  * phase. Shared by every reducer case that hands off to a new current item,
@@ -186,8 +191,23 @@ function initialExerciseWarmups(trainingSession: Session): Record<string, Warmup
  * into "interval-active" at whatever round/phase it left off, rather than
  * re-showing "interval-ready" and implying nothing has started yet — see
  * WorkoutSession.intervalProgress's own doc for why this state survives a
- * defer untouched. */
+ * defer untouched.
+ *
+ * Phase 11B — checked FIRST, before the item lookup: a circuit block
+ * occupies its own flat-queue slot keyed by BLOCK id, not any item's id
+ * (see lib/workout/session-flow.ts's buildInitialFlowState), so
+ * findTrainingItemById would never find it. Same resume-in-place
+ * discipline as interval: existing circuitProgress resumes directly into
+ * "circuit-active" at whatever round/item it left off; its own
+ * round-rest phase resumes as "circuit-active" too (never re-shown as a
+ * bare "circuit-ready", and never re-derived as "round-rest" here — the
+ * live panel itself reads circuitProgress.phase to decide between the
+ * item view and the round-rest view once "circuit-active" is entered). */
 function entryPhaseForCurrentItem(session: WorkoutSession): WorkoutSessionPhase {
+  const circuitBlock = findBlockById(session.resolvedSession, session.currentExerciseId);
+  if (circuitBlock && isCircuitBlock(circuitBlock)) {
+    return session.circuitProgress?.[circuitBlock.id] ? "circuit-active" : "circuit-ready";
+  }
   const item = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
   if (!item) return "exercise-intro";
   if (item.prescription.family === "interval") {
@@ -219,16 +239,24 @@ export function buildStartedWorkoutSession(params: {
 
   const initialFlow = buildInitialFlowState(params.trainingSession);
   const sessionWarmupConfig = resolveSessionWarmupConfigFromSession(params.trainingSession);
-  // The very first current item might be continuous or interval work, with
+  // The very first current item might be continuous/interval/circuit, with
   // no warm-up-set/working-set concept to route into — entryPhaseForCurrentItem
   // can't be reused verbatim here since no WorkoutSession object exists yet
   // at this exact point in construction, so the same rule is inlined. A
-  // brand-new session can never already have intervalProgress for its own
-  // first item, so this is always "interval-ready", never "interval-active"
-  // (unlike entryPhaseForCurrentItem's own general case).
+  // brand-new session can never already have intervalProgress/circuitProgress
+  // for its own first item/block, so this is always "interval-ready" or
+  // "circuit-ready", never the "-active" resume state (unlike
+  // entryPhaseForCurrentItem's own general case).
+  const initialCircuitBlock = findBlockById(params.trainingSession, initialFlow.currentExerciseId);
   const initialItem = findTrainingItemById(params.trainingSession, initialFlow.currentExerciseId);
   const initialEntryPhase: WorkoutSessionPhase =
-    initialItem?.prescription.family === "interval" ? "interval-ready" : initialItem && initialItem.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
+    initialCircuitBlock && isCircuitBlock(initialCircuitBlock)
+      ? "circuit-ready"
+      : initialItem?.prescription.family === "interval"
+        ? "interval-ready"
+        : initialItem && initialItem.prescription.family !== "resistance"
+          ? "continuous-ready"
+          : "exercise-intro";
 
   return {
     ...params.existingSession,
@@ -246,6 +274,7 @@ export function buildStartedWorkoutSession(params: {
     exerciseLogs,
     continuousExecutions: {},
     intervalProgress: {},
+    circuitProgress: {},
     currentExerciseId: initialFlow.currentExerciseId,
     exerciseQueue: initialFlow.exerciseQueue,
     actualExerciseOrder: initialFlow.actualExerciseOrder,
@@ -280,6 +309,7 @@ export function createInitialWorkoutSession(
     exerciseLogs: {},
     continuousExecutions: {},
     intervalProgress: {},
+    circuitProgress: {},
     painReports: [],
     phase: "session-warmup",
     currentExerciseId: null,
@@ -550,6 +580,34 @@ export type Action =
    * partial-completion path, spec acceptance test B) with fewer rounds
    * than prescribed already in roundActuals. */
   | { type: "FINALIZE_INTERVAL_EXECUTION"; exerciseId: string; rpe?: RpeValue; note?: string }
+  /** Phase 11B — circuit-ready -> circuit-active: opens round 1, item 0
+   * of a real circuit Block (see lib/workout/session-flow.ts's
+   * isCircuitBlock). `blockId` addresses the block directly — a circuit
+   * has no single "exerciseId" of its own, matching how it occupies one
+   * flat-queue slot keyed by block id, not any item's id. */
+  | { type: "BEGIN_CIRCUIT_EXECUTION"; blockId: string }
+  /** Phase 11B — the one explicit action that resolves the CURRENT circuit
+   * sub-state (an item-round exposure, or round-rest) and advances to
+   * whatever comes next — item -> next item / round-rest / auto-finalize
+   * on the very last exposure, or round-rest -> the next round's first
+   * item. Never auto-dispatched by a ticking timer (same discipline as
+   * ADVANCE_INTERVAL_PHASE) — always a real client action. `actual`/
+   * `skipped`/`skipReason` are only meaningful while resolving an ITEM
+   * (ignored, harmlessly, while resolving round-rest, which has no
+   * exposure of its own to record — see the reducer case). Finalizing the
+   * circuit (writing each item's real ExecutionRecord and advancing the
+   * session) happens automatically, inline, the moment the very last
+   * exposure of the very last round is recorded — a circuit needs no
+   * separate one-shot "logging" step the way interval's optional
+   * whole-activity RPE does, since each resistance/continuous exposure
+   * already captured its own actual as it happened. */
+  | {
+      type: "ADVANCE_CIRCUIT_PHASE";
+      blockId: string;
+      actual?: Partial<Prescription>;
+      skipped?: boolean;
+      skipReason?: SkipReason;
+    }
   | { type: "WORKOUT_ROUTE_ENTERED" }
   | { type: "WORKOUT_ROUTE_LEFT" }
   | { type: "COMPLETE_WORKOUT"; summary: WorkoutSummary }
@@ -638,6 +696,9 @@ const PAIN_BLOCKED_ACTIONS = new Set<Action["type"]>([
   "BEGIN_INTERVAL_EXECUTION",
   "ADVANCE_INTERVAL_PHASE",
   "FINALIZE_INTERVAL_EXECUTION",
+  // Phase 11B — circuit's own progression actions, same reasoning.
+  "BEGIN_CIRCUIT_EXECUTION",
+  "ADVANCE_CIRCUIT_PHASE",
 ]);
 
 /** True once there's an active pain report AND the current exercise is a
@@ -1096,6 +1157,50 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "SKIP_EXERCISE": {
+      // Phase 11B — a whole-circuit skip (spec section 15: "reuse the
+      // existing structured skip model... should not require skipping
+      // every child item manually"). action.exerciseId is the BLOCK id
+      // here (a circuit has no exerciseLogs entry of its own — its ITEMS
+      // do), so this must be handled as its own branch before the
+      // generic single-item logic below, which looks up exerciseLogs by
+      // the given id directly. Preserves whatever was already genuinely
+      // completed per item (spec section 16's "never lose completed
+      // circuit work"), exactly mirroring the interval whole-activity-skip
+      // snapshot below, generalized across every item in the block.
+      const skippedCircuitBlock = findBlockById(state.workoutSession.resolvedSession, action.exerciseId);
+      if (skippedCircuitBlock && isCircuitBlock(skippedCircuitBlock)) {
+        const inProgressCircuit = state.workoutSession.circuitProgress?.[action.exerciseId];
+        const totalRounds = totalCircuitRounds(skippedCircuitBlock);
+        const nowIso = new Date().toISOString();
+        let exerciseLogs = state.workoutSession.exerciseLogs;
+        let continuousExecutions = state.workoutSession.continuousExecutions;
+        for (const item of skippedCircuitBlock.items) {
+          const itemExposures = inProgressCircuit?.exposuresByItemId[item.id] ?? [];
+          const existingLog = exerciseLogs[item.id];
+          if (existingLog) exerciseLogs = { ...exerciseLogs, [item.id]: { ...existingLog, status: "skipped", skipReason: action.reason, skipNote: action.note } };
+          if (itemExposures.length > 0) {
+            const execution: ExecutionRecord = {
+              id: nextId("execution"),
+              trainingItemInstanceId: item.id,
+              status: classifyCircuitItemCompletion(totalRounds, itemExposures),
+              performedAsPrescribed: circuitItemPerformedAsPrescribed(totalRounds, itemExposures),
+              completedAtIso: nowIso,
+              skipReason: action.reason,
+              note: action.note,
+              circuitRoundActuals: itemExposures,
+            };
+            continuousExecutions = { ...continuousExecutions, [item.id]: execution };
+          }
+        }
+        const remainingCircuitProgress = Object.fromEntries(Object.entries(state.workoutSession.circuitProgress ?? {}).filter(([id]) => id !== action.exerciseId));
+        const sessionWithLog: WorkoutSession = { ...state.workoutSession, exerciseLogs, continuousExecutions, circuitProgress: remainingCircuitProgress };
+        if (state.workoutSession.currentExerciseId !== action.exerciseId) {
+          return { ...state, workoutSession: sessionWithLog };
+        }
+        const advance = advanceAfterExerciseResolved(sessionWithLog);
+        return { ...state, workoutSession: { ...sessionWithLog, ...advance } };
+      }
+
       const log = state.workoutSession.exerciseLogs[action.exerciseId];
       if (!log) return state;
       const updatedLog: ExerciseLog = { ...log, status: "skipped", skipReason: action.reason, skipNote: action.note };
@@ -1270,7 +1375,20 @@ export function reducer(state: AppState, action: Action): AppState {
     case "RESUME_AFTER_PAIN": {
       const interruption = state.workoutSession.activePainInterruption;
       if (!interruption || interruption.severity !== "resume-eligible" || !interruption.confirmedResolved) return state;
-      if (state.workoutSession.currentExerciseId !== interruption.exerciseId) return state;
+      // Phase 11B fix — a circuit's own currentExerciseId is its BLOCK id
+      // (see lib/workout/session-flow.ts's buildInitialFlowState), never
+      // any one item's id, but REPORT_PAIN during a circuit always records
+      // the interruption against the real circuit ITEM the client was
+      // actually on (so PainReviewPanel shows the true exercise name) —
+      // these two ids can never be literally equal for a circuit. Without
+      // this check, a mild/resume-eligible pain report during a circuit
+      // item would leave the client permanently stuck on pain-review, with
+      // RESUME_AFTER_PAIN silently no-op'ing forever. A match is also
+      // valid when the interruption's own item genuinely belongs to the
+      // currently-active circuit block.
+      const currentCircuitBlock = findBlockById(state.workoutSession.resolvedSession, state.workoutSession.currentExerciseId);
+      const interruptionBelongsToCurrentCircuit = !!currentCircuitBlock && isCircuitBlock(currentCircuitBlock) && currentCircuitBlock.items.some((i) => i.id === interruption.exerciseId);
+      if (state.workoutSession.currentExerciseId !== interruption.exerciseId && !interruptionBelongsToCurrentCircuit) return state;
       // Phase 11A fix — this reducer previously hardcoded "set-ready"
       // unconditionally, a latent gap this phase's own audit uncovered:
       // resuming a resume-eligible (mild) pain report on a non-resistance
@@ -1607,6 +1725,113 @@ export function reducer(state: AppState, action: Action): AppState {
       };
       const advance = advanceAfterExerciseResolved(sessionWithExecution);
       return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+    }
+
+    // Phase 11B — circuit-ready -> circuit-active: opens round 1, item 0.
+    // A no-op if circuitProgress already exists for this block (defensive
+    // — the ready panel is never shown once progress exists, per
+    // entryPhaseForCurrentItem, mirroring BEGIN_INTERVAL_EXECUTION's own
+    // guard).
+    case "BEGIN_CIRCUIT_EXECUTION": {
+      const blockId = state.workoutSession.currentExerciseId;
+      if (!blockId || blockId !== action.blockId || state.workoutSession.phase !== "circuit-ready") return state;
+      const block = findBlockById(state.workoutSession.resolvedSession, blockId);
+      if (!block || !isCircuitBlock(block)) return state;
+      if (state.workoutSession.circuitProgress?.[blockId]) return state;
+      const progress: CircuitExecutionProgress = { round: 1, itemIndex: 0, phase: "item", exposuresByItemId: {} };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          phase: "circuit-active",
+          circuitProgress: { ...state.workoutSession.circuitProgress, [blockId]: progress },
+        },
+      };
+    }
+
+    // Phase 11B — the circuit state machine's single real transition point
+    // (spec test matrix J/K/L/M/N), unifying "an item-round exposure just
+    // resolved" and "round-rest just finished" into one action — mirrors
+    // ADVANCE_INTERVAL_PHASE's own unification. Finalizes and advances the
+    // session inline the moment the very last exposure of the very last
+    // round is recorded — see this case's own tail.
+    case "ADVANCE_CIRCUIT_PHASE": {
+      const blockId = state.workoutSession.currentExerciseId;
+      if (!blockId || blockId !== action.blockId || state.workoutSession.phase !== "circuit-active") return state;
+      const block = findBlockById(state.workoutSession.resolvedSession, blockId);
+      if (!block || !isCircuitBlock(block)) return state;
+      const progress = state.workoutSession.circuitProgress?.[blockId];
+      if (!progress) return state;
+
+      // Round-rest resolving has no exposure of its own to record — it
+      // just hands off to the next round's first item.
+      let exposuresByItemId = progress.exposuresByItemId;
+      if (progress.phase === "item") {
+        const currentItem = block.items[progress.itemIndex];
+        if (!currentItem) return state;
+        const existing = exposuresByItemId[currentItem.id] ?? [];
+        const exposure: CircuitRoundActual = {
+          roundNumber: progress.round,
+          status: action.skipped ? "skipped" : "completed",
+          actual: action.actual,
+          skipReason: action.skipped ? action.skipReason : undefined,
+          completedAtIso: new Date().toISOString(),
+        };
+        exposuresByItemId = { ...exposuresByItemId, [currentItem.id]: [...existing, exposure] };
+      }
+
+      const next = nextCircuitPosition(block, { round: progress.round, itemIndex: progress.itemIndex, phase: progress.phase });
+
+      if (next === "complete") {
+        // Finalize inline — fan the accumulated exposures out into one
+        // real ExecutionRecord per item (spec section 9's preferred
+        // representation: one TrainingItemInstance -> its own repeated
+        // exposures, never a fabricated collapse into a single value, and
+        // never a mutation of the item's own prescription).
+        const totalRounds = totalCircuitRounds(block);
+        const nowIso = new Date().toISOString();
+        let exerciseLogs = state.workoutSession.exerciseLogs;
+        let continuousExecutions = state.workoutSession.continuousExecutions;
+        for (const item of block.items) {
+          const itemExposures = exposuresByItemId[item.id] ?? [];
+          const execution: ExecutionRecord = {
+            id: nextId("execution"),
+            trainingItemInstanceId: item.id,
+            status: classifyCircuitItemCompletion(totalRounds, itemExposures),
+            performedAsPrescribed: circuitItemPerformedAsPrescribed(totalRounds, itemExposures),
+            completedAtIso: nowIso,
+            circuitRoundActuals: itemExposures,
+          };
+          continuousExecutions = { ...continuousExecutions, [item.id]: execution };
+          const existingLog = exerciseLogs[item.id];
+          if (existingLog) exerciseLogs = { ...exerciseLogs, [item.id]: { ...existingLog, status: "completed" } };
+        }
+        const remainingCircuitProgress = Object.fromEntries(Object.entries(state.workoutSession.circuitProgress ?? {}).filter(([id]) => id !== blockId));
+        const sessionWithExecution: WorkoutSession = {
+          ...state.workoutSession,
+          exerciseLogs,
+          continuousExecutions,
+          circuitProgress: remainingCircuitProgress,
+        };
+        const advance = advanceAfterExerciseResolved(sessionWithExecution);
+        return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+      }
+
+      const nowIso = new Date().toISOString();
+      const nextProgress: CircuitExecutionProgress = {
+        round: next.round,
+        itemIndex: next.itemIndex,
+        phase: next.phase,
+        restStartedAtIso: next.phase === "round-rest" ? nowIso : undefined,
+        exposuresByItemId,
+      };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          circuitProgress: { ...state.workoutSession.circuitProgress, [blockId]: nextProgress },
+        },
+      };
     }
 
     // Phase 4.4B-2.2 — the one place that decides which of the three

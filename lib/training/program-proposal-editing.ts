@@ -214,6 +214,40 @@ export function applyTrainingItemPatch(content: UniversalTrainingProgramContent,
   }));
 }
 
+/** Phase 11B — every BLOCK-level field a coach may edit on a circuit (spec
+ * section 26: "round count, block name... round rest, applicable block
+ * timing"). Deliberately separate from TrainingItemPatch: a circuit's
+ * rounds/rest/name are BLOCK behavior, never confused with one item's own
+ * prescription (spec section 10's own "do not confuse a circuit round with
+ * a resistance set" extends to never blurring block-level and item-level
+ * edits together). All optional — a patch only ever sets what the coach
+ * actually changed. */
+export interface BlockPatch {
+  name?: string;
+  rounds?: number;
+  restBetweenItemsSeconds?: number;
+  restBetweenRoundsSeconds?: number;
+  timeCapSeconds?: number;
+}
+
+/** Returns a NEW content tree with exactly one block's own fields
+ * replaced — never touches its items. Throws if the target block no
+ * longer exists, matching applyTrainingItemPatch's own discipline. */
+export function applyBlockPatch(content: UniversalTrainingProgramContent, path: BlockPath, patch: BlockPatch): UniversalTrainingProgramContent {
+  const week = content.weeks.find((w) => w.weekNumber === path.weekNumber);
+  const day = week?.days.find((d) => d.dayOfWeek === path.dayOfWeek);
+  const located = day?.sessions?.[path.sessionIndex]?.blocks.find((b) => b.id === path.blockId);
+  if (!located) throw new Error(`applyBlockPatch: no block at week ${path.weekNumber} ${path.dayOfWeek} session ${path.sessionIndex} block ${path.blockId}`);
+  return mapBlockAt(content, path, (block) => ({
+    ...block,
+    name: patch.name ?? block.name,
+    rounds: patch.rounds ?? block.rounds,
+    restBetweenItemsSeconds: patch.restBetweenItemsSeconds ?? block.restBetweenItemsSeconds,
+    restBetweenRoundsSeconds: patch.restBetweenRoundsSeconds ?? block.restBetweenRoundsSeconds,
+    timeCapSeconds: patch.timeCapSeconds ?? block.timeCapSeconds,
+  }));
+}
+
 /** Phase 8D — removes one proposed item outright. "At minimum, removal/
  * replacement should be practical" (spec section 9). Throws if the item is
  * already gone, matching applyTrainingItemPatch's own discipline.

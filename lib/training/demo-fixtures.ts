@@ -281,3 +281,158 @@ export const MIXED_SESSION_WITH_INTERVALS_DEMO: Session = {
     },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Phase 11B — circuit/grouped-training fixtures. Mirror the interval
+// fixtures above exactly (hand-authored universal Session, never a
+// generation-engine output), proving the circuit grammar/execution engine
+// end to end. BASIC_CIRCUIT_SESSION_DEMO matches the Phase 11B spec's own
+// required acceptance case verbatim (spec section 39): "3 rounds: Goblet
+// Squat 12, Push-Up 15, Bike 30 sec, 90 sec round rest."
+// ---------------------------------------------------------------------------
+
+export const BASIC_CIRCUIT_SESSION_DEMO: Session = {
+  id: "basic-circuit-session-demo",
+  name: "Full Body Conditioning",
+  focus: "Conditioning circuit",
+  estimatedDurationMin: 20,
+  coachNote: "Move with control through each round — quality over speed.",
+  blocks: [
+    {
+      id: "block-full-body-circuit",
+      kind: "circuit",
+      order: 1,
+      rounds: 3,
+      restBetweenItemsSeconds: 15,
+      restBetweenRoundsSeconds: 90,
+      items: [
+        {
+          id: "circuit-goblet-squat",
+          order: 1,
+          name: "Goblet Squat",
+          category: "resistance",
+          coachCue: "Sit between your heels, chest tall.",
+          prescription: { family: "resistance", reps: { low: 12, high: 12 }, load: { value: 35, unit: "lb" } },
+        },
+        {
+          id: "circuit-push-up",
+          order: 2,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion — knees down is fine.",
+          prescription: { family: "resistance", reps: { low: 15, high: 15 } },
+        },
+        {
+          id: "circuit-bike",
+          order: 3,
+          name: "Assault Bike",
+          category: "continuous",
+          coachCue: "All-out effort for the full 30 seconds.",
+          prescription: { family: "continuous", duration: { seconds: 30 } },
+        },
+      ],
+    },
+  ],
+};
+
+/** Acceptance test D/44 — one real Session mixing warm-up, resistance,
+ * circuit, an interval finisher, AND a cooldown, proving Session does not
+ * equal modality even with BOTH circuit and interval in the same session
+ * (spec section 22's "critical acceptance case"). Never a separate
+ * "circuit workout engine" — the SAME universal Session/Block/
+ * TrainingItemInstance every other fixture above already uses. */
+export const MIXED_SESSION_WITH_CIRCUIT_DEMO: Session = {
+  id: "mixed-session-with-circuit-demo",
+  name: "Full Body + Conditioning Finisher",
+  focus: "Strength and conditioning",
+  estimatedDurationMin: 55,
+  coachNote: "Bench first, then the circuit, then a short interval finisher, then cool down.",
+  blocks: [
+    {
+      id: "block-warmup-circuit-mixed",
+      kind: "warmup",
+      order: 1,
+      items: [
+        {
+          id: "warmup-row",
+          order: 1,
+          name: "Easy Row",
+          category: "continuous",
+          coachCue: "Light effort — just raise your heart rate a little.",
+          prescription: { family: "continuous", duration: { seconds: 5 * 60 }, completionTarget: "Easy, conversational effort" },
+        },
+      ],
+    },
+    {
+      id: "block-bench-circuit-mixed",
+      kind: "straight",
+      order: 2,
+      items: [
+        {
+          id: "bench-press-circuit-mixed",
+          order: 1,
+          name: "Barbell Bench Press",
+          category: "resistance",
+          coachCue: "Full range of motion, controlled descent.",
+          prescription: { family: "resistance", sets: 3, warmupSets: 1, reps: { low: 6, high: 8 }, rpe: 8, restSeconds: 120, load: { value: 135, unit: "lb" } },
+        },
+      ],
+    },
+    {
+      id: "block-circuit-mixed",
+      kind: "circuit",
+      order: 3,
+      rounds: 2,
+      restBetweenItemsSeconds: 15,
+      restBetweenRoundsSeconds: 60,
+      items: [
+        {
+          id: "circuit-mixed-squat",
+          order: 1,
+          name: "Goblet Squat",
+          category: "resistance",
+          coachCue: "Sit between your heels, chest tall.",
+          prescription: { family: "resistance", reps: { low: 12, high: 12 }, load: { value: 35, unit: "lb" } },
+        },
+        {
+          id: "circuit-mixed-pushup",
+          order: 2,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion — knees down is fine.",
+          prescription: { family: "resistance", reps: { low: 15, high: 15 } },
+        },
+      ],
+    },
+    {
+      id: "block-interval-finisher-mixed",
+      kind: "interval",
+      order: 4,
+      items: [
+        {
+          id: "interval-finisher-mixed",
+          order: 1,
+          name: "Assault Bike Finisher",
+          category: "interval",
+          coachCue: "Max effort for the full work interval, every round.",
+          prescription: { family: "interval", rounds: 4, workInterval: { seconds: 20 }, recoveryInterval: { seconds: 40 }, rpe: 9 },
+        },
+      ],
+    },
+    {
+      id: "block-cooldown-circuit-mixed",
+      kind: "cooldown",
+      order: 5,
+      items: [
+        {
+          id: "cooldown-walk-circuit-mixed",
+          order: 1,
+          name: "Cooldown Walk",
+          category: "continuous",
+          coachCue: "Easy walk to bring your heart rate down.",
+          prescription: { family: "continuous", duration: { seconds: 5 * 60 }, completionTarget: "Very easy" },
+        },
+      ],
+    },
+  ],
+};

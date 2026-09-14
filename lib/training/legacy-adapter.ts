@@ -203,6 +203,7 @@ function blockCompatibilityReason(block: Block): string | undefined {
   if (!LEGACY_COMPATIBLE_BLOCK_KINDS.includes(block.kind)) {
     return `Block "${block.id}" has kind "${block.kind}", which has no equivalent in the legacy ExerciseBlockType ("straight"/"superset"/"circuit" only).`;
   }
+  if (block.name !== undefined) return `Block "${block.id}" has a name ("${block.name}") — legacy has nowhere to store a block-level display name.`;
   if (block.rounds !== undefined) return `Block "${block.id}" prescribes rounds (${block.rounds}) — legacy has nowhere to store block-level rounds.`;
   if (block.restBetweenItemsSeconds !== undefined)
     return `Block "${block.id}" prescribes restBetweenItemsSeconds — legacy has nowhere to store it.`;

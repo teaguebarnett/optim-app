@@ -20,8 +20,10 @@ import { ContinuousLoggingPanel } from "@/components/workout/live/continuous-log
 import { IntervalReadyPanel } from "@/components/workout/live/interval-ready-panel";
 import { IntervalActivePanel } from "@/components/workout/live/interval-active-panel";
 import { IntervalLoggingPanel } from "@/components/workout/live/interval-logging-panel";
+import { CircuitReadyPanel } from "@/components/workout/live/circuit-ready-panel";
+import { CircuitActivePanel } from "@/components/workout/live/circuit-active-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { findTrainingItemById } from "@/lib/workout/session-flow";
+import { findBlockById, findTrainingItemById, isCircuitBlock } from "@/lib/workout/session-flow";
 import { trainingItemToLegacyExercise } from "@/lib/training/legacy-adapter";
 import type { TrainingItemInstance } from "@/lib/training/types";
 
@@ -135,6 +137,29 @@ export default function ActiveWorkoutPage() {
     if (session.phase === "exercise-transition") {
       const finishedItem = findTrainingItemById(session.resolvedSession, session.lastResolvedExerciseId);
       return <ExerciseTransitionPanel finishedItem={finishedItem} nextItem={currentTrainingItem} session={session} />;
+    }
+
+    // Phase 11B — a real circuit block occupies its own flat-queue slot
+    // keyed by BLOCK id, never any one item's id (see
+    // lib/workout/session-flow.ts's buildInitialFlowState), so
+    // findTrainingItemById can never find it — currentTrainingItem stays
+    // undefined for the block's entire duration. Checked before the
+    // defensive "!currentTrainingItem" fallback below, which would
+    // otherwise incorrectly route every circuit straight to the session
+    // summary.
+    const currentCircuitBlock = findBlockById(session.resolvedSession, session.currentExerciseId);
+    if (currentCircuitBlock && isCircuitBlock(currentCircuitBlock)) {
+      const painReportActive = Boolean(session.activePainInterruption);
+      switch (session.phase) {
+        case "circuit-ready":
+          return <CircuitReadyPanel block={currentCircuitBlock} painReportActive={painReportActive} />;
+        case "circuit-active": {
+          const progress = session.circuitProgress?.[currentCircuitBlock.id];
+          return progress ? <CircuitActivePanel block={currentCircuitBlock} progress={progress} painReportActive={painReportActive} /> : null;
+        }
+        default:
+          return null;
+      }
     }
 
     if (!currentTrainingItem) {

@@ -87,6 +87,26 @@ export function findBlockForItem(session: Session, itemId: string): Block | unde
   return session.blocks.find((b) => b.items.some((i) => i.id === itemId));
 }
 
+/** Tolerant lookup by BLOCK id (as opposed to findTrainingItemById's
+ * lookup by ITEM id) — see isCircuitBlock's own doc for why a circuit
+ * needs this: its id, not any one item's id, is what actually occupies a
+ * flat-queue slot. */
+export function findBlockById(session: Session | null | undefined, blockId: string | null): Block | undefined {
+  if (!session || !blockId) return undefined;
+  return session.blocks.find((b) => b.id === blockId);
+}
+
+/** Phase 11B — a real, repeating multi-item group (spec section 3: "a
+ * circuit is a BLOCK behavior"). Requires `rounds` to be genuinely set,
+ * not merely `kind === "circuit"` with no repetition — mirrors
+ * lib/workout/interval.ts's totalIntervalRounds' own "rounds must be a
+ * real, positive number" discipline; a `kind: "circuit"` block with no
+ * rounds set has nothing to actually repeat and is left to plain flat
+ * per-item navigation instead (the same posture superset already has). */
+export function isCircuitBlock(block: Block): boolean {
+  return block.kind === "circuit" && block.rounds !== undefined && block.rounds > 0;
+}
+
 export interface InitialFlowState {
   exerciseQueue: string[];
   currentExerciseId: string;
@@ -101,26 +121,35 @@ export interface InitialFlowState {
  * this produces the exact same sequence as the pre-Phase-3 flat
  * `workout.exercises` order.
  *
- * Grouped items (a real coach-authored superset/circuit) land consecutively
- * in this queue, since they share one block — the structural grouping
- * survives navigation. What this deliberately does NOT do: cycle
+ * Grouped items (a real coach-authored superset) land consecutively in this
+ * queue, since they share one block — the structural grouping survives
+ * navigation. What this deliberately does NOT do, for a superset: cycle
  * A1 -> A2 -> rest -> next round, or otherwise change resolution rhythm for
- * a grouped block. No real current content uses grouping (confirmed in the
- * Phase 0/2 audits), so there is no live behavior to preserve here, and
- * inventing a new grouped-execution rhythm is an explicit Phase 4+ UX
- * decision, not a Phase 3 migration-parity one — see this module's own
- * header doc and the Phase 3 completion report's "block execution model"
- * section for the full reasoning.
+ * a grouped block. No real current content uses superset grouping
+ * (confirmed in the Phase 0/2 audits, still true as of Phase 11B's own
+ * audit), so there is no live behavior to preserve here.
+ *
+ * Phase 11B — a real circuit block (isCircuitBlock: `kind: "circuit"` with
+ * real `rounds`) is the one exception: it occupies exactly ONE queue slot
+ * (the block's own id, never any one item's id — see findBlockById),
+ * because the whole group of items is ONE repeating execution unit, not N
+ * independently-resolvable ones. Its own internal round/item cycling is
+ * tracked separately in WorkoutSession.circuitProgress and only resolves
+ * this one queue slot once the entire circuit (every round) is done — see
+ * lib/state.ts's FINALIZE_CIRCUIT_EXECUTION, mirroring exactly how a
+ * multi-round interval item occupies one queue slot for its own duration.
  */
 export function buildInitialFlowState(session: Session): InitialFlowState {
   const exerciseQueue = session.blocks
     .slice()
     .sort((a, b) => a.order - b.order)
     .flatMap((block) =>
-      block.items
-        .slice()
-        .sort((a, b) => a.order - b.order)
-        .map((item) => item.id)
+      isCircuitBlock(block)
+        ? [block.id]
+        : block.items
+            .slice()
+            .sort((a, b) => a.order - b.order)
+            .map((item) => item.id)
     );
   const currentExerciseId = exerciseQueue[0];
   return { exerciseQueue, currentExerciseId, actualExerciseOrder: currentExerciseId ? [currentExerciseId] : [] };

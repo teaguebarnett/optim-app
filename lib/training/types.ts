@@ -168,6 +168,15 @@ export interface Block {
   id: string;
   kind: BlockKind;
   order: number;
+  /** Phase 11B — a coach-owned display name for the block, most relevant
+   * for a real circuit (spec section 28: "MetCon A", "Saturday Burner",
+   * "Elon Conditioning Hell" — the branding is coach-owned; internally it
+   * remains `kind: "circuit"`, never derived from the name). Purely
+   * additive: no schema/DB migration, same posture as every other field
+   * added directly onto this already-flexible, jsonb-backed grammar.
+   * Optional and never required — a block with no name falls back to a
+   * generic "Circuit" label wherever it's displayed. */
+  name?: string;
   rounds?: number;
   restBetweenItemsSeconds?: number;
   restBetweenRoundsSeconds?: number;
@@ -251,6 +260,40 @@ export interface ExecutionRecord {
    * mutated to reflect what happened. Absent for every non-interval
    * execution. */
   roundActuals?: IntervalRoundActual[];
+  /** Phase 11B — present ONLY for an item that is a member of a `kind:
+   * "circuit"` Block: this item's own real outcome, once per circuit round
+   * it was actually exposed to. Deliberately a SEPARATE, distinctly-named
+   * field from `roundActuals` (interval) even though structurally similar
+   * — spec section 10's own "do not confuse a circuit round with a
+   * resistance set" extends to never confusing a circuit round with an
+   * interval round either; the two are different repetition concepts with
+   * different completion semantics (a circuit round is a whole-BLOCK
+   * repetition spanning several DIFFERENT items; an interval round is one
+   * item's own work/recovery cycle). Uses the general `Partial<Prescription>`
+   * actual shape (reps/load/RPE for resistance, duration/distance for
+   * continuous) rather than interval's narrow work-seconds/work-distance
+   * fields, since a circuit item keeps its own real family-specific
+   * prescription (spec section 3: "each item retains its own real
+   * Prescription") — never reinterpreted as a resistance set or an
+   * interval work phase. */
+  circuitRoundActuals?: CircuitRoundActual[];
+}
+
+/** Phase 11B — see ExecutionRecord.circuitRoundActuals's own doc. A round
+ * simply absent from the array means that item was never reached in that
+ * round (honest partial completion, mirroring IntervalRoundActual's own
+ * "never fabricate" discipline) — distinct from a round present with
+ * status "skipped" (the client explicitly skipped that one exposure while
+ * the circuit continued — spec section 14). */
+export interface CircuitRoundActual {
+  roundNumber: number;
+  status: "completed" | "skipped";
+  /** Only the primitives that actually differ from the item's own
+   * prescription — same discipline as ExecutionRecord.actual itself,
+   * never a full duplicate. */
+  actual?: Partial<Prescription>;
+  skipReason?: SkipReason;
+  completedAtIso?: string;
 }
 
 // ---------------------------------------------------------------------------

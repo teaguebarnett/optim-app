@@ -223,19 +223,24 @@ check("malformed model output (weeks not an array) throws InvalidPersistedConten
   assert.throws(() => validateUniversalTrainingProgramContent(malformed), InvalidPersistedContentError);
 });
 
-check("an unsupported prescription family (e.g. 'circuit' — Phase 11A adds real interval support, but circuit/quality remain unsupported) is structurally valid grammar but fails the executable-families hard constraint", () => {
+check("an unsupported prescription FAMILY (e.g. item-level family: 'circuit' — Phase 11B adds real support for a BLOCK with kind: 'circuit', but an item whose own family is literally 'circuit'/'quality' remains unsupported) is structurally valid grammar but fails the executable-families hard constraint", () => {
   const profile = profileWithDays(["Monday", "Wednesday", "Friday"]);
   const { content } = generate(profile, com(), 1);
   const session: Session = content.weeks[0].days.find((d) => d.type === "training")!.sessions![0];
   const pollutedSession: Session = {
     ...session,
+    // Deliberately kind: "straight" (never "circuit") — this test targets
+    // the still-genuinely-unsupported ITEM-level family value "circuit"
+    // (a real, distinct ExecutionFamily this codebase has never given
+    // meaning to — a circuit BLOCK's own items keep their real family,
+    // resistance/continuous, per spec section 3), decoupled from Phase
+    // 11B's own real, tested kind:"circuit" BLOCK support.
     blocks: [
       {
-        id: "block-circuit",
-        kind: "circuit",
+        id: "block-unsupported-family",
+        kind: "straight",
         order: 1,
-        rounds: 4,
-        items: [{ id: "circuit-item", order: 1, name: "Circuit round", category: "circuit", prescription: { family: "circuit" } }],
+        items: [{ id: "unsupported-family-item", order: 1, name: "Unsupported", category: "circuit", prescription: { family: "circuit" } }],
       },
     ],
   };
@@ -247,7 +252,7 @@ check("an unsupported prescription family (e.g. 'circuit' — Phase 11A adds rea
   const result = validateUniversalProgramHardConstraints(pollutedContent, profile, com());
   assert.equal(result.passed, false);
   const failedCheck = result.checks.find((c) => c.id === "only_executable_families");
-  assert.ok(failedCheck && !failedCheck.passed, "the circuit family must fail only_executable_families");
+  assert.ok(failedCheck && !failedCheck.passed, "an item whose own family is 'circuit' must fail only_executable_families");
 });
 
 check("Phase 11A — a real interval item now PASSES the executable-families hard constraint (interval moved from unsupported to supported)", () => {
@@ -547,6 +552,48 @@ check("HIIT is a prescription format, never a client goal — interval generatio
     const { content } = generate(profile, conditioningCoach, 1);
     assert.ok(allItems(content).some((i) => i.category === "interval"), `expected interval content regardless of primaryGoal=${primaryGoal}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 11B — Z/AA: real circuit generation, and non-conditioning-coach
+// behavior unchanged.
+// ---------------------------------------------------------------------------
+
+console.log("\nPhase 11B — real circuit generation as a BLOCK, gated on the same real coach methodology (Z, AA)\n");
+
+check("Z: a conditioning-focused coach with exactly 2 real surplus days gets the SECOND conditioning day generated as ONE real circuit BLOCK (rounds set, multiple items) — never flattened into N independent activities", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], { cardioPreference: "enjoys_cardio" });
+  const { content, constraints } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "prescribed_for_conditioning" }), 1);
+
+  const week1 = content.weeks[0];
+  const trainingDays = week1.days.filter((d) => d.type === "training");
+  const circuitBlocks = trainingDays.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.filter((b) => b.kind === "circuit")));
+  assert.equal(circuitBlocks.length, 1, "exactly one real circuit block generated (the second conditioning day)");
+  const circuitBlock = circuitBlocks[0];
+  assert.ok(circuitBlock.rounds && circuitBlock.rounds > 0, "a real, positive round count — never a bare grouped block with no repetition");
+  assert.ok(circuitBlock.items.length >= 2, "multiple different items — spec section 3's own domain model, never a fake single repeated exercise");
+  assert.equal(new Set(circuitBlock.items.map((i) => i.name)).size, circuitBlock.items.length, "every item is genuinely distinct, never N clones of one exercise");
+
+  const intervalItems = trainingDays.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.category === "interval"))));
+  assert.equal(intervalItems.length, 1, "the FIRST conditioning day still gets interval — Phase 11A's own existing trigger, unchanged, byte-for-byte regression safe");
+
+  assert.equal(constraints.passed, true, "circuit-bearing generated content must itself pass every real hard constraint");
+  validateUniversalTrainingProgramContent(content); // structurally valid, round-trips
+  assert.match(content.generationRationale ?? "", /conditioning-circuit/i, "the rationale honestly names the circuit placement too, in coaching language");
+});
+
+check("AA: a coach WITHOUT 'prescribed_for_conditioning' never generates a circuit block, even with real surplus days (unchanged behavior)", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], { cardioPreference: "enjoys_cardio" });
+  const { content } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "optional_low_intensity_supplemental" }), 1);
+  const circuitBlocks = content.weeks[0].days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.filter((b) => b.kind === "circuit")));
+  assert.equal(circuitBlocks.length, 0, "a coach whose methodology doesn't call for conditioning work must never receive a circuit block");
+});
+
+check("a conditioning coach with only ONE real surplus day gets interval only — never a circuit with nothing to alternate with", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday"], { cardioPreference: "enjoys_cardio" });
+  const { content } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "prescribed_for_conditioning" }), 1);
+  const circuitBlocks = content.weeks[0].days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.filter((b) => b.kind === "circuit")));
+  assert.equal(circuitBlocks.length, 0, "exactly one surplus day -> that one day is interval (Phase 11A's own unchanged first-day rule) -> no circuit day exists to generate");
 });
 
 // ---------------------------------------------------------------------------

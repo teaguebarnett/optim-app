@@ -7,7 +7,7 @@
 // re-imports the tenant-attribution types it needs to stamp onto records.
 
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
-import type { ExecutionRecord, IntervalRoundActual, Session } from "./training/types";
+import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, Session } from "./training/types";
 
 export type ClientId = ClientProfileId;
 
@@ -464,7 +464,35 @@ export type WorkoutSessionPhase =
    * "continuous-logging"'s own minimal-logging-burden discipline (spec
    * section 13) — never a per-round metrics form. See
    * lib/state.ts's FINALIZE_INTERVAL_EXECUTION. */
-  | "interval-logging";
+  | "interval-logging"
+  /** Phase 11B — the circuit (grouped multi-item, multi-round) counterpart
+   * of "interval-ready": the block overview (round count, each item's own
+   * name/target, round-rest duration) before starting — see
+   * lib/state.ts's entryPhaseForCurrentItem, which routes here whenever
+   * the current queue entry is a `kind: "circuit"` Block id (a circuit
+   * occupies exactly ONE flat-queue slot for its whole block — see
+   * lib/workout/session-flow.ts's buildInitialFlowState — never one slot
+   * per item, since the block repeats as a unit). Also re-entered (never
+   * "circuit-active" directly) if the client defers the circuit and later
+   * returns before starting it. */
+  | "circuit-ready"
+  /** Phase 11B — the live circuit flow, covering BOTH sub-states: an
+   * item's own "round X of Y, item N of M" screen (real family-specific
+   * target + a lightweight completion capture — spec section 6/38's
+   * "quick rep confirmation," never the full multi-set resistance flow —
+   * spec section 10) AND the between-round "ROUND COMPLETE, Rest 01:30"
+   * screen (never shown between items within a round — spec section 18's
+   * explicit distinction). Exactly mirrors how "interval-active" alone
+   * covers both work and recovery sub-phases: the top-level session phase
+   * stays "circuit-active" throughout the whole circuit; which of the two
+   * screens actually renders is decided by
+   * WorkoutSession.circuitProgress[blockId].phase ("item" | "round-rest"),
+   * never a second top-level phase value. See lib/workout/circuit.ts for
+   * the pure state-machine transition logic. Re-entered (never reset to
+   * round 1) if the client defers mid-circuit and returns —
+   * circuitProgress is deliberately untouched by
+   * DEFER_EXERCISE/REPORT_PAIN, exactly like intervalProgress. */
+  | "circuit-active";
 
 export type WarmupOutcomeStatus = "not-started" | "completed" | "skipped";
 
@@ -569,6 +597,29 @@ export interface IntervalExecutionProgress {
   roundActuals: IntervalRoundActual[];
 }
 
+/** Phase 11B — see WorkoutSession.circuitProgress's own doc for why this
+ * is kept separate from ExecutionRecord/continuousExecutions, and shared
+ * across every item in the block rather than per-item. */
+export interface CircuitExecutionProgress {
+  /** 1-indexed. */
+  round: number;
+  /** 0-indexed position within the block's own items array — which item
+   * is currently "up." Only meaningful while phase === "item". */
+  itemIndex: number;
+  phase: "item" | "round-rest";
+  /** A real timestamp anchor for the current round-rest phase only, reset
+   * every time round-rest begins — same "never a mutable countdown"
+   * discipline as IntervalExecutionProgress.phaseStartedAtIso. Absent
+   * while phase === "item" (there is no dedicated between-ITEM rest
+   * screen/timer — see lib/workout/circuit.ts's own module doc). */
+  restStartedAtIso?: string;
+  /** Every item-round exposure resolved so far this circuit, keyed by
+   * TrainingItemInstance id — the exact shape FINALIZE_CIRCUIT_EXECUTION
+   * later fans out into each item's own real ExecutionRecord.circuitRoundActuals
+   * once the whole circuit resolves. */
+  exposuresByItemId: Record<string, CircuitRoundActual[]>;
+}
+
 export interface WorkoutSession {
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
@@ -627,6 +678,21 @@ export interface WorkoutSession {
    * marking the item resolved. Cleared the moment the item is finalized or
    * fully skipped. */
   intervalProgress?: Record<string, IntervalExecutionProgress>;
+  /** Phase 11B — transient, in-progress round/item state for a circuit
+   * BLOCK currently being executed, keyed by Block id (never by item id —
+   * a circuit's round/item position is ONE shared piece of state spanning
+   * all its items, not independent per-item state). Deliberately separate
+   * from continuousExecutions for the exact same reason intervalProgress
+   * is: each of the circuit's items only gains its own real
+   * continuousExecutions entry once FINALIZE_CIRCUIT_EXECUTION actually
+   * fans the accumulated exposures out, one ExecutionRecord per item — see
+   * that reducer case. This is what lets already-completed rounds survive
+   * a pain interruption or a defer untouched, and is also why
+   * isExerciseResolved needs zero circuit-specific changes: a circuit
+   * block's items never appear as independent flat-queue entries in the
+   * first place (see buildInitialFlowState), so nothing ever asks
+   * isExerciseResolved about them mid-circuit. */
+  circuitProgress?: Record<string, CircuitExecutionProgress>;
   painReports: PainReport[];
   skipReason?: SkipReason;
   skipNote?: string;

@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { completedWorkingSetCount } from "@/components/workout/live/helpers";
 import { formatDistance, formatDurationMinutes } from "@/lib/workout/continuous";
+import { findBlockById } from "@/lib/workout/session-flow";
 import type { WorkoutSession } from "@/lib/types";
-import type { TrainingItemInstance } from "@/lib/training/types";
+import type { Block, TrainingItemInstance } from "@/lib/training/types";
 
 /** Phase 4 — a short, honest completion line for a finished continuous item,
  * mirroring the resistance branch's own "state exactly what happened, never
@@ -28,6 +29,16 @@ function continuousCompletionLine(name: string, session: WorkoutSession, itemId:
   if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));
   if (execution.actual?.distance) parts.push(formatDistance(execution.actual.distance));
   return parts.length > 0 ? `${name}: ${parts.join(", ")} logged${suffix}.` : `${name} logged${suffix}.`;
+}
+
+/** Phase 11B — a short, honest completion line for a finished circuit
+ * BLOCK: how many of its items resolved as genuinely completed vs
+ * skipped, across the whole group — never per-round detail here (that
+ * belongs to history, not this transient transition screen). */
+function circuitCompletionLine(block: Block, session: WorkoutSession): string {
+  const completedItems = block.items.filter((item) => session.continuousExecutions?.[item.id]?.status === "completed").length;
+  const suffix = completedItems < block.items.length ? " (partial)" : "";
+  return `${block.name ?? "Circuit"}: ${completedItems} of ${block.items.length} exercises completed${suffix}.`;
 }
 
 /**
@@ -53,7 +64,13 @@ export function ExerciseTransitionPanel({
   session: WorkoutSession;
 }) {
   const { dispatch } = usePrototypeState();
-  const wasDeferred = finishedItem ? session.deferredExerciseIds.includes(finishedItem.id) : false;
+  // Phase 11B — a resolved circuit BLOCK has no TrainingItemInstance of
+  // its own (findTrainingItemById can never find it — it occupies its
+  // flat-queue slot by block id, not any item's id), so `finishedItem` is
+  // undefined for it. Resolved separately here so the transition screen
+  // never silently renders nothing for a completed circuit.
+  const finishedCircuitBlock = !finishedItem ? findBlockById(session.resolvedSession, session.lastResolvedExerciseId) : undefined;
+  const wasDeferred = session.lastResolvedExerciseId ? session.deferredExerciseIds.includes(session.lastResolvedExerciseId) : false;
   const finishedLog = finishedItem ? session.exerciseLogs[finishedItem.id] : undefined;
   const wasSkipped = finishedLog?.status === "skipped";
   const isResistance = finishedItem?.prescription.family === "resistance";
@@ -79,6 +96,10 @@ export function ExerciseTransitionPanel({
               : isResistance
                 ? `${completedCount} working set${completedCount === 1 ? "" : "s"} logged for ${finishedItem.name}.`
                 : continuousCompletionLine(finishedItem.name, session, finishedItem.id)}
+        </p>
+      ) : finishedCircuitBlock ? (
+        <p className="mt-3 text-body text-off-white">
+          {wasDeferred ? `${finishedCircuitBlock.name ?? "Circuit"} moved to later in the session.` : circuitCompletionLine(finishedCircuitBlock, session)}
         </p>
       ) : null}
 

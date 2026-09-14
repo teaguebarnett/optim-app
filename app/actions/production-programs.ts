@@ -56,6 +56,7 @@ import { recordDecisionEvidence } from "../../lib/production/decision-evidence";
 import {
   locateTrainingItem,
   applyTrainingItemPatch,
+  applyBlockPatch,
   removeTrainingItem,
   addTrainingItem,
   moveTrainingItem,
@@ -71,6 +72,7 @@ import {
   type SessionPath,
   type BlockPath,
   type TrainingItemPatch,
+  type BlockPatch,
 } from "../../lib/training/program-proposal-editing";
 import { projectItemRemovedDecision, projectItemAddedDecision, projectSessionRenamedDecision, projectDayConvertedToRestDecision } from "../../lib/decisions/project-structural-edit";
 import { validateUniversalTrainingProgramContent } from "../../lib/production/validation";
@@ -630,6 +632,22 @@ export async function moveProgramProposalBlockAction(params: { workspaceId: stri
   await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "moveProgramProposalBlockAction");
   const nextContent = moveBlock(current.content, params.path, params.direction);
+  const { versionId } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
+  return { versionId };
+}
+
+/** Phase 11B — edits a BLOCK's own fields (round count, round/item rest,
+ * name, time cap) — real circuit editing, spec section 26. Never touches
+ * the block's items (see applyBlockPatch's own doc). Same no-evidence
+ * posture as moveProgramProposalBlockAction above: diffProgramProposal
+ * only understands ITEM-level field deltas today, not block-level ones —
+ * a real, documented limitation (see this phase's own completion report),
+ * not an oversight; the edit itself still persists safely and correctly
+ * either way. */
+export async function editProgramProposalBlockAction(params: { workspaceId: string; clientProfileId: string; versionId: string; path: BlockPath; patch: BlockPatch }): Promise<{ versionId: string }> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "editProgramProposalBlockAction");
+  const nextContent = applyBlockPatch(current.content, params.path, params.patch);
   const { versionId } = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current, nextContent });
   return { versionId };
 }

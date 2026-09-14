@@ -75,9 +75,19 @@ export function canCompleteExercise(item: TrainingItemInstance, log: ExerciseLog
  *
  * Phase 11A — an interval item's own real round count instead
  * (duration/distance describe the item as a whole and would misrepresent a
- * multi-round activity — see ExecutionRecord.roundActuals). */
+ * multi-round activity — see ExecutionRecord.roundActuals).
+ *
+ * Phase 11B — a circuit item's own real round count too (see
+ * ExecutionRecord.circuitRoundActuals) — checked first, since a circuit's
+ * RESISTANCE item has no duration/distance to fall back to at all (it
+ * never had loggedSets in the first place — see buildWorkoutSummary's own
+ * circuit-aware branch below). */
 function describeContinuousExecution(name: string, execution: ExecutionRecord): string {
   const suffix = execution.status === "partial" ? " (partial)" : "";
+  if (execution.circuitRoundActuals) {
+    const completedRounds = execution.circuitRoundActuals.filter((r) => r.status === "completed").length;
+    return `${name}: ${completedRounds} round${completedRounds === 1 ? "" : "s"} completed${suffix}.`;
+  }
   if (execution.roundActuals) {
     const completedRounds = execution.roundActuals.filter((r) => r.status === "completed").length;
     return `${name}: ${completedRounds} round${completedRounds === 1 ? "" : "s"} completed${suffix}.`;
@@ -118,7 +128,17 @@ export function buildWorkoutSummary(
     const log = session.exerciseLogs[item.id];
     if (!log) continue;
 
-    if (item.prescription.family !== "resistance") {
+    // Phase 11B — a circuit item's real actual lives in
+    // continuousExecutions[id].circuitRoundActuals regardless of the
+    // item's own family (a circuit's resistance item never accumulates
+    // loggedSets — see lib/state.ts's FINALIZE_CIRCUIT_EXECUTION), so it
+    // must route through this branch too, not the working-set branch
+    // below, which would otherwise silently see zero loggedSets and never
+    // count it. This "bucket" is really "everything not using the
+    // loggedSets/working-set model," which every circuit item genuinely
+    // is not.
+    const isCircuitExposure = session.continuousExecutions?.[item.id]?.circuitRoundActuals !== undefined;
+    if (item.prescription.family !== "resistance" || isCircuitExposure) {
       continuousItemCount += 1;
       if (log.status === "skipped") {
         exercisesSkipped += 1;

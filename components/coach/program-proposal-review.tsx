@@ -17,6 +17,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   editProgramProposalItemAction,
+  editProgramProposalBlockAction,
   removeProgramProposalItemAction,
   addProgramProposalItemAction,
   moveProgramProposalBlockAction,
@@ -26,9 +27,11 @@ import {
   rejectProgramProposalAction,
   type ProgramProposalReviewView,
 } from "@/app/actions/production-programs";
-import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch } from "@/lib/training/program-proposal-editing";
+import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, BlockPatch } from "@/lib/training/program-proposal-editing";
 import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance } from "@/lib/training/types";
 import { describeIntervalOverview } from "@/lib/workout/interval";
+import { describeCircuitOverview } from "@/lib/workout/circuit";
+import { isCircuitBlock } from "@/lib/workout/session-flow";
 
 function numberOrUndefined(formData: FormData, key: string): number | undefined {
   const raw = formData.get(key);
@@ -56,9 +59,11 @@ function buildProgramOverview(content: UniversalTrainingProgramContent) {
   let resistanceItems = 0;
   let continuousItems = 0;
   let intervalItems = 0;
+  let circuitBlocks = 0;
   for (const day of trainingDays) {
     for (const session of day.sessions ?? []) {
       for (const block of session.blocks) {
+        if (isCircuitBlock(block)) circuitBlocks += 1;
         for (const item of block.items) {
           if (item.category === "interval") intervalItems += 1;
           else if (item.category === "continuous") continuousItems += 1;
@@ -67,7 +72,7 @@ function buildProgramOverview(content: UniversalTrainingProgramContent) {
       }
     }
   }
-  return { trainingDaysPerWeek: trainingDays.length, restDaysPerWeek: restDays, sessionNames, resistanceItems, continuousItems, intervalItems };
+  return { trainingDaysPerWeek: trainingDays.length, restDaysPerWeek: restDays, sessionNames, resistanceItems, continuousItems, intervalItems, circuitBlocks };
 }
 
 export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, proposal }: { workspaceId: string; clientProfileId: string; clientId: string; proposal: ProgramProposalReviewView }) {
@@ -159,6 +164,22 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     return move;
   }
 
+  function editBlockActionFor(path: BlockPath) {
+    async function edit(formData: FormData) {
+      "use server";
+      const patch: BlockPatch = {
+        name: stringOrUndefined(formData, "blockName"),
+        rounds: numberOrUndefined(formData, "blockRounds"),
+        restBetweenItemsSeconds: numberOrUndefined(formData, "restBetweenItemsSeconds"),
+        restBetweenRoundsSeconds: numberOrUndefined(formData, "restBetweenRoundsSeconds"),
+        timeCapSeconds: numberOrUndefined(formData, "timeCapSeconds"),
+      };
+      await editProgramProposalBlockAction({ workspaceId, clientProfileId, versionId: proposal.versionId, path, patch });
+      await revalidate();
+    }
+    return edit;
+  }
+
   function renameActionFor(path: SessionPath) {
     async function rename(formData: FormData) {
       "use server";
@@ -218,7 +239,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
         <p className="text-xs font-medium uppercase tracking-wide text-neutral">What OPTIM built</p>
         <p className="mt-1 text-xs text-off-white">
-          {proposal.content.durationWeeks} weeks · {overview.trainingDaysPerWeek} training days/week · {overview.restDaysPerWeek} rest days/week · {overview.resistanceItems} resistance items · {overview.continuousItems} continuous items · {overview.intervalItems} interval items (week 1 pattern)
+          {proposal.content.durationWeeks} weeks · {overview.trainingDaysPerWeek} training days/week · {overview.restDaysPerWeek} rest days/week · {overview.resistanceItems} resistance items · {overview.continuousItems} continuous items · {overview.intervalItems} interval items · {overview.circuitBlocks} circuit blocks (week 1 pattern)
         </p>
         {overview.sessionNames.length > 0 ? <p className="mt-1 text-xs text-neutral">{overview.sessionNames.join(" · ")}</p> : null}
       </div>
@@ -286,9 +307,10 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                             <div className="space-y-2">
                               {[...session.blocks]
                                 .sort((a, b) => a.order - b.order)
-                                .map((block, blockIndex, sortedBlocks) => (
-                                <div key={block.id} className="space-y-2">
-                                  {block.items.map((item) => {
+                                .map((block, blockIndex, sortedBlocks) => {
+                                const blockPathForBlock: BlockPath = { weekNumber: week.weekNumber, dayOfWeek: day.dayOfWeek, sessionIndex, blockId: block.id };
+                                const circuit = isCircuitBlock(block);
+                                const itemRows = block.items.map((item) => {
                                     const path: TrainingItemPath = { weekNumber: week.weekNumber, dayOfWeek: day.dayOfWeek, sessionIndex, blockId: block.id, itemId: item.id };
                                     const blockPath: BlockPath = { weekNumber: week.weekNumber, dayOfWeek: day.dayOfWeek, sessionIndex, blockId: block.id };
                                     const editCategory: "resistance" | "continuous" | "interval" = item.category === "interval" ? "interval" : item.category === "continuous" ? "continuous" : "resistance";
@@ -298,14 +320,18 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                           {item.name} — {describeItem(item)}
                                         </summary>
                                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                                          {blockIndex > 0 ? (
+                                          {/* Phase 11B — a circuit's own Move up/down already lives once at
+                                              the block level above (moving the whole group as a unit) —
+                                              showing it again per item here would be redundant and
+                                              misleading (it never moves just this one item). */}
+                                          {!circuit && blockIndex > 0 ? (
                                             <form action={moveBlockActionFor(blockPath, "up")}>
                                               <Button type="submit" variant="ghost" size="sm">
                                                 Move up
                                               </Button>
                                             </form>
                                           ) : null}
-                                          {blockIndex < sortedBlocks.length - 1 ? (
+                                          {!circuit && blockIndex < sortedBlocks.length - 1 ? (
                                             <form action={moveBlockActionFor(blockPath, "down")}>
                                               <Button type="submit" variant="ghost" size="sm">
                                                 Move down
@@ -415,9 +441,62 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                         </form>
                                       </details>
                                     );
-                                  })}
-                                </div>
-                              ))}
+                                  });
+
+                                if (!circuit) {
+                                  return (
+                                    <div key={block.id} className="space-y-2">
+                                      {itemRows}
+                                    </div>
+                                  );
+                                }
+
+                                const circuitLines = describeCircuitOverview(block);
+                                return (
+                                  <div key={block.id} className="space-y-2 rounded border border-accent/30 bg-accent/[0.03] p-2.5">
+                                    <div className="flex flex-wrap items-start justify-between gap-2">
+                                      <div>
+                                        <p className="text-sm font-medium text-off-white">{block.name ?? "Circuit"}</p>
+                                        {circuitLines.map((line) => (
+                                          <p key={line} className="text-xs text-neutral">
+                                            {line}
+                                          </p>
+                                        ))}
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        {blockIndex > 0 ? (
+                                          <form action={moveBlockActionFor(blockPathForBlock, "up")}>
+                                            <Button type="submit" variant="ghost" size="sm">
+                                              Move up
+                                            </Button>
+                                          </form>
+                                        ) : null}
+                                        {blockIndex < sortedBlocks.length - 1 ? (
+                                          <form action={moveBlockActionFor(blockPathForBlock, "down")}>
+                                            <Button type="submit" variant="ghost" size="sm">
+                                              Move down
+                                            </Button>
+                                          </form>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                    <form action={editBlockActionFor(blockPathForBlock)} className="flex flex-wrap items-end gap-2">
+                                      <label className="flex flex-col text-xs text-neutral">
+                                        Circuit name
+                                        <input type="text" name="blockName" defaultValue={block.name ?? ""} className="w-40 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                      </label>
+                                      <NumField label="Rounds" name="blockRounds" defaultValue={block.rounds} />
+                                      <NumField label="Rest between items (sec)" name="restBetweenItemsSeconds" defaultValue={block.restBetweenItemsSeconds} />
+                                      <NumField label="Rest between rounds (sec)" name="restBetweenRoundsSeconds" defaultValue={block.restBetweenRoundsSeconds} />
+                                      <NumField label="Time cap (sec)" name="timeCapSeconds" defaultValue={block.timeCapSeconds} />
+                                      <Button type="submit" variant="secondary" size="sm">
+                                        Save circuit change
+                                      </Button>
+                                    </form>
+                                    {itemRows}
+                                  </div>
+                                );
+                              })}
                               <form action={addItemActionFor(sessionPath)} className="flex flex-wrap items-end gap-2 pt-1">
                                 <label className="flex flex-col text-xs text-neutral">
                                   Add exercise — name

@@ -239,6 +239,58 @@ function buildUniversalIntervalSessionForDay(dayOfWeek: DayOfWeek): { session: S
   return { session, diagnostics: emptyDiagnostics() };
 }
 
+/** Phase 11B — a real, repeating circuit block: a bounded, sane V1 default
+ * (3 rounds, 3 bodyweight/equipment-free items) since — same honest gap as
+ * interval above — no coach-configured circuit structure (which items,
+ * which rep/duration targets, round count) exists in the current coach
+ * operating model yet. Bodyweight-only deliberately: this generator has no
+ * per-client equipment context available at this call site (equipmentForClient
+ * is resolved once, outside these day-builders, for resistance selection
+ * only), so a default circuit must never assume equipment a client may not
+ * have — see buildPlaceholderProgrammingProfile's own "never a stereotype,
+ * never an unconfirmed assumption" discipline. Not fed through any
+ * rule-application pathway, for the exact same reason as interval's own
+ * function above. */
+function buildUniversalCircuitSessionForDay(dayOfWeek: DayOfWeek): { session: Session; diagnostics: RuleApplicationDiagnostics } {
+  const rounds = 3;
+  const items: TrainingItemInstance[] = [
+    {
+      id: `circuit-${dayOfWeek}-squat-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+      order: 1,
+      name: "Bodyweight Squat",
+      category: "resistance",
+      coachCue: "Full range of motion, controlled tempo.",
+      prescription: { family: "resistance", reps: { low: 15, high: 15 } },
+    },
+    {
+      id: `circuit-${dayOfWeek}-pushup-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+      order: 2,
+      name: "Push-Up",
+      category: "resistance",
+      coachCue: "Full range of motion — knees down is fine.",
+      prescription: { family: "resistance", reps: { low: 12, high: 12 } },
+    },
+    {
+      id: `circuit-${dayOfWeek}-mountainclimber-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+      order: 3,
+      name: "Mountain Climbers",
+      category: "continuous",
+      coachCue: "Quick, controlled pace — drive the knees.",
+      prescription: { family: "continuous", duration: { seconds: 30 } },
+    },
+  ];
+  const block: Block = { id: `block-circuit-${dayOfWeek}`, kind: "circuit", order: 1, name: "Conditioning Circuit", rounds, restBetweenItemsSeconds: 15, restBetweenRoundsSeconds: 90, items };
+  const session: Session = {
+    id: `session-circuit-${dayOfWeek}-${Date.now()}`,
+    name: `${dayOfWeek} — Conditioning Circuit`,
+    focus: "Anaerobic conditioning",
+    estimatedDurationMin: Math.round((rounds * (items.length * 45 + 90)) / 60),
+    coachNote: "Move with control through each round — quality over speed.",
+    blocks: [block],
+  };
+  return { session, diagnostics: emptyDiagnostics() };
+}
+
 // ---------------------------------------------------------------------------
 // Resistance-day generation — the exact same decision logic as
 // program-directions.ts's buildPeriodizedWorkoutForDay (rep range, RPE,
@@ -493,11 +545,20 @@ function buildGenerationRationale(direction: ProgramDirectionSummary, resistance
     direction.rankingRationale,
   ];
   if (continuousDays.length > 0) {
-    lines.push(
-      isIntervalConditioning
-        ? `Added ${continuousDays.length} interval-conditioning day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching this coach's own stored conditioning methodology.`
-        : `Added ${continuousDays.length} continuous-work day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching the client's own stated cardio preference.`
-    );
+    if (isIntervalConditioning) {
+      // Phase 11B — honestly names BOTH formats when both are actually
+      // present (the first conditioning day is interval, any further one
+      // is circuit — see the real day-building loop above), never a
+      // blanket "interval" label that would misdescribe a circuit day.
+      const intervalDays = continuousDays.slice(0, 1);
+      const circuitDays = continuousDays.slice(1);
+      lines.push(`Added ${intervalDays.length} interval-conditioning day${intervalDays.length === 1 ? "" : "s"} (${intervalDays.join(", ")}) — real schedule surplus beyond the resistance split, matching this coach's own stored conditioning methodology.`);
+      if (circuitDays.length > 0) {
+        lines.push(`Added ${circuitDays.length} conditioning-circuit day${circuitDays.length === 1 ? "" : "s"} (${circuitDays.join(", ")}) — additional real schedule surplus, for format variety within the same conditioning methodology.`);
+      }
+    } else {
+      lines.push(`Added ${continuousDays.length} continuous-work day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching the client's own stated cardio preference.`);
+    }
   }
   if (direction.confidenceNote) lines.push(direction.confidenceNote);
   return lines.filter((l) => l && l.trim().length > 0).join(" ");
@@ -545,16 +606,33 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
       days[idx] = { dayOfWeek, type: "training", sessions: [session] };
     });
 
-    continuousDays.forEach((dayOfWeek) => {
+    continuousDays.forEach((dayOfWeek, conditioningIndex) => {
       const idx = days.findIndex((d) => d.dayOfWeek === dayOfWeek);
       if (idx === -1 || days[idx].type === "training") return; // never overwrite a resistance day
-      // Phase 11A — the SAME real schedule-surplus days decideContinuousDays
-      // already selected get interval content instead of easy continuous
-      // cardio, but ONLY for a coach whose own stored methodology
-      // (cardioPhilosophy === "prescribed_for_conditioning") calls for it —
-      // never every coach, and never a client-goal-driven decision (spec
-      // section 5's "do not encode goal = HIIT").
-      const { session, diagnostics } = usesIntervalConditioning(com) ? buildUniversalIntervalSessionForDay(dayOfWeek) : buildUniversalContinuousSessionForDay(dayOfWeek, effectiveRules);
+      // Phase 11A/11B — the SAME real schedule-surplus days decideContinuousDays
+      // already selected get real conditioning content instead of easy
+      // continuous cardio, but ONLY for a coach whose own stored
+      // methodology (cardioPhilosophy === "prescribed_for_conditioning")
+      // calls for it — never every coach, and never a client-goal-driven
+      // decision (spec section 5's "do not encode goal = HIIT").
+      //
+      // Phase 11B — no real coach-collected signal distinguishes "wants
+      // intervals" from "wants circuits" beyond this one shared
+      // methodology field (a genuine, documented onboarding gap — spec
+      // section 23's own explicit escape hatch for exactly this case), so
+      // rather than fabricate an arbitrary split or let circuit silently
+      // compete with interval's own already-shipped, already-tested
+      // trigger, the FIRST conditioning-eligible day keeps Phase 11A's
+      // exact existing behavior (interval — byte-for-byte regression
+      // safe), and any FURTHER conditioning day(s) get circuit instead —
+      // a deterministic, reproducible choice that gives a
+      // conditioning-focused coach with real schedule surplus genuine
+      // format variety, never a coin flip.
+      const { session, diagnostics } = !usesIntervalConditioning(com)
+        ? buildUniversalContinuousSessionForDay(dayOfWeek, effectiveRules)
+        : conditioningIndex === 0
+          ? buildUniversalIntervalSessionForDay(dayOfWeek)
+          : buildUniversalCircuitSessionForDay(dayOfWeek);
       sessionDiagnostics.push(diagnostics);
       days[idx] = { dayOfWeek, type: "training", sessions: [session] };
     });

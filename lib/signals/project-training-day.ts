@@ -266,6 +266,29 @@ export function projectTrainingDayObservations(params: ProjectTrainingDayParams)
         observedAtIso: itemObservedAtIso,
       });
     }
+
+    // Phase 11B — circuit-only: the SAME "completed_rounds" metric key as
+    // interval above — both express the same real concept (how many
+    // round-exposures this specific item completed), and a downstream
+    // consumer reading this fact generically shouldn't need to know
+    // whether it came from an interval or a circuit. Same honest
+    // "never fabricate prescribed rounds" posture as interval's own doc
+    // just above.
+    if (execution.circuitRoundActuals) {
+      const completedRounds = execution.circuitRoundActuals.filter((r) => r.status === "completed").length;
+      observations.push({
+        clientProfileId,
+        workspaceId,
+        category: "training_performance",
+        metricKey: "completed_rounds",
+        sourceType: "workout_execution",
+        value: { valueType: "numeric", valueNumeric: completedRounds },
+        unit: null,
+        sourceRef: itemRef,
+        trainingItemInstanceId: itemId,
+        observedAtIso: itemObservedAtIso,
+      });
+    }
   }
 
   return observations;

@@ -253,6 +253,7 @@ function validateBlock(raw: unknown, what: string): Block {
   requireString(raw.id, "block.id", what);
   requireOneOf(raw.kind, BLOCK_KINDS, "block.kind", what);
   requireNumber(raw.order, "block.order", what);
+  if (raw.name !== undefined) requireString(raw.name, "block.name", what);
   if (raw.rounds !== undefined) requireNumber(raw.rounds, "block.rounds", what);
   if (raw.restBetweenItemsSeconds !== undefined) requireNumber(raw.restBetweenItemsSeconds, "block.restBetweenItemsSeconds", what);
   if (raw.restBetweenRoundsSeconds !== undefined) requireNumber(raw.restBetweenRoundsSeconds, "block.restBetweenRoundsSeconds", what);
@@ -261,6 +262,18 @@ function validateBlock(raw: unknown, what: string): Block {
   const items = requireArray(raw.items, "block.items", what);
   if (items.length === 0) fail(what, `"block.items" must have at least one item`);
   items.forEach((i) => validateTrainingItemInstance(i, what));
+  // Phase 11B — a real, repeating circuit (kind: "circuit" WITH rounds
+  // genuinely set — see lib/workout/session-flow.ts's isCircuitBlock,
+  // which draws the exact same line) must have a real positive round
+  // count and at least 2 DIFFERENT items (spec test matrix C: "invalid
+  // round count rejected"; spec section 3's own domain model: "MULTIPLE
+  // DIFFERENT TrainingItemInstances"). A `kind: "circuit"` block with no
+  // rounds set is left alone here — same posture as an equally
+  // unimplemented superset — never forced through this stricter gate.
+  if (raw.kind === "circuit" && raw.rounds !== undefined) {
+    if (typeof raw.rounds !== "number" || raw.rounds <= 0) fail(what, `a "circuit" block's "rounds" must be a real positive number`);
+    if (items.length < 2) fail(what, `a "circuit" block with rounds set must have at least 2 different items — a single repeated item is not a circuit`);
+  }
   return raw as unknown as Block;
 }
 
