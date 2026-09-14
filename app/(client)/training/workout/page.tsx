@@ -22,6 +22,10 @@ import { IntervalActivePanel } from "@/components/workout/live/interval-active-p
 import { IntervalLoggingPanel } from "@/components/workout/live/interval-logging-panel";
 import { CircuitReadyPanel } from "@/components/workout/live/circuit-ready-panel";
 import { CircuitActivePanel } from "@/components/workout/live/circuit-active-panel";
+import { PowerReadyPanel } from "@/components/workout/live/power-ready-panel";
+import { PowerSetPanel } from "@/components/workout/live/power-set-panel";
+import { MobilityReadyPanel } from "@/components/workout/live/mobility-ready-panel";
+import { MobilitySetPanel } from "@/components/workout/live/mobility-set-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { findBlockById, findTrainingItemById, isCircuitBlock } from "@/lib/workout/session-flow";
 import { trainingItemToLegacyExercise } from "@/lib/training/legacy-adapter";
@@ -192,6 +196,35 @@ export default function ActiveWorkoutPage() {
           return progress ? <IntervalActivePanel item={currentTrainingItem} progress={progress} painReportActive={painReportActive} /> : null;
         case "interval-logging":
           return progress ? <IntervalLoggingPanel item={currentTrainingItem} progress={progress} painReportActive={painReportActive} /> : null;
+        default:
+          return null;
+      }
+    }
+
+    // Phase 11C — power/mobility are each their own distinct prescription
+    // family (never a resistance exercise repeated several times, and
+    // never routed through the generic one-shot continuous flow) —
+    // checked before the general continuous branch below, same as
+    // interval above.
+    if (currentTrainingItem.prescription.family === "power") {
+      const progress = session.powerProgress?.[currentTrainingItem.id];
+      switch (session.phase) {
+        case "power-ready":
+          return <PowerReadyPanel item={currentTrainingItem} painReportActive={painReportActive} />;
+        case "power-active":
+          return progress ? <PowerSetPanel item={currentTrainingItem} currentSet={progress.currentSet} painReportActive={painReportActive} /> : null;
+        default:
+          return null;
+      }
+    }
+
+    if (currentTrainingItem.prescription.family === "mobility") {
+      const progress = session.mobilityProgress?.[currentTrainingItem.id];
+      switch (session.phase) {
+        case "mobility-ready":
+          return <MobilityReadyPanel item={currentTrainingItem} painReportActive={painReportActive} />;
+        case "mobility-active":
+          return progress ? <MobilitySetPanel item={currentTrainingItem} progress={progress} painReportActive={painReportActive} /> : null;
         default:
           return null;
       }

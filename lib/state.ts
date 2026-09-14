@@ -26,8 +26,10 @@ import { legacyWorkoutToSession } from "./training/legacy-adapter.ts";
 import { classifyContinuousCompletion, continuousPerformedAsPrescribed, type ContinuousActual } from "./workout/continuous.ts";
 import { classifyIntervalActivityCompletion, intervalPerformedAsPrescribed, nextIntervalProgress } from "./workout/interval.ts";
 import { circuitItemPerformedAsPrescribed, classifyCircuitItemCompletion, nextCircuitPosition, totalCircuitRounds } from "./workout/circuit.ts";
+import { classifyPowerItemCompletion, powerItemPerformedAsPrescribed, totalPowerSets } from "./workout/power.ts";
+import { classifyMobilityItemCompletion, mobilityItemPerformedAsPrescribed, nextMobilityPosition, requiresBothSides, totalMobilityExposures } from "./workout/mobility.ts";
 import { MIXED_SESSION_DEMO } from "./training/demo-fixtures.ts";
-import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
+import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, MobilitySetActual, PowerSetActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
@@ -44,11 +46,13 @@ import type {
   MealEstimateItem,
   MealPeriod,
   MealSelection,
+  MobilityExecutionProgress,
   MorningWeightLog,
   NutritionTargets,
   PainInterruption,
   PainReport,
   PainSymptomQuality,
+  PowerExecutionProgress,
   ReviewRequest,
   ReviewRequestKind,
   RpeValue,
@@ -213,6 +217,16 @@ function entryPhaseForCurrentItem(session: WorkoutSession): WorkoutSessionPhase 
   if (item.prescription.family === "interval") {
     return session.intervalProgress?.[item.id] ? "interval-active" : "interval-ready";
   }
+  // Phase 11C — power/mobility each get their own ready/active pair, same
+  // as interval, so they must be checked before the generic
+  // "!== resistance" fallback below would otherwise silently misroute them
+  // into the one-shot continuous flow.
+  if (item.prescription.family === "power") {
+    return session.powerProgress?.[item.id] ? "power-active" : "power-ready";
+  }
+  if (item.prescription.family === "mobility") {
+    return session.mobilityProgress?.[item.id] ? "mobility-active" : "mobility-ready";
+  }
   return item.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
 }
 
@@ -254,9 +268,13 @@ export function buildStartedWorkoutSession(params: {
       ? "circuit-ready"
       : initialItem?.prescription.family === "interval"
         ? "interval-ready"
-        : initialItem && initialItem.prescription.family !== "resistance"
-          ? "continuous-ready"
-          : "exercise-intro";
+        : initialItem?.prescription.family === "power"
+          ? "power-ready"
+          : initialItem?.prescription.family === "mobility"
+            ? "mobility-ready"
+            : initialItem && initialItem.prescription.family !== "resistance"
+              ? "continuous-ready"
+              : "exercise-intro";
 
   return {
     ...params.existingSession,
@@ -275,6 +293,8 @@ export function buildStartedWorkoutSession(params: {
     continuousExecutions: {},
     intervalProgress: {},
     circuitProgress: {},
+    powerProgress: {},
+    mobilityProgress: {},
     currentExerciseId: initialFlow.currentExerciseId,
     exerciseQueue: initialFlow.exerciseQueue,
     actualExerciseOrder: initialFlow.actualExerciseOrder,
@@ -310,6 +330,8 @@ export function createInitialWorkoutSession(
     continuousExecutions: {},
     intervalProgress: {},
     circuitProgress: {},
+    powerProgress: {},
+    mobilityProgress: {},
     painReports: [],
     phase: "session-warmup",
     currentExerciseId: null,
@@ -608,6 +630,37 @@ export type Action =
       skipped?: boolean;
       skipReason?: SkipReason;
     }
+  /** Phase 11C — power-ready -> power-active: opens set 1 of a real power
+   * item. */
+  | { type: "BEGIN_POWER_EXECUTION"; exerciseId: string }
+  /** Phase 11C — the one explicit action that resolves the CURRENT set and
+   * advances to the next one, or auto-finalizes inline the moment the last
+   * set resolves (same "no separate logging step" discipline as
+   * ADVANCE_CIRCUIT_PHASE — each set already captures its own real actual
+   * as it happens). `actual` carries whichever primitive the item's own
+   * prescription specifies (reps, contacts, or distance — never converted
+   * between them, spec section 6). */
+  | {
+      type: "ADVANCE_POWER_SET";
+      exerciseId: string;
+      actual?: Partial<Prescription>;
+      skipped?: boolean;
+      skipReason?: SkipReason;
+    }
+  /** Phase 11C — mobility-ready -> mobility-active: opens set 1 (and, for
+   * a dual-side item, the "left" side) of a real mobility item. */
+  | { type: "BEGIN_MOBILITY_EXECUTION"; exerciseId: string }
+  /** Phase 11C — the one explicit action that resolves the CURRENT
+   * set/side and advances via nextMobilityPosition (left -> right -> next
+   * set, or straight to the next set for a single-resolution item), or
+   * auto-finalizes inline once the last required exposure resolves. */
+  | {
+      type: "ADVANCE_MOBILITY_PHASE";
+      exerciseId: string;
+      actual?: Partial<Prescription>;
+      skipped?: boolean;
+      skipReason?: SkipReason;
+    }
   | { type: "WORKOUT_ROUTE_ENTERED" }
   | { type: "WORKOUT_ROUTE_LEFT" }
   | { type: "COMPLETE_WORKOUT"; summary: WorkoutSummary }
@@ -699,6 +752,11 @@ const PAIN_BLOCKED_ACTIONS = new Set<Action["type"]>([
   // Phase 11B — circuit's own progression actions, same reasoning.
   "BEGIN_CIRCUIT_EXECUTION",
   "ADVANCE_CIRCUIT_PHASE",
+  // Phase 11C — power/mobility's own progression actions, same reasoning.
+  "BEGIN_POWER_EXECUTION",
+  "ADVANCE_POWER_SET",
+  "BEGIN_MOBILITY_EXECUTION",
+  "ADVANCE_MOBILITY_PHASE",
 ]);
 
 /** True once there's an active pain report AND the current exercise is a
@@ -1245,11 +1303,63 @@ export function reducer(state: AppState, action: Action): AppState {
       if (inProgressInterval) {
         intervalProgress = Object.fromEntries(Object.entries(intervalProgress ?? {}).filter(([id]) => id !== action.exerciseId));
       }
+      // Phase 11C — same snapshot-on-skip discipline as interval above,
+      // generalized to power's per-set actuals.
+      const inProgressPower = state.workoutSession.powerProgress?.[action.exerciseId];
+      let powerProgress = state.workoutSession.powerProgress;
+      if (inProgressPower && inProgressPower.setActuals.length > 0) {
+        const item = findTrainingItemById(state.workoutSession.resolvedSession, action.exerciseId);
+        if (item && item.prescription.family === "power") {
+          const totalSets = totalPowerSets(item.prescription);
+          const nowIso = new Date().toISOString();
+          const execution: ExecutionRecord = {
+            id: nextId("execution"),
+            trainingItemInstanceId: action.exerciseId,
+            status: classifyPowerItemCompletion(totalSets, inProgressPower.setActuals),
+            performedAsPrescribed: powerItemPerformedAsPrescribed(totalSets, inProgressPower.setActuals),
+            completedAtIso: nowIso,
+            skipReason: action.reason,
+            note: action.note,
+            powerSetActuals: inProgressPower.setActuals,
+          };
+          continuousExecutions = { ...continuousExecutions, [action.exerciseId]: execution };
+        }
+      }
+      if (inProgressPower) {
+        powerProgress = Object.fromEntries(Object.entries(powerProgress ?? {}).filter(([id]) => id !== action.exerciseId));
+      }
+      // Phase 11C — same snapshot-on-skip discipline, generalized to
+      // mobility's per-set(-side) actuals.
+      const inProgressMobility = state.workoutSession.mobilityProgress?.[action.exerciseId];
+      let mobilityProgress = state.workoutSession.mobilityProgress;
+      if (inProgressMobility && inProgressMobility.setActuals.length > 0) {
+        const item = findTrainingItemById(state.workoutSession.resolvedSession, action.exerciseId);
+        if (item && item.prescription.family === "mobility") {
+          const totalExpected = totalMobilityExposures(item.prescription);
+          const nowIso = new Date().toISOString();
+          const execution: ExecutionRecord = {
+            id: nextId("execution"),
+            trainingItemInstanceId: action.exerciseId,
+            status: classifyMobilityItemCompletion(totalExpected, inProgressMobility.setActuals),
+            performedAsPrescribed: mobilityItemPerformedAsPrescribed(totalExpected, inProgressMobility.setActuals),
+            completedAtIso: nowIso,
+            skipReason: action.reason,
+            note: action.note,
+            mobilitySetActuals: inProgressMobility.setActuals,
+          };
+          continuousExecutions = { ...continuousExecutions, [action.exerciseId]: execution };
+        }
+      }
+      if (inProgressMobility) {
+        mobilityProgress = Object.fromEntries(Object.entries(mobilityProgress ?? {}).filter(([id]) => id !== action.exerciseId));
+      }
       const sessionWithLog: WorkoutSession = {
         ...state.workoutSession,
         exerciseLogs: { ...state.workoutSession.exerciseLogs, [action.exerciseId]: updatedLog },
         continuousExecutions,
         intervalProgress,
+        powerProgress,
+        mobilityProgress,
       };
       if (state.workoutSession.currentExerciseId !== action.exerciseId) {
         return { ...state, workoutSession: sessionWithLog };
@@ -1565,7 +1675,8 @@ export function reducer(state: AppState, action: Action): AppState {
       // never create a one-shot execution record with no round-level data,
       // mirroring this whole reducer's established "safe no-op for the
       // wrong family" convention (see e.g. LOG_SET against a continuous id).
-      if (!item || item.prescription.family === "resistance" || item.prescription.family === "interval") return state;
+      // Phase 11C — power/mobility get the same exclusion, same reasoning.
+      if (!item || item.prescription.family === "resistance" || item.prescription.family === "interval" || item.prescription.family === "power" || item.prescription.family === "mobility") return state;
       const log = state.workoutSession.exerciseLogs[exerciseId];
       if (!log) return state;
 
@@ -1830,6 +1941,161 @@ export function reducer(state: AppState, action: Action): AppState {
         workoutSession: {
           ...state.workoutSession,
           circuitProgress: { ...state.workoutSession.circuitProgress, [blockId]: nextProgress },
+        },
+      };
+    }
+
+    case "BEGIN_POWER_EXECUTION": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId || state.workoutSession.phase !== "power-ready") return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family !== "power") return state;
+      if (state.workoutSession.powerProgress?.[exerciseId]) return state;
+      const progress: PowerExecutionProgress = { currentSet: 1, setActuals: [] };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          phase: "power-active",
+          powerProgress: { ...state.workoutSession.powerProgress, [exerciseId]: progress },
+        },
+      };
+    }
+
+    // Phase 11C — power's single real transition point, mirroring
+    // ADVANCE_CIRCUIT_PHASE's own "no separate logging step" discipline:
+    // finalizes inline the moment the last set resolves.
+    case "ADVANCE_POWER_SET": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId || state.workoutSession.phase !== "power-active") return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family !== "power") return state;
+      const progress = state.workoutSession.powerProgress?.[exerciseId];
+      if (!progress) return state;
+
+      const setActual: PowerSetActual = {
+        setNumber: progress.currentSet,
+        status: action.skipped ? "skipped" : "completed",
+        actual: action.actual,
+        skipReason: action.skipped ? action.skipReason : undefined,
+        completedAtIso: new Date().toISOString(),
+      };
+      const setActuals = [...progress.setActuals, setActual];
+      const totalSets = totalPowerSets(item.prescription);
+
+      if (progress.currentSet >= totalSets) {
+        const nowIso = new Date().toISOString();
+        const execution: ExecutionRecord = {
+          id: nextId("execution"),
+          trainingItemInstanceId: exerciseId,
+          status: classifyPowerItemCompletion(totalSets, setActuals),
+          performedAsPrescribed: powerItemPerformedAsPrescribed(totalSets, setActuals),
+          completedAtIso: nowIso,
+          powerSetActuals: setActuals,
+        };
+        const remainingPowerProgress = Object.fromEntries(Object.entries(state.workoutSession.powerProgress ?? {}).filter(([id]) => id !== exerciseId));
+        const log = state.workoutSession.exerciseLogs[exerciseId];
+        const sessionWithExecution: WorkoutSession = {
+          ...state.workoutSession,
+          exerciseLogs: log ? { ...state.workoutSession.exerciseLogs, [exerciseId]: { ...log, status: "completed" } } : state.workoutSession.exerciseLogs,
+          continuousExecutions: { ...state.workoutSession.continuousExecutions, [exerciseId]: execution },
+          powerProgress: remainingPowerProgress,
+        };
+        const advance = advanceAfterExerciseResolved(sessionWithExecution);
+        return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+      }
+
+      const nextProgress: PowerExecutionProgress = { currentSet: progress.currentSet + 1, setActuals };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          powerProgress: { ...state.workoutSession.powerProgress, [exerciseId]: nextProgress },
+        },
+      };
+    }
+
+    case "BEGIN_MOBILITY_EXECUTION": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId || state.workoutSession.phase !== "mobility-ready") return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family !== "mobility") return state;
+      if (state.workoutSession.mobilityProgress?.[exerciseId]) return state;
+      const nowIso = new Date().toISOString();
+      const progress: MobilityExecutionProgress = {
+        currentSet: 1,
+        currentSide: requiresBothSides(item.prescription) ? "left" : null,
+        holdStartedAtIso: item.prescription.duration ? nowIso : undefined,
+        setActuals: [],
+      };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          phase: "mobility-active",
+          mobilityProgress: { ...state.workoutSession.mobilityProgress, [exerciseId]: progress },
+        },
+      };
+    }
+
+    // Phase 11C — mobility's single real transition point, mirroring
+    // ADVANCE_CIRCUIT_PHASE/ADVANCE_POWER_SET's "no separate logging step"
+    // discipline: finalizes inline once the last required set/side
+    // resolves.
+    case "ADVANCE_MOBILITY_PHASE": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId || state.workoutSession.phase !== "mobility-active") return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family !== "mobility") return state;
+      const progress = state.workoutSession.mobilityProgress?.[exerciseId];
+      if (!progress) return state;
+
+      const setActual: MobilitySetActual = {
+        setNumber: progress.currentSet,
+        side: progress.currentSide ?? (item.prescription.side === "left" || item.prescription.side === "right" ? item.prescription.side : undefined),
+        status: action.skipped ? "skipped" : "completed",
+        actual: action.actual,
+        skipReason: action.skipped ? action.skipReason : undefined,
+        completedAtIso: new Date().toISOString(),
+      };
+      const setActuals = [...progress.setActuals, setActual];
+      const totalExpected = totalMobilityExposures(item.prescription);
+
+      const next = nextMobilityPosition(item.prescription, { set: progress.currentSet, side: progress.currentSide });
+      if (next === "complete") {
+        const nowIso = new Date().toISOString();
+        const execution: ExecutionRecord = {
+          id: nextId("execution"),
+          trainingItemInstanceId: exerciseId,
+          status: classifyMobilityItemCompletion(totalExpected, setActuals),
+          performedAsPrescribed: mobilityItemPerformedAsPrescribed(totalExpected, setActuals),
+          completedAtIso: nowIso,
+          mobilitySetActuals: setActuals,
+        };
+        const remainingMobilityProgress = Object.fromEntries(Object.entries(state.workoutSession.mobilityProgress ?? {}).filter(([id]) => id !== exerciseId));
+        const log = state.workoutSession.exerciseLogs[exerciseId];
+        const sessionWithExecution: WorkoutSession = {
+          ...state.workoutSession,
+          exerciseLogs: log ? { ...state.workoutSession.exerciseLogs, [exerciseId]: { ...log, status: "completed" } } : state.workoutSession.exerciseLogs,
+          continuousExecutions: { ...state.workoutSession.continuousExecutions, [exerciseId]: execution },
+          mobilityProgress: remainingMobilityProgress,
+        };
+        const advance = advanceAfterExerciseResolved(sessionWithExecution);
+        return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+      }
+
+      const nowIso = new Date().toISOString();
+      const nextProgress: MobilityExecutionProgress = {
+        currentSet: next.set,
+        currentSide: next.side,
+        holdStartedAtIso: item.prescription.duration ? nowIso : undefined,
+        setActuals,
+      };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          mobilityProgress: { ...state.workoutSession.mobilityProgress, [exerciseId]: nextProgress },
         },
       };
     }

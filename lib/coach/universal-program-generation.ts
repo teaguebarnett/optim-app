@@ -200,6 +200,84 @@ function usesIntervalConditioning(com: CoachOperatingModel): boolean {
   return com.programArchitecture.cardioPhilosophy === "prescribed_for_conditioning";
 }
 
+/** Phase 11C — "athletic_performance" is this coach's own real, stored
+ * answer to "Which goals do you most commonly support?" (see
+ * lib/coach/coach-onboarding-questions.ts's practice_common_goals
+ * question, which feeds BOTH practice.commonGoals and outcomePriorities) —
+ * a genuine, already-collected, coach-PRACTICE-level signal (what this
+ * coach's business generally serves), never a per-client goal (spec
+ * section 3/22's own "athletic/power coach" framing is exactly this: the
+ * coach's overall methodology, not any one client's stated preference —
+ * mirrors usesIntervalConditioning's own "coach methodology, not client
+ * goal" discipline). Exhaustively audited: no other field in
+ * CoachOperatingModel maps to power/plyometric methodology today — this is
+ * the one real signal, not a fabricated new one (spec section 23's
+ * "document the onboarding gap" escape hatch was considered and rejected
+ * here specifically because a real signal already exists). */
+function usesAthleticPowerTraining(com: CoachOperatingModel): boolean {
+  return com.practice.commonGoals.includes("athletic_performance");
+}
+
+/** Phase 11C — "general_then_specific" ("General movement prep, then
+ * specific ramp-up") is this coach's own real, stored answer to "What's
+ * your warm-up philosophy?" (see lib/coach/coach-onboarding-questions.ts's
+ * program_warmup question) — already collected, already read elsewhere for
+ * warmupOverview text; this is the first place it also gates real
+ * mobility-item generation, not a new field. A coach without this
+ * methodology gets no mobility block — never every general-fitness
+ * program (spec section 22). */
+function usesMobilityWork(com: CoachOperatingModel): boolean {
+  return com.programArchitecture.warmupPhilosophy === "general_then_specific";
+}
+
+/** A single power/plyometric item — a bounded, sane V1 default (Box Jump,
+ * 4 sets x 3 reps, real 2-minute rest — spec section 5's own "sets +
+ * reps" pattern), since no coach-configured plyometric progression exists
+ * in the current coach operating model yet (same honest "document the
+ * capability, do not block execution" posture as buildUniversalIntervalSessionForDay's
+ * own doc). Preserves the coach's own qualitative instruction ("Maximum
+ * intent... stick each landing") rather than inventing a numeric
+ * explosiveness score (spec section 7). Not fed through any rule-
+ * application pathway — same reasoning as interval/circuit's own
+ * generator functions. */
+function buildPowerItem(dayOfWeek: DayOfWeek): TrainingItemInstance {
+  return {
+    id: `power-${dayOfWeek}-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+    order: 1,
+    name: "Box Jump",
+    category: "power",
+    coachCue: "Maximum intent on the jump — stick each landing before resetting.",
+    prescription: {
+      family: "power",
+      sets: 4,
+      reps: { low: 3, high: 3 },
+      restSeconds: 120,
+    },
+  };
+}
+
+/** A single mobility item — a bounded, sane V1 default (90/90 Hip
+ * Rotation, a dynamic, warm-up-appropriate movement-prep drill — spec
+ * section 13's own "reps" pattern, with real "/ side" semantics via
+ * Prescription.side, spec section 14). Same "document the gap, do not
+ * block execution" posture and "no rule-application pathway" reasoning as
+ * buildPowerItem above. */
+function buildMobilityItem(dayOfWeek: DayOfWeek): TrainingItemInstance {
+  return {
+    id: `mobility-${dayOfWeek}-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+    order: 1,
+    name: "90/90 Hip Rotation",
+    category: "mobility",
+    coachCue: "Move through the full range on both sides — control, not speed.",
+    prescription: {
+      family: "mobility",
+      sets: 1,
+      reps: { low: 8, high: 8 },
+      side: "alternating",
+    },
+  };
+}
+
 /** A single interval item — a bounded, sane V1 default (6 rounds, 30s work
  * / 90s recovery) since no coach-configured work:rest ratio or interval
  * frequency exists in the current coach operating model yet (spec section
@@ -509,9 +587,13 @@ export function validateUniversalProgramHardConstraints(
       // outrunning what the client can actually execute, so it moves in
       // lockstep with that real capability, never ahead of it.
       id: "only_executable_families",
-      label: "Only generates families the client execution engine can currently run (resistance, continuous, interval)",
+      label: "Only generates families the client execution engine can currently run (resistance, continuous, interval, power, mobility)",
       passed: content.weeks.every((w) =>
-        w.days.every((d) => (d.sessions ?? []).every((s) => s.blocks.every((b) => b.items.every((i) => i.category === "resistance" || i.category === "continuous" || i.category === "interval"))))
+        w.days.every((d) =>
+          (d.sessions ?? []).every((s) =>
+            s.blocks.every((b) => b.items.every((i) => i.category === "resistance" || i.category === "continuous" || i.category === "interval" || i.category === "power" || i.category === "mobility"))
+          )
+        )
       ),
       reason: "Generated an execution family the live client engine cannot yet run.",
     },
@@ -538,7 +620,14 @@ export function validateUniversalProgramHardConstraints(
  * reasoning dump. Explains WHAT was chosen and WHY in the client's/coach's
  * own real terms (split, schedule, coach-methodology fit, any continuous/
  * interval placement), not "AI chose this." */
-function buildGenerationRationale(direction: ProgramDirectionSummary, resistanceDayCount: number, continuousDays: DayOfWeek[], isIntervalConditioning: boolean): string {
+function buildGenerationRationale(
+  direction: ProgramDirectionSummary,
+  resistanceDayCount: number,
+  continuousDays: DayOfWeek[],
+  isIntervalConditioning: boolean,
+  includesPower: boolean,
+  includesMobility: boolean
+): string {
   const lines: string[] = [
     `${direction.splitName} (${resistanceDayCount}x/week) — ${direction.whyItFits}`,
     direction.howItReflectsCoach,
@@ -560,6 +649,8 @@ function buildGenerationRationale(direction: ProgramDirectionSummary, resistance
       lines.push(`Added ${continuousDays.length} continuous-work day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching the client's own stated cardio preference.`);
     }
   }
+  if (includesMobility) lines.push(`Added mobility movement-prep to the first training day — matches this coach's own stored warm-up methodology.`);
+  if (includesPower) lines.push(`Added a power/plyometric finisher to the first training day — matches this coach's own stored practice focus on athletic performance.`);
   if (direction.confidenceNote) lines.push(direction.confidenceNote);
   return lines.filter((l) => l && l.trim().length > 0).join(" ");
 }
@@ -603,7 +694,24 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
       if (idx === -1) return;
       const { session, diagnostics } = buildUniversalResistanceSessionForDay(dayOfWeek, plan.dayPatterns[i], equipment, com, profile, params, profile.maxSessionLengthMinutes, effectiveRules);
       sessionDiagnostics.push(diagnostics);
-      days[idx] = { dayOfWeek, type: "training", sessions: [session] };
+      // Phase 11C — power (a finisher block, appended after the resistance
+      // work) and mobility (a warm-up block, prepended before it) are each
+      // added to the FIRST resistance day only — a real, bounded, honest
+      // addition (spec section 22: "do not insert into every program"),
+      // never every training day, and only when this coach's own real,
+      // stored methodology signal actually calls for it (see
+      // usesAthleticPowerTraining/usesMobilityWork's own docs).
+      let blocks = session.blocks;
+      if (i === 0 && usesMobilityWork(com)) {
+        const mobilityItem = buildMobilityItem(dayOfWeek);
+        blocks = [{ id: `block-${mobilityItem.id}`, kind: "warmup", order: 0, items: [mobilityItem] }, ...blocks];
+      }
+      if (i === 0 && usesAthleticPowerTraining(com)) {
+        const powerItem = buildPowerItem(dayOfWeek);
+        const nextOrder = Math.max(0, ...blocks.map((b) => b.order)) + 1;
+        blocks = [...blocks, { id: `block-${powerItem.id}`, kind: "straight", order: nextOrder, items: [powerItem] }];
+      }
+      days[idx] = { dayOfWeek, type: "training", sessions: [{ ...session, blocks }] };
     });
 
     continuousDays.forEach((dayOfWeek, conditioningIndex) => {
@@ -651,7 +759,7 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
     name: `${direction.label} — ${direction.splitName}`,
     durationWeeks,
     weeks,
-    generationRationale: buildGenerationRationale(direction, resistanceDayCount, continuousDays, usesIntervalConditioning(com)),
+    generationRationale: buildGenerationRationale(direction, resistanceDayCount, continuousDays, usesIntervalConditioning(com), usesAthleticPowerTraining(com), usesMobilityWork(com)),
     directionLabel: direction.label,
     status: "assigned",
     createdAtIso: input.nowIso,

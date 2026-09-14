@@ -124,6 +124,12 @@ export interface TrainingItemPatch {
   recoveryIntervalSeconds?: number;
   recoveryDistanceValue?: number;
   recoveryDistanceUnit?: "m" | "mi" | "km";
+  /** Phase 11C — power's own contacts primitive (never conflated with
+   * reps — spec section 6), and mobility's side selection. `sets`, `reps`,
+   * `distance*`, `duration*`, and `restSeconds` above are already
+   * genuinely shared with power/mobility, so only these two are new. */
+  contactsValue?: number;
+  side?: "left" | "right" | "alternating" | "bilateral";
 }
 
 function applyPatchToPrescription(prescription: Prescription, patch: TrainingItemPatch): Prescription {
@@ -164,6 +170,8 @@ function applyPatchToPrescription(prescription: Prescription, patch: TrainingIte
   if (patch.recoveryDistanceValue !== undefined) {
     next.recoveryDistance = { value: patch.recoveryDistanceValue, unit: patch.recoveryDistanceUnit ?? prescription.recoveryDistance?.unit ?? "m" };
   }
+  if (patch.contactsValue !== undefined) next.contacts = patch.contactsValue;
+  if (patch.side !== undefined) next.side = patch.side;
   return next;
 }
 
@@ -429,7 +437,7 @@ export type ProgramDiffEntry =
   | ({ kind: "session_renamed" } & DiffLocation & { from: string; to: string })
   | ({ kind: "day_converted_to_rest" } & Pick<DiffLocation, "weekNumber" | "dayOfWeek">);
 
-const PRESCRIPTION_SCALAR_FIELDS = ["sets", "warmupSets", "rpe", "rir", "restSeconds", "tempo", "cadence", "warmupInstruction"] as const;
+const PRESCRIPTION_SCALAR_FIELDS = ["sets", "warmupSets", "rpe", "rir", "restSeconds", "tempo", "cadence", "warmupInstruction", "contacts", "side"] as const;
 const PRESCRIPTION_STRUCT_FIELDS = ["reps", "load", "duration", "distance", "heartRate", "pace"] as const;
 
 function comparePrescriptions(from: Prescription, to: Prescription): Array<{ field: string; from: unknown; to: unknown }> {

@@ -40,7 +40,20 @@ export function absoluteWorkingSetNumbers(item: TrainingItemInstance): number[] 
 
 export function totalPrescribedWorkingSets(session: Session | null): number {
   if (!session) return 0;
-  return session.blocks.reduce((n, b) => n + b.items.reduce((m, item) => m + (item.prescription.sets ?? 0), 0), 0);
+  // Phase 11C fix — a power item (Box Jump: sets:4) or a mobility item
+  // (Couch Stretch: sets:2) ALSO carries a real `prescription.sets` field,
+  // same as resistance, but neither ever writes to `loggedSets`/
+  // `workingSetsCompleted` (they use their own powerSetActuals/
+  // mobilitySetActuals via continuousExecutions instead — see
+  // buildWorkoutSummary's own main loop, which already routes any
+  // non-resistance family through that branch). Counting their `sets`
+  // here polluted this RESISTANCE-specific total, making
+  // resistanceFullyCompleted/missedMajorityOfWork silently false for any
+  // session containing one, even when the power/mobility item itself
+  // completed honestly — restricting to family==="resistance" matches
+  // this function's own intent ("prescribed WORKING SETS", the
+  // loggedSets-based concept).
+  return session.blocks.reduce((n, b) => n + b.items.reduce((m, item) => m + (item.prescription.family === "resistance" ? (item.prescription.sets ?? 0) : 0), 0), 0);
 }
 
 /**
@@ -91,6 +104,14 @@ function describeContinuousExecution(name: string, execution: ExecutionRecord): 
   if (execution.roundActuals) {
     const completedRounds = execution.roundActuals.filter((r) => r.status === "completed").length;
     return `${name}: ${completedRounds} round${completedRounds === 1 ? "" : "s"} completed${suffix}.`;
+  }
+  if (execution.powerSetActuals) {
+    const completedSets = execution.powerSetActuals.filter((s) => s.status === "completed").length;
+    return `${name}: ${completedSets} set${completedSets === 1 ? "" : "s"} completed${suffix}.`;
+  }
+  if (execution.mobilitySetActuals) {
+    const completedExposures = execution.mobilitySetActuals.filter((s) => s.status === "completed").length;
+    return `${name}: ${completedExposures} of ${execution.mobilitySetActuals.length} completed${suffix}.`;
   }
   const parts: string[] = [];
   if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));

@@ -31,6 +31,8 @@ import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, Block
 import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance } from "@/lib/training/types";
 import { describeIntervalOverview } from "@/lib/workout/interval";
 import { describeCircuitOverview } from "@/lib/workout/circuit";
+import { describePowerOverview } from "@/lib/workout/power";
+import { describeMobilityOverview } from "@/lib/workout/mobility";
 import { isCircuitBlock } from "@/lib/workout/session-flow";
 
 function numberOrUndefined(formData: FormData, key: string): number | undefined {
@@ -60,19 +62,27 @@ function buildProgramOverview(content: UniversalTrainingProgramContent) {
   let continuousItems = 0;
   let intervalItems = 0;
   let circuitBlocks = 0;
+  let powerItems = 0;
+  let mobilityItems = 0;
   for (const day of trainingDays) {
     for (const session of day.sessions ?? []) {
       for (const block of session.blocks) {
         if (isCircuitBlock(block)) circuitBlocks += 1;
         for (const item of block.items) {
+          // Phase 11C — power/mobility must be counted in their OWN
+          // buckets, checked before the resistance catch-all below, or
+          // they'd be silently mislabeled as resistance items in the
+          // coach-facing summary line.
           if (item.category === "interval") intervalItems += 1;
           else if (item.category === "continuous") continuousItems += 1;
+          else if (item.category === "power") powerItems += 1;
+          else if (item.category === "mobility") mobilityItems += 1;
           else resistanceItems += 1;
         }
       }
     }
   }
-  return { trainingDaysPerWeek: trainingDays.length, restDaysPerWeek: restDays, sessionNames, resistanceItems, continuousItems, intervalItems, circuitBlocks };
+  return { trainingDaysPerWeek: trainingDays.length, restDaysPerWeek: restDays, sessionNames, resistanceItems, continuousItems, intervalItems, circuitBlocks, powerItems, mobilityItems };
 }
 
 export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, proposal }: { workspaceId: string; clientProfileId: string; clientId: string; proposal: ProgramProposalReviewView }) {
@@ -94,7 +104,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     await revalidate();
   }
 
-  function editActionFor(path: TrainingItemPath, category: "resistance" | "continuous" | "interval") {
+  function editActionFor(path: TrainingItemPath, category: "resistance" | "continuous" | "interval" | "power" | "mobility") {
     async function edit(formData: FormData) {
       "use server";
       const patch: TrainingItemPatch =
@@ -110,8 +120,29 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
               paceValue: numberOrUndefined(formData, "paceValue"),
               paceUnit: stringOrUndefined(formData, "paceUnit") as TrainingItemPatch["paceUnit"],
             }
-          : category === "interval"
+          : category === "power"
             ? {
+                name: stringOrUndefined(formData, "name"),
+                sets: numberOrUndefined(formData, "sets"),
+                repsLow: numberOrUndefined(formData, "repsLow"),
+                repsHigh: numberOrUndefined(formData, "repsHigh"),
+                contactsValue: numberOrUndefined(formData, "contactsValue"),
+                distanceValue: numberOrUndefined(formData, "distanceValue"),
+                distanceUnit: stringOrUndefined(formData, "distanceUnit") as TrainingItemPatch["distanceUnit"],
+                restSeconds: numberOrUndefined(formData, "restSeconds"),
+              }
+            : category === "mobility"
+              ? {
+                  name: stringOrUndefined(formData, "name"),
+                  sets: numberOrUndefined(formData, "sets"),
+                  durationSeconds: numberOrUndefined(formData, "durationSeconds"),
+                  repsLow: numberOrUndefined(formData, "repsLow"),
+                  repsHigh: numberOrUndefined(formData, "repsHigh"),
+                  side: stringOrUndefined(formData, "side") as TrainingItemPatch["side"],
+                  restSeconds: numberOrUndefined(formData, "restSeconds"),
+                }
+              : category === "interval"
+                ? {
                 name: stringOrUndefined(formData, "name"),
                 rounds: numberOrUndefined(formData, "rounds"),
                 workIntervalSeconds: numberOrUndefined(formData, "workIntervalSeconds"),
@@ -239,7 +270,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
         <p className="text-xs font-medium uppercase tracking-wide text-neutral">What OPTIM built</p>
         <p className="mt-1 text-xs text-off-white">
-          {proposal.content.durationWeeks} weeks · {overview.trainingDaysPerWeek} training days/week · {overview.restDaysPerWeek} rest days/week · {overview.resistanceItems} resistance items · {overview.continuousItems} continuous items · {overview.intervalItems} interval items · {overview.circuitBlocks} circuit blocks (week 1 pattern)
+          {proposal.content.durationWeeks} weeks · {overview.trainingDaysPerWeek} training days/week · {overview.restDaysPerWeek} rest days/week · {overview.resistanceItems} resistance items · {overview.continuousItems} continuous items · {overview.intervalItems} interval items · {overview.circuitBlocks} circuit blocks · {overview.powerItems} power items · {overview.mobilityItems} mobility items (week 1 pattern)
         </p>
         {overview.sessionNames.length > 0 ? <p className="mt-1 text-xs text-neutral">{overview.sessionNames.join(" · ")}</p> : null}
       </div>
@@ -313,7 +344,16 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                 const itemRows = block.items.map((item) => {
                                     const path: TrainingItemPath = { weekNumber: week.weekNumber, dayOfWeek: day.dayOfWeek, sessionIndex, blockId: block.id, itemId: item.id };
                                     const blockPath: BlockPath = { weekNumber: week.weekNumber, dayOfWeek: day.dayOfWeek, sessionIndex, blockId: block.id };
-                                    const editCategory: "resistance" | "continuous" | "interval" = item.category === "interval" ? "interval" : item.category === "continuous" ? "continuous" : "resistance";
+                                    const editCategory: "resistance" | "continuous" | "interval" | "power" | "mobility" =
+                                      item.category === "interval"
+                                        ? "interval"
+                                        : item.category === "continuous"
+                                          ? "continuous"
+                                          : item.category === "power"
+                                            ? "power"
+                                            : item.category === "mobility"
+                                              ? "mobility"
+                                              : "resistance";
                                     return (
                                       <details key={item.id} className="rounded border border-border px-2.5 py-2">
                                         <summary className="cursor-pointer text-sm text-off-white">
@@ -383,6 +423,41 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                               </label>
                                               <NumField label="HR low" name="heartRateLow" defaultValue={item.prescription.heartRate?.low} />
                                               <NumField label="HR high" name="heartRateHigh" defaultValue={item.prescription.heartRate?.high} />
+                                            </>
+                                          ) : editCategory === "power" ? (
+                                            <>
+                                              <NumField label="Sets" name="sets" defaultValue={item.prescription.sets} />
+                                              <NumField label="Reps low" name="repsLow" defaultValue={item.prescription.reps?.low} />
+                                              <NumField label="Reps high" name="repsHigh" defaultValue={item.prescription.reps?.high} />
+                                              <NumField label="Contacts" name="contactsValue" defaultValue={item.prescription.contacts} />
+                                              <NumField label="Distance" name="distanceValue" defaultValue={item.prescription.distance?.value} />
+                                              <label className="flex flex-col text-xs text-neutral">
+                                                Unit
+                                                <select name="distanceUnit" defaultValue={item.prescription.distance?.unit ?? "m"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                  <option value="m">m</option>
+                                                  <option value="km">km</option>
+                                                  <option value="mi">mi</option>
+                                                </select>
+                                              </label>
+                                              <NumField label="Rest (sec)" name="restSeconds" defaultValue={item.prescription.restSeconds} />
+                                            </>
+                                          ) : editCategory === "mobility" ? (
+                                            <>
+                                              <NumField label="Sets" name="sets" defaultValue={item.prescription.sets} />
+                                              <NumField label="Hold (sec)" name="durationSeconds" defaultValue={item.prescription.duration?.seconds} />
+                                              <NumField label="Reps low" name="repsLow" defaultValue={item.prescription.reps?.low} />
+                                              <NumField label="Reps high" name="repsHigh" defaultValue={item.prescription.reps?.high} />
+                                              <label className="flex flex-col text-xs text-neutral">
+                                                Side
+                                                <select name="side" defaultValue={item.prescription.side ?? ""} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                  <option value="">—</option>
+                                                  <option value="left">Left</option>
+                                                  <option value="right">Right</option>
+                                                  <option value="alternating">Alternating</option>
+                                                  <option value="bilateral">Bilateral</option>
+                                                </select>
+                                              </label>
+                                              <NumField label="Rest (sec)" name="restSeconds" defaultValue={item.prescription.restSeconds} />
                                             </>
                                           ) : editCategory === "continuous" ? (
                                             <>
@@ -649,6 +724,12 @@ function describeItem(item: TrainingItemInstance): string {
   // independently-drifting description — "8 rounds, 400 m work / 200 m
   // recovery, Target pace 1:42/km", never raw JSON (spec section 21).
   if (item.category === "interval") return describeIntervalOverview(item.prescription).join(", ") || "interval work";
+  // Phase 11C — same "reuse the client-facing formatter" discipline, for
+  // power/mobility (spec section 24's own worked examples: "Box Jump, 4
+  // sets x 3 reps, 2:00 rest, Maximum intent" / "Couch Stretch, 2 sets x
+  // 45 sec / side").
+  if (item.category === "power") return describePowerOverview(item.prescription).join(", ") || "power work";
+  if (item.category === "mobility") return describeMobilityOverview(item.prescription).join(", ") || "mobility work";
   if (item.category === "continuous") {
     const d = item.prescription.duration ? `${Math.round(item.prescription.duration.seconds / 60)} min` : null;
     const dist = item.prescription.distance ? `${item.prescription.distance.value} ${item.prescription.distance.unit}` : null;

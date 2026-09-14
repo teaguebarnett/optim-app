@@ -25,6 +25,19 @@ function continuousCompletionLine(name: string, session: WorkoutSession, itemId:
     const completedRounds = execution.roundActuals.filter((r) => r.status === "completed").length;
     return `${name}: ${completedRounds} round${completedRounds === 1 ? "" : "s"} completed${suffix}.`;
   }
+  // Phase 11C — a power item's own real set count (never a duration/
+  // distance summary, which describes the whole item and would misstate a
+  // multi-set activity).
+  if (execution.powerSetActuals) {
+    const completedSets = execution.powerSetActuals.filter((s) => s.status === "completed").length;
+    return `${name}: ${completedSets} set${completedSets === 1 ? "" : "s"} completed${suffix}.`;
+  }
+  // Phase 11C — a mobility item's own real exposure count (sets, or
+  // sets x both sides when required).
+  if (execution.mobilitySetActuals) {
+    const completedExposures = execution.mobilitySetActuals.filter((s) => s.status === "completed").length;
+    return `${name}: ${completedExposures} of ${execution.mobilitySetActuals.length} completed${suffix}.`;
+  }
   const parts: string[] = [];
   if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));
   if (execution.actual?.distance) parts.push(formatDistance(execution.actual.distance));

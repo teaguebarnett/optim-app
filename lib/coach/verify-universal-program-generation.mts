@@ -597,6 +597,70 @@ check("a conditioning coach with only ONE real surplus day gets interval only �
 });
 
 // ---------------------------------------------------------------------------
+// Phase 11C — real power/mobility generation, gated on real, already-
+// collected coach methodology signals (X, Y, Z of the Phase 11C spec's own
+// test matrix).
+// ---------------------------------------------------------------------------
+
+console.log("\nPhase 11C — real power/mobility generation, gated on real coach methodology (X, Y, Z)\n");
+
+function comWithPractice(overrides: Partial<CoachOperatingModel["programArchitecture"]> = {}, commonGoals?: string[]): CoachOperatingModel {
+  const base = com(overrides);
+  return commonGoals ? { ...base, practice: { ...base.practice, commonGoals } } : base;
+}
+
+check("X: a coach whose real, stored practice focus includes 'athletic_performance' generates a real power/plyometric item on the first resistance day", () => {
+  const profile = profileWithDays(["Monday", "Wednesday", "Friday"]);
+  const { content, constraints } = generate(profile, comWithPractice({}, ["athletic_performance"]), 1);
+  const powerItems = allItems(content).filter((i) => i.category === "power");
+  assert.ok(powerItems.length > 0, "a real power item was generated");
+  assert.equal(powerItems[0].prescription.family, "power", "the item's own prescription family is genuinely 'power', never resistance");
+  assert.ok((powerItems[0].prescription.sets ?? 0) > 0 && powerItems[0].prescription.reps !== undefined, "a real, structured set x rep target — never a generic text instruction");
+  assert.equal(constraints.passed, true, "power-bearing generated content must itself pass every real hard constraint");
+  validateUniversalTrainingProgramContent(content);
+  assert.match(content.generationRationale ?? "", /power|plyometric/i, "the rationale honestly names the power placement in coaching language");
+});
+
+check("Y: a coach whose real, stored warm-up philosophy is 'general_then_specific' generates a real mobility item on the first resistance day", () => {
+  const profile = profileWithDays(["Monday", "Wednesday", "Friday"]);
+  const { content, constraints } = generate(profile, com({ warmupPhilosophy: "general_then_specific" }), 1);
+  const mobilityItems = allItems(content).filter((i) => i.category === "mobility");
+  assert.ok(mobilityItems.length > 0, "a real mobility item was generated");
+  assert.equal(mobilityItems[0].prescription.family, "mobility", "the item's own prescription family is genuinely 'mobility', never continuous");
+  assert.ok(mobilityItems[0].prescription.reps !== undefined || mobilityItems[0].prescription.duration !== undefined, "a real structured hold/rep target — never a generic text instruction");
+  assert.equal(constraints.passed, true, "mobility-bearing generated content must itself pass every real hard constraint");
+  validateUniversalTrainingProgramContent(content);
+  assert.match(content.generationRationale ?? "", /mobility/i, "the rationale honestly names the mobility placement in coaching language");
+});
+
+check("Z: an unrelated coach — neither an athletic-performance practice focus nor a general-then-specific warm-up philosophy — never receives power or mobility content, even with real schedule surplus (unchanged behavior)", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], { cardioPreference: "enjoys_cardio" });
+  const { content } = generate(profile, comWithPractice({ typicalFrequencyDaysMax: 3, warmupPhilosophy: "ramped_warmup_sets" }, ["general_health", "fat_loss"]), 1);
+  const powerItems = allItems(content).filter((i) => i.category === "power");
+  const mobilityItems = allItems(content).filter((i) => i.category === "mobility");
+  assert.equal(powerItems.length, 0, "no athletic-performance signal -> no power item");
+  assert.equal(mobilityItems.length, 0, "no general-then-specific warm-up signal -> no mobility item");
+});
+
+check("a coach with BOTH real signals generates BOTH a power item and a mobility item on the same first day, without either suppressing the other", () => {
+  const profile = profileWithDays(["Monday", "Wednesday", "Friday"]);
+  const { content } = generate(profile, comWithPractice({ warmupPhilosophy: "general_then_specific" }, ["athletic_performance"]), 1);
+  const powerItems = allItems(content).filter((i) => i.category === "power");
+  const mobilityItems = allItems(content).filter((i) => i.category === "mobility");
+  assert.ok(powerItems.length > 0 && mobilityItems.length > 0, "both real signals independently produce their own real content in the same program");
+});
+
+check("power/mobility generation never depends on profile.primaryGoal — a coaching-methodology signal, never a client goal (spec section 3: HIIT-is-a-format's own principle extended to power/mobility)", () => {
+  for (const primaryGoal of ["fat_loss", "strength", "general_fitness"] as const) {
+    const profile = { ...profileWithDays(["Monday", "Wednesday", "Friday"]), primaryGoal };
+    const { content } = generate(profile, comWithPractice({ warmupPhilosophy: "general_then_specific" }, ["athletic_performance"]), 1);
+    const hasPower = allItems(content).some((i) => i.category === "power");
+    const hasMobility = allItems(content).some((i) => i.category === "mobility");
+    assert.ok(hasPower && hasMobility, `power/mobility still generated regardless of primaryGoal="${primaryGoal}"`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // O. Ownership/client/coach identifiers remain correct
 // ---------------------------------------------------------------------------
 

@@ -73,6 +73,24 @@ export function describeCircuitItemTarget(item: TrainingItemInstance): string {
     const rpe = p.rpe !== undefined ? `RPE ${p.rpe}` : null;
     return [reps, load, rpe].filter(Boolean).join(", ") || "bodyweight";
   }
+  // Phase 11C — a power item's own per-set metric (reps, contacts, or
+  // distance) inside a circuit exposure, never converted between them
+  // (spec section 6). A mobility item's own hold/reps target, with a
+  // "/ side" suffix when both sides are required — matching
+  // describeMobilityOverview's own convention.
+  if (p.family === "power") {
+    const reps = p.reps ? (p.reps.low === p.reps.high ? `${p.reps.low} reps` : `${p.reps.low}-${p.reps.high} reps`) : null;
+    const contacts = p.contacts !== undefined ? `${p.contacts} contacts` : null;
+    const distance = p.distance ? formatDistance(p.distance) : null;
+    return [reps, contacts, distance].filter(Boolean).join(", ") || item.name;
+  }
+  if (p.family === "mobility") {
+    const duration = p.duration ? formatIntervalSeconds(p.duration.seconds) : null;
+    const reps = p.reps ? (p.reps.low === p.reps.high ? `${p.reps.low} reps` : `${p.reps.low}-${p.reps.high} reps`) : null;
+    const sideSuffix = p.side === "bilateral" || p.side === "alternating" ? " / side" : "";
+    const base = [duration, reps].filter(Boolean).join(", ");
+    return base ? `${base}${sideSuffix}` : item.name;
+  }
   const parts: string[] = [];
   if (p.duration) parts.push(formatIntervalSeconds(p.duration.seconds));
   if (p.distance) parts.push(formatDistance(p.distance));
@@ -159,12 +177,14 @@ export function circuitItemPerformedAsPrescribed(totalRounds: number, exposures:
 /** Whether an item's own family has rich, family-specific per-exposure
  * capture the circuit layer already knows how to build an actual for
  * (spec section 11: "reuse existing family-specific logging behavior...
- * should not recreate all family-specific logging logic"). Anything else
- * (interval, circuit, quality — deferred families, spec section 21) still
- * executes safely through a generic completion-only capture, never a
- * crash. */
+ * should not recreate all family-specific logging logic"). Phase 11C adds
+ * power/mobility here — their own per-set actuals (reps/contacts/distance,
+ * duration/reps) are exactly the shape a Partial<Prescription> circuit
+ * exposure already generalizes to. Anything else (interval, circuit,
+ * quality — deferred families, spec section 21) still executes safely
+ * through a generic completion-only capture, never a crash. */
 export function hasRichCircuitCapture(prescription: Prescription): boolean {
-  return prescription.family === "resistance" || prescription.family === "continuous";
+  return prescription.family === "resistance" || prescription.family === "continuous" || prescription.family === "power" || prescription.family === "mobility";
 }
 
 /** Which actual fields are worth asking for on ONE circuit exposure —
@@ -179,12 +199,16 @@ export interface CircuitCaptureFields {
   duration: boolean;
   distance: boolean;
   rpe: boolean;
+  /** Phase 11C — a power item's own contacts primitive, never conflated
+   * with reps. */
+  contacts: boolean;
 }
 
 export function circuitCaptureFields(prescription: Prescription): CircuitCaptureFields {
   return {
     reps: prescription.reps !== undefined,
     load: prescription.load !== undefined,
+    contacts: prescription.contacts !== undefined,
     duration: prescription.duration !== undefined,
     distance: prescription.distance !== undefined,
     rpe: prescription.rpe !== undefined,

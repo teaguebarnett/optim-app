@@ -289,6 +289,46 @@ export function projectTrainingDayObservations(params: ProjectTrainingDayParams)
         observedAtIso: itemObservedAtIso,
       });
     }
+
+    // Phase 11C — power-only: the SAME "completed_rounds" metric key as
+    // interval/circuit above — a power item's own completed-set count is
+    // the same real "how many repetition-exposures this item completed"
+    // concept. Same honest "never fabricate a prescribed count, never
+    // build advanced analytics — preserve facts first" posture.
+    if (execution.powerSetActuals) {
+      const completedSets = execution.powerSetActuals.filter((s) => s.status === "completed").length;
+      observations.push({
+        clientProfileId,
+        workspaceId,
+        category: "training_performance",
+        metricKey: "completed_rounds",
+        sourceType: "workout_execution",
+        value: { valueType: "numeric", valueNumeric: completedSets },
+        unit: null,
+        sourceRef: itemRef,
+        trainingItemInstanceId: itemId,
+        observedAtIso: itemObservedAtIso,
+      });
+    }
+
+    // Phase 11C — mobility-only: the SAME "completed_rounds" metric key,
+    // counting completed set/side exposures. Never a fabricated
+    // "flexibility score" or "mobility score" (spec section 27).
+    if (execution.mobilitySetActuals) {
+      const completedExposures = execution.mobilitySetActuals.filter((s) => s.status === "completed").length;
+      observations.push({
+        clientProfileId,
+        workspaceId,
+        category: "training_performance",
+        metricKey: "completed_rounds",
+        sourceType: "workout_execution",
+        value: { valueType: "numeric", valueNumeric: completedExposures },
+        unit: null,
+        sourceRef: itemRef,
+        trainingItemInstanceId: itemId,
+        observedAtIso: itemObservedAtIso,
+      });
+    }
   }
 
   return observations;

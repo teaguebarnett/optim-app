@@ -140,7 +140,7 @@ function validateProgramWeek(raw: unknown, what: string): ProgramWeek {
 // migration is required to introduce it.
 // ---------------------------------------------------------------------------
 
-const EXECUTION_FAMILIES = ["resistance", "continuous", "interval", "circuit", "quality"] as const;
+const EXECUTION_FAMILIES = ["resistance", "continuous", "interval", "circuit", "quality", "power", "mobility"] as const;
 const BLOCK_KINDS = ["straight", "superset", "circuit", "interval", "warmup", "cooldown", "custom"] as const;
 const PRESCRIPTION_LOAD_UNITS = ["lb", "kg"] as const;
 const PRESCRIPTION_DISTANCE_UNITS = ["m", "mi", "km"] as const;
@@ -209,6 +209,16 @@ function validatePrescription(raw: unknown, what: string): Prescription {
   if (raw.heartRate !== undefined) validatePrescriptionHeartRate(raw.heartRate, what);
   if (raw.power !== undefined) validatePrescriptionPower(raw.power, what);
   if (raw.rounds !== undefined) requireNumber(raw.rounds, "prescription.rounds", what);
+  // Phase 11C — contacts is a distinct plyometric primitive, never a reps
+  // stand-in (spec section 6: "20 contacts != 20 reps"). Rejects a
+  // zero/negative value the same way circuit's own rounds guard does
+  // (spec test matrix D: "invalid contact values rejected") — a real
+  // ground-contact count is always a positive whole number.
+  if (raw.contacts !== undefined) {
+    if (typeof raw.contacts !== "number" || !Number.isFinite(raw.contacts) || raw.contacts <= 0) {
+      fail(what, `"prescription.contacts" must be a positive number, got ${JSON.stringify(raw.contacts)}`);
+    }
+  }
   if (raw.workInterval !== undefined) validatePrescriptionIntervalField(raw.workInterval, "prescription.workInterval", what);
   if (raw.recoveryInterval !== undefined)
     validatePrescriptionIntervalField(raw.recoveryInterval, "prescription.recoveryInterval", what);
@@ -230,6 +240,21 @@ function validatePrescription(raw: unknown, what: string): Prescription {
   if (raw.family === "interval") {
     if (raw.rounds === undefined) fail(what, `an "interval" prescription requires "rounds"`);
     if (raw.workInterval === undefined && raw.distance === undefined) fail(what, `an "interval" prescription requires either "workInterval" (time-based) or "distance" (distance-based) as its work target`);
+  }
+  // Phase 11C — a power prescription must specify a real per-set metric
+  // (reps, contacts, or distance — spec section 5's real V1 patterns), and
+  // a mobility prescription must specify a real hold duration or rep
+  // count (spec section 13) — otherwise there is nothing for the client to
+  // actually do or for the review UI to honestly describe.
+  if (raw.family === "power") {
+    if (raw.reps === undefined && raw.contacts === undefined && raw.distance === undefined) {
+      fail(what, `a "power" prescription requires at least one of "reps", "contacts", or "distance" as its per-set target`);
+    }
+  }
+  if (raw.family === "mobility") {
+    if (raw.duration === undefined && raw.reps === undefined) {
+      fail(what, `a "mobility" prescription requires either "duration" (a hold) or "reps"`);
+    }
   }
   return raw as unknown as Prescription;
 }

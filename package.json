@@ -68,6 +68,7 @@
     "verify:continuous-execution": "node --experimental-strip-types lib/workout/verify-continuous-execution.mts",
     "verify:interval-execution": "node --experimental-strip-types lib/workout/verify-interval-execution.mts",
     "verify:circuit-execution": "node --experimental-strip-types lib/workout/verify-circuit-execution.mts",
+    "verify:power-mobility-execution": "node --experimental-strip-types lib/workout/verify-power-mobility-execution.mts",
     "verify:universal-client-execution": "node --experimental-strip-types lib/workout/verify-universal-client-execution.mts",
     "verify:production-mode": "node --conditions=react-server --experimental-strip-types lib/production/verify-mode.mts",
     "verify:coach-operations": "node --experimental-strip-types lib/production/verify-coach-operations.mts",

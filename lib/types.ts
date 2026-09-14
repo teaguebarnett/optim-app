@@ -7,7 +7,7 @@
 // re-imports the tenant-attribution types it needs to stamp onto records.
 
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
-import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, Session } from "./training/types";
+import type { CircuitRoundActual, ExecutionRecord, IntervalRoundActual, MobilitySetActual, PowerSetActual, Session } from "./training/types";
 
 export type ClientId = ClientProfileId;
 
@@ -492,7 +492,53 @@ export type WorkoutSessionPhase =
    * round 1) if the client defers mid-circuit and returns —
    * circuitProgress is deliberately untouched by
    * DEFER_EXERCISE/REPORT_PAIN, exactly like intervalProgress. */
-  | "circuit-active";
+  | "circuit-active"
+  /** Phase 11C — the power/plyometric counterpart of "interval-ready": the
+   * item overview (set count, target reps/contacts/distance, rest) before
+   * starting — see lib/state.ts's entryPhaseForCurrentItem, which routes
+   * here whenever the current item's prescription family is "power".
+   * Power/plyometric work is a distinct prescription family, never a
+   * resistance exercise repeated several times (spec section 3) — but its
+   * per-SET iteration shape genuinely mirrors resistance's own set-ready
+   * flow, so it gets its own small, equally simple ready/active pair
+   * rather than being forced through either the resistance or continuous
+   * machinery. Also re-entered (never "power-active" directly) if the
+   * client defers this item and later returns before starting it. */
+  | "power-ready"
+  /** Phase 11C — the live set-by-set flow: "Set N of M", the item's real
+   * target (reps, contacts, or distance — whichever the prescription
+   * specifies), with an honest completed/performed-differently/skip
+   * capture per set. No sub-phase (unlike interval's work/recovery or
+   * circuit's item/round-rest) — a power item simply repeats its own real
+   * prescription N times. See WorkoutSession.powerProgress for the
+   * per-item set state this renders from, and lib/workout/power.ts for the
+   * pure classification logic. Re-entered (never reset to set 1) if the
+   * client defers this item mid-activity and returns — powerProgress is
+   * deliberately untouched by DEFER_EXERCISE/REPORT_PAIN, exactly like
+   * intervalProgress/circuitProgress. */
+  | "power-active"
+  /** Phase 11C — the mobility/flexibility counterpart of "interval-ready":
+   * the item overview (set count, hold duration or reps, which side(s))
+   * before starting — see lib/state.ts's entryPhaseForCurrentItem, which
+   * routes here whenever the current item's prescription family is
+   * "mobility". Also re-entered (never "mobility-active" directly) if the
+   * client defers this item and later returns before starting it. */
+  | "mobility-ready"
+  /** Phase 11C — the live set-by-set (and, when the item requires both
+   * sides, side-by-side) flow: "Set N of M" plus, only when
+   * prescription.side is "bilateral"/"alternating", which side is
+   * currently up ("LEFT 00:45" then "RIGHT 00:45") before advancing to the
+   * next set — spec section 15's exact worked example. A duration-based
+   * hold reuses Phase 11A's IntervalTimer for a guidance-only countdown
+   * (spec section 16: "no third/fourth independent timer implementation");
+   * a rep-based mobility item has no timer, just a completion capture. See
+   * WorkoutSession.mobilityProgress for the per-item set/side state this
+   * renders from, and lib/workout/mobility.ts for the pure logic.
+   * Re-entered (never reset) if the client defers mid-activity and
+   * returns — mobilityProgress is deliberately untouched by
+   * DEFER_EXERCISE/REPORT_PAIN, exactly like every other family's own
+   * progress map. */
+  | "mobility-active";
 
 export type WarmupOutcomeStatus = "not-started" | "completed" | "skipped";
 
@@ -620,6 +666,39 @@ export interface CircuitExecutionProgress {
   exposuresByItemId: Record<string, CircuitRoundActual[]>;
 }
 
+/** Phase 11C — see WorkoutSession.powerProgress's own doc for why this is
+ * kept separate from ExecutionRecord/continuousExecutions. */
+export interface PowerExecutionProgress {
+  /** 1-indexed — which set is currently "up". */
+  currentSet: number;
+  /** Sets actually completed/skipped SO FAR — the exact same shape the
+   * inline finalize step (lib/state.ts's ADVANCE_POWER_SET) later copies
+   * into the real ExecutionRecord.powerSetActuals once every set is
+   * resolved. */
+  setActuals: PowerSetActual[];
+}
+
+/** Phase 11C — see WorkoutSession.mobilityProgress's own doc for why this
+ * is kept separate from ExecutionRecord/continuousExecutions. */
+export interface MobilityExecutionProgress {
+  /** 1-indexed — which set is currently "up". */
+  currentSet: number;
+  /** Which side is currently being resolved within the current set — only
+   * meaningful when the item's prescription.side is
+   * "bilateral"/"alternating" (both sides must be resolved separately per
+   * set); null once the current set's own required side(s) are already
+   * captured, or for a set with no side concept to iterate at all (see
+   * lib/workout/mobility.ts's requiresBothSides). */
+  currentSide: "left" | "right" | null;
+  /** A real timestamp anchor for the CURRENT hold only, reset on every
+   * set/side transition — same "never a mutable remaining-seconds
+   * counter" discipline as IntervalExecutionProgress.phaseStartedAtIso.
+   * Only meaningful for a duration-based hold; present regardless of
+   * prescription shape for simplicity, just unused for a rep-based one. */
+  holdStartedAtIso?: string;
+  setActuals: MobilitySetActual[];
+}
+
 export interface WorkoutSession {
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
@@ -693,6 +772,15 @@ export interface WorkoutSession {
    * first place (see buildInitialFlowState), so nothing ever asks
    * isExerciseResolved about them mid-circuit. */
   circuitProgress?: Record<string, CircuitExecutionProgress>;
+  /** Phase 11C — transient, in-progress set state for a power/plyometric
+   * item currently being executed, keyed by TrainingItemInstance id. Same
+   * "separate from continuousExecutions until real finalize" discipline as
+   * intervalProgress/circuitProgress — see those fields' own docs. */
+  powerProgress?: Record<string, PowerExecutionProgress>;
+  /** Phase 11C — transient, in-progress set/side state for a mobility item
+   * currently being executed, keyed by TrainingItemInstance id. Same
+   * discipline as powerProgress/intervalProgress/circuitProgress. */
+  mobilityProgress?: Record<string, MobilityExecutionProgress>;
   painReports: PainReport[];
   skipReason?: SkipReason;
   skipNote?: string;

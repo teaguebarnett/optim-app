@@ -43,8 +43,13 @@ import type { RpeValue, DayOfWeek, SkipReason } from "../types";
 
 /** The five V1 execution families from the Phase 0 audit's acceptance test
  * (section 44/spec section 36) — a user-facing rendering/authoring pattern,
- * not five separate backends. */
-export type ExecutionFamily = "resistance" | "continuous" | "interval" | "circuit" | "quality";
+ * not five separate backends. "quality" is the original Phase 0 stub for
+ * qualitative/non-standard work; it has never been implemented and is left
+ * untouched here (still validated, still never routed anywhere) — Phase
+ * 11C's power and mobility work are distinct, UX-differentiated families in
+ * their own right (spec section 3: "do not force everything into
+ * resistance"), not a reuse of that stub. */
+export type ExecutionFamily = "resistance" | "continuous" | "interval" | "circuit" | "quality" | "power" | "mobility";
 
 export interface PrescriptionReps {
   low: number;
@@ -93,6 +98,14 @@ export type PrescriptionSide = "left" | "right" | "alternating" | "bilateral";
 export interface Prescription {
   family: ExecutionFamily;
   sets?: number;
+  /** Phase 11C — a plyometric/power-specific repetition primitive, distinct
+   * from `reps` (spec section 6: "20 contacts ≠ 20 reps automatically" — no
+   * fake conversion between the two). Present only when the coach
+   * genuinely prescribes ground-contact count as the per-set target (e.g.
+   * "Pogo Jump, 3 x 20 contacts"); absent otherwise. Purely additive: no
+   * schema/DB migration, same posture as every other field on this
+   * already-flexible, jsonb-backed grammar. */
+  contacts?: number;
   /** Phase 2 addition — a ramp-up set count before `sets`' working sets
    * begin, honest and general enough for any family (not legacy-only: a
    * runner's easy-pace minutes before pace work is the same concept). Added
@@ -277,6 +290,22 @@ export interface ExecutionRecord {
    * Prescription") — never reinterpreted as a resistance set or an
    * interval work phase. */
   circuitRoundActuals?: CircuitRoundActual[];
+  /** Phase 11C — present ONLY for a power/plyometric-family execution: the
+   * real, per-set history (spec section 33's own acceptance case: "3 3 3
+   * 2", never collapsed into a single aggregate). Deliberately a separate,
+   * distinctly-named field from roundActuals/circuitRoundActuals even
+   * though structurally similar — the same "never confuse one repetition
+   * concept with another" discipline those two fields' own docs establish,
+   * extended to a THIRD, genuinely different one: a power set is neither a
+   * circuit's whole-block round nor an interval's work/recovery cycle. */
+  powerSetActuals?: PowerSetActual[];
+  /** Phase 11C — present ONLY for a mobility-family execution: the real,
+   * per-set (and, when the item requires both sides, per-side) history —
+   * spec section 36's own acceptance case ("Set 1 left/right complete, Set
+   * 2 left complete, right skipped -> partial"). Same "never confuse with
+   * another repetition concept" discipline as powerSetActuals/
+   * roundActuals/circuitRoundActuals. */
+  mobilitySetActuals?: MobilitySetActual[];
 }
 
 /** Phase 11B — see ExecutionRecord.circuitRoundActuals's own doc. A round
@@ -291,6 +320,36 @@ export interface CircuitRoundActual {
   /** Only the primitives that actually differ from the item's own
    * prescription — same discipline as ExecutionRecord.actual itself,
    * never a full duplicate. */
+  actual?: Partial<Prescription>;
+  skipReason?: SkipReason;
+  completedAtIso?: string;
+}
+
+/** Phase 11C — see ExecutionRecord.powerSetActuals's own doc. A set simply
+ * absent from the array means it was never reached (honest partial
+ * completion, matching every other *RoundActual/*SetActual type's "never
+ * fabricate" discipline). */
+export interface PowerSetActual {
+  setNumber: number;
+  status: "completed" | "skipped";
+  /** Only the primitives that actually differ from the item's own
+   * prescription (reps, contacts, or distance — whichever the item's real
+   * prescription specifies) — never a full duplicate. */
+  actual?: Partial<Prescription>;
+  skipReason?: SkipReason;
+  completedAtIso?: string;
+}
+
+/** Phase 11C — see ExecutionRecord.mobilitySetActuals's own doc. `side` is
+ * the RESOLVED side this one exposure reflects — "left"/"right" when the
+ * item's prescription.side is "bilateral"/"alternating" (both sides must
+ * be resolved separately, so a single set number can appear twice, once
+ * per side) or the item's own fixed single side; absent when the item has
+ * no side concept at all (prescription.side undefined). */
+export interface MobilitySetActual {
+  setNumber: number;
+  side?: "left" | "right";
+  status: "completed" | "skipped";
   actual?: Partial<Prescription>;
   skipReason?: SkipReason;
   completedAtIso?: string;

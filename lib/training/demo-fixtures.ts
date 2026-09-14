@@ -436,3 +436,310 @@ export const MIXED_SESSION_WITH_CIRCUIT_DEMO: Session = {
     },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Phase 11C — power/plyometric and mobility/flexibility fixtures. Mirror the
+// interval/circuit fixtures above exactly (hand-authored universal Session,
+// never a generation-engine output), matching the Phase 11C spec's own
+// required acceptance cases verbatim (sections 33-38).
+// ---------------------------------------------------------------------------
+
+/** Spec section 33's exact acceptance case: "Box Jump, 4 sets x 3 reps,
+ * 2:00 rest." */
+export const BOX_JUMP_POWER_SESSION_DEMO: Session = {
+  id: "box-jump-power-session-demo",
+  name: "Power Development",
+  focus: "Lower-body power",
+  estimatedDurationMin: 20,
+  coachNote: "Full recovery between sets — quality over fatigue.",
+  blocks: [
+    {
+      id: "block-box-jump",
+      kind: "straight",
+      order: 1,
+      items: [
+        {
+          id: "power-box-jump",
+          order: 1,
+          name: "Box Jump",
+          category: "power",
+          coachCue: "Maximum intent on the jump — stick each landing before resetting.",
+          prescription: { family: "power", sets: 4, reps: { low: 3, high: 3 }, restSeconds: 120 },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 34's exact acceptance case: "Pogo Jump, 3 x 20 contacts" —
+ * proves contacts remain contacts, never dishonestly converted to reps. */
+export const POGO_JUMP_CONTACTS_SESSION_DEMO: Session = {
+  id: "pogo-jump-contacts-session-demo",
+  name: "Reactive Power",
+  focus: "Ground contact time",
+  estimatedDurationMin: 15,
+  coachNote: "Stay tall, minimize ground contact time.",
+  blocks: [
+    {
+      id: "block-pogo-jump",
+      kind: "straight",
+      order: 1,
+      items: [
+        {
+          id: "power-pogo-jump",
+          order: 1,
+          name: "Pogo Jump",
+          category: "power",
+          coachCue: "Quick, springy contacts — stay off your heels.",
+          prescription: { family: "power", sets: 3, contacts: 20, restSeconds: 60 },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 35's exact acceptance case: "Bounds, 3 x 20 m" — distance
+ * prescription and actuals via the real distance primitive, never reps. */
+export const BOUNDS_DISTANCE_POWER_SESSION_DEMO: Session = {
+  id: "bounds-distance-power-session-demo",
+  name: "Horizontal Power",
+  focus: "Bounding",
+  estimatedDurationMin: 15,
+  coachNote: "Reset fully between each bounding effort.",
+  blocks: [
+    {
+      id: "block-bounds",
+      kind: "straight",
+      order: 1,
+      items: [
+        {
+          id: "power-bounds",
+          order: 1,
+          name: "Bounds",
+          category: "power",
+          coachCue: "Drive forward and up — maximum distance per contact.",
+          prescription: { family: "power", sets: 3, distance: { value: 20, unit: "m" }, restSeconds: 90 },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 36's exact acceptance case: "Couch Stretch, 2 sets, 45 sec
+ * / side" — a hold-duration mobility item requiring both sides resolved
+ * separately per set. */
+export const COUCH_STRETCH_MOBILITY_SESSION_DEMO: Session = {
+  id: "couch-stretch-mobility-session-demo",
+  name: "Hip Flexor Mobility",
+  focus: "Mobility",
+  estimatedDurationMin: 10,
+  coachNote: "Keep your ribs down — this should feel like a stretch, not strain.",
+  blocks: [
+    {
+      id: "block-couch-stretch",
+      kind: "straight",
+      order: 1,
+      items: [
+        {
+          id: "mobility-couch-stretch",
+          order: 1,
+          name: "Couch Stretch",
+          category: "mobility",
+          coachCue: "Squeeze the glute on the stretched side.",
+          prescription: { family: "mobility", sets: 2, duration: { seconds: 45 }, side: "bilateral" },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 37's exact acceptance case: "90/90 Hip Rotation, 2 x 10 /
+ * side" — rep-based mobility with side semantics, never cardio/continuous
+ * misclassification. */
+export const HIP_ROTATION_MOBILITY_SESSION_DEMO: Session = {
+  id: "hip-rotation-mobility-session-demo",
+  name: "Hip Mobility",
+  focus: "Mobility",
+  estimatedDurationMin: 10,
+  coachNote: "Control through the full range — no momentum.",
+  blocks: [
+    {
+      id: "block-hip-rotation",
+      kind: "straight",
+      order: 1,
+      items: [
+        {
+          id: "mobility-hip-rotation",
+          order: 1,
+          name: "90/90 Hip Rotation",
+          category: "mobility",
+          coachCue: "Keep both sit bones on the floor.",
+          prescription: { family: "mobility", sets: 2, reps: { low: 10, high: 10 }, side: "alternating" },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 39's exact acceptance case: a circuit containing a power
+ * item (Pogo Jump — contacts) alongside resistance and continuous items —
+ * proves Phase 11B's repeated-exposure architecture supports power without
+ * circuit-specific hacks. */
+export const CIRCUIT_WITH_POWER_ITEM_DEMO: Session = {
+  id: "circuit-with-power-item-demo",
+  name: "Athletic Circuit",
+  focus: "Power and conditioning circuit",
+  estimatedDurationMin: 20,
+  coachNote: "Move with intent through each round.",
+  blocks: [
+    {
+      id: "block-athletic-circuit",
+      kind: "circuit",
+      order: 1,
+      rounds: 3,
+      restBetweenItemsSeconds: 15,
+      restBetweenRoundsSeconds: 90,
+      items: [
+        {
+          id: "circuit-power-pogo-jump",
+          order: 1,
+          name: "Pogo Jump",
+          category: "power",
+          coachCue: "Quick, springy contacts.",
+          prescription: { family: "power", contacts: 15 },
+        },
+        {
+          id: "circuit-power-push-up",
+          order: 2,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion — knees down is fine.",
+          prescription: { family: "resistance", reps: { low: 12, high: 12 } },
+        },
+        {
+          id: "circuit-power-bike",
+          order: 3,
+          name: "Assault Bike",
+          category: "continuous",
+          coachCue: "All-out effort for the full 30 seconds.",
+          prescription: { family: "continuous", duration: { seconds: 30 } },
+        },
+      ],
+    },
+  ],
+};
+
+/** Spec section 38's own "critical acceptance session": mobility warm-up
+ * -> Box Jump power -> Squat resistance -> conditioning circuit -> bike
+ * intervals -> mobility cooldown, ALL through the one universal Session
+ * engine — never a modality-specific workout shell. */
+export const MIXED_SESSION_WITH_POWER_AND_MOBILITY_DEMO: Session = {
+  id: "mixed-session-with-power-and-mobility-demo",
+  name: "Full Athletic Session",
+  focus: "Power, strength, and conditioning",
+  estimatedDurationMin: 65,
+  coachNote: "Mobility first, then power while fresh, then strength, then conditioning, then cool down.",
+  blocks: [
+    {
+      id: "block-warmup-mobility-full",
+      kind: "warmup",
+      order: 1,
+      items: [
+        {
+          id: "warmup-hip-rotation-full",
+          order: 1,
+          name: "90/90 Hip Rotation",
+          category: "mobility",
+          coachCue: "Control through the full range.",
+          prescription: { family: "mobility", sets: 1, reps: { low: 8, high: 8 }, side: "alternating" },
+        },
+      ],
+    },
+    {
+      id: "block-power-full",
+      kind: "straight",
+      order: 2,
+      items: [
+        {
+          id: "power-box-jump-full",
+          order: 1,
+          name: "Box Jump",
+          category: "power",
+          coachCue: "Maximum intent — stick each landing.",
+          prescription: { family: "power", sets: 4, reps: { low: 3, high: 3 }, restSeconds: 120 },
+        },
+      ],
+    },
+    {
+      id: "block-squat-full",
+      kind: "straight",
+      order: 3,
+      items: [
+        {
+          id: "resistance-squat-full",
+          order: 1,
+          name: "Back Squat",
+          category: "resistance",
+          coachCue: "Full depth, controlled descent.",
+          prescription: { family: "resistance", sets: 4, reps: { low: 5, high: 5 }, rpe: 8, restSeconds: 150, load: { value: 185, unit: "lb" } },
+        },
+      ],
+    },
+    {
+      id: "block-circuit-full",
+      kind: "circuit",
+      order: 4,
+      rounds: 2,
+      restBetweenItemsSeconds: 15,
+      restBetweenRoundsSeconds: 60,
+      items: [
+        {
+          id: "circuit-full-squat",
+          order: 1,
+          name: "Goblet Squat",
+          category: "resistance",
+          coachCue: "Sit between your heels, chest tall.",
+          prescription: { family: "resistance", reps: { low: 12, high: 12 }, load: { value: 35, unit: "lb" } },
+        },
+        {
+          id: "circuit-full-pushup",
+          order: 2,
+          name: "Push-Up",
+          category: "resistance",
+          coachCue: "Full range of motion — knees down is fine.",
+          prescription: { family: "resistance", reps: { low: 15, high: 15 } },
+        },
+      ],
+    },
+    {
+      id: "block-intervals-full",
+      kind: "interval",
+      order: 5,
+      items: [
+        {
+          id: "interval-bike-full",
+          order: 1,
+          name: "Assault Bike Intervals",
+          category: "interval",
+          coachCue: "Max effort for the full work interval, every round.",
+          prescription: { family: "interval", rounds: 4, workInterval: { seconds: 20 }, recoveryInterval: { seconds: 40 }, rpe: 9 },
+        },
+      ],
+    },
+    {
+      id: "block-cooldown-mobility-full",
+      kind: "cooldown",
+      order: 6,
+      items: [
+        {
+          id: "cooldown-couch-stretch-full",
+          order: 1,
+          name: "Couch Stretch",
+          category: "mobility",
+          coachCue: "Squeeze the glute on the stretched side.",
+          prescription: { family: "mobility", sets: 1, duration: { seconds: 45 }, side: "bilateral" },
+        },
+      ],
+    },
+  ],
+};
