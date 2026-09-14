@@ -7,7 +7,7 @@
 // re-imports the tenant-attribution types it needs to stamp onto records.
 
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
-import type { ExecutionRecord, Session } from "./training/types";
+import type { ExecutionRecord, IntervalRoundActual, Session } from "./training/types";
 
 export type ClientId = ClientProfileId;
 
@@ -439,7 +439,32 @@ export type WorkoutSessionPhase =
    * prescription specifies) before logging completion in one shot — see
    * lib/state.ts's LOG_CONTINUOUS_EXECUTION. There is no per-set iteration
    * here, unlike "set-logging"; one submission resolves the whole item. */
-  | "continuous-logging";
+  | "continuous-logging"
+  /** Phase 11A — the interval (HIIT) counterpart of "continuous-ready": the
+   * activity overview (round count, work/recovery targets) before starting
+   * — see lib/state.ts's entryPhaseForCurrentItem, which routes here
+   * instead of "continuous-ready" whenever the current item's prescription
+   * family is specifically "interval" (a distinct prescription family, not
+   * a resistance exercise repeated several times — spec section 3). Also
+   * re-entered (never "interval-active" directly) if the client defers this
+   * item and later returns before starting it. */
+  | "interval-ready"
+  /** Phase 11A — the live round/phase flow: round N of M, WORK or RECOVER,
+   * with a live countdown for a time-based interval (guidance only — never
+   * an auto-advancing gate, matching lib/workout/rest-policy.ts's own
+   * philosophy) or a plain manual round-by-round flow for a distance-based
+   * one. See WorkoutSession.intervalProgress for the per-item round/phase
+   * state this renders from, and lib/workout/interval.ts for the pure
+   * state-machine transition logic. Re-entered (never reset to round 1) if
+   * the client defers this item mid-activity and returns — intervalProgress
+   * is deliberately untouched by DEFER_EXERCISE/REPORT_PAIN. */
+  | "interval-active"
+  /** Phase 11A — the one-shot final capture step once every round is done
+   * (or the client ends the activity early): an optional RPE, mirroring
+   * "continuous-logging"'s own minimal-logging-burden discipline (spec
+   * section 13) — never a per-round metrics form. See
+   * lib/state.ts's FINALIZE_INTERVAL_EXECUTION. */
+  | "interval-logging";
 
 export type WarmupOutcomeStatus = "not-started" | "completed" | "skipped";
 
@@ -525,6 +550,25 @@ export interface WorkoutSessionEvent {
   painReportId?: string;
 }
 
+/** Phase 11A — see WorkoutSession.intervalProgress's own doc for why this
+ * is kept separate from ExecutionRecord/continuousExecutions. */
+export interface IntervalExecutionProgress {
+  round: number;
+  phase: "work" | "recovery";
+  /** A real timestamp anchor for the CURRENT phase only, reset on every
+   * phase transition — never a mutable "remaining seconds" counter, so a
+   * live countdown re-derives its display from (now - this anchor) on
+   * every render, immune to backgrounding/re-render drift (spec section
+   * 7). Only meaningful for a time-based work/recovery phase; present
+   * regardless of family for simplicity, just unused for a distance-based
+   * one. */
+  phaseStartedAtIso: string;
+  /** Rounds actually completed/skipped SO FAR — the exact same shape
+   * FINALIZE_INTERVAL_EXECUTION later copies into the real
+   * ExecutionRecord.roundActuals once the activity resolves. */
+  roundActuals: IntervalRoundActual[];
+}
+
 export interface WorkoutSession {
   workspaceId: WorkspaceId;
   clientId: ClientProfileId;
@@ -570,6 +614,19 @@ export interface WorkoutSession {
    * before this phase still load without a migration step; treat a missing
    * value the same as {} everywhere it's read. */
   continuousExecutions?: Record<string, ExecutionRecord>;
+  /** Phase 11A — transient, in-progress round/phase state for an interval
+   * item currently being executed, keyed by TrainingItemInstance id.
+   * Deliberately SEPARATE from continuousExecutions: an item only gains a
+   * continuousExecutions entry once FINALIZE_INTERVAL_EXECUTION actually
+   * resolves it (mirroring LOG_CONTINUOUS_EXECUTION's own one-shot-write
+   * discipline), so isExerciseResolved's existing "continuousExecution !==
+   * undefined means resolved" check needs zero changes for interval. This
+   * is what lets the completed-so-far round history survive a pain
+   * interruption or a defer (see lib/state.ts's REPORT_PAIN/
+   * DEFER_EXERCISE, which never touch this field) without prematurely
+   * marking the item resolved. Cleared the moment the item is finalized or
+   * fully skipped. */
+  intervalProgress?: Record<string, IntervalExecutionProgress>;
   painReports: PainReport[];
   skipReason?: SkipReason;
   skipNote?: string;

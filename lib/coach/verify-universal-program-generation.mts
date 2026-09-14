@@ -223,7 +223,7 @@ check("malformed model output (weeks not an array) throws InvalidPersistedConten
   assert.throws(() => validateUniversalTrainingProgramContent(malformed), InvalidPersistedContentError);
 });
 
-check("an unsupported prescription family (e.g. 'interval') is structurally valid grammar but fails the executable-families hard constraint", () => {
+check("an unsupported prescription family (e.g. 'circuit' — Phase 11A adds real interval support, but circuit/quality remain unsupported) is structurally valid grammar but fails the executable-families hard constraint", () => {
   const profile = profileWithDays(["Monday", "Wednesday", "Friday"]);
   const { content } = generate(profile, com(), 1);
   const session: Session = content.weeks[0].days.find((d) => d.type === "training")!.sessions![0];
@@ -231,11 +231,11 @@ check("an unsupported prescription family (e.g. 'interval') is structurally vali
     ...session,
     blocks: [
       {
-        id: "block-interval",
-        kind: "interval",
+        id: "block-circuit",
+        kind: "circuit",
         order: 1,
         rounds: 4,
-        items: [{ id: "interval-item", order: 1, name: "400m repeats", category: "interval", prescription: { family: "interval", distance: { value: 400, unit: "m" } } }],
+        items: [{ id: "circuit-item", order: 1, name: "Circuit round", category: "circuit", prescription: { family: "circuit" } }],
       },
     ],
   };
@@ -247,7 +247,32 @@ check("an unsupported prescription family (e.g. 'interval') is structurally vali
   const result = validateUniversalProgramHardConstraints(pollutedContent, profile, com());
   assert.equal(result.passed, false);
   const failedCheck = result.checks.find((c) => c.id === "only_executable_families");
-  assert.ok(failedCheck && !failedCheck.passed, "the interval family must fail only_executable_families");
+  assert.ok(failedCheck && !failedCheck.passed, "the circuit family must fail only_executable_families");
+});
+
+check("Phase 11A — a real interval item now PASSES the executable-families hard constraint (interval moved from unsupported to supported)", () => {
+  const profile = profileWithDays(["Monday", "Wednesday", "Friday"]);
+  const { content } = generate(profile, com(), 1);
+  const session: Session = content.weeks[0].days.find((d) => d.type === "training")!.sessions![0];
+  const intervalSession: Session = {
+    ...session,
+    blocks: [
+      {
+        id: "block-interval",
+        kind: "interval",
+        order: 1,
+        items: [{ id: "interval-item", order: 1, name: "400m repeats", category: "interval", prescription: { family: "interval", rounds: 4, distance: { value: 400, unit: "m" } } }],
+      },
+    ],
+  };
+  validateSession(intervalSession, "interval session");
+  const intervalContent: UniversalTrainingProgramContent = {
+    ...content,
+    weeks: [{ ...content.weeks[0], days: content.weeks[0].days.map((d) => (d.type === "training" ? { ...d, sessions: [intervalSession] } : d)) }],
+  };
+  const result = validateUniversalProgramHardConstraints(intervalContent, profile, com());
+  const check = result.checks.find((c) => c.id === "only_executable_families");
+  assert.ok(check && check.passed, "interval is a real, executed family as of Phase 11A");
 });
 
 check("missing required structure (a training day with zero sessions) is rejected by the structural validator", () => {
@@ -482,6 +507,46 @@ check("validateUniversalProgramHardConstraints' only_executable_families check i
   const { content } = generate(profile, com(), 1);
   const result = validateUniversalProgramHardConstraints(content, profile, com());
   assert.ok(result.checks.some((c) => c.id === "only_executable_families" && c.passed));
+});
+
+// ---------------------------------------------------------------------------
+// Phase 11A — U/V: interval generation for a conditioning-focused coach;
+// unchanged behavior for every other coach.
+// ---------------------------------------------------------------------------
+
+console.log("\nPhase 11A — real interval generation, gated on real coach methodology (U, V)\n");
+
+check("U: a coach whose real, stored methodology is 'prescribed_for_conditioning' generates real interval content on schedule-surplus days", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], { cardioPreference: "enjoys_cardio" });
+  const { content, constraints } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "prescribed_for_conditioning" }), 1);
+  const intervalItems = allItems(content).filter((i) => i.category === "interval");
+  assert.ok(intervalItems.length > 0, "expected at least one real interval item");
+  const item = intervalItems[0];
+  assert.equal(item.prescription.family, "interval");
+  assert.ok(item.prescription.rounds && item.prescription.rounds > 0);
+  assert.ok(item.prescription.workInterval);
+  assert.equal(constraints.passed, true, "generated interval content must itself pass every hard constraint, including only_executable_families");
+  validateUniversalTrainingProgramContent(content); // structurally valid, round-trips
+  assert.match(content.generationRationale ?? "", /interval-conditioning/i, "the rationale honestly names what was added, in coaching language");
+});
+
+check("V: a coach WITHOUT 'prescribed_for_conditioning' never generates interval content, even with real schedule surplus (unchanged behavior)", () => {
+  const profile = profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], { cardioPreference: "enjoys_cardio" });
+  const { content } = generate(profile, com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "optional_low_intensity_supplemental" }), 1);
+  assert.equal(
+    allItems(content).filter((i) => i.category === "interval").length,
+    0,
+    "a coach whose methodology doesn't call for conditioning work must never receive interval content"
+  );
+});
+
+check("HIIT is a prescription format, never a client goal — interval generation depends only on coach methodology, never profile.primaryGoal (spec section 5)", () => {
+  const conditioningCoach = com({ typicalFrequencyDaysMax: 3, cardioPhilosophy: "prescribed_for_conditioning" });
+  for (const primaryGoal of ["fat_loss", "strength", "general_fitness"] as const) {
+    const profile = { ...profileWithDays(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], { cardioPreference: "enjoys_cardio" }), primaryGoal };
+    const { content } = generate(profile, conditioningCoach, 1);
+    assert.ok(allItems(content).some((i) => i.category === "interval"), `expected interval content regardless of primaryGoal=${primaryGoal}`);
+  }
 });
 
 // ---------------------------------------------------------------------------

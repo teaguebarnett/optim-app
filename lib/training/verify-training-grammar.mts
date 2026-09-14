@@ -307,6 +307,15 @@ const INTERVAL_SESSION: Session = {
           category: "interval",
           prescription: {
             family: "interval",
+            // Phase 11A — rounds lives on the Prescription itself (the real,
+            // now-executed design: see lib/workout/interval.ts and spec
+            // section 4's "a prescription should be capable of representing
+            // round count"), not only the Block's own separate `rounds`
+            // field above (block.rounds is unrelated pre-existing Phase 1
+            // grammar, potentially meaningful for a future multi-item
+            // circuit block repeated as a whole — not what the real
+            // interval execution engine reads for a single interval item).
+            rounds: 6,
             distance: { value: 400, unit: "m" },
             pace: { value: 1.6, unit: "min_per_mi" },
             workInterval: { seconds: 95 },
@@ -331,10 +340,10 @@ check("a 30-minute Zone 2-style continuous run validates with duration + heart-r
   assert.equal(item?.prescription.reps, undefined);
 });
 
-check("6x400m intervals validate with rounds/work/recovery on the Block and pace/distance on the Prescription", () => {
+check("6x400m intervals validate with the real round count/pace/distance/work-recovery on the Prescription itself", () => {
   const result = validateUniversalTrainingProgramContent(ENDURANCE_PROGRAM);
   const block = result.weeks[0].days[2].sessions?.[0].blocks[0];
-  assert.equal(block?.rounds, 6);
+  assert.equal(block?.items[0].prescription.rounds, 6);
   assert.equal(block?.items[0].prescription.distance?.value, 400);
   assert.equal(block?.items[0].prescription.workInterval?.seconds, 95);
 });

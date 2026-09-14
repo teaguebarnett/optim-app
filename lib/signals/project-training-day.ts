@@ -199,6 +199,73 @@ export function projectTrainingDayObservations(params: ProjectTrainingDayParams)
         observedAtIso: itemObservedAtIso,
       });
     }
+
+    // Phase 11A — closes two real, pre-existing gaps this phase's own audit
+    // found in this loop (never projected for continuous work either, not
+    // just interval): a real distance actual, and RPE — both explicitly
+    // required raw facts for interval per spec section 24, and a strict,
+    // safe improvement for continuous too (only ever emitted when the
+    // client actually provided one — never fabricated).
+    const distanceValue = execution.actual?.distance?.value;
+    if (typeof distanceValue === "number" && execution.actual?.distance?.unit) {
+      observations.push({
+        clientProfileId,
+        workspaceId,
+        category: "training_performance",
+        metricKey: "continuous_distance",
+        sourceType: "workout_execution",
+        value: { valueType: "numeric", valueNumeric: distanceValue },
+        unit: execution.actual.distance!.unit,
+        sourceRef: itemRef,
+        trainingItemInstanceId: itemId,
+        observedAtIso: itemObservedAtIso,
+      });
+    }
+
+    const rpe = execution.actual?.rpe;
+    if (typeof rpe === "number") {
+      observations.push({
+        clientProfileId,
+        workspaceId,
+        category: "training_performance",
+        metricKey: "rpe",
+        sourceType: "workout_execution",
+        value: { valueType: "numeric", valueNumeric: rpe },
+        unit: "rpe",
+        sourceRef: itemRef,
+        trainingItemInstanceId: itemId,
+        observedAtIso: itemObservedAtIso,
+      });
+    }
+
+    // Phase 11A — interval-only: real completed-round count (spec section
+    // 24's "completed rounds" — never a derived "conditioning score").
+    // Deliberately NOT "prescribed rounds" here: this function only ever
+    // receives TrainingDaySnapshot, which has no reference to the original
+    // universal item's own prescription for a non-legacy-representable
+    // family like interval (prescribedWorkoutSnapshot is legacy-only and
+    // never populated for one) — fabricating a "prescribed" count from the
+    // execution record's own roundActuals length would be dishonest
+    // whenever the activity was genuinely partial (it would silently
+    // read as "fully prescribed = whatever was attempted"). The real
+    // prescription is already durably preserved unmutated on the program
+    // version itself; this projection stays limited to what it can state
+    // honestly from execution data alone.
+    if (execution.roundActuals) {
+      const completedRounds = execution.roundActuals.filter((r) => r.status === "completed").length;
+      observations.push({
+        clientProfileId,
+        workspaceId,
+        category: "training_performance",
+        metricKey: "completed_rounds",
+        sourceType: "workout_execution",
+        value: { valueType: "numeric", valueNumeric: completedRounds },
+        unit: null,
+        sourceRef: itemRef,
+        trainingItemInstanceId: itemId,
+        observedAtIso: itemObservedAtIso,
+      });
+    }
   }
 
   return observations;

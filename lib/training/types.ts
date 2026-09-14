@@ -113,6 +113,16 @@ export interface Prescription {
   rounds?: number;
   workInterval?: PrescriptionInterval;
   recoveryInterval?: PrescriptionInterval;
+  /** Phase 11A — a distance-based recovery target ("200m easy jog
+   * recovery"), distinct from `distance` (the WORK interval's own
+   * distance) and from `recoveryInterval` (a DURATION-based recovery).
+   * Purely additive: no schema/DB migration, since Prescription lives
+   * entirely inside the already-flexible training_program_versions.content
+   * jsonb payload — same posture as every other additive field this
+   * codebase has added onto Prescription (e.g. warmupSets,
+   * warmupInstruction). Optional; absent for a time-based or
+   * duration-recovery interval, never fabricated. */
+  recoveryDistance?: PrescriptionDistance;
   restSeconds?: number;
   tempo?: string;
   cadence?: number;
@@ -189,6 +199,31 @@ export interface Session {
 
 export type ExecutionStatus = "completed" | "skipped" | "partial";
 
+/** Phase 11A — one interval round's real outcome, bounded to exactly the
+ * primitives that matter for coaching review (spec section 9's own example:
+ * "Round 1: 45, Round 2: 45, Round 3: 41, Round 4: skipped..."). Reflects
+ * the round's WORK phase specifically — recovery is guidance-only and never
+ * separately logged, matching spec section 13's minimal-logging-burden
+ * requirement. A round simply absent from ExecutionRecord.roundActuals
+ * means it was never reached (honest partial completion — spec section 9's
+ * "never fabricate the final two rounds"), distinct from a round present
+ * with status "skipped" (the client explicitly skipped that one round while
+ * continuing the activity — spec section 15). */
+export interface IntervalRoundActual {
+  roundNumber: number;
+  status: "completed" | "skipped";
+  /** Real elapsed seconds in the work phase, captured from a real timestamp
+   * anchor (see lib/workout/interval.ts) for a time-based interval — never
+   * assumed equal to the prescribed target. Absent for a distance-based
+   * interval with no client-entered actual. */
+  actualWorkSeconds?: number;
+  /** Client-entered actual distance covered in the work phase — only
+   * meaningful for a distance-based interval, and only populated when the
+   * client actually provided one (never inferred). */
+  actualWorkDistanceValue?: number;
+  completedAtIso?: string;
+}
+
 export interface ExecutionRecord {
   id: string;
   trainingItemInstanceId: string;
@@ -206,6 +241,16 @@ export interface ExecutionRecord {
   completedAtIso?: string;
   skipReason?: SkipReason;
   note?: string;
+  /** Phase 11A — present ONLY for an interval-family execution: the real,
+   * bounded per-round history (spec section 10's preferred representation —
+   * "one TrainingItemInstance -> one prescription -> execution containing
+   * bounded round-level actuals," never six fake exercises). Prescribed and
+   * performed remain separate: this array is the actual, `roundNumber`/
+   * `actual` above stay describing the ITEM as a whole (e.g. an aggregate
+   * RPE), and the prescription itself (item.prescription.rounds) is never
+   * mutated to reflect what happened. Absent for every non-interval
+   * execution. */
+  roundActuals?: IntervalRoundActual[];
 }
 
 // ---------------------------------------------------------------------------

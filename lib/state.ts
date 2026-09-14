@@ -22,8 +22,9 @@ import { resolveScheduledSessionForStart } from "./workout/resolve-scheduled-ses
 import { classifyPainSeverity } from "./workout/pain-policy.ts";
 import { legacyWorkoutToSession } from "./training/legacy-adapter.ts";
 import { classifyContinuousCompletion, continuousPerformedAsPrescribed, type ContinuousActual } from "./workout/continuous.ts";
+import { classifyIntervalActivityCompletion, intervalPerformedAsPrescribed, nextIntervalProgress } from "./workout/interval.ts";
 import { MIXED_SESSION_DEMO } from "./training/demo-fixtures.ts";
-import type { ExecutionRecord, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
+import type { ExecutionRecord, IntervalRoundActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
 import type {
@@ -32,6 +33,7 @@ import type {
   ChatMessage,
   ClientAssignedProgram,
   ExerciseLog,
+  IntervalExecutionProgress,
   LoggedSet,
   MacroValues,
   MealEstimateConfidence,
@@ -171,15 +173,27 @@ function initialExerciseWarmups(trainingSession: Session): Record<string, Warmup
   return warmups;
 }
 
-/** Phase 4 — where the entering-a-new-current-item transition should land:
- * "exercise-intro" for resistance (unchanged), or the continuous-work
- * counterpart otherwise. There is no warm-up-set/working-set concept for a
- * non-resistance item, so it skips straight to its own ready phase. Shared
- * by every reducer case that hands off to a new current item, so they can
- * never disagree about which family gets which phase. */
+/** Phase 4/11A — where the entering-a-new-current-item transition should
+ * land: "exercise-intro" for resistance (unchanged), "interval-ready" or
+ * "interval-active" for interval (see below), or the plain continuous-work
+ * counterpart for any other family. There is no warm-up-set/working-set
+ * concept for a non-resistance item, so it skips straight to its own ready
+ * phase. Shared by every reducer case that hands off to a new current item,
+ * so they can never disagree about which family gets which phase.
+ *
+ * Phase 11A — an interval item with EXISTING intervalProgress (the client
+ * deferred it mid-activity and has now returned to it) resumes directly
+ * into "interval-active" at whatever round/phase it left off, rather than
+ * re-showing "interval-ready" and implying nothing has started yet — see
+ * WorkoutSession.intervalProgress's own doc for why this state survives a
+ * defer untouched. */
 function entryPhaseForCurrentItem(session: WorkoutSession): WorkoutSessionPhase {
   const item = findTrainingItemById(session.resolvedSession, session.currentExerciseId);
-  return item && item.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
+  if (!item) return "exercise-intro";
+  if (item.prescription.family === "interval") {
+    return session.intervalProgress?.[item.id] ? "interval-active" : "interval-ready";
+  }
+  return item.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
 }
 
 /** The one place a real live session's initial canonical state is actually
@@ -205,12 +219,16 @@ export function buildStartedWorkoutSession(params: {
 
   const initialFlow = buildInitialFlowState(params.trainingSession);
   const sessionWarmupConfig = resolveSessionWarmupConfigFromSession(params.trainingSession);
-  // The very first current item might be continuous work, with no
-  // warm-up-set/working-set concept to route into — entryPhaseForCurrentItem
+  // The very first current item might be continuous or interval work, with
+  // no warm-up-set/working-set concept to route into — entryPhaseForCurrentItem
   // can't be reused verbatim here since no WorkoutSession object exists yet
-  // at this exact point in construction, so the same rule is inlined.
+  // at this exact point in construction, so the same rule is inlined. A
+  // brand-new session can never already have intervalProgress for its own
+  // first item, so this is always "interval-ready", never "interval-active"
+  // (unlike entryPhaseForCurrentItem's own general case).
   const initialItem = findTrainingItemById(params.trainingSession, initialFlow.currentExerciseId);
-  const initialEntryPhase: WorkoutSessionPhase = initialItem && initialItem.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
+  const initialEntryPhase: WorkoutSessionPhase =
+    initialItem?.prescription.family === "interval" ? "interval-ready" : initialItem && initialItem.prescription.family !== "resistance" ? "continuous-ready" : "exercise-intro";
 
   return {
     ...params.existingSession,
@@ -227,6 +245,7 @@ export function buildStartedWorkoutSession(params: {
     startedAtIso: params.nowIso,
     exerciseLogs,
     continuousExecutions: {},
+    intervalProgress: {},
     currentExerciseId: initialFlow.currentExerciseId,
     exerciseQueue: initialFlow.exerciseQueue,
     actualExerciseOrder: initialFlow.actualExerciseOrder,
@@ -260,6 +279,7 @@ export function createInitialWorkoutSession(
     status: "not-started",
     exerciseLogs: {},
     continuousExecutions: {},
+    intervalProgress: {},
     painReports: [],
     phase: "session-warmup",
     currentExerciseId: null,
@@ -497,6 +517,39 @@ export type Action =
       note?: string;
       deviationReason?: SkipReason;
     }
+  /** Phase 11A — interval-ready -> interval-active: starts round 1's work
+   * phase, anchored to a real timestamp (see IntervalExecutionProgress). */
+  | { type: "BEGIN_INTERVAL_EXECUTION"; exerciseId: string }
+  /** Phase 11A — the one explicit action that ends the CURRENT phase (work
+   * or recovery) of the current round, whether via a natural timer
+   * completion, an early "I'm done" tap, or a manual distance-interval
+   * confirmation. Never auto-dispatched by a ticking timer (spec section
+   * 7) — always a real client action, so `actualSeconds`/`actualDistanceValue`
+   * reflect what genuinely happened, never an assumption. Advances to the
+   * next phase/round (or leaves canonical state alone to let the caller
+   * transition to "interval-logging" once nextIntervalProgress reports
+   * "complete" — see the reducer case). `skipped` marks just this one round
+   * skipped while continuing the activity (spec section 15's "skip one
+   * interval" — distinct from skipping the whole activity via the existing
+   * SKIP_EXERCISE). */
+  | {
+      type: "ADVANCE_INTERVAL_PHASE";
+      exerciseId: string;
+      actualSeconds?: number;
+      actualDistanceValue?: number;
+      skipped?: boolean;
+    }
+  /** Phase 11A — the one-shot final capture (optional RPE only, mirroring
+   * LOG_CONTINUOUS_EXECUTION's own minimal-burden discipline) that actually
+   * resolves the interval item: builds the real ExecutionRecord from
+   * whatever roundActuals accumulated in intervalProgress (honestly
+   * "completed" only once every prescribed round is present — see
+   * lib/workout/interval.ts's classifyIntervalActivityCompletion), clears
+   * intervalProgress, and advances. Dispatchable either once every round
+   * naturally finished, or early (an explicit "Finish now" — the honest
+   * partial-completion path, spec acceptance test B) with fewer rounds
+   * than prescribed already in roundActuals. */
+  | { type: "FINALIZE_INTERVAL_EXECUTION"; exerciseId: string; rpe?: RpeValue; note?: string }
   | { type: "WORKOUT_ROUTE_ENTERED" }
   | { type: "WORKOUT_ROUTE_LEFT" }
   | { type: "COMPLETE_WORKOUT"; summary: WorkoutSummary }
@@ -577,6 +630,14 @@ const PAIN_BLOCKED_ACTIONS = new Set<Action["type"]>([
   // architecture, never a cardio-specific carve-out (Phase 4 spec section 12).
   "BEGIN_CONTINUOUS_LOGGING",
   "LOG_CONTINUOUS_EXECUTION",
+  // Phase 11A — interval's own progression actions, same reasoning. Never
+  // a parallel safety system (spec section 14) — SKIP_EXERCISE is
+  // deliberately NOT in this set (unchanged from before this phase), since
+  // it's the one action that resolves a "block-exercise" severity report
+  // from the pain-review screen itself, for every family alike.
+  "BEGIN_INTERVAL_EXECUTION",
+  "ADVANCE_INTERVAL_PHASE",
+  "FINALIZE_INTERVAL_EXECUTION",
 ]);
 
 /** True once there's an active pain report AND the current exercise is a
@@ -1047,9 +1108,43 @@ export function reducer(state: AppState, action: Action): AppState {
       // currentExerciseRequiresPainCheck/the exercise-pain-check phase,
       // until it's genuinely resolved (RESUME_AFTER_PAIN) or the session
       // ends (COMPLETE_WORKOUT/SKIP_WORKOUT).
+      //
+      // Phase 11A — if this item is an interval activity with real rounds
+      // already in progress (intervalProgress), skipping it whole must
+      // still preserve whatever was genuinely completed (spec section 14's
+      // "preserve completed rounds"), never silently discard it. This is
+      // the one place intervalProgress ever gets snapshotted into a real
+      // ExecutionRecord as a partial (or, if truly zero rounds were ever
+      // reached, no execution record at all — a genuine skip, matching the
+      // existing pre-Phase-11A behavior exactly).
+      const inProgressInterval = state.workoutSession.intervalProgress?.[action.exerciseId];
+      let continuousExecutions = state.workoutSession.continuousExecutions;
+      let intervalProgress = state.workoutSession.intervalProgress;
+      if (inProgressInterval && inProgressInterval.roundActuals.length > 0) {
+        const item = findTrainingItemById(state.workoutSession.resolvedSession, action.exerciseId);
+        if (item && item.prescription.family === "interval") {
+          const nowIso = new Date().toISOString();
+          const execution: ExecutionRecord = {
+            id: nextId("execution"),
+            trainingItemInstanceId: action.exerciseId,
+            status: classifyIntervalActivityCompletion(item.prescription, inProgressInterval.roundActuals),
+            performedAsPrescribed: intervalPerformedAsPrescribed(item.prescription, inProgressInterval.roundActuals),
+            completedAtIso: nowIso,
+            skipReason: action.reason,
+            note: action.note,
+            roundActuals: inProgressInterval.roundActuals,
+          };
+          continuousExecutions = { ...continuousExecutions, [action.exerciseId]: execution };
+        }
+      }
+      if (inProgressInterval) {
+        intervalProgress = Object.fromEntries(Object.entries(intervalProgress ?? {}).filter(([id]) => id !== action.exerciseId));
+      }
       const sessionWithLog: WorkoutSession = {
         ...state.workoutSession,
         exerciseLogs: { ...state.workoutSession.exerciseLogs, [action.exerciseId]: updatedLog },
+        continuousExecutions,
+        intervalProgress,
       };
       if (state.workoutSession.currentExerciseId !== action.exerciseId) {
         return { ...state, workoutSession: sessionWithLog };
@@ -1176,13 +1271,29 @@ export function reducer(state: AppState, action: Action): AppState {
       const interruption = state.workoutSession.activePainInterruption;
       if (!interruption || interruption.severity !== "resume-eligible" || !interruption.confirmedResolved) return state;
       if (state.workoutSession.currentExerciseId !== interruption.exerciseId) return state;
+      // Phase 11A fix — this reducer previously hardcoded "set-ready"
+      // unconditionally, a latent gap this phase's own audit uncovered:
+      // resuming a resume-eligible (mild) pain report on a non-resistance
+      // item landed on a phase requiring currentSetNumber, which is never
+      // set for a continuous/interval item — a blank screen. Routed
+      // through entryPhaseForCurrentItem instead, which already knows to
+      // resume an interval item directly into "interval-active" at
+      // whatever round/phase it left off (intervalProgress was never
+      // touched by REPORT_PAIN — see that field's own doc), or "ready" for
+      // a family with nothing to resume mid-activity. Strictly a
+      // generalization for resistance: entryPhaseForCurrentItem already
+      // returns "exercise-intro" there, so this restores currentSetNumber
+      // and forces "set-ready" specifically to preserve the exact
+      // resistance behavior byte-for-byte.
+      const clearedSession: WorkoutSession = { ...state.workoutSession, activePainInterruption: null };
+      const resumedItem = findTrainingItemById(clearedSession.resolvedSession, clearedSession.currentExerciseId);
+      const isResistance = resumedItem?.prescription.family === "resistance";
       return {
         ...state,
         workoutSession: {
-          ...state.workoutSession,
-          activePainInterruption: null,
-          currentSetNumber: interruption.setNumber,
-          phase: "set-ready",
+          ...clearedSession,
+          currentSetNumber: isResistance ? interruption.setNumber : clearedSession.currentSetNumber,
+          phase: isResistance ? "set-ready" : entryPhaseForCurrentItem(clearedSession),
         },
       };
     }
@@ -1331,7 +1442,12 @@ export function reducer(state: AppState, action: Action): AppState {
       const exerciseId = state.workoutSession.currentExerciseId;
       if (!exerciseId || exerciseId !== action.exerciseId) return state;
       const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
-      if (!item || item.prescription.family === "resistance") return state;
+      // Phase 11A — interval has its own dedicated actions below; excluded
+      // here defensively so a stray dispatch against an interval item can
+      // never create a one-shot execution record with no round-level data,
+      // mirroring this whole reducer's established "safe no-op for the
+      // wrong family" convention (see e.g. LOG_SET against a continuous id).
+      if (!item || item.prescription.family === "resistance" || item.prescription.family === "interval") return state;
       const log = state.workoutSession.exerciseLogs[exerciseId];
       if (!log) return state;
 
@@ -1363,6 +1479,131 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state.workoutSession,
         exerciseLogs: { ...state.workoutSession.exerciseLogs, [exerciseId]: { ...log, status: "completed" } },
         continuousExecutions: { ...state.workoutSession.continuousExecutions, [exerciseId]: execution },
+      };
+      const advance = advanceAfterExerciseResolved(sessionWithExecution);
+      return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };
+    }
+
+    // Phase 11A — interval-ready -> interval-active: opens round 1's work
+    // phase with a real timestamp anchor. A no-op if intervalProgress
+    // already exists for this item (defensive — the ready panel is never
+    // shown once progress exists, per entryPhaseForCurrentItem, so this
+    // should be unreachable in practice, but re-anchoring an in-progress
+    // round would silently discard real elapsed time).
+    case "BEGIN_INTERVAL_EXECUTION": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId || state.workoutSession.phase !== "interval-ready") return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family !== "interval") return state;
+      if (state.workoutSession.intervalProgress?.[exerciseId]) return state;
+      const nowIso = new Date().toISOString();
+      const progress: IntervalExecutionProgress = { round: 1, phase: "work", phaseStartedAtIso: nowIso, roundActuals: [] };
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          phase: "interval-active",
+          intervalProgress: { ...state.workoutSession.intervalProgress, [exerciseId]: progress },
+        },
+      };
+    }
+
+    // Phase 11A — the interval work/recovery state machine's single real
+    // transition point (spec test matrix I/J/K). Never reachable from a
+    // ticking timer itself (see lib/workout/interval.ts's own module doc) —
+    // always a real, explicit client action, so `actualSeconds`/
+    // `actualDistanceValue` reflect genuine elapsed time/distance, never an
+    // assumed full completion.
+    case "ADVANCE_INTERVAL_PHASE": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId || state.workoutSession.phase !== "interval-active") return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family !== "interval") return state;
+      const progress = state.workoutSession.intervalProgress?.[exerciseId];
+      if (!progress) return state;
+
+      // Only the WORK phase of a round produces a round actual (spec
+      // section 13's minimal-logging-burden discipline — recovery is
+      // guidance-only, never separately logged; see IntervalRoundActual's
+      // own doc). Finishing recovery just advances round/phase in place.
+      const roundActuals =
+        progress.phase === "work"
+          ? [
+              ...progress.roundActuals,
+              {
+                roundNumber: progress.round,
+                status: action.skipped ? ("skipped" as const) : ("completed" as const),
+                actualWorkSeconds: action.actualSeconds,
+                actualWorkDistanceValue: action.actualDistanceValue,
+                completedAtIso: new Date().toISOString(),
+              } satisfies IntervalRoundActual,
+            ]
+          : progress.roundActuals;
+
+      const next = nextIntervalProgress(item.prescription, { round: progress.round, phase: progress.phase });
+      if (next === "complete") {
+        return {
+          ...state,
+          workoutSession: {
+            ...state.workoutSession,
+            phase: "interval-logging",
+            intervalProgress: { ...state.workoutSession.intervalProgress, [exerciseId]: { ...progress, roundActuals } },
+          },
+        };
+      }
+      const nowIso = new Date().toISOString();
+      return {
+        ...state,
+        workoutSession: {
+          ...state.workoutSession,
+          intervalProgress: {
+            ...state.workoutSession.intervalProgress,
+            [exerciseId]: { round: next.round, phase: next.phase, phaseStartedAtIso: nowIso, roundActuals },
+          },
+        },
+      };
+    }
+
+    // Phase 11A — the continuous-work counterpart's exact one-shot
+    // resolve-and-advance discipline, applied to whatever roundActuals
+    // intervalProgress accumulated. Reachable either once every round
+    // naturally finished (session.phase already "interval-logging") or
+    // early via an explicit "Finish now" from "interval-active" — either
+    // way, completion is DERIVED from the real roundActuals array, never
+    // supplied by the caller (same "the system decides" discipline as
+    // LOG_CONTINUOUS_EXECUTION).
+    case "FINALIZE_INTERVAL_EXECUTION": {
+      const exerciseId = state.workoutSession.currentExerciseId;
+      if (!exerciseId || exerciseId !== action.exerciseId) return state;
+      if (state.workoutSession.phase !== "interval-active" && state.workoutSession.phase !== "interval-logging") return state;
+      const item = findTrainingItemById(state.workoutSession.resolvedSession, exerciseId);
+      if (!item || item.prescription.family !== "interval") return state;
+      const progress = state.workoutSession.intervalProgress?.[exerciseId];
+      if (!progress) return state;
+      const log = state.workoutSession.exerciseLogs[exerciseId];
+      if (!log) return state;
+
+      const roundActuals = progress.roundActuals;
+      const status = classifyIntervalActivityCompletion(item.prescription, roundActuals);
+      const performedAsPrescribed = intervalPerformedAsPrescribed(item.prescription, roundActuals);
+      const nowIso = new Date().toISOString();
+      const execution: ExecutionRecord = {
+        id: nextId("execution"),
+        trainingItemInstanceId: exerciseId,
+        status,
+        performedAsPrescribed,
+        actual: action.rpe !== undefined ? { rpe: action.rpe } : undefined,
+        completedAtIso: nowIso,
+        note: action.note,
+        roundActuals,
+      };
+
+      const remainingProgress = Object.fromEntries(Object.entries(state.workoutSession.intervalProgress ?? {}).filter(([id]) => id !== exerciseId));
+      const sessionWithExecution: WorkoutSession = {
+        ...state.workoutSession,
+        exerciseLogs: { ...state.workoutSession.exerciseLogs, [exerciseId]: { ...log, status: "completed" } },
+        continuousExecutions: { ...state.workoutSession.continuousExecutions, [exerciseId]: execution },
+        intervalProgress: remainingProgress,
       };
       const advance = advanceAfterExerciseResolved(sessionWithExecution);
       return { ...state, workoutSession: { ...sessionWithExecution, ...advance } };

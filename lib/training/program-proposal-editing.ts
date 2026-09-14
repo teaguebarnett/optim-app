@@ -115,6 +115,15 @@ export interface TrainingItemPatch {
    * not fabricate one; see this phase's completion report. */
   paceValue?: number;
   paceUnit?: "min_per_mi" | "min_per_km";
+  /** Phase 11A — interval-only fields. `distanceValue`/`distanceUnit` above
+   * are reused for the WORK target of a distance-based interval (the same
+   * primitive continuous already edits); these three are additive and
+   * interval-specific. */
+  rounds?: number;
+  workIntervalSeconds?: number;
+  recoveryIntervalSeconds?: number;
+  recoveryDistanceValue?: number;
+  recoveryDistanceUnit?: "m" | "mi" | "km";
 }
 
 function applyPatchToPrescription(prescription: Prescription, patch: TrainingItemPatch): Prescription {
@@ -148,6 +157,12 @@ function applyPatchToPrescription(prescription: Prescription, patch: TrainingIte
   }
   if (patch.paceValue !== undefined) {
     next.pace = { value: patch.paceValue, unit: patch.paceUnit ?? prescription.pace?.unit ?? "min_per_mi" };
+  }
+  if (patch.rounds !== undefined) next.rounds = patch.rounds;
+  if (patch.workIntervalSeconds !== undefined) next.workInterval = { seconds: patch.workIntervalSeconds };
+  if (patch.recoveryIntervalSeconds !== undefined) next.recoveryInterval = { seconds: patch.recoveryIntervalSeconds };
+  if (patch.recoveryDistanceValue !== undefined) {
+    next.recoveryDistance = { value: patch.recoveryDistanceValue, unit: patch.recoveryDistanceUnit ?? prescription.recoveryDistance?.unit ?? "m" };
   }
   return next;
 }

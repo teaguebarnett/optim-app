@@ -11,14 +11,22 @@ import type { TrainingItemInstance } from "@/lib/training/types";
 /** Phase 4 — a short, honest completion line for a finished continuous item,
  * mirroring the resistance branch's own "state exactly what happened, never
  * a fabricated split" discipline (see lib/workout-analysis.ts's
- * describeContinuousExecution, which this intentionally matches). */
+ * describeContinuousExecution, which this intentionally matches).
+ *
+ * Phase 11A — an interval item's own real round count (never
+ * duration/distance, which describe the ITEM as a whole and would be
+ * misleading for a multi-round activity) — see ExecutionRecord.roundActuals. */
 function continuousCompletionLine(name: string, session: WorkoutSession, itemId: string): string {
   const execution = session.continuousExecutions?.[itemId];
   if (!execution) return `${name} logged.`;
+  const suffix = execution.status === "partial" ? " (partial)" : "";
+  if (execution.roundActuals) {
+    const completedRounds = execution.roundActuals.filter((r) => r.status === "completed").length;
+    return `${name}: ${completedRounds} round${completedRounds === 1 ? "" : "s"} completed${suffix}.`;
+  }
   const parts: string[] = [];
   if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));
   if (execution.actual?.distance) parts.push(formatDistance(execution.actual.distance));
-  const suffix = execution.status === "partial" ? " (partial)" : "";
   return parts.length > 0 ? `${name}: ${parts.join(", ")} logged${suffix}.` : `${name} logged${suffix}.`;
 }
 

@@ -71,12 +71,20 @@ export function canCompleteExercise(item: TrainingItemInstance, log: ExerciseLog
  * outcome (e.g. "Bike: 22 min logged (partial)."), built strictly from real
  * actual values — never a fabricated pace/split the client never recorded.
  * Mirrors the resistance detail lines' own "state exactly what happened"
- * discipline. */
+ * discipline.
+ *
+ * Phase 11A — an interval item's own real round count instead
+ * (duration/distance describe the item as a whole and would misrepresent a
+ * multi-round activity — see ExecutionRecord.roundActuals). */
 function describeContinuousExecution(name: string, execution: ExecutionRecord): string {
+  const suffix = execution.status === "partial" ? " (partial)" : "";
+  if (execution.roundActuals) {
+    const completedRounds = execution.roundActuals.filter((r) => r.status === "completed").length;
+    return `${name}: ${completedRounds} round${completedRounds === 1 ? "" : "s"} completed${suffix}.`;
+  }
   const parts: string[] = [];
   if (execution.actual?.duration) parts.push(formatDurationMinutes(execution.actual.duration.seconds));
   if (execution.actual?.distance) parts.push(formatDistance(execution.actual.distance));
-  const suffix = execution.status === "partial" ? " (partial)" : "";
   return parts.length > 0 ? `${name}: ${parts.join(", ")} logged${suffix}.` : `${name} logged${suffix}.`;
 }
 

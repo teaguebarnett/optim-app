@@ -212,6 +212,9 @@ function validatePrescription(raw: unknown, what: string): Prescription {
   if (raw.workInterval !== undefined) validatePrescriptionIntervalField(raw.workInterval, "prescription.workInterval", what);
   if (raw.recoveryInterval !== undefined)
     validatePrescriptionIntervalField(raw.recoveryInterval, "prescription.recoveryInterval", what);
+  // Phase 11A — see Prescription.recoveryDistance's own doc: purely
+  // additive, distance-based recovery, distinct from recoveryInterval.
+  if (raw.recoveryDistance !== undefined) validatePrescriptionDistance(raw.recoveryDistance, what);
   if (raw.restSeconds !== undefined) requireNumber(raw.restSeconds, "prescription.restSeconds", what);
   if (raw.tempo !== undefined) requireString(raw.tempo, "prescription.tempo", what);
   if (raw.cadence !== undefined) requireNumber(raw.cadence, "prescription.cadence", what);
@@ -219,6 +222,15 @@ function validatePrescription(raw: unknown, what: string): Prescription {
   if (raw.completionTarget !== undefined) requireString(raw.completionTarget, "prescription.completionTarget", what);
   if (raw.side !== undefined) requireOneOf(raw.side, PRESCRIPTION_SIDES, "prescription.side", what);
   if (raw.warmupInstruction !== undefined) requireString(raw.warmupInstruction, "prescription.warmupInstruction", what);
+  // Phase 11A — family-specific required fields (spec test matrix C: "rounds
+  // required where applicable"). An interval prescription must specify a
+  // real round count and a real work target (either time-based or
+  // distance-based) — everything else stays optional, matching spec
+  // section 4's "do not require every field."
+  if (raw.family === "interval") {
+    if (raw.rounds === undefined) fail(what, `an "interval" prescription requires "rounds"`);
+    if (raw.workInterval === undefined && raw.distance === undefined) fail(what, `an "interval" prescription requires either "workInterval" (time-based) or "distance" (distance-based) as its work target`);
+  }
   return raw as unknown as Prescription;
 }
 

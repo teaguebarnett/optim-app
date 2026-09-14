@@ -17,6 +17,9 @@ import { PainReviewPanel } from "@/components/workout/live/pain-review-panel";
 import { ExercisePainCheckPanel } from "@/components/workout/live/exercise-pain-check-panel";
 import { ContinuousReadyPanel } from "@/components/workout/live/continuous-ready-panel";
 import { ContinuousLoggingPanel } from "@/components/workout/live/continuous-logging-panel";
+import { IntervalReadyPanel } from "@/components/workout/live/interval-ready-panel";
+import { IntervalActivePanel } from "@/components/workout/live/interval-active-panel";
+import { IntervalLoggingPanel } from "@/components/workout/live/interval-logging-panel";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { findTrainingItemById } from "@/lib/workout/session-flow";
 import { trainingItemToLegacyExercise } from "@/lib/training/legacy-adapter";
@@ -150,6 +153,24 @@ export default function ActiveWorkoutPage() {
     // render at all, currentExerciseRequiresPainCheck has already been
     // satisfied for whatever exercise this is.
     const painReportActive = Boolean(session.activePainInterruption);
+
+    // Phase 11A — interval is a distinct prescription family (never a
+    // resistance exercise repeated several times, and never routed through
+    // the generic one-shot continuous flow) — checked before the general
+    // continuous branch below, which would otherwise also match it.
+    if (currentTrainingItem.prescription.family === "interval") {
+      const progress = session.intervalProgress?.[currentTrainingItem.id];
+      switch (session.phase) {
+        case "interval-ready":
+          return <IntervalReadyPanel item={currentTrainingItem} painReportActive={painReportActive} />;
+        case "interval-active":
+          return progress ? <IntervalActivePanel item={currentTrainingItem} progress={progress} painReportActive={painReportActive} /> : null;
+        case "interval-logging":
+          return progress ? <IntervalLoggingPanel item={currentTrainingItem} progress={progress} painReportActive={painReportActive} /> : null;
+        default:
+          return null;
+      }
+    }
 
     // Phase 4 — continuous work has its own two phases and never touches
     // any of the resistance-only panels below (which all render from the

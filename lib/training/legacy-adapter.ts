@@ -237,6 +237,7 @@ function itemCompatibilityReason(item: TrainingItemInstance): string | undefined
   if (p.rounds !== undefined) return `Item "${item.id}" prescribes item-level rounds — legacy has no equivalent field.`;
   if (p.workInterval !== undefined) return `Item "${item.id}" prescribes a work interval — legacy Exercise has no interval fields.`;
   if (p.recoveryInterval !== undefined) return `Item "${item.id}" prescribes a recovery interval — legacy Exercise has no interval fields.`;
+  if (p.recoveryDistance !== undefined) return `Item "${item.id}" prescribes a distance-based recovery — legacy Exercise has no interval fields.`;
   if (p.amrap !== undefined) return `Item "${item.id}" prescribes AMRAP — legacy Exercise has no AMRAP field.`;
   if (p.completionTarget !== undefined) return `Item "${item.id}" prescribes a completion target — legacy Exercise has no equivalent field.`;
   if (p.side !== undefined) return `Item "${item.id}" prescribes a side (${p.side}) — legacy Exercise has no side/laterality field.`;

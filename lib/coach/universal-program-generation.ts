@@ -40,6 +40,7 @@ import {
   resolveRulePrecedence,
   reconcileContextMismatches,
   mergeDiagnostics,
+  emptyDiagnostics,
   type ApplicableRule,
   type RuleApplicationDiagnostics,
 } from "./rule-application.ts";
@@ -180,6 +181,62 @@ function buildUniversalContinuousSessionForDay(dayOfWeek: DayOfWeek, rules: Appl
     blocks: [block],
   };
   return { session, diagnostics };
+}
+
+/** Phase 11A — "prescribed_for_conditioning" is this coach's own real,
+ * stored answer to the SAME program_cardio onboarding question
+ * decideContinuousDays already reads — the one real, existing coach
+ * methodology signal that clearly and specifically maps to interval/HIIT
+ * work (its own onboarding label: "Prescribed for general conditioning,
+ * regardless of goal"), never a fabricated new field. HIIT is a
+ * prescription FORMAT, never a client goal (spec section 5) — this
+ * function only ever decides whether the coach's own general programming
+ * style calls for it, completely independent of the client's own
+ * primaryGoal. Does not suppress the day-selection logic itself
+ * (decideContinuousDays' own schedule-surplus/client-preference reasoning
+ * still applies unchanged) — it only decides what CONTENT fills those
+ * days. */
+function usesIntervalConditioning(com: CoachOperatingModel): boolean {
+  return com.programArchitecture.cardioPhilosophy === "prescribed_for_conditioning";
+}
+
+/** A single interval item — a bounded, sane V1 default (6 rounds, 30s work
+ * / 90s recovery) since no coach-configured work:rest ratio or interval
+ * frequency exists in the current coach operating model yet (spec section
+ * 19: "if existing coach model lacks sufficient interval methodology,
+ * document this for later onboarding work — do not block execution
+ * architecture unnecessarily"). Not fed through applyContinuousRules or any
+ * other rule-application pathway — Phase 9C's learned-rule system was never
+ * designed with interval in mind, and broadening it is explicitly out of
+ * this phase's scope (spec section 26). */
+function buildUniversalIntervalSessionForDay(dayOfWeek: DayOfWeek): { session: Session; diagnostics: RuleApplicationDiagnostics } {
+  const rounds = 6;
+  const workSeconds = 30;
+  const recoverySeconds = 90;
+  const item: TrainingItemInstance = {
+    id: `interval-${dayOfWeek}-${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+    order: 1,
+    name: "Interval Conditioning",
+    category: "interval",
+    coachCue: "Max effort on every work interval — use the full recovery between rounds.",
+    prescription: {
+      family: "interval",
+      rounds,
+      workInterval: { seconds: workSeconds },
+      recoveryInterval: { seconds: recoverySeconds },
+      rpe: 8,
+    },
+  };
+  const block: Block = { id: `block-interval-${dayOfWeek}`, kind: "interval", order: 1, items: [item] };
+  const session: Session = {
+    id: `session-interval-${dayOfWeek}-${Date.now()}`,
+    name: `${dayOfWeek} — Interval Conditioning`,
+    focus: "Anaerobic conditioning",
+    estimatedDurationMin: Math.round((rounds * (workSeconds + recoverySeconds)) / 60),
+    coachNote: "Conditioning work — push hard on every work interval, use the recovery to reset.",
+    blocks: [block],
+  };
+  return { session, diagnostics: emptyDiagnostics() };
 }
 
 // ---------------------------------------------------------------------------
@@ -392,10 +449,17 @@ export function validateUniversalProgramHardConstraints(
       }),
     },
     {
+      // Phase 11A — "interval" added: the live client engine now has a real,
+      // tested round/phase execution path for it (lib/state.ts's
+      // BEGIN_INTERVAL_EXECUTION/ADVANCE_INTERVAL_PHASE/FINALIZE_INTERVAL_EXECUTION,
+      // lib/workout/interval.ts, components/workout/live/interval-*-panel.tsx)
+      // — this gate exists specifically to prevent generation from ever
+      // outrunning what the client can actually execute, so it moves in
+      // lockstep with that real capability, never ahead of it.
       id: "only_executable_families",
-      label: "Only generates families the client execution engine can currently run (resistance, continuous)",
+      label: "Only generates families the client execution engine can currently run (resistance, continuous, interval)",
       passed: content.weeks.every((w) =>
-        w.days.every((d) => (d.sessions ?? []).every((s) => s.blocks.every((b) => b.items.every((i) => i.category === "resistance" || i.category === "continuous"))))
+        w.days.every((d) => (d.sessions ?? []).every((s) => s.blocks.every((b) => b.items.every((i) => i.category === "resistance" || i.category === "continuous" || i.category === "interval"))))
       ),
       reason: "Generated an execution family the live client engine cannot yet run.",
     },
@@ -416,20 +480,24 @@ export function validateUniversalProgramHardConstraints(
  * InvalidPersistedContentError here if the structural shape is ever wrong,
  * which should only be reachable by a genuine bug in this function itself).
  */
-/** Phase 6B — a concise, real coach-review rationale (spec section 30),
+/** Phase 6B/11A — a concise, real coach-review rationale (spec section 30),
  * built entirely from fields ProgramDirectionSummary already computed —
  * never a separate, independently-drifting description, and never a giant
  * reasoning dump. Explains WHAT was chosen and WHY in the client's/coach's
- * own real terms (split, schedule, coach-methodology fit, any continuous
- * placement), not "AI chose this." */
-function buildGenerationRationale(direction: ProgramDirectionSummary, resistanceDayCount: number, continuousDays: DayOfWeek[]): string {
+ * own real terms (split, schedule, coach-methodology fit, any continuous/
+ * interval placement), not "AI chose this." */
+function buildGenerationRationale(direction: ProgramDirectionSummary, resistanceDayCount: number, continuousDays: DayOfWeek[], isIntervalConditioning: boolean): string {
   const lines: string[] = [
     `${direction.splitName} (${resistanceDayCount}x/week) — ${direction.whyItFits}`,
     direction.howItReflectsCoach,
     direction.rankingRationale,
   ];
   if (continuousDays.length > 0) {
-    lines.push(`Added ${continuousDays.length} continuous-work day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching the client's own stated cardio preference.`);
+    lines.push(
+      isIntervalConditioning
+        ? `Added ${continuousDays.length} interval-conditioning day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching this coach's own stored conditioning methodology.`
+        : `Added ${continuousDays.length} continuous-work day${continuousDays.length === 1 ? "" : "s"} (${continuousDays.join(", ")}) — real schedule surplus beyond the resistance split, matching the client's own stated cardio preference.`
+    );
   }
   if (direction.confidenceNote) lines.push(direction.confidenceNote);
   return lines.filter((l) => l && l.trim().length > 0).join(" ");
@@ -480,7 +548,13 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
     continuousDays.forEach((dayOfWeek) => {
       const idx = days.findIndex((d) => d.dayOfWeek === dayOfWeek);
       if (idx === -1 || days[idx].type === "training") return; // never overwrite a resistance day
-      const { session, diagnostics } = buildUniversalContinuousSessionForDay(dayOfWeek, effectiveRules);
+      // Phase 11A — the SAME real schedule-surplus days decideContinuousDays
+      // already selected get interval content instead of easy continuous
+      // cardio, but ONLY for a coach whose own stored methodology
+      // (cardioPhilosophy === "prescribed_for_conditioning") calls for it —
+      // never every coach, and never a client-goal-driven decision (spec
+      // section 5's "do not encode goal = HIIT").
+      const { session, diagnostics } = usesIntervalConditioning(com) ? buildUniversalIntervalSessionForDay(dayOfWeek) : buildUniversalContinuousSessionForDay(dayOfWeek, effectiveRules);
       sessionDiagnostics.push(diagnostics);
       days[idx] = { dayOfWeek, type: "training", sessions: [session] };
     });
@@ -499,7 +573,7 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
     name: `${direction.label} — ${direction.splitName}`,
     durationWeeks,
     weeks,
-    generationRationale: buildGenerationRationale(direction, resistanceDayCount, continuousDays),
+    generationRationale: buildGenerationRationale(direction, resistanceDayCount, continuousDays, usesIntervalConditioning(com)),
     directionLabel: direction.label,
     status: "assigned",
     createdAtIso: input.nowIso,

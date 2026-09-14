@@ -66,6 +66,7 @@
     "verify:legacy-adapter": "node --experimental-strip-types lib/training/verify-legacy-adapter.mts",
     "verify:universal-execution": "node --experimental-strip-types lib/workout/verify-universal-execution.mts",
     "verify:continuous-execution": "node --experimental-strip-types lib/workout/verify-continuous-execution.mts",
+    "verify:interval-execution": "node --experimental-strip-types lib/workout/verify-interval-execution.mts",
     "verify:universal-client-execution": "node --experimental-strip-types lib/workout/verify-universal-client-execution.mts",
     "verify:production-mode": "node --conditions=react-server --experimental-strip-types lib/production/verify-mode.mts",
     "verify:coach-operations": "node --experimental-strip-types lib/production/verify-coach-operations.mts",
