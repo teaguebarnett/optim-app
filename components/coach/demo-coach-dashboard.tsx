@@ -11,10 +11,9 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarClock, CheckCircle2, ClipboardCheck, Sparkles, UserPlus, Users2 } from "lucide-react";
+import { ArrowRight, CalendarClock, CheckCircle2, ClipboardCheck, Sparkles, UserPlus } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/coach/section-header";
-import { EmptyState } from "@/components/coach/empty-state";
 import { DecisionFocusSurface } from "@/components/coach/decision-focus-surface";
 import { DecisionQueueRows } from "@/components/coach/decision-queue-rows";
 import { PersonalTouchList } from "@/components/coach/personal-touch-list";
@@ -119,10 +118,20 @@ export function DemoCoachDashboard() {
   const globalAiLevel = resolveEffectiveAiAuthorityLevel(aiSettings, null);
   const clientNameById = new Map(workspace.clients.map((c) => [c.id, c.name]));
 
-  const summaryLine =
-    queue.length === 0
-      ? "Everything's on track."
-      : `${queue.length} decision${queue.length === 1 ? "" : "s"} need${queue.length === 1 ? "s" : ""} you. Everything else is moving.`;
+  const briefingsNeedingAction = workspace.briefings.filter((b) => b.status === "draft" || b.status === "held_for_review").length;
+  const worthKnowingCount = personalTouchItems.length + briefingsNeedingAction;
+  const summaryParts = [
+    `${workspace.clients.length} active client${workspace.clients.length === 1 ? "" : "s"}`,
+    queue.length > 0 ? `${queue.length} need${queue.length === 1 ? "s" : ""} you` : null,
+    worthKnowingCount > 0 ? `${worthKnowingCount} worth knowing` : null,
+  ].filter(Boolean);
+  const summaryLine = `${summaryParts.join(". ")}. Everything else is on track.`;
+
+  // Worth Knowing keeps only the two zones that carry real informational
+  // content ("briefings", "personal_touch"); "Waiting" moves to the
+  // recessive Handled zone below (already-acted-on, dormant work), but its
+  // relative time-of-day ordering against the other two is preserved.
+  const worthKnowingOrder = SECONDARY_SECTION_ORDER[timeOfDay].filter((id) => id !== "waiting");
 
   const sections = {
     briefings: (
@@ -185,95 +194,103 @@ export function DemoCoachDashboard() {
 
       <CalibrateOptimBanner />
 
-      {/* Greeting + on-track status. */}
-      <div className="flex flex-wrap items-end justify-between gap-6">
-        <div>
-          <p className="text-label text-accent-strong">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
-          <h1 className="mt-1 text-display text-off-white">
-            {greetingForHour(today.getHours())}, {coachFirstName}.
-          </h1>
-          <p className="mt-1.5 text-body text-neutral">{summaryLine}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-metric leading-none text-success">{rosterPulse.onTrack}</p>
-          <p className="mt-1 text-label text-neutral">On track</p>
-        </div>
+      {/* Greeting + roster-state sentence — the one restrained orientation
+          line; no giant hero section. */}
+      <div>
+        <p className="text-label text-accent-strong">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
+        <h1 className="mt-1 text-display text-off-white">
+          {greetingForHour(today.getHours())}, {coachFirstName}.
+        </h1>
+        <p className="mt-1.5 text-body text-neutral">{summaryLine}</p>
       </div>
 
-      {/* 1. Needs Your Attention — dominates whenever anything is actionable
-          (spec §2); a calm, compact all-clear otherwise, never a giant empty
-          alert container. */}
-      <section className="min-w-0 space-y-4">
-        <SectionHeader title="Needs Your Attention" />
-        {focusItem ? (
-          <>
-            <div key={focusItem.reviewRequestId} className="pc-row-promote">
-              <DecisionFocusSurface
-                item={focusItem}
-                client={focusClient}
-                coachId={workspace.coachId ?? ""}
-                coachName={coachName}
-                workspaceId={workspace.workspaceId}
-                programContextLabel={focusProgramLabel}
-                onChanged={onChanged}
-              />
-            </div>
-            <DecisionQueueRows items={remainingItems} selectedId={selectedId} onSelect={setSelectedId} />
-          </>
-        ) : (
-          <Card className="flex items-center gap-2.5 py-4">
-            <CheckCircle2 size={16} className="shrink-0 text-success" aria-hidden="true" />
-            <p className="text-sm text-neutral">All clear. No clients currently require your decision.</p>
-          </Card>
-        )}
-      </section>
-
-      {/* 2-4. Daily Briefings / Worth a Personal Touch / Waiting, reordered
-          by real time of day (spec §2). */}
-      <div className="grid gap-6 lg:grid-cols-3">{SECONDARY_SECTION_ORDER[timeOfDay].map((id) => sections[id])}</div>
-
-      {/* 5. Clients On Track — quiet, condensed, still reachable. */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        <section>
-          <SectionHeader title="Clients On Track" />
-          <Card>
-            <RosterPulseCard pulse={rosterPulse} />
-          </Card>
-        </section>
-
-        <section>
-          <SectionHeader
-            title="Next up"
-            action={
-              <Link href="/coach/clients" className="flex items-center gap-1 text-action text-accent-strong hover:underline">
-                All clients <ArrowRight size={13} />
-              </Link>
-            }
-          />
-          {upcomingWork.length === 0 ? (
-            <EmptyState icon={Users2} title="Pipeline is clear" description="No clients currently in onboarding, setup, or awaiting activation." />
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+        {/* NEEDS YOU — the dominant working surface (spec §2): the one
+            genuinely expanded decision, plus the rest of the queue as
+            compact rows. A calm, compact all-clear otherwise, never a
+            giant empty alert container. */}
+        <section className="min-w-0 space-y-4">
+          <SectionHeader title="Needs You" />
+          {focusItem ? (
+            <>
+              <div key={focusItem.reviewRequestId} className="pc-row-promote">
+                <DecisionFocusSurface
+                  item={focusItem}
+                  client={focusClient}
+                  coachId={workspace.coachId ?? ""}
+                  coachName={coachName}
+                  workspaceId={workspace.workspaceId}
+                  programContextLabel={focusProgramLabel}
+                  onChanged={onChanged}
+                />
+              </div>
+              <DecisionQueueRows items={remainingItems} selectedId={selectedId} onSelect={setSelectedId} />
+            </>
           ) : (
-            <Card className="divide-y divide-border p-0">
-              {upcomingWork.map((row) => (
-                <Link key={row.clientId} href={`/coach/clients/${row.clientId}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-raised first:rounded-t-[var(--radius-lg)] last:rounded-b-[var(--radius-lg)]" style={{ transitionDuration: "var(--motion-fast)" }}>
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${row.readyToActivate ? "bg-warning-soft text-warning" : row.startsLabel ? "bg-brass-soft text-brass-strong" : "bg-accent-soft text-accent-strong"}`}>
-                    {row.readyToActivate ? <Sparkles size={14} aria-hidden="true" /> : row.startsLabel ? <CalendarClock size={14} aria-hidden="true" /> : <ClipboardCheck size={14} aria-hidden="true" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-off-white">{row.clientName}</p>
-                    {row.startsLabel ? <p className="truncate text-meta text-neutral">Starts {row.startsLabel}</p> : null}
-                  </div>
-                  <LifecycleBadge lifecycle={row.lifecycle} programPhase={row.startsLabel ? "pre_program" : undefined} className="shrink-0" />
-                </Link>
-              ))}
+            <Card className="flex items-center gap-2.5 py-4">
+              <CheckCircle2 size={16} className="shrink-0 text-success" aria-hidden="true" />
+              <p className="text-sm text-neutral">All clear. No clients currently require your decision.</p>
             </Card>
           )}
         </section>
 
-        <section>
-          <SectionHeader title="AI Coaching Authority" />
-          <AiAuthorityRailCard level={globalAiLevel} onChange={(level) => setGlobal({ level, domainOverrides: aiSettings.global.domainOverrides })} />
-        </section>
+        {/* Right rail — WORTH KNOWING (quiet secondary intelligence,
+            reordered by real time of day) above HANDLED (recessive, calm
+            confirmation of what OPTIM already has under control). */}
+        <div className="space-y-6">
+          <section className="space-y-6">
+            <SectionHeader title="Worth Knowing" />
+            {worthKnowingOrder.map((id) => sections[id])}
+          </section>
+
+          <section className="space-y-4 rounded-[var(--radius-lg)] border border-border bg-surface-raised p-4">
+            <div>
+              <p className="text-label text-neutral">Handled</p>
+              <div className="mt-3">
+                <RosterPulseCard pulse={rosterPulse} />
+              </div>
+            </div>
+
+            {waitingItems.length > 0 && (
+              <div className="border-t border-border pt-3">
+                <p className="mb-2 text-label text-neutral">Waiting</p>
+                <WaitingList items={waitingItems} onSelect={(item) => setWaitingSelectedId(item.reviewRequestId)} />
+              </div>
+            )}
+
+            <div className="border-t border-border pt-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-label text-neutral">Pipeline</p>
+                <Link href="/coach/clients" className="flex items-center gap-1 text-action text-accent-strong hover:underline">
+                  All clients <ArrowRight size={13} />
+                </Link>
+              </div>
+              {upcomingWork.length === 0 ? (
+                <p className="text-meta text-neutral">Nothing in onboarding, setup, or awaiting activation.</p>
+              ) : (
+                <div className="space-y-0.5">
+                  {upcomingWork.map((row) => (
+                    <Link key={row.clientId} href={`/coach/clients/${row.clientId}`} className="flex items-center gap-3 rounded-[var(--radius-sm)] px-1.5 py-2 transition-colors hover:bg-charcoal" style={{ transitionDuration: "var(--motion-fast)" }}>
+                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${row.readyToActivate ? "bg-warning-soft text-warning" : row.startsLabel ? "bg-brass-soft text-brass-strong" : "bg-accent-soft text-accent-strong"}`}>
+                        {row.readyToActivate ? <Sparkles size={13} aria-hidden="true" /> : row.startsLabel ? <CalendarClock size={13} aria-hidden="true" /> : <ClipboardCheck size={13} aria-hidden="true" />}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-off-white">{row.clientName}</p>
+                        {row.startsLabel ? <p className="truncate text-meta text-neutral">Starts {row.startsLabel}</p> : null}
+                      </div>
+                      <LifecycleBadge lifecycle={row.lifecycle} programPhase={row.startsLabel ? "pre_program" : undefined} className="shrink-0" />
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-border pt-3">
+              <p className="mb-2 text-label text-neutral">AI Coaching Authority</p>
+              <AiAuthorityRailCard level={globalAiLevel} onChange={(level) => setGlobal({ level, domainOverrides: aiSettings.global.domainOverrides })} />
+            </div>
+          </section>
+        </div>
       </div>
 
       <AddClientSheet open={addClientOpen} onClose={() => setAddClientOpen(false)} />

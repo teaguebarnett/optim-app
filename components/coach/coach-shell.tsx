@@ -11,6 +11,7 @@ import { resolveCoachCalibrationStatus } from "@/lib/coach/coach-onboarding-engi
 import { isGenuinelyNewCoach as computeIsGenuinelyNewCoach } from "@/lib/coach/routing";
 import { cn } from "@/lib/cn";
 import { Avatar } from "@/components/ui/avatar";
+import { OptimMark } from "@/components/brand/optim-mark";
 import { CoachBottomNav, type CoachNavItem } from "@/components/coach/coach-bottom-nav";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
 import type { AppMode } from "@/lib/production/mode";
@@ -116,9 +117,7 @@ export function CoachShell({
         <header className="sticky top-0 z-30 hidden border-b border-border bg-charcoal/95 backdrop-blur-md md:block">
           <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-6 px-8">
             <Link href="/coach" className="flex shrink-0 items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-sm)] bg-accent text-sm font-semibold tracking-tight text-on-accent">
-                O
-              </span>
+              <OptimMark size={26} strokeWidth={3} className="text-accent" />
               <span className="text-subheading text-off-white">OPTIM</span>
             </Link>
 
@@ -162,7 +161,7 @@ export function CoachShell({
 
         <header className="flex items-center justify-between border-b border-border bg-charcoal px-4 py-3 pc-safe-top md:hidden">
           <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-xs)] bg-accent text-xs font-semibold text-on-accent">O</span>
+            <OptimMark size={20} strokeWidth={2.5} className="text-accent" />
             <span className="text-sm font-semibold text-off-white">OPTIM</span>
           </div>
           <Avatar initials={initialsFromDisplayName(identity.coachDisplayName)} size="sm" />
