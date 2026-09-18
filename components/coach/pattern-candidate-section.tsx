@@ -11,7 +11,6 @@
 import { revalidatePath } from "next/cache";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { SectionHeader } from "@/components/coach/section-header";
 import { confirmLearnedRuleAction, recordContextualDispositionAction, recordRejectedDispositionAction } from "@/app/actions/coach-learned-rules";
 import type { EligibleCandidateSummary } from "@/lib/production/learned-rules";
 
@@ -121,21 +120,18 @@ function CandidateCard({ workspaceId, candidate }: { workspaceId: string; candid
 
 /** Renders nothing at all when there's nothing eligible — this section
  * must never compete with real attention items, and an empty-state card
- * here would just be dashboard clutter (spec section 25/26). Capped at 3
- * candidates per render — this is a light-touch reflective section, never
- * a queue to work through. */
+ * here would just be dashboard clutter. The caller (the Command Center's
+ * Worth Knowing zone) already labels this category and its count; this
+ * renders only the object(s) it's given, capped at 3 as a hard safety
+ * limit — never its own repeated category header or explanatory subtitle. */
 export function PatternCandidateSection({ workspaceId, candidates }: { workspaceId: string; candidates: EligibleCandidateSummary[] }) {
   if (candidates.length === 0) return null;
   const shown = candidates.slice(0, 3);
   return (
-    <section className="space-y-3">
-      <SectionHeader title="OPTIM noticed" />
-      <p className="text-meta text-neutral -mt-2">A recurring pattern in your recent decisions — not yet a rule, just something worth your call.</p>
-      <div className="space-y-3">
-        {shown.map((c) => (
-          <CandidateCard key={c.candidateSignature} workspaceId={workspaceId} candidate={c} />
-        ))}
-      </div>
-    </section>
+    <div className="space-y-3">
+      {shown.map((c) => (
+        <CandidateCard key={c.candidateSignature} workspaceId={workspaceId} candidate={c} />
+      ))}
+    </div>
   );
 }

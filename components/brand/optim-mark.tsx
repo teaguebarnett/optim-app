@@ -20,7 +20,7 @@ export function OptimMark({ size = 28, className }: { size?: number; className?:
   const maskId = useId();
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" fill="none" className={className} aria-hidden="true">
-      <mask id={maskId} maskUnits="userSpaceOnUse">
+      <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
         <circle cx="50" cy="50" r="32.15" stroke="white" strokeWidth="13.7" fill="none" />
         <rect x="-40" y="-1.8" width="80" height="3.6" fill="black" transform="translate(66.075 22.157) rotate(135)" />
         <rect x="-40" y="-1.8" width="80" height="3.6" fill="black" transform="translate(33.925 77.843) rotate(135)" />

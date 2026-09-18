@@ -7,11 +7,15 @@
 // is already the real Supabase-mode operational home (see app/coach/page.tsx's
 // own module doc). Renders nothing when the coach has zero active rules —
 // no empty-state clutter.
+//
+// Phase 13A.1 — the caller (the Command Center's Handled zone) puts this
+// behind its own <details> disclosure with the count already in the
+// <summary>, so this renders only the row list, never a repeated "Confirmed
+// patterns" header.
 
 import { revalidatePath } from "next/cache";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { SectionHeader } from "@/components/coach/section-header";
 import { deactivateLearnedRuleAction } from "@/app/actions/coach-learned-rules";
 import type { LearnedRuleRecord } from "@/lib/production/learned-rules";
 
@@ -43,13 +47,10 @@ export function LearnedRulesList({ workspaceId, rules }: { workspaceId: string; 
   const active = rules.filter((r) => r.status === "active");
   if (active.length === 0) return null;
   return (
-    <section className="space-y-3">
-      <SectionHeader title="Confirmed patterns" />
-      <Card className="divide-y divide-border p-0">
-        {active.map((r) => (
-          <RuleRow key={r.id} workspaceId={workspaceId} rule={r} />
-        ))}
-      </Card>
-    </section>
+    <Card className="divide-y divide-border p-0">
+      {active.map((r) => (
+        <RuleRow key={r.id} workspaceId={workspaceId} rule={r} />
+      ))}
+    </Card>
   );
 }

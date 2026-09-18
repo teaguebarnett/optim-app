@@ -16,9 +16,6 @@
 // there is exactly one presentation and one data source, never two.
 
 import Link from "next/link";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
-import { Card } from "@/components/ui/card";
-import { SectionHeader } from "@/components/coach/section-header";
 import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
 import { AdjustmentAttentionCard } from "@/components/coach/adjustment-attention-card";
 import { DemoCoachDashboard } from "@/components/coach/demo-coach-dashboard";
@@ -38,7 +35,6 @@ import {
   resolveEscalationWithoutMessagingAction,
   proposePlaybookExampleAction,
   recordHealthReviewDecisionAction,
-  getCampaignsAction,
 } from "@/app/actions/coach-communications";
 import { getEligibleCandidatesForReviewAction, getMyLearnedRulesAction } from "@/app/actions/coach-learned-rules";
 import type { AttentionItem } from "@/lib/production/coach-operations";
@@ -87,10 +83,6 @@ async function LiveCoachDashboard() {
   }
   const focusHealthReview = focus ? await healthReviewFor(focus) : undefined;
 
-  const { campaigns } = await getCampaignsAction();
-  const activeCampaigns = campaigns.filter((c) => c.status !== "published").length;
-  const publishedCampaigns = campaigns.filter((c) => c.status === "published").length;
-
   // Phase 9B — a light-touch, easily-ignored reflective section; belongs to
   // the quieter "Worth Knowing" zone below, never competing with real
   // attention items in "Needs You".
@@ -114,7 +106,6 @@ async function LiveCoachDashboard() {
     needsCoachClientIds,
     programPhaseByClientId
   );
-  const totalClients = visibleRosterRows.length;
 
   // Phase 7A — approve/editAndSend/respondPersonally all send an actual
   // message to the client (approving/editing/replacing "what OPTIM
@@ -170,38 +161,26 @@ async function LiveCoachDashboard() {
   }
 
   const worthKnowingCount = patternCandidates.length;
-  const summaryParts = [
-    `${totalClients} client${totalClients === 1 ? "" : "s"}`,
-    inbox.open.length > 0 ? `${inbox.open.length} need${inbox.open.length === 1 ? "s" : ""} you` : null,
-    worthKnowingCount > 0 ? `${worthKnowingCount} worth knowing` : null,
-  ].filter(Boolean);
-  const summaryLine = `${summaryParts.join(". ")}. ${inbox.open.length === 0 ? "Everything's on track." : "Everything else is on track."}`;
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] space-y-8">
+    <div className="mx-auto w-full max-w-[1180px] space-y-12">
       <div>
         <p className="text-label text-accent-strong">
           {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
         </p>
         <h1 className="mt-1 text-display text-off-white">Good {timeOfDayGreeting()}, {inbox.coachDisplayName.split(" ")[0]}.</h1>
-        <p className="mt-1.5 text-body text-neutral">{summaryLine}</p>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
-        {/* NEEDS YOU — the dominant working surface. */}
-        <section className="min-w-0 space-y-4">
-          <SectionHeader
-            title="Needs You"
-            action={
-              inbox.open.length > 0 || inbox.resolved.length > 0 ? (
-                <Link href="/coach/escalations" className="text-action text-accent-strong hover:underline">
-                  View all
-                </Link>
-              ) : undefined
-            }
-          />
+      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+        {/* NEEDS YOU — the dominant working surface. Zero is a complete
+            state on its own; a real item is the one expanded object plus
+            compact rows for the rest — actions only ever live on the
+            focused item. /coach/escalations already carries the full
+            open+resolved history, so nothing here duplicates it. */}
+        <section className="min-w-0">
+          <p className="text-label text-neutral">Needs You</p>
           {focus ? (
-            <>
+            <div className="mt-4 space-y-4">
               {focus.adjustmentProposal ? <AdjustmentAttentionCard item={focus} /> : <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} healthReview={focusHealthReview} />}
               {rest.length > 0 && (
                 <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-lg)] border border-border">
@@ -222,66 +201,42 @@ async function LiveCoachDashboard() {
                   )}
                 </div>
               )}
-            </>
+            </div>
           ) : (
-            <Card className="flex items-center gap-2.5 py-4">
-              <CheckCircle2 size={16} className="shrink-0 text-success" aria-hidden="true" />
-              <p className="text-body text-neutral">All clear — OPTIM is handling routine conversation. Nothing needs you right now.</p>
-            </Card>
+            <p className="mt-3 text-metric text-off-white">0</p>
           )}
         </section>
 
-        {/* Right rail — WORTH KNOWING (quiet, informational) above HANDLED
-            (recessive, resolved/under-control). Never equal-weight cards
-            competing with Needs You. */}
-        <div className="space-y-6">
-          <section className="space-y-4">
-            <SectionHeader title="Worth Knowing" />
-            <PatternCandidateSection workspaceId={workspaceId} candidates={patternCandidates} />
-            {patternCandidates.length === 0 ? <p className="px-1 text-meta text-neutral">Nothing OPTIM has noticed needs your awareness right now.</p> : null}
+        {/* Right rail — WORTH KNOWING (quieter secondary territory) above
+            HANDLED (recessive/ambient). No borders, no equal-weight stat
+            cards, no repeated category headers — position, scale, and
+            color carry the hierarchy. */}
+        <div className="space-y-10">
+          <section>
+            <p className="text-label text-neutral">Worth Knowing</p>
+            <p className="mt-2 text-heading text-off-white">{worthKnowingCount}</p>
+            {worthKnowingCount > 0 ? (
+              <div className="mt-3">
+                <PatternCandidateSection workspaceId={workspaceId} candidates={patternCandidates.slice(0, 1)} />
+              </div>
+            ) : null}
           </section>
 
-          <section className="space-y-3 rounded-[var(--radius-lg)] border border-border bg-surface-raised p-4">
+          <section>
             <p className="text-label text-neutral">Handled</p>
-            <p className="text-meta text-neutral">
-              <span className="font-semibold text-off-white">{rosterPulse.onTrack}</span> of {totalClients} client{totalClients === 1 ? "" : "s"} on track
-              {inbox.resolved.length > 0 ? (
-                <>
-                  {" · "}
-                  <span className="font-semibold text-off-white">{inbox.resolved.length}</span> resolved
-                </>
-              ) : null}
-              {publishedCampaigns > 0 || activeCampaigns > 0 ? (
-                <>
-                  {" · "}
-                  <Link href="/coach/campaigns" className="font-semibold text-off-white hover:text-accent-strong">
-                    {publishedCampaigns} campaign{publishedCampaigns === 1 ? "" : "s"} published
-                  </Link>
-                </>
-              ) : null}
-              {activeLearnedRuleCount > 0 ? (
-                <>
-                  {" · "}
-                  <span className="font-semibold text-off-white">{activeLearnedRuleCount}</span> confirmed pattern{activeLearnedRuleCount === 1 ? "" : "s"}
-                </>
-              ) : null}
-            </p>
-
-            {inbox.resolved.length > 0 && (
-              <div className="divide-y divide-border border-t border-border pt-2">
-                {inbox.resolved.slice(0, 5).map((item) => (
-                  <div key={item.id} className="flex items-center gap-2.5 py-2">
-                    <AlertTriangle size={13} className="shrink-0 text-neutral" aria-hidden="true" />
-                    <p className="min-w-0 flex-1 truncate text-meta text-neutral">
-                      {item.clientDisplayName} — {item.kindLabel}
-                    </p>
-                    <span className="shrink-0 text-meta text-neutral">{new Date(item.createdAtIso).toLocaleDateString()}</span>
-                  </div>
-                ))}
-              </div>
+            <Link href="/coach/clients" className="mt-2 inline-block text-subheading text-neutral hover:text-off-white">
+              {rosterPulse.onTrack}
+            </Link>
+            {activeLearnedRuleCount > 0 && (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-meta text-neutral hover:text-off-white">
+                  {activeLearnedRuleCount} confirmed pattern{activeLearnedRuleCount === 1 ? "" : "s"}
+                </summary>
+                <div className="mt-2">
+                  <LearnedRulesList workspaceId={workspaceId} rules={learnedRules} />
+                </div>
+              </details>
             )}
-
-            <LearnedRulesList workspaceId={workspaceId} rules={learnedRules} />
           </section>
         </div>
       </div>

@@ -11,7 +11,7 @@ import { resolveCoachCalibrationStatus } from "@/lib/coach/coach-onboarding-engi
 import { isGenuinelyNewCoach as computeIsGenuinelyNewCoach } from "@/lib/coach/routing";
 import { cn } from "@/lib/cn";
 import { Avatar } from "@/components/ui/avatar";
-import { OptimMark } from "@/components/brand/optim-mark";
+import { OptimWordmark } from "@/components/brand/optim-wordmark";
 import { CoachBottomNav, type CoachNavItem } from "@/components/coach/coach-bottom-nav";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
 import type { AppMode } from "@/lib/production/mode";
@@ -116,9 +116,8 @@ export function CoachShell({
       <div className="flex min-h-screen flex-col bg-near-black">
         <header className="sticky top-0 z-30 hidden border-b border-border bg-charcoal/95 backdrop-blur-md md:block">
           <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-6 px-8">
-            <Link href="/coach" className="flex shrink-0 items-center gap-2.5">
-              <OptimMark size={26} className="text-accent" />
-              <span className="text-subheading text-off-white">OPTIM</span>
+            <Link href="/coach" className="flex shrink-0 items-center">
+              <OptimWordmark size={22} className="text-off-white" />
             </Link>
 
             <nav className="flex flex-1 items-center justify-center gap-1" aria-label="Coach navigation">
@@ -160,10 +159,7 @@ export function CoachShell({
         </header>
 
         <header className="flex items-center justify-between border-b border-border bg-charcoal px-4 py-3 pc-safe-top md:hidden">
-          <div className="flex items-center gap-2">
-            <OptimMark size={20} className="text-accent" />
-            <span className="text-sm font-semibold text-off-white">OPTIM</span>
-          </div>
+          <OptimWordmark size={18} className="text-off-white" />
           <Avatar initials={initialsFromDisplayName(identity.coachDisplayName)} size="sm" />
         </header>
 
