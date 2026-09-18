@@ -28,12 +28,12 @@ import { AwaitingProgramSetup } from "@/components/today/awaiting-program-setup"
 // two-column rail was removed so this always renders the same single-column
 // phone stack regardless of window size.
 //
-// `pickedDateIso` is the client's own carousel selection, kept entirely
-// local to this page — it never mutates state.dateIso, dailyTrainingPlan,
-// or any historical/program data (see the acceptance scenarios in this
-// phase's spec). `null` means "no explicit pick yet," which always resolves
-// to the client-local current day, so a rollover to a new real day is
-// reflected automatically without this page needing its own reset logic.
+// `pickedDateIso` is the client's own carousel selection — it never
+// mutates state.dateIso, dailyTrainingPlan, or any historical/program data
+// (see the acceptance scenarios in this phase's spec). `null` means "no
+// explicit pick yet," which always resolves to the client-local current
+// day, so a rollover to a new real day is reflected automatically without
+// this page needing its own reset logic.
 //
 // Phase 13B (Gate 2A) — extracted out of app/(client)/training/page.tsx so
 // both the standalone /training deep link and the /plan destination's
@@ -41,9 +41,26 @@ import { AwaitingProgramSetup } from "@/components/today/awaiting-program-setup"
 // app/(client)/plan/page.tsx and that page's own doc for why both
 // subsections stay mounted (not conditionally rendered) rather than each
 // remounting this component's local pickedDateIso state on every switch.
-export function TrainingScreen() {
+//
+// Gate 2D — `controlledDateIso`/`onControlledDateChange` let a caller (see
+// app/(client)/plan/page.tsx) lift this same pick into its own `date` URL
+// query param, exactly the way that page already lifts the Training/
+// Nutrition tab into `tab`, so the pick survives navigating away and back
+// (browser history, not a new storage layer) — see that page's own doc.
+// The standalone /training deep link never passes these, so it keeps its
+// prior, exact local-state-only behavior untouched.
+export function TrainingScreen({
+  controlledDateIso,
+  onControlledDateChange,
+}: {
+  controlledDateIso?: string | null;
+  onControlledDateChange?: (dateIso: string | null) => void;
+} = {}) {
   const { isHydrated, state, activeContext, supabaseProgramNotAssigned } = usePrototypeState();
-  const [pickedDateIso, setPickedDateIso] = useState<string | null>(null);
+  const isControlled = onControlledDateChange !== undefined;
+  const [localPickedDateIso, setLocalPickedDateIso] = useState<string | null>(null);
+  const pickedDateIso = isControlled ? (controlledDateIso ?? null) : localPickedDateIso;
+  const setPickedDateIso = isControlled ? onControlledDateChange : setLocalPickedDateIso;
 
   if (!isHydrated) return <ScreenSkeleton />;
   // Phase 6A — supabaseProgramNotAssigned is true whenever this client has

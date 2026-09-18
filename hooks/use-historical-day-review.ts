@@ -47,6 +47,16 @@ export interface UseHistoryDayPickerResult {
   demoQuery: string;
 }
 
+/** Gate 2D — the same "?demo=1" (or "") suffix useHistoryDayPicker already
+ * appends when linking into a specific archived day, exposed standalone so
+ * any other Progress surface that links into /progress/history/[date]
+ * (e.g. a card's own per-day row) carries the exact same live-vs-demo
+ * source forward — never a second, independently-derived demo flag. */
+export function useDemoQuery(): string {
+  const { source } = useHistorySource();
+  return source === "fixture" ? "?demo=1" : "";
+}
+
 export function useHistoryDayPicker(windowDays?: number): UseHistoryDayPickerResult {
   const { state, source } = useHistorySource();
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ExpandableCard } from "./expandable-card";
 import type { CoachGuidanceCardModel } from "@/lib/progress/types";
 
@@ -28,6 +29,14 @@ export function CoachGuidanceCard({ coachGuidance }: { coachGuidance: CoachGuida
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wide text-neutral">{coachGuidance.latestMessage.authorName}</p>
                   <p className="mt-1 text-[15px] leading-relaxed text-off-white">{coachGuidance.latestMessage.text}</p>
+                  {/* Gate 2D — Coach guidance interprets a real message that
+                      already lives in the one Coach conversation (see
+                      components/chat/demo-chat-screen.tsx); this is the
+                      deliberate destination back to that full thread, never
+                      a second copy of it here. */}
+                  <Link href="/chat" className="mt-2 inline-block text-sm font-medium text-accent-fg hover:underline">
+                    View in Coach
+                  </Link>
                 </div>
               ) : null}
               {coachGuidance.recentCorrections.length > 0 ? (

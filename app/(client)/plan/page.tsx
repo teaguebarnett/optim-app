@@ -37,6 +37,18 @@ function isPlanSection(value: string | null): value is PlanSection {
 // state) so switching pushes real browser history — back/forward move
 // between subsections sensibly — and so a /plan URL is directly
 // shareable/refreshable into either subsection.
+//
+// Gate 2D — the Training subsection's selected day joins `tab` in the URL
+// as `date`, lifted out of TrainingScreen's own local pickedDateIso (see
+// that component's controlledDateIso/onControlledDateChange props) via the
+// exact same query-param pattern `tab` already established here, rather
+// than a second mechanism. Absent `date` (or `date` cleared back to null)
+// means "today," matching pickedDateIso's own null convention. This is
+// what lets a Today cross-link land on a SPECIFIC prescribed day (e.g.
+// /plan?tab=training&date=2026-09-22 from Progress's own Training card —
+// see components/progress/training-card.tsx) and what lets browser
+// back/forward and a same-tab return to /plan restore exactly the day the
+// client was last looking at, the same way `tab` already survives those.
 export default function PlanPage() {
   return (
     <Suspense fallback={<ScreenSkeleton />}>
@@ -51,11 +63,19 @@ function PlanScreen() {
   const searchParams = useSearchParams();
   const rawTab = searchParams.get("tab");
   const activeSection: PlanSection = isPlanSection(rawTab) ? rawTab : "training";
+  const selectedDateIso = searchParams.get("date");
 
   function selectSection(section: PlanSection) {
     if (section === activeSection) return;
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", section);
+    router.push(`${pathname}?${params.toString()}`, { scroll: false });
+  }
+
+  function handleDateChange(dateIso: string | null) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (dateIso) params.set("date", dateIso);
+    else params.delete("date");
     router.push(`${pathname}?${params.toString()}`, { scroll: false });
   }
 
@@ -69,7 +89,7 @@ function PlanScreen() {
       </div>
 
       <div hidden={activeSection !== "training"}>
-        <TrainingScreen />
+        <TrainingScreen controlledDateIso={selectedDateIso} onControlledDateChange={handleDateChange} />
       </div>
       <div hidden={activeSection !== "nutrition"}>
         <NutritionScreen />

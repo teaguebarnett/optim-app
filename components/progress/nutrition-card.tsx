@@ -1,5 +1,11 @@
+"use client";
+
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { ExpandableCard } from "./expandable-card";
 import { StatusBadge } from "./status-badge";
+import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { useDemoQuery } from "@/hooks/use-historical-day-review";
 import type { NutritionCardModel, NutritionDaySummaryModel } from "@/lib/progress/types";
 
 function mealPlanBadge(day: NutritionDaySummaryModel) {
@@ -20,6 +26,8 @@ function MetricRow({ label, value }: { label: string; value: string }) {
 }
 
 export function NutritionCard({ nutrition }: { nutrition: NutritionCardModel }) {
+  const { state } = usePrototypeState();
+  const demoQuery = useDemoQuery();
   const mealPlanText =
     nutrition.mealPlanStatus === "ok" && nutrition.mealPlanAdherenceRatio !== null
       ? `${Math.round(nutrition.mealPlanAdherenceRatio * 100)}% of planned meals`
@@ -43,12 +51,39 @@ export function NutritionCard({ nutrition }: { nutrition: NutritionCardModel }) 
             />
           </div>
           <ul className="space-y-2">
-            {nutrition.days.map((day) => (
-              <li key={day.dateIso} className="flex items-center justify-between rounded-[var(--radius-sm)] bg-off-white/[0.03] px-3 py-2.5">
-                <p className="text-sm text-off-white">{day.dayOfWeek}</p>
-                {mealPlanBadge(day)}
-              </li>
-            ))}
+            {nutrition.days.map((day) => {
+              // Gate 2D — a past day's meal log is real, archived evidence
+              // (the same Historical Day Review every other Progress card
+              // links into); today's own row and any future day stay plain —
+              // Nutrition has no separate "prescribed day" browsing in Plan
+              // (it only ever shows the current day), so there is no honest
+              // destination to invent for those.
+              const isToday = day.dateIso === state.dateIso;
+              const isPast = !isToday && day.mealPlanOutcome !== "future";
+              const rowContent = (
+                <>
+                  <p className="text-sm text-off-white">{day.dayOfWeek}</p>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    {mealPlanBadge(day)}
+                    {isPast ? <ChevronRight size={14} className="text-neutral" aria-hidden="true" /> : null}
+                  </span>
+                </>
+              );
+              return isPast ? (
+                <li key={day.dateIso}>
+                  <Link
+                    href={`/progress/history/${day.dateIso}${demoQuery}`}
+                    className="flex items-center justify-between rounded-[var(--radius-sm)] bg-off-white/[0.03] px-3 py-2.5 transition-colors hover:bg-off-white/[0.06]"
+                  >
+                    {rowContent}
+                  </Link>
+                </li>
+              ) : (
+                <li key={day.dateIso} className="flex items-center justify-between rounded-[var(--radius-sm)] bg-off-white/[0.03] px-3 py-2.5">
+                  {rowContent}
+                </li>
+              );
+            })}
           </ul>
         </div>
       }

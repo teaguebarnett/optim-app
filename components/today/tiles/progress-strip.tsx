@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 
@@ -22,6 +23,14 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
  * the rare case there's no spotlight to attach to (nothing left to do),
  * where it needs its own card chrome to still read as an intentional
  * surface rather than an orphaned row.
+ *
+ * Gate 2D — the whole strip links to /progress: once a task recedes here
+ * (completed/skipped), Today itself no longer shows its detail (see
+ * today-bento.tsx's remainingItems filter) — Progress is the correct,
+ * already-existing source of truth for "what actually happened," so this
+ * is the one deliberate way back to it rather than leaving completed work
+ * undiscoverable. A plain navigational link, so viewing it can never mark
+ * anything complete or otherwise mutate state.
  */
 export function ProgressStrip({ attached = true }: { attached?: boolean }) {
   const { dailyCompletionPercent, tasks } = usePrototypeState();
@@ -46,8 +55,16 @@ export function ProgressStrip({ attached = true }: { attached?: boolean }) {
   );
 
   if (!attached) {
-    return <div className="rounded-[var(--radius-lg)] bg-charcoal/60 px-4 py-3 shadow-[var(--shadow-subtle)]">{content}</div>;
+    return (
+      <Link href="/progress" className="block rounded-[var(--radius-lg)] bg-charcoal/60 px-4 py-3 shadow-[var(--shadow-subtle)]">
+        {content}
+      </Link>
+    );
   }
 
-  return <div className="px-4 py-3">{content}</div>;
+  return (
+    <Link href="/progress" className="block px-4 py-3">
+      {content}
+    </Link>
+  );
 }

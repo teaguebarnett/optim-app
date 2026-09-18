@@ -34,7 +34,7 @@ export function FuelSection() {
   const percent = Math.round((nutritionTotals.calories / targets.calories) * 100);
 
   return (
-    <Link href="/nutrition" className="block p-4">
+    <Link href="/plan?tab=nutrition" className="block p-4">
       <div className="flex items-center justify-between gap-2">
         <p className="text-label text-neutral">Fuel</p>
         <ChevronRight size={16} className="shrink-0 text-neutral" aria-hidden="true" />
