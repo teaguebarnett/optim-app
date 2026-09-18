@@ -16,14 +16,19 @@ import {
   deriveMealCardStatus,
   macroRemainingCaption,
   mealDisplayName,
+  mealIntentFor,
   mealProvenanceLabel,
   nextRelevantMealPeriod,
   remainingCalorieCaption,
   sumMealEstimateItems,
 } from "./view-model.ts";
-import { localDemoMealVisionEstimator } from "./vision-estimator.ts";
-import { NUTRITION_TARGETS } from "../mock-data.ts";
+import { isUncertainMealSelection, localDemoMealVisionEstimator, resolvePhotoEstimateDisposition } from "./vision-estimator.ts";
+import { BOUNDED_SUBSTITUTION_RULES, findBoundedSubstitution, isValidationEligible, resolveSubstitutionDisposition } from "./substitution.ts";
+import { defaultCoachAiAuthoritySettings } from "../coach/ai-authority.ts";
+import { buildDailyRecordFromLiveState } from "../history/build-daily-record.ts";
+import { MEAL_OPTIONS, NUTRITION_TARGETS } from "../mock-data.ts";
 import type { AppState } from "../state.ts";
+import type { BoundedSubstitutionRule } from "./substitution.ts";
 import type { MealEstimateItem } from "../types";
 
 let passed = 0;
@@ -287,6 +292,242 @@ await checkAsync("localDemoMealVisionEstimator: a returned 'ok'/'low-confidence'
       assert.ok(item.macros.calories >= 0);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Gate 3A — Meal Intent
+// ---------------------------------------------------------------------------
+
+console.log("\nGate 3A.1 — Meal Intent stays attached to its planned recommendation, never confused with actual intake\n");
+
+check("Selecting a coach-approved option snapshots its MealIntent (description) onto the log", () => {
+  const option = MEAL_OPTIONS.breakfast[0];
+  const state = reducer(createInitialState(), { type: "SELECT_MEAL_OPTION", period: "breakfast", optionId: option.id });
+  assert.equal(mealIntentFor(state.meals.breakfast), option.description);
+  assert.ok(mealIntentFor(state.meals.breakfast)!.length > 0, "the catalog fixture must have a real, non-empty intent");
+});
+
+check("MealIntent survives independently of the catalog — it is a snapshot, not a live optionId lookup", () => {
+  const option = MEAL_OPTIONS.lunch[0];
+  let state = reducer(createInitialState(), { type: "SELECT_MEAL_OPTION", period: "lunch", optionId: option.id });
+  const capturedIntent = mealIntentFor(state.meals.lunch);
+  // Changing training time (an unrelated action) must never touch a
+  // meal already logged — the same invariant lib/planning/verify-planner.mts
+  // already proves for macros/timestamps, now proven for mealIntent too.
+  state = reducer(state, { type: "SET_TRAINING_TIME", time24: "18:00" });
+  assert.equal(mealIntentFor(state.meals.lunch), capturedIntent);
+});
+
+check("MealIntent is never fabricated for a manual entry, photo estimate, skip, or plan-for-later — it describes WHY a planned meal exists, never what was actually eaten", () => {
+  let state = createInitialState();
+  state = reducer(state, { type: "SET_MANUAL_MEAL", period: "breakfast", manualName: "Leftover pizza", macros: { calories: 600, proteinG: 25, carbsG: 60, fatG: 25 } });
+  assert.equal(mealIntentFor(state.meals.breakfast), null);
+
+  const items = [{ id: nextId("estimate-item"), name: "Chicken", quantityLabel: "6 oz", macros: { calories: 280, proteinG: 52, carbsG: 0, fatG: 6 } }];
+  state = reducer(state, { type: "LOG_PHOTO_MEAL", period: "lunch", items, macros: sumMealEstimateItems(items), confidence: "high" });
+  assert.equal(mealIntentFor(state.meals.lunch), null);
+
+  state = reducer(state, { type: "SKIP_MEAL", period: "dinner", reason: "forgot" });
+  assert.equal(mealIntentFor(state.meals.dinner), null);
+
+  state = reducer(state, { type: "PLAN_MEAL_LATER", period: "snack" });
+  assert.equal(mealIntentFor(state.meals.snack), null);
+});
+
+check("MealIntent is distinct from what was actually eaten — the manual meal's real macros never leak into (or get overwritten by) the intent field", () => {
+  const option = MEAL_OPTIONS.dinner[0];
+  const state = reducer(createInitialState(), { type: "SELECT_MEAL_OPTION", period: "dinner", optionId: option.id });
+  assert.deepEqual(state.meals.dinner?.macros, option.macros, "actual logged macros must still be the real option macros");
+  assert.equal(mealIntentFor(state.meals.dinner), option.description, "intent is the WHY, kept separate from the WHAT");
+  assert.notEqual(mealIntentFor(state.meals.dinner), JSON.stringify(state.meals.dinner?.macros), "sanity: intent is real text, never a serialized macro dump");
+});
+
+// ---------------------------------------------------------------------------
+// Gate 3A — Bounded substitution rules
+// ---------------------------------------------------------------------------
+
+console.log("\nGate 3A.2 — Bounded substitution rules are validated decisions, never arbitrary suggestions\n");
+
+function authoritySettingsAtLevel(level: "advisor" | "copilot" | "ai_led" | "review_only") {
+  const base = defaultCoachAiAuthoritySettings("coach-test", "workspace-test", "2026-01-01T00:00:00.000Z");
+  return { ...base, global: { level, domainOverrides: {} } };
+}
+
+check("A registered, validated substitution rule is found only for its exact declared from/to pair", () => {
+  const found = findBoundedSubstitution("chicken breast", "turkey breast");
+  assert.ok(found);
+  assert.equal(found!.validation, "validated");
+  assert.equal(found!.id, "sub-chicken-turkey");
+  assert.equal(findBoundedSubstitution("Chicken Breast", "Turkey Breast")?.id, found!.id, "lookup must be case/whitespace tolerant, never a second silently-different match");
+});
+
+check("An unregistered substitution pair resolves to null — an honest 'unresolved,' never a fabricated rule", () => {
+  assert.equal(findBoundedSubstitution("chicken breast", "candy bar"), null);
+  assert.equal(findBoundedSubstitution("rice", "chicken breast"), null);
+});
+
+check("Every seeded BoundedSubstitutionRule declares every field the contract requires — no partial/ambiguous rules", () => {
+  for (const rule of BOUNDED_SUBSTITUTION_RULES) {
+    assert.ok(rule.fromLabel.length > 0);
+    assert.ok(rule.toLabel.length > 0);
+    assert.ok(rule.constraint.length > 0, "the permitted boundary/constraint must be stated, never implied");
+    assert.ok(rule.rationale.length > 0, "why the substitution is acceptable must be stated");
+    assert.ok(["high", "medium", "low"].includes(rule.confidence));
+    assert.ok(["coach", "optim_bounded"].includes(rule.authority));
+    assert.ok(isValidationEligible(rule.validation) === (rule.validation === "validated"));
+  }
+});
+
+check("A valid, high-confidence bounded rule under a permissive authority resolves to auto_execute — accepted within its declared constraint, not beyond it", () => {
+  const rule = findBoundedSubstitution("chicken breast", "turkey breast")!;
+  const disposition = resolveSubstitutionDisposition(rule, authoritySettingsAtLevel("review_only"), "client-test");
+  assert.equal(disposition, "auto_execute");
+});
+
+check("A missing (unknown) substitution never becomes an automatic recommendation, regardless of how permissive authority is", () => {
+  const disposition = resolveSubstitutionDisposition(null, authoritySettingsAtLevel("review_only"), "client-test");
+  assert.equal(disposition, "escalate");
+});
+
+check("An unvalidated candidate rule never becomes an automatic recommendation, even under the most permissive authority", () => {
+  const unvalidated: BoundedSubstitutionRule = {
+    id: "sub-test-unvalidated",
+    period: null,
+    fromLabel: "rice",
+    toLabel: "quinoa",
+    constraint: "Match cooked volume.",
+    rationale: "Both are starchy carb sources.",
+    confidence: "medium",
+    authority: "optim_bounded",
+    validation: "unvalidated",
+  };
+  assert.equal(resolveSubstitutionDisposition(unvalidated, authoritySettingsAtLevel("review_only"), "client-test"), "escalate");
+});
+
+check("A validated but low-confidence rule never becomes an automatic recommendation, even under the most permissive authority", () => {
+  const lowConfidence: BoundedSubstitutionRule = {
+    id: "sub-test-low-confidence",
+    period: null,
+    fromLabel: "beef",
+    toLabel: "tofu",
+    constraint: "Match protein grams as closely as possible.",
+    rationale: "Both can serve as a meal's primary protein source.",
+    confidence: "low",
+    authority: "optim_bounded",
+    validation: "validated",
+  };
+  assert.equal(resolveSubstitutionDisposition(lowConfidence, authoritySettingsAtLevel("review_only"), "client-test"), "escalate");
+});
+
+check("isValidationEligible exhaustively handles every declared SubstitutionValidationStatus — validated is the only eligible one", () => {
+  assert.equal(isValidationEligible("validated"), true);
+  assert.equal(isValidationEligible("unvalidated"), false);
+  assert.equal(isValidationEligible("insufficient_confidence"), false);
+});
+
+// ---------------------------------------------------------------------------
+// Gate 3A — Photo estimates remain uncertain evidence
+// ---------------------------------------------------------------------------
+
+console.log("\nGate 3A.3 — Photo estimates remain uncertain evidence, never a confirmed-exact record\n");
+
+check("A confirmed photo-estimate meal is marked uncertain; a coach-approved option is not", () => {
+  let state = createInitialState();
+  const items = sampleItems();
+  state = reducer(state, { type: "LOG_PHOTO_MEAL", period: "lunch", items, macros: sumMealEstimateItems(items), confidence: "medium" });
+  assert.equal(isUncertainMealSelection(state.meals.lunch), true);
+
+  const option = MEAL_OPTIONS.dinner[0];
+  state = reducer(state, { type: "SELECT_MEAL_OPTION", period: "dinner", optionId: option.id });
+  assert.equal(isUncertainMealSelection(state.meals.dinner), false, "a coach-approved option is a known value, never marked as an estimate");
+});
+
+check("A manual entry (isEstimate: true) is also marked uncertain — estimated values must never silently present as exact", () => {
+  const state = reducer(createInitialState(), {
+    type: "SET_MANUAL_MEAL",
+    period: "breakfast",
+    manualName: "Homemade stir fry",
+    macros: { calories: 500, proteinG: 30, carbsG: 40, fatG: 20 },
+  });
+  assert.equal(state.meals.breakfast?.isEstimate, true);
+  assert.equal(isUncertainMealSelection(state.meals.breakfast), true);
+});
+
+check("A photo confirmation with no real, named items is refused at the reducer — missing evidence stays unknown, it never becomes a zero-calorie logged meal", () => {
+  const state = reducer(createInitialState(), {
+    type: "LOG_PHOTO_MEAL",
+    period: "lunch",
+    items: [],
+    macros: { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+    confidence: "low",
+  });
+  assert.equal(state.meals.lunch, undefined, "must remain genuinely unlogged, not a zero-value MealSelection");
+});
+
+check("An unrecognized photo result always escalates regardless of authority — there is no real estimate behind it to act on", () => {
+  assert.equal(resolvePhotoEstimateDisposition("unrecognized", "low", authoritySettingsAtLevel("review_only"), "client-test"), "escalate");
+});
+
+check("A low-confidence photo estimate never becomes an automatic recommendation, even under the most permissive authority", () => {
+  assert.equal(resolvePhotoEstimateDisposition("low-confidence", "low", authoritySettingsAtLevel("review_only"), "client-test"), "escalate");
+});
+
+// ---------------------------------------------------------------------------
+// Gate 3A — Authority: automatic vs draft vs escalation
+// ---------------------------------------------------------------------------
+
+console.log("\nGate 3A.4 — Automatic response requires both sufficient confidence AND explicit permission; draft and escalation stay distinct\n");
+
+check("High confidence alone is not enough — advisor-level authority never auto-executes a substitution, it only suggests", () => {
+  const rule = findBoundedSubstitution("chicken breast", "turkey breast")!;
+  const disposition = resolveSubstitutionDisposition(rule, authoritySettingsAtLevel("advisor"), "client-test");
+  assert.equal(disposition, "suggest");
+  assert.notEqual(disposition, "auto_execute");
+});
+
+check("Permission alone is not enough — even the most permissive authority never auto-executes a low-confidence photo estimate", () => {
+  assert.equal(resolvePhotoEstimateDisposition("low-confidence", "low", authoritySettingsAtLevel("review_only"), "client-test"), "escalate");
+});
+
+check("Both sufficient confidence and permissive authority together are what actually produce auto_execute", () => {
+  assert.equal(resolvePhotoEstimateDisposition("ok", "high", authoritySettingsAtLevel("review_only"), "client-test"), "auto_execute");
+});
+
+check("Draft-for-approval and escalation are distinct outcomes, never conflated under copilot authority", () => {
+  const validRule = findBoundedSubstitution("chicken breast", "turkey breast")!;
+  const draftOutcome = resolveSubstitutionDisposition(validRule, authoritySettingsAtLevel("copilot"), "client-test");
+  const escalateOutcome = resolveSubstitutionDisposition(null, authoritySettingsAtLevel("copilot"), "client-test");
+  assert.equal(draftOutcome, "draft");
+  assert.equal(escalateOutcome, "escalate");
+  assert.notEqual(draftOutcome, escalateOutcome);
+});
+
+// ---------------------------------------------------------------------------
+// Gate 3A — Attribution and planned-vs-actual survive downstream transformations
+// ---------------------------------------------------------------------------
+
+console.log("\nGate 3A.5 — Attribution and planned-vs-actual semantics survive archival, and existing nutrition behavior stays compatible\n");
+
+check("MealIntent, provenance, and estimate status all survive the existing daily-record archival snapshot unchanged", () => {
+  const option = MEAL_OPTIONS.breakfast[0];
+  let state = reducer(createInitialState(), { type: "SELECT_MEAL_OPTION", period: "breakfast", optionId: option.id });
+  const items = sampleItems();
+  state = reducer(state, { type: "LOG_PHOTO_MEAL", period: "lunch", items, macros: sumMealEstimateItems(items), confidence: "medium" });
+
+  const record = buildDailyRecordFromLiveState(state, state.programEnrollment, "live");
+
+  assert.equal(record.nutrition.meals.breakfast?.mealIntent, option.description, "MealIntent must survive archival exactly as logged");
+  assert.equal(mealProvenanceLabel(record.nutrition.meals.breakfast), "Coach-approved option");
+  assert.equal(mealProvenanceLabel(record.nutrition.meals.lunch), "OPTIM photo estimate");
+  assert.equal(isUncertainMealSelection(record.nutrition.meals.lunch), true, "the archived record must still read as uncertain evidence, never silently promoted to exact");
+});
+
+check("Existing nutrition totals/provenance behavior is unchanged by the Gate 3A additions", () => {
+  const option = MEAL_OPTIONS.snack[0];
+  const state = reducer(createInitialState(), { type: "SELECT_MEAL_OPTION", period: "snack", optionId: option.id });
+  const totals = computeNutritionTotals(state.meals);
+  assert.equal(totals.calories, option.macros.calories, "totals math is unaffected by carrying mealIntent alongside macros");
+  assert.equal(mealDisplayName("snack", state.meals.snack), option.name);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -16,6 +16,7 @@ import type {
   CardioOption,
   DayOfWeek,
   MacroValues,
+  MealIntent,
   MealPeriod,
   MealSelectionSource,
   NutritionTargets,
@@ -113,6 +114,11 @@ export interface MealSelectionSnapshot {
   /** Mirrors MealSelection.photoEstimate — present only when source ===
    * "photo-estimate". */
   photoEstimate?: PhotoMealEstimateSnapshot;
+  /** Gate 3A — mirrors MealSelection.mealIntent (see that field's own doc
+   * in lib/types.ts): the planned meal's preserved rationale, snapshotted
+   * at archival time exactly like every other field here. Absent for the
+   * same sources mealIntent is always absent for on the live selection. */
+  mealIntent?: MealIntent;
 }
 
 export interface NutritionDaySnapshot {

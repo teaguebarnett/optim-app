@@ -29,11 +29,33 @@ export interface MacroValues {
   fatG: number;
 }
 
+/** Gate 3A — the smallest useful representation of "Meal Intent": a
+ * concise, human-readable explanation of WHY a planned meal exists (its
+ * coaching rationale — timing, macro role, practicality), never a
+ * description of the food itself and never a record of what was actually
+ * eaten. Deliberately a plain string, not a richer object: MealOption's own
+ * `description` field already carries exactly this truth today (see e.g.
+ * MEAL_OPTIONS's real fixture text, "A fast, high-protein start that
+ * travels well if you're out the door early.") — this formalizes that
+ * existing field's semantics through the type system rather than adding a
+ * second, competing field. Distinct from:
+ *   - what the client actually ate (MealSelection.macros/manualName);
+ *   - AssignedNutritionPlan.substitutionGuidance (plan-wide free text about
+ *     swapping foods generally, never about one specific planned meal);
+ *   - MealEstimateItem (a photo estimate's item-level detail).
+ * Preserved across the recommendation -> logging flow via
+ * MealSelection.mealIntent — see lib/state.ts's SELECT_MEAL_OPTION and
+ * lib/nutrition/view-model.ts's mealIntentFor. */
+export type MealIntent = string;
+
 export interface MealOption {
   id: string;
   period: MealPeriod;
   name: string;
-  description: string;
+  /** Formalized as MealIntent (Gate 3A) — see that type's own doc. Still a
+   * plain string; every existing reader of `.description` (component or
+   * fixture) is unaffected. */
+  description: MealIntent;
   mainIngredients: string[];
   macros: MacroValues;
 }
@@ -76,6 +98,14 @@ export interface MealSelection {
    * behind the confirmed total, so reopening a photo-logged meal can show
    * (and let the client re-edit) exactly what was confirmed. */
   photoEstimate?: PhotoMealEstimateSnapshot;
+  /** Gate 3A — a snapshot of the planned meal's MealIntent (see that type's
+   * doc), captured at selection time exactly the way `photoEstimate` is
+   * already snapshotted above — never a live reference back into the
+   * MEAL_OPTIONS catalog, so this selection's recorded rationale can never
+   * change or disappear if the catalog is edited later. Absent for
+   * "manual"/"photo-estimate"/"skipped"/"planned-later" sources, which have
+   * no planned intent to preserve — never fabricated for those. */
+  mealIntent?: MealIntent;
 }
 
 export interface NutritionTargets {

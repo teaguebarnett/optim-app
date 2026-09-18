@@ -21,7 +21,10 @@
 // ---------------------------------------------------------------------------
 
 import { nextId } from "../state.ts";
-import type { MacroValues, MealEstimateConfidence, MealEstimateItem } from "../types";
+import { resolveAiAction } from "../coach/ai-authority.ts";
+import type { AiActionDisposition, CoachAiAuthoritySettings } from "../coach/ai-authority.ts";
+import type { ClientProfileId } from "../tenancy/types";
+import type { MacroValues, MealEstimateConfidence, MealEstimateItem, MealSelection } from "../types";
 
 export type MealAnalysisStatus = "ok" | "low-confidence" | "unrecognized";
 
@@ -139,3 +142,48 @@ export const localDemoMealVisionEstimator: MealVisionEstimator = {
  * export for a real backend-backed implementation to go live — see the
  * module doc above. */
 export const activeMealVisionEstimator: MealVisionEstimator = localDemoMealVisionEstimator;
+
+// ---------------------------------------------------------------------------
+// Gate 3A — photo estimates remain uncertain evidence.
+//
+// A confirmed photo-estimate MealSelection is real evidence the client
+// reviewed and approved (see LOG_PHOTO_MEAL in lib/state.ts) — but it is
+// still an estimate, never promoted to the same certainty as a coach-
+// approved catalog pick or the client's own precise manual entry. These two
+// helpers make that distinction load-bearing rather than merely a naming
+// convention: one for "is this specific logged meal still marked
+// uncertain," one for "what may happen automatically with evidence at this
+// confidence level" — reusing lib/coach/ai-authority.ts's existing
+// resolveAiAction exactly as lib/nutrition/substitution.ts's
+// resolveSubstitutionDisposition does, never a second permission model.
+// ---------------------------------------------------------------------------
+
+/** True for any meal selection that is not a confirmed-exact record — a
+ * photo estimate (regardless of confidence) or a client's own manual
+ * estimate (MealSelection.isEstimate). A coach-approved catalog option is
+ * the one source this returns false for: its macros are the plan's own
+ * known values, not an estimate of anything. */
+export function isUncertainMealSelection(selection: MealSelection | undefined): boolean {
+  if (!selection) return false;
+  return selection.source === "photo-estimate" || selection.isEstimate === true;
+}
+
+/**
+ * What may happen automatically with a photo estimate at this confidence —
+ * same two-step shape as resolveSubstitutionDisposition: a hard confidence
+ * gate first (low confidence, or a status that never reaches a real
+ * estimate at all, always escalates — no authority level can override
+ * that), then the existing authority table for anything confident enough
+ * to be eligible. `status` "unrecognized" (no usable evidence — see
+ * MealAnalysisResult) always escalates regardless of the confidence field,
+ * since there is no real estimate behind it to act on.
+ */
+export function resolvePhotoEstimateDisposition(
+  status: MealAnalysisStatus,
+  confidence: MealEstimateConfidence,
+  settings: CoachAiAuthoritySettings,
+  clientId: ClientProfileId | null
+): AiActionDisposition {
+  if (status === "unrecognized" || confidence === "low") return "escalate";
+  return resolveAiAction(settings, clientId, "nutrition_change", "routine", "nutrition_adjustment");
+}

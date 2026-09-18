@@ -7,7 +7,7 @@ import { MEAL_ORDER } from "../calculations.ts";
 import { MEAL_OPTIONS } from "../mock-data.ts";
 import type { DailyPlanResult, MealScheduleEntry } from "../planning/types";
 import type { AppState } from "../state";
-import type { DailyTaskId, DailyTaskState, MacroValues, MealEstimateItem, MealPeriod, MealSelection } from "../types";
+import type { DailyTaskId, DailyTaskState, MacroValues, MealEstimateItem, MealIntent, MealPeriod, MealSelection } from "../types";
 
 export type MacroKey = "protein" | "carbs" | "fat";
 
@@ -120,6 +120,16 @@ export function mealProvenanceLabel(selection: MealSelection | undefined): strin
   if (selection.source === "manual") return "Your manual entry";
   if (selection.source === "photo-estimate") return "OPTIM photo estimate";
   return null;
+}
+
+/** Gate 3A — the preserved MealIntent for a logged/selected meal, if this
+ * particular selection ever had one (see MealSelection.mealIntent's own
+ * doc). Never fabricated for a selection that has none (manual entries,
+ * photo estimates, skips, and "planned for later" all honestly return
+ * null) — this is a pure read of what was actually snapshotted, never a
+ * guess reconstructed from the current catalog. */
+export function mealIntentFor(selection: MealSelection | undefined): MealIntent | null {
+  return selection?.mealIntent ?? null;
 }
 
 export type MealCardStatus = "current" | "logged" | "skipped" | "missed" | "upcoming";

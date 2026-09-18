@@ -926,6 +926,10 @@ export function reducer(state: AppState, action: Action): AppState {
         optionId: option.id,
         macros: option.macros,
         completedAtIso: new Date().toISOString(),
+        // Gate 3A — snapshot the option's MealIntent onto the log the same
+        // way photoEstimate is already snapshotted below, so it survives
+        // independently of the MEAL_OPTIONS catalog.
+        mealIntent: option.description,
       };
       return { ...state, meals: withMealMacros(state.meals, action.period, selection) };
     }
@@ -949,7 +953,16 @@ export function reducer(state: AppState, action: Action): AppState {
     // this again for the same period always overwrites the prior entry via
     // withMealMacros, never appends.
     case "LOG_PHOTO_MEAL": {
+      // Gate 3A — a photo estimate with no real, named items is missing
+      // evidence, not a legitimate zero-calorie meal; refusing it here
+      // (the same "invalid input, state unchanged" pattern SELECT_MEAL_OPTION
+      // uses above for an unknown optionId) is the contract-level guarantee
+      // that "absence of usable evidence remains unknown" — the existing UI
+      // flow (components/nutrition/photo/photo-meal-flow.tsx's canConfirm)
+      // already never dispatches this with empty items, but the reducer is
+      // the real boundary, not a UI convention.
       const itemNames = action.items.map((i) => i.name.trim()).filter(Boolean);
+      if (itemNames.length === 0) return state;
       const selection: MealSelection = {
         period: action.period,
         source: "photo-estimate",
