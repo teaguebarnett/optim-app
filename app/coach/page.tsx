@@ -16,6 +16,7 @@
 // there is exactly one presentation and one data source, never two.
 
 import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
 import { AdjustmentAttentionCard } from "@/components/coach/adjustment-attention-card";
 import { DemoCoachDashboard } from "@/components/coach/demo-coach-dashboard";
@@ -163,7 +164,7 @@ async function LiveCoachDashboard() {
   const worthKnowingCount = patternCandidates.length;
 
   return (
-    <div className="mx-auto w-full max-w-[1040px] space-y-10">
+    <div className="mx-auto w-full max-w-[820px] space-y-10">
       <div>
         <p className="text-label text-accent-strong">
           {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
@@ -171,13 +172,14 @@ async function LiveCoachDashboard() {
         <h1 className="mt-1 text-display text-off-white">Good {timeOfDayGreeting()}, {inbox.coachDisplayName.split(" ")[0]}.</h1>
       </div>
 
-      {/* One composition, three zones on the same baseline — never a wide
-          dominant column with a narrow leftover rail beside it. Needs You
-          still owns most of the width (and, with a real item, the only
-          real height), but Worth Knowing and Handled sit at the same top
-          edge as genuine siblings, not stacked afterthoughts, so the row
-          reads as one deliberate group even when every count is small. */}
-      <div className="grid grid-cols-1 gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,1fr)_200px_200px] lg:items-start">
+      {/* One bounded composition, three zones on the same baseline — never
+          stretched edge-to-edge. Proportional columns (not a fixed-width
+          rail) keep Worth Knowing and Handled close enough to Needs You to
+          read as one status band, even when Needs You itself is just a
+          bare "0". Needs You still owns most of the width (and, with a
+          real item, the only real height); Worth Knowing and Handled
+          recede via scale and color, not physical distance. */}
+      <div className="grid grid-cols-1 gap-16 lg:grid-cols-[1.6fr_0.8fr_0.8fr] lg:gap-x-12 lg:items-start">
         {/* NEEDS YOU — the dominant working surface. Zero is a complete
             state on its own; a real item is the one expanded object plus
             compact rows for the rest — actions only ever live on the
@@ -225,14 +227,17 @@ async function LiveCoachDashboard() {
         </section>
 
         {/* HANDLED — recessive/ambient. A nonzero count is a real link into
-            the roster it's counting (a quiet underline, not a button). */}
+            the roster it's counting, with a small chevron (not an
+            underline, which read as a stray dash) as the disclosure cue. */}
         <section className="min-w-0">
           <p className="text-label text-neutral">Handled</p>
           <Link
             href="/coach/clients"
-            className="mt-2 inline-block text-subheading text-neutral underline decoration-border-strong underline-offset-4 transition-colors hover:text-off-white hover:decoration-off-white"
+            aria-label={`${rosterPulse.onTrack} handled — view clients`}
+            className="mt-2 inline-flex items-center gap-0.5 text-subheading text-neutral transition-colors hover:text-off-white"
           >
             {rosterPulse.onTrack}
+            <ChevronRight size={14} className="shrink-0 opacity-60" aria-hidden="true" />
           </Link>
           {activeLearnedRuleCount > 0 && (
             <details className="mt-3">

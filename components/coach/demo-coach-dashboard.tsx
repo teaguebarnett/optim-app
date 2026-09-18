@@ -11,6 +11,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { DecisionFocusSurface } from "@/components/coach/decision-focus-surface";
 import { DecisionQueueRows } from "@/components/coach/decision-queue-rows";
 import { PersonalTouchList } from "@/components/coach/personal-touch-list";
@@ -118,7 +119,7 @@ export function DemoCoachDashboard() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1040px] space-y-10">
+    <div className="mx-auto w-full max-w-[820px] space-y-10">
       <div>
         <p className="text-label text-accent-strong">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
         <h1 className="mt-1 text-display text-off-white">
@@ -126,13 +127,14 @@ export function DemoCoachDashboard() {
         </h1>
       </div>
 
-      {/* One composition, three zones on the same baseline — never a wide
-          dominant column with a narrow leftover rail beside it. Needs You
-          still owns most of the width (and, with a real decision, the only
-          real height), but Worth Knowing and Handled sit at the same top
-          edge as genuine siblings, not stacked afterthoughts, so the row
-          reads as one deliberate group even when every count is small. */}
-      <div className="grid grid-cols-1 gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,1fr)_200px_200px] lg:items-start">
+      {/* One bounded composition, three zones on the same baseline — never
+          stretched edge-to-edge. Proportional columns (not a fixed-width
+          rail) keep Worth Knowing and Handled close enough to Needs You to
+          read as one status band, even when Needs You itself is just a
+          bare "0". Needs You still owns most of the width (and, with a
+          real decision, the only real height); Worth Knowing and Handled
+          recede via scale and color, not physical distance. */}
+      <div className="grid grid-cols-1 gap-16 lg:grid-cols-[1.6fr_0.8fr_0.8fr] lg:gap-x-12 lg:items-start">
         {/* NEEDS YOU — the dominant working surface. Zero is a complete,
             self-sufficient state (conceptual sufficiency); a real decision
             is the one genuinely expanded object, the rest compact rows —
@@ -168,16 +170,19 @@ export function DemoCoachDashboard() {
         </section>
 
         {/* HANDLED — recessive/ambient: smaller still, muted color. A
-            nonzero count is a real link into the roster it's counting
-            (a quiet underline, not a button), so "what got handled" stays
-            one click away without ever becoming a list here. */}
+            nonzero count is a real link into the roster it's counting, with
+            a small chevron (not an underline, which read as a stray dash)
+            as the disclosure cue, so "what got handled" stays one click
+            away without ever becoming a list here. */}
         <section className="min-w-0">
           <p className="text-label text-neutral">Handled</p>
           <Link
             href="/coach/clients"
-            className="mt-2 inline-block text-subheading text-neutral underline decoration-border-strong underline-offset-4 transition-colors hover:text-off-white hover:decoration-off-white"
+            aria-label={`${rosterPulse.onTrack} handled — view clients`}
+            className="mt-2 inline-flex items-center gap-0.5 text-subheading text-neutral transition-colors hover:text-off-white"
           >
             {rosterPulse.onTrack}
+            <ChevronRight size={14} className="shrink-0 opacity-60" aria-hidden="true" />
           </Link>
         </section>
       </div>
