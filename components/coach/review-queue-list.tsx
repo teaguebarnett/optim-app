@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, CheckCircle2, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2, ClipboardCheck } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, CheckCircle2, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2, ClipboardCheck, MessageCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/coach/empty-state";
 import { ATTENTION_KIND_LABELS } from "@/lib/coach/labels";
@@ -21,6 +21,7 @@ const KIND_ICON: Record<AttentionQueueItem["kind"], typeof AlertTriangle> = {
   "ai-authority-boundary": ShieldAlert,
   "adaptation-proposal": Wand2,
   milestone: Trophy,
+  "client-requested": MessageCircle,
 };
 
 function toneClassesForKind(kind: AttentionQueueItem["kind"]): { icon: string; bg: string; accentBorder: string } {

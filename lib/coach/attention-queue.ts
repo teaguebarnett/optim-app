@@ -43,6 +43,10 @@ const ATTENTION_PRIORITY: Record<AttentionItemKind, number> = {
   "pain-report": 0,
   "recovery-deterioration": 0.5,
   "ai-authority-boundary": 0.75,
+  // A client's own deliberate request to talk — ranked just ahead of a
+  // routine program-change ask, since it's a direct, personal ask rather
+  // than a detected pattern.
+  "client-requested": 0.9,
   "program-change-request": 1,
   "adaptation-proposal": 1.25,
   "performance-pattern": 1.5,

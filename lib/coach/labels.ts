@@ -28,6 +28,7 @@ export const REVIEW_KIND_LABELS: Record<ReviewRequestKind, string> = {
   "ai-authority-boundary": "OPTIM held for your review",
   "adaptation-proposal": "Program adjustment proposed",
   milestone: "Worth a personal touch",
+  "client-requested": "Wants to talk directly",
 };
 
 /** Every AttentionQueueItem's kind, including the two ("health_review",
@@ -58,6 +59,7 @@ export const ATTENTION_KIND_QUESTIONS: Record<AttentionItemKind, string> = {
   "ai-authority-boundary": "What should OPTIM tell {name}?",
   "adaptation-proposal": "Should {name}'s upcoming training change based on how they're actually performing?",
   milestone: "Want to send {name} a quick note?",
+  "client-requested": "What should you tell {name}?",
 };
 
 export const HEALTH_REVIEW_STATUS_LABELS: Record<HealthReviewStatus, string> = {

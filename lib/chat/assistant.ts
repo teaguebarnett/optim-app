@@ -187,6 +187,26 @@ export function unsupportedHandoffReplyText(coachName: string): string {
   return `I've sent this to ${coachName} so they can take a look.`;
 }
 
+/** Gate 2C — the one-line system confirmation shown after a client
+ * deliberately taps "Talk to {coach}," distinct from every other handoff
+ * copy in this file: those describe OPTIM routing something IT classified;
+ * this describes the client's own explicit choice, so the wording says
+ * "you asked" rather than "I've sent this." Never claims the coach has
+ * already replied — see ChatHandoffState's "pending_coach_review". */
+export function talkToCoachRequestedSystemText(coachName: string): string {
+  return `You asked to talk to ${coachName} directly — sent, awaiting a reply.`;
+}
+
+/** Gate 2C human-QA correction — once the request talkToCoachRequestedSystemText
+ * described has actually been resolved, "awaiting a reply" is stale: the
+ * reply is right there in the transcript below it. See
+ * components/chat/message-bubble.tsx, which chooses between this and
+ * talkToCoachRequestedSystemText live from the linked ReviewRequest's own
+ * `resolved` field — never by editing the stored message. */
+export function talkToCoachRepliedSystemText(coachName: string): string {
+  return `You asked to talk to ${coachName} directly — ${coachName} replied.`;
+}
+
 export function scheduleUpdateConfirmationText(
   coachName: string,
   result: { kind: "scheduled"; timeLabel: string } | { kind: "rest_day" } | { kind: "unsure" }

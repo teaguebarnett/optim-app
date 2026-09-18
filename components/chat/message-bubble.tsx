@@ -2,6 +2,7 @@ import { Sparkles } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { AttachmentMessage } from "@/components/chat/attachment-message";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { talkToCoachRepliedSystemText } from "@/lib/chat/assistant";
 import { cn } from "@/lib/cn";
 import type { ChatMessage } from "@/lib/types";
 
@@ -40,16 +41,25 @@ export function MessageBubble({
   coachOverride?: { displayName: string; avatarInitials: string } | null;
   clientAvatarInitialsOverride?: string;
 }) {
-  const { activeContext } = usePrototypeState();
+  const { state, activeContext } = usePrototypeState();
   const coach = coachOverride !== undefined ? coachOverride : activeContext.primaryCoach;
   const clientAvatarInitials = clientAvatarInitialsOverride ?? activeContext.clientProfile?.avatarInitials ?? "?";
   const hasText = message.text.trim().length > 0;
   const hasAttachments = !!message.attachments && message.attachments.length > 0;
 
   if (message.sender === "system") {
+    // Gate 2C human-QA correction — a "system" line linked to a Talk-to-
+    // {coach} request (see ChatMessage.reviewRequestId) must read as
+    // resolved the moment the real ReviewRequest is, not stay frozen on
+    // its creation-time "awaiting a reply" wording. Derived live off that
+    // request's own `resolved` field every render; the stored message.text
+    // itself is never rewritten, and every other system message (with no
+    // reviewRequestId) renders exactly as before.
+    const linkedReview = message.reviewRequestId ? state.reviewRequests.find((r) => r.id === message.reviewRequestId) : undefined;
+    const displayText = linkedReview?.resolved ? talkToCoachRepliedSystemText(coach?.displayName ?? "your coach") : message.text;
     return (
       <div className="flex justify-center py-1">
-        <span className="rounded-full bg-off-white/[0.05] px-3 py-1 text-xs text-neutral">{message.text}</span>
+        <span className="rounded-full bg-off-white/[0.05] px-3 py-1 text-xs text-neutral">{displayText}</span>
       </div>
     );
   }

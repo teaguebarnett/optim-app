@@ -21,7 +21,8 @@ export function requiresResolutionNote(kind: ReviewRequestKind): boolean {
     kind === "adherence-pattern" ||
     kind === "recovery-deterioration" ||
     kind === "ai-authority-boundary" ||
-    kind === "adaptation-proposal"
+    kind === "adaptation-proposal" ||
+    kind === "client-requested"
   );
 }
 
@@ -44,7 +45,11 @@ export function requiresClientNotificationBeforeResolution(kind: ReviewRequestKi
     kind === "program-change-request" ||
     kind === "performance-pattern" ||
     kind === "adherence-pattern" ||
-    kind === "recovery-deterioration"
+    kind === "recovery-deterioration" ||
+    // Gate 2C — the client is waiting to hear back; resolving without a
+    // real reply relayed to them would silently drop the request they
+    // explicitly asked for.
+    kind === "client-requested"
   );
 }
 

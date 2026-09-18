@@ -257,6 +257,54 @@ check("resolving a significant kind with a client message relays a real, provena
   assert.equal(relayed.text, "Teague reviewed this and wants you to know: Keep incline pressing paused today.");
 });
 
+console.log("\n3c. Gate 2C — the client-requested kind (explicit 'Talk to Teague')\n");
+
+check("client-requested is normal severity but still requires a resolution note and client notification", () => {
+  assert.equal(severityForKind("client-requested"), "normal");
+  assert.equal(requiresResolutionNote("client-requested"), true);
+  assert.equal(requiresClientNotificationBeforeResolution("client-requested"), true);
+});
+
+check("resolving a client-requested review without a reply is blocked, exactly like any other significant kind", () => {
+  seedClientWithReview(makeReview({ id: "r-talk-blocked", status: "needs_review", kind: "client-requested", severity: "normal", summary: "Asked to talk directly." }));
+  const result = resolveReviewRequest({
+    clientId: LIFECYCLE_CLIENT_ID,
+    reviewId: "r-talk-blocked",
+    resolutionAction: "resolved",
+    resolvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    resolvedByCoachName: "Teague Barnett",
+    nowIso: "2026-01-03T00:00:00.000Z",
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "notification_required");
+});
+
+check("resolving a client-requested review with a reply relays it to the client and closes the temporary thread", () => {
+  seedClientWithReview(makeReview({ id: "r-talk-resolved", status: "needs_review", kind: "client-requested", severity: "normal", summary: "Asked to talk directly." }));
+  const result = resolveReviewRequest({
+    clientId: LIFECYCLE_CLIENT_ID,
+    reviewId: "r-talk-resolved",
+    resolutionAction: "resolved",
+    resolvedByCoachId: COACH_PROFILE_TEAGUE.id,
+    resolvedByCoachName: "Teague Barnett",
+    clientMessage: "Let's push tomorrow's session to 6pm — I'll adjust your plan.",
+    nowIso: "2026-01-03T00:00:00.000Z",
+  });
+  assert.equal(result.ok, true);
+  const state = loadClientAppState(LIFECYCLE_CLIENT_ID)!;
+  const review = state.reviewRequests.find((r) => r.id === "r-talk-resolved")!;
+  // The client-side screen derives its "still talking with Teague" state
+  // from exactly this: reviewRequests.find(kind === "client-requested" &&
+  // !resolved). Once resolved is true, that lookup finds nothing and the
+  // screen reverts to the default OPTIM conversation on its own — no
+  // separate "close the thread" step exists or is needed.
+  assert.equal(review.resolved, true);
+  const relayed = state.chatMessages[state.chatMessages.length - 1];
+  assert.equal(relayed.sender, "assistant", "the relay is attributed to OPTIM communicating Teague's reply, never faked as Teague speaking directly");
+  assert.equal(relayed.relayedCoachDecision?.coachDisplayName, "Teague Barnett");
+  assert.match(relayed.text, /Teague reviewed this and wants you to know/);
+});
+
 check("moveReviewToWaiting records what's being waited on and never resolves the review", () => {
   seedClientWithReview(makeReview({ id: "r-waiting", status: "needs_review", kind: "pain-report" }));
   const ok = moveReviewToWaiting({

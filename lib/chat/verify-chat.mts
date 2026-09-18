@@ -17,6 +17,8 @@ import {
   programChangeAckReplyText,
   scheduleChangePromptText,
   scheduleUpdateConfirmationText,
+  talkToCoachRepliedSystemText,
+  talkToCoachRequestedSystemText,
   unsupportedHandoffReplyText,
 } from "./assistant.ts";
 import { ATTACHMENT_LIMITS, buildChatAttachment, validateAttachmentFile } from "./attachments.ts";
@@ -279,6 +281,72 @@ check("A program-change acknowledgement never approves or invents the change its
 check("Pain takes precedence over program-change wording when a message contains both", () => {
   // Safety-critical ordering — see classifyClientMessage's module doc.
   assert.equal(classifyClientMessage("My shoulder hurts, can we substitute a different exercise?").kind, "pain");
+});
+
+console.log("\n8b. Gate 2C — explicit 'Talk to Teague' is distinct from every AI-classified category\n");
+
+check("classifyClientMessage never produces client-requested — it is only ever created via the explicit action, not inferred from wording", () => {
+  const probes = [
+    "I want to talk to my coach",
+    "Can I talk to Teague directly?",
+    "I need to speak with a real person",
+    "hey",
+    "My shoulder hurts",
+    "Can I substitute incline press for flat bench?",
+  ];
+  for (const text of probes) {
+    const intent = classifyClientMessage(text);
+    assert.notEqual((intent as { kind: string }).kind, "client-requested", `"${text}" must never classify as client-requested`);
+  }
+});
+
+check("talkToCoachRequestedSystemText names the real coach and reads as the client's own ask, never as OPTIM routing something it classified", () => {
+  const text = talkToCoachRequestedSystemText("Alex");
+  assert.match(text, /Alex/);
+  assert.match(text, /^You asked/, "must frame this as the client's own deliberate request");
+  assert.doesNotMatch(text, /^I've sent/, "must read differently from the AI-escalation handoff copy (\"I've sent this to…\")");
+});
+
+check("CREATE_CHAT_REVIEW_REQUEST routes an explicit client-requested request through the demo client's assigned coach, same as any other chat-originated review", () => {
+  const state = reducer(createInitialState(), {
+    type: "CREATE_CHAT_REVIEW_REQUEST",
+    kind: "client-requested",
+    summary: "Asked to talk directly.",
+  });
+  const request = state.reviewRequests[0];
+  assert.equal(request.assignedCoachId, COACH_PROFILE_TEAGUE.id);
+  assert.equal(request.kind, "client-requested");
+  assert.equal(request.resolved, false);
+});
+
+console.log("\n8c. Gate 2C human-QA correction — the Talk-to-Teague system line is derived from resolved status, not frozen at creation\n");
+
+check("talkToCoachRepliedSystemText names the real coach and reads as resolved, distinct from the still-open wording", () => {
+  const open = talkToCoachRequestedSystemText("Alex");
+  const replied = talkToCoachRepliedSystemText("Alex");
+  assert.match(replied, /Alex/);
+  assert.match(replied, /replied/i);
+  assert.doesNotMatch(replied, /awaiting/i, "the resolved wording must not still claim a reply is pending");
+  assert.notEqual(open, replied);
+});
+
+check("CREATE_CHAT_REVIEW_REQUEST honors an explicit id when the caller supplies one (so a companion ChatMessage can reference the exact same review)", () => {
+  const state = reducer(createInitialState(), {
+    type: "CREATE_CHAT_REVIEW_REQUEST",
+    kind: "client-requested",
+    summary: "Asked to talk directly.",
+    id: "review-fixed-id",
+  });
+  assert.equal(state.reviewRequests[0].id, "review-fixed-id");
+});
+
+check("CREATE_CHAT_REVIEW_REQUEST still generates its own id when none is supplied — every other existing caller (pain, program-change) is unaffected", () => {
+  const state = reducer(createInitialState(), {
+    type: "CREATE_CHAT_REVIEW_REQUEST",
+    kind: "pain-report",
+    summary: 'Pain reported via chat: "my shoulder hurts"',
+  });
+  assert.ok(state.reviewRequests[0].id.length > 0);
 });
 
 console.log("\n9. Attachment validation\n");

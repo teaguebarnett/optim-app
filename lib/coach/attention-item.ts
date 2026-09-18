@@ -230,6 +230,7 @@ export const DEMO_ATTENTION_KIND_LABELS: Record<AttentionItemKind, string> = {
   "technique-flag": "Technique flag",
   "schedule-change": "Schedule change",
   milestone: "Milestone",
+  "client-requested": "Wants to talk",
 };
 
 /** Exported so the demo dashboard COULD render through the shared shape in

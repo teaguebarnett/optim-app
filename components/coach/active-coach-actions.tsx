@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, TrendingDown, ShieldAlert, CalendarX, Wand2 } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, TrendingDown, ShieldAlert, CalendarX, Wand2, MessageCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { ReviewDetailSheet } from "@/components/coach/review-detail-sheet";
 import { PersonalTouchList } from "@/components/coach/personal-touch-list";
@@ -21,6 +21,7 @@ const KIND_ICON: Record<string, typeof AlertTriangle> = {
   "recovery-deterioration": TrendingDown,
   "ai-authority-boundary": ShieldAlert,
   "adaptation-proposal": Wand2,
+  "client-requested": MessageCircle,
 };
 
 const STATUS_LABEL: Record<string, string> = {

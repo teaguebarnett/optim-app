@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2, ClipboardCheck } from "lucide-react";
+import { AlertTriangle, RefreshCcw, Activity, SkipForward, Flag, HeartPulse, TrendingDown, ShieldAlert, Trophy, CalendarX, Wand2, ClipboardCheck, MessageCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/coach/empty-state";
 import { CheckCircle2 } from "lucide-react";
@@ -21,6 +21,7 @@ const KIND_ICON: Record<AttentionQueueItem["kind"], typeof AlertTriangle> = {
   "ai-authority-boundary": ShieldAlert,
   "adaptation-proposal": Wand2,
   milestone: Trophy,
+  "client-requested": MessageCircle,
 };
 
 /** Pain/injury and a pending health review both read as a genuinely more

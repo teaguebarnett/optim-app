@@ -1126,6 +1126,16 @@ export interface ChatMessage {
    * "Teague." Used to render explicit coach-involvement provenance without
    * exposing internal system labels (spec §6). */
   relayedCoachDecision?: { coachDisplayName: string; reviewRequestId: string };
+  /** Gate 2C — set only on the "system" status line created alongside an
+   * explicit "Talk to {coach}" request (see components/chat/demo-chat-
+   * screen.tsx's handleTalkToCoach). Lets the displayed text be derived
+   * live from that exact ReviewRequest's current resolved status (see
+   * components/chat/message-bubble.tsx) rather than frozen at creation
+   * time — never used to alter the ReviewRequest itself. Absent on every
+   * other message, including the AI-classified escalation's own "Sent to
+   * {coach} — awaiting review" system line, which keeps its original,
+   * unmodified behavior. */
+  reviewRequestId?: string;
 }
 
 export interface ScriptedChatTopic {
@@ -1187,7 +1197,14 @@ export type ReviewRequestKind =
    * a milestone) routed to "Worth a personal touch," never mixed with a
    * risk/decision alert. Carries a real, ready-to-send draft message (see
    * ReviewRequest.preparedClientMessage) rather than an invented one. */
-  | "milestone";
+  | "milestone"
+  /** Gate 2C — the client explicitly tapped "Talk to Teague" in Chat: a
+   * deliberate request for the real human coach, never inferred from
+   * message wording the way "pain"/"program_change" are classified (see
+   * lib/chat/assistant.ts's classifyClientMessage, which never produces
+   * this kind). Created only via CREATE_CHAT_REVIEW_REQUEST, exactly like
+   * every other chat-originated review — no second escalation model. */
+  | "client-requested";
 
 /** A review's explicit, persistent place in its resolution lifecycle —
  * never inferred solely from the `resolved` boolean (kept only for

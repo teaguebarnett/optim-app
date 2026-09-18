@@ -167,6 +167,7 @@ const REVIEW_KIND_PHRASE: Partial<Record<ReviewRequestKind, string>> = {
   "recovery-deterioration": "declining recovery/adherence",
   "ai-authority-boundary": "a briefing held for review",
   milestone: "a milestone",
+  "client-requested": "a request to talk directly",
 };
 
 function reviewPhrase(kind: ReviewRequestKind): string {

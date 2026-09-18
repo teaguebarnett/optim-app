@@ -12,12 +12,26 @@
 // (the client's default conversation is always OPTIM, never a coach DM).
 //
 // Supabase mode uses components/chat/live-chat-screen.tsx instead.
+//
+// Gate 2C — added the one explicit "Talk to {coach}" action (see
+// TalkToCoachSheet/handleTalkToCoach below) so a client can deliberately
+// request the real human coach, distinct from lib/chat/assistant.ts's
+// AI-classified pain/program-change handoffs. It's a one-shot request, not
+// a mode toggle: the header/composer only shift into "talking with {coach}"
+// framing while a real "client-requested" ReviewRequest is open (see
+// openCoachThread below), and revert to the default OPTIM conversation the
+// moment Teague resolves it — through the exact same review-resolution
+// path (lib/coach/review-lifecycle.ts) every other escalation already
+// uses, so nothing here is a second backend or thread system.
 
 import { useEffect, useRef, useState } from "react";
+import { MessageCircle } from "lucide-react";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { SuggestedPrompts } from "@/components/chat/suggested-prompts";
 import { ChatComposer } from "@/components/chat/chat-composer";
+import { TalkToCoachSheet } from "@/components/chat/talk-to-coach-sheet";
 import { ScreenSkeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { TrainingTimeSheet, type TrainingTimeCommitResult } from "@/components/today/training-time-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { chatAssistantDescription } from "@/lib/mock-data";
@@ -29,6 +43,7 @@ import {
   programChangeAckReplyText,
   scheduleChangePromptText,
   scheduleUpdateConfirmationText,
+  talkToCoachRequestedSystemText,
   unsupportedHandoffReplyText,
 } from "@/lib/chat/assistant";
 import { isNearBottom } from "@/lib/chat/composer-guards";
@@ -51,8 +66,19 @@ export function DemoChatScreen() {
   const wasNearBottomRef = useRef(true);
   const pendingEscalationRef = useRef<PendingEscalation>(null);
   const [scheduleSheetOpen, setScheduleSheetOpen] = useState(false);
+  const [talkToCoachOpen, setTalkToCoachOpen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(0);
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
+
+  // Gate 2C — a client explicitly asked to talk directly (see
+  // handleTalkToCoach) and Teague hasn't resolved it yet. Derived straight
+  // from the same reviewRequests the coach's own Reviews/Command Center
+  // already read — never a second, separate "thread" record — so this is
+  // true for exactly as long as the request is genuinely open, survives a
+  // refresh, and clears itself the moment Teague resolves it (see
+  // lib/coach/review-lifecycle.ts's resolveReviewRequest), returning this
+  // screen to the default OPTIM conversation with nothing deleted.
+  const openCoachThread = state.reviewRequests.find((r) => r.kind === "client-requested" && !r.resolved);
 
   useEffect(() => {
     if (isHydrated && state.chatMessages.length === 0 && !seeded.current) {
@@ -137,6 +163,15 @@ export function DemoChatScreen() {
       },
     });
 
+    // Gate 2C — while an explicit Talk-to-Teague request is still open,
+    // every message the client sends is more context for THAT real human
+    // conversation, never material for OPTIM's own classifier/auto-reply —
+    // sending it as OPTIM would blur exactly the distinction requirement #5
+    // exists to preserve. It stays in this one thread (never a separate
+    // history) and reaches Teague through the same AppState his Reviews/
+    // Messages screens already read.
+    if (openCoachThread) return;
+
     const intent = classifyClientMessage(text);
 
     // The immediate next message in the same open escalation category is
@@ -211,9 +246,48 @@ export function DemoChatScreen() {
 
   function handleSendVoice(attachment: ChatAttachment) {
     addMessage({ sender: "client", text: "", attachments: [attachment], deliveryState: "sent" });
+    if (openCoachThread) return; // see handleSend's matching guard
     window.setTimeout(() => {
       addMessage({ sender: "assistant", text: `Got it — ${coachName} will get your voice message.` });
     }, 400);
+  }
+
+  // Gate 2C — the one explicit "request the real human" action (distinct
+  // from lib/chat/assistant.ts's classifyClientMessage, which never
+  // produces this kind). Only ever creates the review request after the
+  // sheet's own confirm action actually fires — never speculatively while
+  // the sheet is merely open — and only then shows the client-facing
+  // confirmation, so the record and what the client is told about it can
+  // never drift apart.
+  function handleTalkToCoach(note?: string) {
+    let sourceMessageId: string | undefined;
+    if (note) {
+      sourceMessageId = nextId("msg");
+      dispatch({
+        type: "ADD_CHAT_MESSAGE",
+        message: { id: sourceMessageId, createdAtIso: new Date().toISOString(), sender: "client", text: note, deliveryState: "sent" },
+      });
+    }
+    // Generated here (not left to the reducer) so this exact id can also be
+    // stamped onto the system message below — see ChatMessage.reviewRequestId's
+    // doc for why the two need to agree.
+    const reviewRequestId = nextId("review");
+    dispatch({
+      type: "CREATE_CHAT_REVIEW_REQUEST",
+      kind: "client-requested",
+      summary: note ? `Asked to talk directly: "${note}"` : "Asked to talk directly.",
+      sourceMessageId,
+      id: reviewRequestId,
+    });
+    setTalkToCoachOpen(false);
+    window.setTimeout(() => {
+      addMessage({
+        sender: "system",
+        text: talkToCoachRequestedSystemText(coachName),
+        handoffState: "pending_coach_review",
+        reviewRequestId,
+      });
+    }, 300);
   }
 
   function handleScheduleCommitted(result: TrainingTimeCommitResult) {
@@ -225,11 +299,29 @@ export function DemoChatScreen() {
 
   return (
     <div className="flex flex-col">
-      <div className="border-b border-border px-4 py-3">
-        <p className="text-sm font-semibold text-off-white">OPTIM Assistant</p>
-        <p className="mt-0.5 text-xs text-neutral">
-          {chatAssistantDescription(activeContext.assistantDisplayName, coachName)}
-        </p>
+      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          {openCoachThread ? (
+            <>
+              <p className="text-sm font-semibold text-off-white">{coachName} · Coach</p>
+              <p className="mt-0.5 text-xs text-neutral">
+                {`You're talking with ${coachName} directly. This closes once it's resolved, and you'll be back with OPTIM.`}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-semibold text-off-white">OPTIM Assistant</p>
+              <p className="mt-0.5 text-xs text-neutral">
+                {chatAssistantDescription(activeContext.assistantDisplayName, coachName)}
+              </p>
+            </>
+          )}
+        </div>
+        {!openCoachThread ? (
+          <Button variant="outline" size="sm" className="shrink-0" onClick={() => setTalkToCoachOpen(true)}>
+            <MessageCircle size={14} aria-hidden="true" /> Talk to {coachName}
+          </Button>
+        ) : null}
       </div>
 
       <div className="space-y-1 px-4 py-3" style={{ paddingBottom: composerHeight + 24 }}>
@@ -240,10 +332,16 @@ export function DemoChatScreen() {
       </div>
 
       <div ref={composerWrapRef} className="sticky bottom-[4.75rem] z-20 border-t border-border bg-near-black/95 backdrop-blur-md">
-        <div className="pb-2 pt-2">
-          <SuggestedPrompts onSelect={handleSelectPrompt} />
-        </div>
-        <ChatComposer onSend={handleSend} onSendVoice={handleSendVoice} />
+        {!openCoachThread ? (
+          <div className="pb-2 pt-2">
+            <SuggestedPrompts onSelect={handleSelectPrompt} />
+          </div>
+        ) : null}
+        <ChatComposer
+          placeholder={openCoachThread ? `Message ${coachName}…` : undefined}
+          onSend={handleSend}
+          onSendVoice={handleSendVoice}
+        />
       </div>
 
       <TrainingTimeSheet
@@ -251,6 +349,12 @@ export function DemoChatScreen() {
         open={scheduleSheetOpen}
         onOpenChange={setScheduleSheetOpen}
         onCommitted={handleScheduleCommitted}
+      />
+      <TalkToCoachSheet
+        open={talkToCoachOpen}
+        onClose={() => setTalkToCoachOpen(false)}
+        coachName={coachName}
+        onConfirm={handleTalkToCoach}
       />
     </div>
   );

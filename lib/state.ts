@@ -722,7 +722,20 @@ export type Action =
    * back to the client's own ChatMessage (and any attachments on it) so a
    * future coach workspace never has to duplicate that content onto the
    * request itself. See lib/chat/assistant.ts for what routes here. */
-  | { type: "CREATE_CHAT_REVIEW_REQUEST"; kind: ReviewRequestKind; summary: string; sourceMessageId?: string }
+  | {
+      type: "CREATE_CHAT_REVIEW_REQUEST";
+      kind: ReviewRequestKind;
+      summary: string;
+      sourceMessageId?: string;
+      /** Gate 2C — lets a caller (see components/chat/demo-chat-screen.tsx's
+       * handleTalkToCoach) know this review's real id up front, so it can
+       * stamp a companion ChatMessage with the same id (ChatMessage.
+       * reviewRequestId) before the review even exists in state — needed to
+       * derive that message's displayed text live from this exact review's
+       * resolved status later. Omitted by every other caller, which keeps
+       * generating its id here exactly as before. */
+      id?: string;
+    }
   /** Phase 5.4B — dispatched once the client-side daily entrance sequence
    * (spec §8) finishes for today, so a second same-day open skips straight
    * to Today. See DailyEntranceState's doc for why this needs no rollover
@@ -2671,7 +2684,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if (findDuplicateReviewRequest(state.reviewRequests, chatReviewCandidate)) return state;
       const chatReviewNowIso = new Date().toISOString();
       const reviewRequest: ReviewRequest = {
-        id: nextId("review"),
+        id: action.id ?? nextId("review"),
         ...chatReviewCandidate,
         sourceMessageId: action.sourceMessageId,
         severity: severityForKind(action.kind),
