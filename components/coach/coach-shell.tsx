@@ -88,6 +88,13 @@ export function CoachShell({
   const com = useCoachOperatingModel();
   const { attentionQueue } = workspace;
   const businessName = activeContext.branding.businessName;
+  // Phase 13A.1 correction — a demo workspace genuinely branded as OPTIM
+  // (the platform's own default identity, e.g. lib/tenancy/seed.ts's
+  // primary demo account) must present the real canonical wordmark, never
+  // the generic letter-tile treatment. A genuinely custom-branded demo
+  // workspace (e.g. the "Atlas Performance Coaching" seed) keeps that
+  // treatment unchanged — this never touches real white-label capability.
+  const isCanonicalOptimBrand = businessName === "OPTIM";
   const coachName = activeContext.coachProfile?.displayName ?? "Coach";
   const initials = activeContext.coachProfile?.avatarInitials ?? "C";
   const reviewCount = attentionQueue.length;
@@ -181,11 +188,17 @@ export function CoachShell({
         {/* Desktop — full-width horizontal navigation. */}
         <header className="sticky top-0 z-30 hidden border-b border-border bg-charcoal/95 backdrop-blur-md md:block">
           <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-6 px-8">
-            <Link href="/coach" className="flex shrink-0 items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-sm)] bg-accent text-sm font-semibold tracking-tight text-on-accent">
-                {businessName.slice(0, 1)}
-              </span>
-              <span className="text-subheading text-off-white">{businessName}</span>
+            <Link href="/coach" className="flex shrink-0 items-center">
+              {isCanonicalOptimBrand ? (
+                <OptimWordmark size={22} className="text-off-white" />
+              ) : (
+                <span className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-sm)] bg-accent text-sm font-semibold tracking-tight text-on-accent">
+                    {businessName.slice(0, 1)}
+                  </span>
+                  <span className="text-subheading text-off-white">{businessName}</span>
+                </span>
+              )}
             </Link>
 
             <nav className="flex flex-1 items-center justify-center gap-1" aria-label="Coach navigation">
@@ -256,12 +269,16 @@ export function CoachShell({
 
         {/* Mobile header. */}
         <header className="flex items-center justify-between border-b border-border bg-charcoal px-4 py-3 pc-safe-top md:hidden">
-          <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-xs)] bg-accent text-xs font-semibold text-on-accent">
-              {businessName.slice(0, 1)}
-            </span>
-            <span className="text-sm font-semibold text-off-white">{businessName}</span>
-          </div>
+          {isCanonicalOptimBrand ? (
+            <OptimWordmark size={18} className="text-off-white" />
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-xs)] bg-accent text-xs font-semibold text-on-accent">
+                {businessName.slice(0, 1)}
+              </span>
+              <span className="text-sm font-semibold text-off-white">{businessName}</span>
+            </div>
+          )}
           <Avatar initials={initials} size="sm" />
         </header>
 

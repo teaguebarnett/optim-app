@@ -163,7 +163,7 @@ async function LiveCoachDashboard() {
   const worthKnowingCount = patternCandidates.length;
 
   return (
-    <div className="mx-auto w-full max-w-[1180px] space-y-12">
+    <div className="mx-auto w-full max-w-[1040px] space-y-10">
       <div>
         <p className="text-label text-accent-strong">
           {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
@@ -171,7 +171,13 @@ async function LiveCoachDashboard() {
         <h1 className="mt-1 text-display text-off-white">Good {timeOfDayGreeting()}, {inbox.coachDisplayName.split(" ")[0]}.</h1>
       </div>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+      {/* One composition, three zones on the same baseline — never a wide
+          dominant column with a narrow leftover rail beside it. Needs You
+          still owns most of the width (and, with a real item, the only
+          real height), but Worth Knowing and Handled sit at the same top
+          edge as genuine siblings, not stacked afterthoughts, so the row
+          reads as one deliberate group even when every count is small. */}
+      <div className="grid grid-cols-1 gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,1fr)_200px_200px] lg:items-start">
         {/* NEEDS YOU — the dominant working surface. Zero is a complete
             state on its own; a real item is the one expanded object plus
             compact rows for the rest — actions only ever live on the
@@ -180,7 +186,7 @@ async function LiveCoachDashboard() {
         <section className="min-w-0">
           <p className="text-label text-neutral">Needs You</p>
           {focus ? (
-            <div className="mt-4 space-y-4">
+            <div className="mt-2 space-y-4">
               {focus.adjustmentProposal ? <AdjustmentAttentionCard item={focus} /> : <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} healthReview={focusHealthReview} />}
               {rest.length > 0 && (
                 <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-lg)] border border-border">
@@ -203,42 +209,42 @@ async function LiveCoachDashboard() {
               )}
             </div>
           ) : (
-            <p className="mt-3 text-metric text-off-white">0</p>
+            <p className="mt-2 text-metric text-off-white">0</p>
           )}
         </section>
 
-        {/* Right rail — WORTH KNOWING (quieter secondary territory) above
-            HANDLED (recessive/ambient). No borders, no equal-weight stat
-            cards, no repeated category headers — position, scale, and
-            color carry the hierarchy. */}
-        <div className="space-y-10">
-          <section>
-            <p className="text-label text-neutral">Worth Knowing</p>
-            <p className="mt-2 text-heading text-off-white">{worthKnowingCount}</p>
-            {worthKnowingCount > 0 ? (
-              <div className="mt-3">
-                <PatternCandidateSection workspaceId={workspaceId} candidates={patternCandidates.slice(0, 1)} />
-              </div>
-            ) : null}
-          </section>
+        {/* WORTH KNOWING — quieter secondary territory. */}
+        <section className="min-w-0">
+          <p className="text-label text-neutral">Worth Knowing</p>
+          <p className="mt-2 text-heading text-off-white">{worthKnowingCount}</p>
+          {worthKnowingCount > 0 ? (
+            <div className="mt-3">
+              <PatternCandidateSection workspaceId={workspaceId} candidates={patternCandidates.slice(0, 1)} />
+            </div>
+          ) : null}
+        </section>
 
-          <section>
-            <p className="text-label text-neutral">Handled</p>
-            <Link href="/coach/clients" className="mt-2 inline-block text-subheading text-neutral hover:text-off-white">
-              {rosterPulse.onTrack}
-            </Link>
-            {activeLearnedRuleCount > 0 && (
-              <details className="mt-3">
-                <summary className="cursor-pointer text-meta text-neutral hover:text-off-white">
-                  {activeLearnedRuleCount} confirmed pattern{activeLearnedRuleCount === 1 ? "" : "s"}
-                </summary>
-                <div className="mt-2">
-                  <LearnedRulesList workspaceId={workspaceId} rules={learnedRules} />
-                </div>
-              </details>
-            )}
-          </section>
-        </div>
+        {/* HANDLED — recessive/ambient. A nonzero count is a real link into
+            the roster it's counting (a quiet underline, not a button). */}
+        <section className="min-w-0">
+          <p className="text-label text-neutral">Handled</p>
+          <Link
+            href="/coach/clients"
+            className="mt-2 inline-block text-subheading text-neutral underline decoration-border-strong underline-offset-4 transition-colors hover:text-off-white hover:decoration-off-white"
+          >
+            {rosterPulse.onTrack}
+          </Link>
+          {activeLearnedRuleCount > 0 && (
+            <details className="mt-3">
+              <summary className="cursor-pointer text-meta text-neutral hover:text-off-white">
+                {activeLearnedRuleCount} confirmed pattern{activeLearnedRuleCount === 1 ? "" : "s"}
+              </summary>
+              <div className="mt-2">
+                <LearnedRulesList workspaceId={workspaceId} rules={learnedRules} />
+              </div>
+            </details>
+          )}
+        </section>
       </div>
     </div>
   );
