@@ -223,7 +223,12 @@ function workoutResolved(state: AppState): boolean {
   );
 }
 
-function hasUnresolvedReview(state: AppState): boolean {
+/** Exported so lib/planning/planner.ts's dayFullyResolved can reuse this
+ * exact predicate — a day with a real pending coach review (e.g. a pain
+ * report flagged during a completed workout) must never present itself as
+ * genuinely finished ("review today," nothing left to see) just because
+ * every individual item was logged. See planner.ts's own use for why. */
+export function hasUnresolvedReview(state: AppState): boolean {
   return state.reviewRequests.some((r) => !r.resolved);
 }
 

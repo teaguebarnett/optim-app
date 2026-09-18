@@ -28,12 +28,12 @@ import {
 import { canCompleteExercise } from "../workout-analysis.ts";
 import { findTrainingItemById } from "../workout/session-flow.ts";
 import { cardioPrescriptionForClient, catalogWorkoutForDay, isCardioAssignedForDay, MEAL_OPTIONS, PUSH_WORKOUT, TRAINING_WEEK, trainingWeekEntryForDay } from "../mock-data.ts";
-import { CLIENT_PROFILE_DEMO, CLIENT_PROFILE_SECONDARY, WORKSPACE_ATLAS, WORKSPACE_OPTIM } from "../tenancy/seed.ts";
+import { CLIENT_PROFILE_DEMO, CLIENT_PROFILE_SECONDARY, COACH_PROFILE_TEAGUE, WORKSPACE_ATLAS, WORKSPACE_OPTIM } from "../tenancy/seed.ts";
 import { localDateDayOfWeek, resolveClientLocalDateIso, resolveClientLocalTime24, startOfLocalWeek } from "../shared/local-date.ts";
 import type { AppState } from "../state.ts";
 import type { DailyTrainingPlan } from "./types.ts";
 import type { TrainingWeekDay } from "../mock-data.ts";
-import type { Workout } from "../types.ts";
+import type { ReviewRequest, Workout } from "../types.ts";
 
 let passed = 0;
 let failed = 0;
@@ -852,6 +852,151 @@ check("Legitimate Monday schedule/catalog content is unchanged by this correctio
   const mondayEntry = TRAINING_WEEK.find((d) => d.dayOfWeek === "Monday");
   assert.equal(mondayEntry?.workoutName, "Push Workout");
   assert.equal(mondayEntry?.type, "training");
+});
+
+console.log("\n34. Gate 2B — a pending coach review blocks the 'day complete' Current Coaching Object\n");
+
+function unresolvedReview(overrides: Partial<ReviewRequest> = {}): ReviewRequest {
+  return {
+    id: "review-1",
+    workspaceId: WORKSPACE_OPTIM.id,
+    clientId: CLIENT_PROFILE_DEMO.id,
+    assignedCoachId: COACH_PROFILE_TEAGUE.id,
+    kind: "pain-report",
+    severity: "normal",
+    createdAtIso: referenceNow(9).toISOString(),
+    updatedAtIso: referenceNow(9).toISOString(),
+    summary: "Right shoulder tightness flagged during today's session.",
+    status: "needs_review",
+    resolved: false,
+    ...overrides,
+  };
+}
+
+function fullyResolvedDayState(): AppState {
+  let state = onMonday(createInitialState());
+  state = reducer(state, { type: "SET_MORNING_WEIGHT", weightLb: 190 });
+  state = reducer(state, { type: "SET_TRAINING_TIME", time24: "07:00" });
+  state = reducer(state, { type: "SELECT_MEAL_OPTION", period: "breakfast", optionId: MEAL_OPTIONS.breakfast[0].id });
+  state = reducer(state, { type: "SELECT_MEAL_OPTION", period: "postWorkout", optionId: MEAL_OPTIONS.postWorkout[0].id });
+  state = reducer(state, { type: "SELECT_MEAL_OPTION", period: "lunch", optionId: MEAL_OPTIONS.lunch[0].id });
+  state = reducer(state, { type: "SELECT_MEAL_OPTION", period: "dinner", optionId: MEAL_OPTIONS.dinner[0].id });
+  state = reducer(state, { type: "START_CARDIO", durationMin: 0 });
+  state = reducer(state, { type: "COMPLETE_CARDIO", durationMin: 20 });
+  state = {
+    ...state,
+    workoutSession: {
+      ...state.workoutSession,
+      status: "completed",
+      summary: {
+        exercisesCompleted: 5,
+        exercisesSkipped: 0,
+        workingSetsCompleted: 15,
+        skippedSetsCount: 0,
+        missingRpeCount: 0,
+        averageRpe: 8,
+        painReportCount: 0,
+        durationMin: 60,
+        headline: "Workout completed.",
+        detail: "",
+        needsReview: false,
+        fullyCompleted: true,
+      },
+    },
+  };
+  return state;
+}
+
+check("With every item logged and no pending review, the day genuinely reports fully resolved", () => {
+  const state = fullyResolvedDayState();
+  const { result } = plan(state, referenceNow(20));
+  assert.equal(result.nextAction?.id, "review");
+});
+
+check("With every item logged but a pain report still awaiting coach review, the day never claims 'complete'", () => {
+  const state = { ...fullyResolvedDayState(), reviewRequests: [unresolvedReview()] };
+  const { result } = plan(state, referenceNow(20));
+  assert.notEqual(result.nextAction?.id, "review", "an unresolved review must block the congratulatory review spotlight");
+  assert.equal(
+    result.items.some((i) => i.id === "review"),
+    false,
+    "the review item itself must not appear while a real review is still pending"
+  );
+});
+
+check("Once the coach review resolves, the exact same day is free to report fully resolved again", () => {
+  const state = { ...fullyResolvedDayState(), reviewRequests: [unresolvedReview({ resolved: true, status: "resolved" })] };
+  const { result } = plan(state, referenceNow(20));
+  assert.equal(result.nextAction?.id, "review");
+});
+
+check("A schedule-change review request blocks 'day complete' exactly like a pain-report review does", () => {
+  const state = { ...fullyResolvedDayState(), reviewRequests: [unresolvedReview({ kind: "schedule-change" })] };
+  const { result } = plan(state, referenceNow(20));
+  assert.notEqual(result.nextAction?.id, "review");
+});
+
+console.log("\n35. Gate 2B — Current Coaching Object resolution across the eight representative lifecycle states\n");
+
+check("State 1/2 — a blank/early day with no training-time decision yet spotlights morning weight first, then the time prompt (unknown data stays unknown, never a fabricated schedule)", () => {
+  const state = onMonday(createInitialState());
+  assert.equal(plan(state, referenceNow(7)).result.nextAction?.id, "morning-weight");
+  const afterWeight = reducer(state, { type: "SET_MORNING_WEIGHT", weightLb: 190 });
+  assert.equal(plan(afterWeight, referenceNow(7)).result.nextAction?.kind, "training-time");
+});
+
+check("State 3 — an active/current meal (breakfast recommended now) becomes the Current Coaching Object", () => {
+  let state = onMonday(createInitialState());
+  state = reducer(state, { type: "SET_MORNING_WEIGHT", weightLb: 190 });
+  state = reducer(state, { type: "SET_TRAINING_TIME", time24: "17:00" });
+  assert.equal(plan(state, referenceNow(7)).result.nextAction?.id, "breakfast");
+});
+
+check("State 4 — pre-training (training time reached, not yet started) spotlights the workout as recommended", () => {
+  let state = onMonday(createInitialState());
+  state = reducer(state, { type: "SET_MORNING_WEIGHT", weightLb: 190 });
+  state = reducer(state, { type: "SET_TRAINING_TIME", time24: "07:00" });
+  state = reducer(state, { type: "SELECT_MEAL_OPTION", period: "breakfast", optionId: MEAL_OPTIONS.breakfast[0].id });
+  const { result } = plan(state, referenceNow(8));
+  assert.equal(result.nextAction?.id, "workout");
+  assert.equal(result.items.find((i) => i.id === "workout")?.status, "recommended");
+});
+
+check("State 5 — in-training (workout started, not yet finished) keeps the in-progress workout as the spotlight — 'Resume,' never re-offered as if unstarted", () => {
+  let state = onMonday(createInitialState());
+  state = reducer(state, { type: "SET_MORNING_WEIGHT", weightLb: 190 });
+  state = reducer(state, { type: "SET_TRAINING_TIME", time24: "07:00" });
+  state = reducer(state, { type: "START_WORKOUT" });
+  const { result } = plan(state, referenceNow(8));
+  assert.equal(result.nextAction?.id, "workout");
+  assert.equal(result.items.find((i) => i.id === "workout")?.status, "in-progress");
+});
+
+check("State 6 — completed training with every item resolved and no pending review reports the day genuinely complete", () => {
+  const state = fullyResolvedDayState();
+  assert.equal(plan(state, referenceNow(20)).result.nextAction?.id, "review");
+});
+
+check("State 7 — a schedule change (client-declared rest day) never pushes the prescribed workout as today's spotlight, and the workout itself stays truthfully unresolved rather than deleted", () => {
+  let state = onMonday(createInitialState());
+  state = reducer(state, { type: "SET_MORNING_WEIGHT", weightLb: 190 });
+  state = reducer(state, { type: "SET_TRAINING_REST_DAY" });
+  const { result } = plan(state, referenceNow(9));
+  assert.notEqual(result.nextAction?.id, "workout");
+  const workoutItem = result.items.find((i) => i.id === "workout");
+  assert.notEqual(workoutItem?.status, "completed");
+  assert.notEqual(workoutItem?.status, "skipped");
+});
+
+check("State 8 — a same-day return visit (MARK_DAILY_ENTRANCE_SEEN already recorded for today) never re-arms the entrance gate a second time", () => {
+  let state = onMonday(createInitialState());
+  state = reducer(state, { type: "MARK_DAILY_ENTRANCE_SEEN" });
+  assert.equal(state.dailyEntrance.lastSeenLocalDateIso, state.dateIso);
+  // Re-dispatching on the same day must stay a no-op (not bump any second
+  // timestamp/counter) — this is the exact guard app/(client)/today/page.tsx
+  // reads before ever rendering DailyEntranceSequence again.
+  const again = reducer(state, { type: "MARK_DAILY_ENTRANCE_SEEN" });
+  assert.equal(again, state, "marking entrance seen again the same day must return the identical state, not a new object");
 });
 
 console.log(`\n(Phase 2 isolation/permission suite covered separately by: npm run verify:tenancy)`);

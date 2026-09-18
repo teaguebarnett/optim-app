@@ -16,6 +16,7 @@ import { cardioPrescriptionForClient, MEAL_OPTIONS, resolveWorkoutAvailabilityFo
 import { resolvePlannedDateTime } from "./training-plan.ts";
 import { comfortableTrainingWindow, mealTimingProfileForMacros, mealTimingProfileForOption } from "./meal-timing.ts";
 import { buildMealSchedule } from "./meal-schedule.ts";
+import { hasUnresolvedReview } from "../calculations.ts";
 import { localDateDayOfWeek } from "../shared/local-date.ts";
 import { deriveProgramWeek } from "../scheduling/enrollment.ts";
 import type { AppState } from "../state";
@@ -328,6 +329,11 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
   }
 
   // --- Review today (only once the day is genuinely fully resolved) ---
+  // Every item being logged isn't the same as the day being done — a
+  // workout that triggered a real pending coach review (e.g. a pain report)
+  // must never present itself as "nice work, day complete" while that
+  // review is still open. See lib/calculations.ts's hasUnresolvedReview,
+  // the same predicate the header's notification badge already uses.
   const dayFullyResolved =
     weightDone &&
     !!breakfastSelection &&
@@ -339,7 +345,8 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     lunchSelection.source !== "planned-later" &&
     (state.cardio.status === "completed" || state.cardio.status === "skipped") &&
     !!dinnerSelection &&
-    dinnerSelection.source !== "planned-later";
+    dinnerSelection.source !== "planned-later" &&
+    !hasUnresolvedReview(state);
 
   if (dayFullyResolved) {
     items.push({
