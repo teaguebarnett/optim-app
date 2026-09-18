@@ -37,7 +37,7 @@ export function TimeZonePicker({ value, onChange, label = "Time zone" }: { value
         <button
           type="button"
           onClick={() => onChange(detectTimeZone())}
-          className="inline-flex items-center gap-1 text-meta font-medium text-accent-strong hover:underline"
+          className="inline-flex items-center gap-1 text-meta font-medium text-accent-fg hover:underline"
         >
           <LocateFixed size={12} aria-hidden="true" />
           Use device time zone

@@ -127,7 +127,7 @@ function CalendarMonth({
           onClick={() => goToMonth(-1)}
           disabled={!canGoToPreviousMonth}
           aria-label="Previous month"
-          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral transition-all active:scale-90 hover:bg-accent-soft hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral transition-all active:scale-90 hover:bg-accent-soft hover:text-accent-fg disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
           style={{ transitionDuration: "var(--motion-fast)" }}
         >
           <ChevronLeft size={18} />
@@ -137,7 +137,7 @@ function CalendarMonth({
           type="button"
           onClick={() => goToMonth(1)}
           aria-label="Next month"
-          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral transition-all active:scale-90 hover:bg-accent-soft hover:text-accent-strong"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-neutral transition-all active:scale-90 hover:bg-accent-soft hover:text-accent-fg"
           style={{ transitionDuration: "var(--motion-fast)" }}
         >
           <ChevronRight size={18} />
@@ -212,7 +212,7 @@ function CalendarMonth({
                 disabled && "cursor-not-allowed text-neutral/30",
                 !disabled && !isSelected && "text-off-white hover:bg-accent-soft",
                 isSelected && "bg-accent font-semibold text-on-accent shadow-[var(--shadow-subtle)]",
-                !isSelected && isToday && "border-2 border-accent font-semibold text-accent-strong"
+                !isSelected && isToday && "border-2 border-accent font-semibold text-accent-fg"
               )}
               style={{ transitionDuration: "var(--motion-fast)" }}
             >
@@ -235,7 +235,7 @@ const PresetOption = forwardRef<HTMLButtonElement, { active: boolean; label: str
         aria-pressed={active}
         className={cn(
           "flex h-11 w-full items-center justify-center rounded-[var(--radius-sm)] border-2 px-2 text-center text-sm font-semibold transition-all active:scale-[0.97]",
-          active ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong bg-surface-input text-off-white hover:border-accent/40"
+          active ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong bg-surface-input text-off-white hover:border-accent/40"
         )}
         style={{ transitionDuration: "var(--motion-fast)" }}
       >

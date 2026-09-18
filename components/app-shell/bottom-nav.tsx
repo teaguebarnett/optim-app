@@ -2,16 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sunrise, Dumbbell, UtensilsCrossed, LineChart, MessageCircle } from "lucide-react";
+import { Sunrise, Dumbbell, LineChart, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 
+// Phase 13B (Gate 2A) — the permanent four-destination client shell. "Plan"
+// is the single parent destination for Training and Nutrition (see
+// app/(client)/plan/page.tsx); matchPrefixes lets it stay active across the
+// standalone /training and /nutrition deep links too, not just /plan
+// itself. "Coach" is this shell's label for the existing /chat route — see
+// this phase's spec for why no client-facing /coach route is created
+// (that path already belongs to the coach application's own shell).
 const NAV_ITEMS = [
-  { href: "/today", label: "Today", icon: Sunrise },
-  { href: "/training", label: "Training", icon: Dumbbell },
-  { href: "/nutrition", label: "Nutrition", icon: UtensilsCrossed },
-  { href: "/progress", label: "Progress", icon: LineChart },
-  { href: "/chat", label: "Chat", icon: MessageCircle },
+  { href: "/today", label: "Today", icon: Sunrise, matchPrefixes: ["/today"] },
+  { href: "/plan", label: "Plan", icon: Dumbbell, matchPrefixes: ["/plan", "/training", "/nutrition"] },
+  { href: "/progress", label: "Progress", icon: LineChart, matchPrefixes: ["/progress"] },
+  { href: "/chat", label: "Coach", icon: MessageCircle, matchPrefixes: ["/chat"] },
 ];
 
 /** Phase 4.4B-2 — hidden only while the live workout route is showing an
@@ -35,7 +41,7 @@ export function BottomNav() {
     >
       <div className="mx-auto flex max-w-lg items-stretch justify-between px-1">
         {NAV_ITEMS.map((item) => {
-          const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`);
+          const isActive = item.matchPrefixes.some((prefix) => pathname === prefix || pathname?.startsWith(`${prefix}/`));
           const Icon = item.icon;
           return (
             <Link
@@ -53,7 +59,7 @@ export function BottomNav() {
                 <Icon
                   size={20}
                   strokeWidth={isActive ? 2.25 : 1.75}
-                  className={cn(isActive ? "text-accent-strong" : "text-neutral")}
+                  className={cn(isActive ? "text-accent-fg" : "text-neutral")}
                 />
               </span>
               <span className={cn("text-[11px] font-medium", isActive ? "text-off-white" : "text-neutral")}>

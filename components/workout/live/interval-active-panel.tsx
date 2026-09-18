@@ -84,7 +84,7 @@ export function IntervalActivePanel({
         </p>
       </div>
 
-      <p className={`mt-2 text-center text-heading ${isWork ? "text-accent-strong" : "text-success"}`}>{phaseLabel}</p>
+      <p className={`mt-2 text-center text-heading ${isWork ? "text-accent-fg" : "text-success"}`}>{phaseLabel}</p>
 
       {timeBased && durationSeconds !== undefined ? (
         <div className="mt-3">

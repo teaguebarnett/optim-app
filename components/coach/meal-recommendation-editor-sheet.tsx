@@ -87,7 +87,7 @@ export function MealRecommendationEditorSheet({
                 aria-pressed={draft.category === opt.value}
                 className={cn(
                   "rounded-[var(--radius-sm)] border-2 px-2 py-2.5 text-sm font-medium transition-colors",
-                  draft.category === opt.value ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white hover:border-accent/40"
+                  draft.category === opt.value ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white hover:border-accent/40"
                 )}
                 style={{ transitionDuration: "var(--motion-fast)" }}
               >
@@ -174,7 +174,7 @@ export function MealRecommendationEditorSheet({
                   aria-pressed={active}
                   className={cn(
                     "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                    active ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-neutral"
+                    active ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-neutral"
                   )}
                 >
                   {MEAL_RECOMMENDATION_TAG_LABELS[tag]}

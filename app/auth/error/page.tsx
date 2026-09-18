@@ -18,7 +18,7 @@ export default async function AuthErrorPage({
         <p className="mt-2 text-sm text-neutral">
           {reason ? decodeURIComponent(reason) : "This link may have expired or already been used."}
         </p>
-        <a href="/auth/sign-in" className="mt-6 inline-block text-sm font-medium text-accent hover:text-accent-strong">
+        <a href="/auth/sign-in" className="mt-6 inline-block text-sm font-medium text-accent hover:text-accent-fg">
           Back to sign in
         </a>
       </div>

@@ -54,7 +54,7 @@ export function QuestionField({
         />
         <div className="mt-2 flex justify-between text-meta text-neutral">
           <span>Less</span>
-          <span className="text-heading text-accent-strong">{current}</span>
+          <span className="text-heading text-accent-fg">{current}</span>
           <span>More</span>
         </div>
       </div>

@@ -27,7 +27,7 @@ export function NutritionGuidanceCard({ plan, coachName }: { plan: AssignedNutri
         </div>
       </div>
 
-      <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-2.5 flex items-center gap-1 text-sm font-medium text-accent-strong">
+      <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-2.5 flex items-center gap-1 text-sm font-medium text-accent-fg">
         {expanded ? "Show less" : "Show more"}
         {expanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
       </button>

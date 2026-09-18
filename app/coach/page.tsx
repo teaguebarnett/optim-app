@@ -166,7 +166,7 @@ async function LiveCoachDashboard() {
   return (
     <div className="mx-auto w-full max-w-[820px] space-y-10">
       <div>
-        <p className="text-label text-accent-strong">
+        <p className="text-label text-accent-fg">
           {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
         </p>
         <h1 className="mt-1 text-display text-off-white">Good {timeOfDayGreeting()}, {inbox.coachDisplayName.split(" ")[0]}.</h1>

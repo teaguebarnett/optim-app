@@ -121,7 +121,7 @@ export function DemoCoachDashboard() {
   return (
     <div className="mx-auto w-full max-w-[820px] space-y-10">
       <div>
-        <p className="text-label text-accent-strong">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
+        <p className="text-label text-accent-fg">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
         <h1 className="mt-1 text-display text-off-white">
           {greetingForHour(today.getHours())}, {coachFirstName}.
         </h1>

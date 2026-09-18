@@ -69,7 +69,7 @@ export function CoachRosterTable({ rows }: { rows: PlatformCoachSummary[] }) {
                 {filtered.map((row) => (
                   <tr key={row.membershipId} className="group border-b border-border last:border-0 transition-colors hover:bg-surface-raised" style={{ transitionDuration: "var(--motion-fast)" }}>
                     <td className="px-4 py-3.5">
-                      <Link href={`/admin/coaches/${row.membershipId}`} className="font-medium text-off-white group-hover:text-accent-strong">
+                      <Link href={`/admin/coaches/${row.membershipId}`} className="font-medium text-off-white group-hover:text-accent-fg">
                         {row.displayName}
                       </Link>
                       <p className="text-meta text-neutral">{row.workspaceName}</p>

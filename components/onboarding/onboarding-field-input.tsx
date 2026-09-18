@@ -56,7 +56,7 @@ function DaySelector({ value, onChange }: { value: string[]; onChange: (v: strin
             className={cn(
               "flex h-12 flex-col items-center justify-center rounded-[var(--radius-sm)] border-2 text-xs font-semibold uppercase transition-all active:scale-95",
               active
-                ? "border-accent bg-selected-bg text-accent-strong shadow-[var(--shadow-subtle)]"
+                ? "border-accent bg-selected-bg text-accent-fg shadow-[var(--shadow-subtle)]"
                 : "border-border-strong bg-charcoal text-off-white shadow-[var(--shadow-subtle)] hover:border-accent/50"
             )}
             style={{ transitionDuration: "var(--motion-fast)" }}

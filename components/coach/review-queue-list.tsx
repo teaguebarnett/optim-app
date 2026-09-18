@@ -38,12 +38,12 @@ function toneClassesForKind(kind: AttentionQueueItem["kind"]): { icon: string; b
     return { icon: "text-warning", bg: "bg-warning-soft", accentBorder: "border-l-warning" };
   }
   if (kind === "milestone") return { icon: "text-success", bg: "bg-success-soft", accentBorder: "border-l-success" };
-  return { icon: "text-accent-strong", bg: "bg-accent-soft", accentBorder: "border-l-accent" };
+  return { icon: "text-accent-fg", bg: "bg-accent-soft", accentBorder: "border-l-accent" };
 }
 
 const STATUS_PILL_CLASSES: Record<AttentionQueueItem["status"], string> = {
   needs_review: "bg-warning-soft text-warning",
-  in_progress: "bg-accent-soft text-accent-strong",
+  in_progress: "bg-accent-soft text-accent-fg",
   waiting: "bg-brass-soft text-brass-strong",
   resolved: "bg-success-soft text-success",
 };

@@ -41,7 +41,7 @@ export function YourCoachingMethodCard() {
   return (
     <Card className="space-y-4">
       <div className="flex items-start gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
           <Compass size={18} aria-hidden="true" />
         </span>
         <div>

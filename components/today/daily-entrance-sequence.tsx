@@ -79,7 +79,7 @@ export function DailyEntranceSequence({ onDone }: { onDone: () => void }) {
   if (showScreenOne) {
     return (
       <div className="flex min-h-[100dvh] flex-col justify-center px-6 py-10">
-        <p className="text-label text-accent-strong">
+        <p className="text-label text-accent-fg">
           {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
         </p>
         <h1 className="mt-1.5 text-display text-off-white">Good morning, {activeContext.clientProfile?.name?.split(" ")[0] ?? "there"}.</h1>

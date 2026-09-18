@@ -18,7 +18,12 @@
    * branding (Phase 2), and are chosen to already read correctly against
    * both a Pearl Ivory and a Midnight Navy canvas, so a differently-branded
    * workspace's primary color keeps working the instant a user switches
-   * theme without any per-theme branding math.
+   * theme without any per-theme branding math. --pc-accent-fg is the one
+   * exception (Phase 13B visual-QA correction): a solid cobalt fill and a
+   * small cobalt-colored text/icon glyph need different values to both read
+   * correctly, so fills (--pc-accent/--pc-accent-strong, still
+   * brand-driven) and this quiet-surface foreground role (theme-keyed, see
+   * :root[data-theme="dark"] below) are deliberately separate tokens.
    * ------------------------------------------------------------------- */
 
   /* Backgrounds & surfaces — bright, crisp ivory-white, never yellow-beige. */
@@ -37,19 +42,31 @@
   --pc-border: #dfdfd9;
   --pc-border-strong: #c7c7be;
 
-  /* Primary interactive color — electric performance cobalt (OPTIM demo
-   * workspace default; overridden per-workspace at runtime — see this
-   * block's own doc above). Used for primary actions, active states, and
-   * interactive focus only — see --pc-brass below for the rare premium
-   * micro-accent, and --pc-navy below for the signature structural surface. */
-  --pc-accent: #3157f6;
-  --pc-accent-strong: #2544c9;
-  --pc-accent-soft: rgba(49, 87, 246, 0.1);
+  /* Primary interactive color — restrained OPTIM cobalt, deliberately
+   * deeper than an electric/saturated blue (OPTIM demo workspace default;
+   * overridden per-workspace at runtime — see this block's own doc above).
+   * Used for primary actions, active states, and interactive focus only —
+   * see --pc-brass below for the rare premium micro-accent, and --pc-navy
+   * below for the signature structural surface. */
+  --pc-accent: #2f4bc8;
+  --pc-accent-strong: #243a9a;
+  --pc-accent-soft: rgba(47, 75, 200, 0.1);
   /* A stronger selected-state fill — an unselected input's border/fill vs.
    * a selected one must be unmistakable at a glance, not a 9%-opacity
    * difference. Selected controls pair this with --pc-accent as a real
    * border, never background alone. */
-  --pc-selected-bg: rgba(49, 87, 246, 0.14);
+  --pc-selected-bg: rgba(47, 75, 200, 0.14);
+  /* Cobalt as small TEXT/ICON foreground on a quiet surface (a soft-tinted
+   * badge, a plain link, a nav icon) — never on a solid --pc-accent fill,
+   * which already pairs with --pc-on-accent. Distinct from --pc-accent-strong
+   * (a fill/hover-darken role only, e.g. button.tsx's hover:bg-accent-strong)
+   * because the two roles need different values on dark surfaces: the same
+   * dark, deep cobalt that works as a fill reads as near-invisible at small
+   * text sizes against Midnight Navy. Light theme's own dark canvas-on-ivory
+   * relationship already has plenty of contrast, so it keeps the existing
+   * deep accent-strong value unchanged; see :root[data-theme="dark"] below
+   * for the dark-theme override. */
+  --pc-accent-fg: var(--pc-accent-strong);
 
   /* Signature deep-navy focus surface — OPTIM's structural identity anchor,
    * independent of the workspace-branded accent above. Used for the coach
@@ -152,6 +169,15 @@
   --pc-border: #263546;
   --pc-border-strong: #33465c;
 
+  /* Phase 13B visual-QA correction — the same deep --pc-accent-strong used
+   * as a fill (button hover, etc.) reads at ~1.8:1 against Midnight Navy
+   * surfaces as small text/an icon glyph, well under the 4.5:1 text /
+   * 3:1 icon-boundary minimums. This restrained-but-visible cobalt (~5:1
+   * against --pc-near-black/--pc-charcoal/--pc-surface-raised, and against
+   * the blended bg-accent-soft badge fill) is for that foreground role
+   * only — never a fill, which stays --pc-accent/--pc-accent-strong. */
+  --pc-accent-fg: #6f86e8;
+
   /* Lifted from the light theme's #071a34 so the signature surface reads as
    * a distinct structural accent against the near-black canvas, rather than
    * disappearing into it. */
@@ -201,6 +227,7 @@
   --color-accent: var(--pc-accent);
   --color-accent-soft: var(--pc-accent-soft);
   --color-accent-strong: var(--pc-accent-strong);
+  --color-accent-fg: var(--pc-accent-fg);
   --color-selected-bg: var(--pc-selected-bg);
   --color-navy: var(--pc-navy);
   --color-navy-strong: var(--pc-navy-strong);

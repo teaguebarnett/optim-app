@@ -44,7 +44,7 @@ export function OptionCard({
       className={cn(
         "group flex w-full items-start justify-between gap-2 rounded-[var(--radius-sm)] border-2 px-3.5 py-3 text-left transition-all",
         active
-          ? "border-accent bg-selected-bg text-accent-strong shadow-[var(--shadow-subtle)]"
+          ? "border-accent bg-selected-bg text-accent-fg shadow-[var(--shadow-subtle)]"
           : disabled
             ? "cursor-not-allowed border-border bg-surface-raised/60 text-neutral"
             : "border-border-strong bg-charcoal text-off-white shadow-[var(--shadow-subtle)] hover:border-accent/50 hover:bg-selected-bg/40 active:scale-[0.98]",
@@ -56,7 +56,7 @@ export function OptionCard({
         {Icon ? (
           <Icon
             size={17}
-            className={cn("mt-0.5 shrink-0", active ? "text-accent-strong" : disabled ? "text-neutral/60" : "text-neutral")}
+            className={cn("mt-0.5 shrink-0", active ? "text-accent-fg" : disabled ? "text-neutral/60" : "text-neutral")}
             aria-hidden="true"
           />
         ) : null}
@@ -66,7 +66,7 @@ export function OptionCard({
           {disabled && disabledReason ? <span className="mt-0.5 block text-xs text-neutral">{disabledReason}</span> : null}
         </span>
       </span>
-      {active ? <Check size={16} className="pc-check-pop mt-0.5 shrink-0 text-accent-strong" aria-hidden="true" /> : null}
+      {active ? <Check size={16} className="pc-check-pop mt-0.5 shrink-0 text-accent-fg" aria-hidden="true" /> : null}
     </button>
   );
 }

@@ -99,7 +99,7 @@ export function DemoClientsPage() {
               onClick={() => setFilter(f.value)}
               className={cn(
                 "rounded-[var(--radius-xs)] border px-3 py-1.5 text-xs font-medium transition-colors",
-                filter === f.value ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-neutral hover:text-off-white"
+                filter === f.value ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-neutral hover:text-off-white"
               )}
               style={{ transitionDuration: "var(--motion-fast)" }}
             >

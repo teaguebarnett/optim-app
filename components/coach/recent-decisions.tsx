@@ -34,7 +34,7 @@ export function RecentDecisions({ resolvedReviews, latestPublishedBriefing }: { 
       <ul className="mt-2.5 space-y-3">
         {latestPublishedBriefing?.publishedAtIso ? (
           <li className="flex items-start gap-2.5">
-            <Newspaper size={15} className="mt-0.5 shrink-0 text-accent-strong" aria-hidden="true" />
+            <Newspaper size={15} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden="true" />
             <div className="min-w-0">
               <p className="text-sm text-off-white">Daily Briefing published: &ldquo;{latestPublishedBriefing.todaysEdgeText}&rdquo;</p>
               <p className="text-meta text-neutral">{formatTimestamp(latestPublishedBriefing.publishedAtIso)}</p>

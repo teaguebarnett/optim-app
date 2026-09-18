@@ -678,6 +678,14 @@ check("An active client landing on any non-client-app route is sent to /today, a
   assert.equal(isRouteAllowed("/nutrition", "client", "active"), true);
 });
 
+check("Phase 13B: /plan is a client-app route, alongside its /training and /nutrition subsections", () => {
+  assert.equal(classifyPathname("/plan"), "client-app");
+  assert.equal(classifyPathname("/plan/anything"), "client-app");
+  assert.equal(isRouteAllowed("/plan", "client", "active"), true);
+  assert.equal(isRouteAllowed("/plan", "client", "onboarding"), false);
+  assert.equal(isRouteAllowed("/plan", "workspace_owner", null), false);
+});
+
 console.log("\n10. Platform-state persistence and migration\n");
 
 check("A freshly created platform state migrates through unchanged (nothing to upgrade yet)", () => {

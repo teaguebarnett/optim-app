@@ -18,7 +18,7 @@ function ThemePreview({ mode }: { mode: ThemeMode }) {
       }}
     >
       <div className="flex w-9 flex-col gap-1.5 border-r p-2" style={{ borderColor: isDark ? "#263546" : "#dfdfd9", background: isDark ? "#131d28" : "#fffefa" }}>
-        <span className="h-1.5 w-4 rounded-full" style={{ background: "#3157f6" }} />
+        <span className="h-1.5 w-4 rounded-full" style={{ background: "var(--pc-accent)" }} />
         <span className="h-1.5 w-4 rounded-full" style={{ background: isDark ? "#33465c" : "#dfdfd9" }} />
         <span className="h-1.5 w-4 rounded-full" style={{ background: isDark ? "#33465c" : "#dfdfd9" }} />
       </div>
@@ -50,7 +50,7 @@ export function AppearanceSelector({ onChoose, phoneOnly }: { onChoose: (mode: T
   const content = (
     <div className={phoneOnly ? "flex min-h-screen flex-1 items-center justify-center px-6 py-10" : "flex min-h-screen items-center justify-center bg-near-black px-6 py-12"}>
       <div className="w-full max-w-lg text-center">
-        <p className="text-label text-accent-strong">OPTIM</p>
+        <p className="text-label text-accent-fg">OPTIM</p>
         <h1 className="mt-2 text-display text-off-white">Choose your appearance</h1>
         <p className="mt-2 text-body text-neutral">Pick the look you want to work in. You can change this anytime in Settings.</p>
 
@@ -63,7 +63,7 @@ export function AppearanceSelector({ onChoose, phoneOnly }: { onChoose: (mode: T
           >
             <ThemePreview mode="light" />
             <div className="mt-3 flex items-center gap-2">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
                 <Sun size={16} aria-hidden="true" />
               </span>
               <div className="min-w-0">
@@ -81,7 +81,7 @@ export function AppearanceSelector({ onChoose, phoneOnly }: { onChoose: (mode: T
           >
             <ThemePreview mode="dark" />
             <div className="mt-3 flex items-center gap-2">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
                 <Moon size={16} aria-hidden="true" />
               </span>
               <div className="min-w-0">

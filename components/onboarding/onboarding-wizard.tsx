@@ -399,7 +399,7 @@ function StepFields({
               <OnboardingFieldInput field={field} value={answers[field.key] as OnboardingFieldValue} answers={answers} onChange={(v) => onUpdate(field.key, v)} />
             )}
             <Collapse open={!!response}>
-              <p className="mt-2.5 rounded-[var(--radius-sm)] bg-accent-soft px-3 py-2 text-sm text-accent-strong">{response}</p>
+              <p className="mt-2.5 rounded-[var(--radius-sm)] bg-accent-soft px-3 py-2 text-sm text-accent-fg">{response}</p>
             </Collapse>
           </div>
         </Collapse>
@@ -482,7 +482,7 @@ function ReviewSummary({
                   type="button"
                   onClick={() => onJump(row.jumpTo, row.moment)}
                   aria-label={`Edit ${row.label}`}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-neutral transition-colors hover:bg-off-white/5 hover:text-accent-strong"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-neutral transition-colors hover:bg-off-white/5 hover:text-accent-fg"
                   style={{ transitionDuration: "var(--motion-fast)" }}
                 >
                   <Pencil size={13} />

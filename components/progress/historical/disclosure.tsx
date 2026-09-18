@@ -26,7 +26,7 @@ export function Disclosure({ label, defaultOpen = false, children, className }: 
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center justify-between gap-2 py-1.5 text-left text-sm font-medium text-accent-strong"
+        className="flex w-full items-center justify-between gap-2 py-1.5 text-left text-sm font-medium text-accent-fg"
       >
         {label}
         <ChevronDown size={16} className={cn("shrink-0 transition-transform", open ? "rotate-180" : "")} aria-hidden="true" />

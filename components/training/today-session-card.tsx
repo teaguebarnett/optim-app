@@ -257,7 +257,7 @@ export function TodaySessionCard() {
           <button
             type="button"
             onClick={() => setPreviewOpen(true)}
-            className="mt-3 w-full text-center text-action text-accent-strong hover:underline"
+            className="mt-3 w-full text-center text-action text-accent-fg hover:underline"
           >
             Preview workout
           </button>

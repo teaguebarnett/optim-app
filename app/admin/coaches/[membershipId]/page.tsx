@@ -59,7 +59,7 @@ export default async function AdminCoachDetailPage({ params }: { params: Promise
             <ul>
               {detail.clients.map((client, i) => (
                 <li key={client.clientId} className={`flex items-center justify-between px-4 py-3 ${i > 0 ? "border-t border-border" : ""}`}>
-                  <Link href={`/admin/clients/${client.clientId}`} className="text-sm font-medium text-off-white hover:text-accent-strong">
+                  <Link href={`/admin/clients/${client.clientId}`} className="text-sm font-medium text-off-white hover:text-accent-fg">
                     {client.displayName}
                   </Link>
                   <LifecycleChip lifecycle={client.lifecycle} />

@@ -19,7 +19,7 @@ import type { Role } from "../tenancy/types";
 
 export type RouteArea = "coach" | "client-app" | "public";
 
-const CLIENT_APP_PREFIXES = ["/today", "/training", "/nutrition", "/progress", "/chat"];
+const CLIENT_APP_PREFIXES = ["/today", "/plan", "/training", "/nutrition", "/progress", "/chat"];
 
 export function classifyPathname(pathname: string): RouteArea {
   if (pathname === "/coach" || pathname.startsWith("/coach/")) return "coach";

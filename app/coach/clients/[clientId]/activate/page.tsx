@@ -85,7 +85,7 @@ export default function OptimPlanPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-display text-off-white">OPTIM Plan — {client.name}</h1>
             {!composer.isActiveClient ? (
-              <div className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2 text-sm text-accent-strong">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[composer.effectiveLevel as AiAuthorityLevel]}</div>
+              <div className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2 text-sm text-accent-fg">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[composer.effectiveLevel as AiAuthorityLevel]}</div>
             ) : null}
           </div>
         </>
@@ -219,7 +219,7 @@ function InitialComposer({ composer, clientId, clientName, onBack }: { composer:
       <div className="space-y-5">
         {healthGate}
         <Card className="text-center">
-          <Sparkles size={24} className="mx-auto mb-3 text-accent-strong" aria-hidden="true" />
+          <Sparkles size={24} className="mx-auto mb-3 text-accent-fg" aria-hidden="true" />
           <p className="text-body text-off-white">Understand {clientName}, then compare OPTIM&apos;s ranked training and nutrition directions.</p>
           {latest?.failureReason ? <p className="mt-2 text-meta text-error-strong">Last attempt failed: {latest.failureReason}</p> : null}
           {latest?.state === "blocked" && latest.blockedReasons?.length ? <p className="mt-2 text-meta text-warning-strong">Last attempt was blocked: {latest.blockedReasons.join(" ")}</p> : null}

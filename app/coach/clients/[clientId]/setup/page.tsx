@@ -33,7 +33,7 @@ function SectionCard({
   return (
     <Card className="space-y-4">
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
           <Icon size={16} aria-hidden="true" />
         </span>
         <div className="min-w-0">
@@ -147,7 +147,7 @@ export default function CoachClientSetupPage() {
                   aria-pressed={durationWeeks === weeks}
                   className={cn(
                     "h-11 rounded-[var(--radius-sm)] border-2 text-sm font-medium transition-colors",
-                    durationWeeks === weeks ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white hover:border-accent/40"
+                    durationWeeks === weeks ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white hover:border-accent/40"
                   )}
                   style={{ transitionDuration: "var(--motion-fast)" }}
                 >
@@ -247,7 +247,7 @@ export default function CoachClientSetupPage() {
             aria-pressed={assignWeeklyCheckIn}
             className={cn(
               "flex items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border-2 px-3 py-2.5 text-sm font-medium transition-colors",
-              assignWeeklyCheckIn ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white"
+              assignWeeklyCheckIn ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white"
             )}
             style={{ transitionDuration: "var(--motion-fast)" }}
           >
@@ -260,7 +260,7 @@ export default function CoachClientSetupPage() {
             aria-pressed={!assignWeeklyCheckIn}
             className={cn(
               "flex items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border-2 px-3 py-2.5 text-sm font-medium transition-colors",
-              !assignWeeklyCheckIn ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white"
+              !assignWeeklyCheckIn ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white"
             )}
             style={{ transitionDuration: "var(--motion-fast)" }}
           >

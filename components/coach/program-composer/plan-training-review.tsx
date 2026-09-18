@@ -32,7 +32,7 @@ export function PlanTrainingReview({ program, onOpenWeek }: { program: ClientAss
           {week1.days.map((day) => (
             <div key={day.dayOfWeek} className={cn("rounded-[var(--radius-sm)] px-1.5 py-2 text-center", day.type === "training" ? "bg-accent-soft" : "bg-surface-raised")}>
               <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral">{day.dayOfWeek.slice(0, 3)}</p>
-              <p className={cn("mt-1 text-xs font-medium", day.type === "training" ? "text-accent-strong" : "text-neutral")}>{day.type === "training" ? "Train" : "Rest"}</p>
+              <p className={cn("mt-1 text-xs font-medium", day.type === "training" ? "text-accent-fg" : "text-neutral")}>{day.type === "training" ? "Train" : "Rest"}</p>
             </div>
           ))}
         </div>

@@ -26,7 +26,7 @@ export function AppearanceSettingsCard() {
           aria-pressed={mode === "light"}
           className={cn(
             "flex flex-col items-center gap-1.5 rounded-[var(--radius-md)] border-2 px-3 py-3 transition-colors",
-            mode === "light" ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong bg-surface-input text-off-white hover:border-accent/40"
+            mode === "light" ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong bg-surface-input text-off-white hover:border-accent/40"
           )}
           style={{ transitionDuration: "var(--motion-fast)" }}
         >
@@ -40,7 +40,7 @@ export function AppearanceSettingsCard() {
           aria-pressed={mode === "dark"}
           className={cn(
             "flex flex-col items-center gap-1.5 rounded-[var(--radius-md)] border-2 px-3 py-3 transition-colors",
-            mode === "dark" ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong bg-surface-input text-off-white hover:border-accent/40"
+            mode === "dark" ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong bg-surface-input text-off-white hover:border-accent/40"
           )}
           style={{ transitionDuration: "var(--motion-fast)" }}
         >

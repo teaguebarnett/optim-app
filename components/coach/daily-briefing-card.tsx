@@ -97,7 +97,7 @@ export function DailyBriefingCard({
   if (!briefing) {
     return (
       <Card className="flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
           <Sparkles size={16} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">

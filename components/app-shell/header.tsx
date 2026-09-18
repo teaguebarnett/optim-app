@@ -5,18 +5,32 @@ import { Settings, Bell } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { SettingsSheet } from "@/components/app-shell/settings-sheet";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { OptimWordmark } from "@/components/brand/optim-wordmark";
 
+// Phase 13B (Gate 2A human QA) — the client shell's one brand mark, shared
+// by Today, Plan, Progress, and Coach (all rendered through this same
+// Header inside AppShell — see components/app-shell/shell.tsx). Mirrors
+// coach-shell.tsx's isCanonicalOptimBrand rule exactly: a workspace
+// genuinely branded as OPTIM gets the real canonical wordmark; a
+// custom-branded demo workspace keeps its existing plain-text treatment
+// unchanged — this never touches white-label capability.
 export function Header() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { state, activeContext } = usePrototypeState();
   const hasUnresolvedReview = state.reviewRequests.some((r) => !r.resolved);
+  const businessName = activeContext.branding.businessName;
+  const isCanonicalOptimBrand = businessName === "OPTIM";
 
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-near-black/90 pc-safe-top backdrop-blur-md">
       <div className="mx-auto flex max-w-lg items-center justify-between px-4 py-3">
-        <span className="text-[15px] font-semibold tracking-tight text-off-white">
-          <span className="text-accent">{activeContext.branding.businessName}</span>
-        </span>
+        {isCanonicalOptimBrand ? (
+          <OptimWordmark size={18} className="text-off-white" />
+        ) : (
+          <span className="text-[15px] font-semibold tracking-tight text-off-white">
+            <span className="text-accent">{businessName}</span>
+          </span>
+        )}
 
         <div className="flex items-center gap-2">
           <button

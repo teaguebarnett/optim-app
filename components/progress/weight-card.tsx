@@ -43,7 +43,7 @@ export function WeightCard({ weight }: { weight: WeightCardModel }) {
                   className={cn(
                     "flex-1 rounded-[var(--radius-sm)] border px-3 py-2 text-sm font-medium transition-colors",
                     range === option.key
-                      ? "border-accent bg-accent-soft text-accent-strong"
+                      ? "border-accent bg-accent-soft text-accent-fg"
                       : "border-border-strong text-off-white hover:border-accent/40"
                   )}
                 >

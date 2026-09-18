@@ -25,7 +25,7 @@ export function AdjustmentAttentionCard({ item }: { item: AttentionItem }) {
           <span className="shrink-0 rounded-full border border-border-strong px-2.5 py-0.5 text-label text-neutral">{item.kindLabel}</span>
         </div>
         <p className="mt-1.5 text-sm text-neutral">{item.summary}</p>
-        <p className="mt-2 text-action text-accent-strong">Review adjustment →</p>
+        <p className="mt-2 text-action text-accent-fg">Review adjustment →</p>
       </Card>
     </Link>
   );

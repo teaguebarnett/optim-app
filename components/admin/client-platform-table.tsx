@@ -81,7 +81,7 @@ export function ClientPlatformTable({ rows }: { rows: PlatformClientSummary[] })
                 {filtered.map((row) => (
                   <tr key={row.clientId} className="group border-b border-border last:border-0 transition-colors hover:bg-surface-raised" style={{ transitionDuration: "var(--motion-fast)" }}>
                     <td className="px-4 py-3.5">
-                      <Link href={`/admin/clients/${row.clientId}`} className="font-medium text-off-white group-hover:text-accent-strong">
+                      <Link href={`/admin/clients/${row.clientId}`} className="font-medium text-off-white group-hover:text-accent-fg">
                         {row.displayName}
                       </Link>
                     </td>

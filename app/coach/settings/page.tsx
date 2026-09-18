@@ -50,7 +50,7 @@ export default function CoachSettingsPage() {
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
-          <ShieldCheck size={16} className="text-accent-strong" aria-hidden="true" />
+          <ShieldCheck size={16} className="text-accent-fg" aria-hidden="true" />
           <h2 className="text-subheading text-off-white">You always decide</h2>
         </div>
         <Card>
@@ -139,7 +139,7 @@ export default function CoachSettingsPage() {
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-accent-strong" aria-hidden="true" />
+          <Sparkles size={16} className="text-accent-fg" aria-hidden="true" />
           <h2 className="text-subheading text-off-white">AI Coaching Authority</h2>
         </div>
         <AiAuthorityPanel />

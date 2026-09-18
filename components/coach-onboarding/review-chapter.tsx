@@ -212,14 +212,14 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
               <p className="text-subheading text-off-white">{p.title}</p>
               {p.bestTraining ? (
                 <div className="mt-3">
-                  <p className="text-meta font-semibold uppercase tracking-wide text-accent-strong">OPTIM would recommend</p>
+                  <p className="text-meta font-semibold uppercase tracking-wide text-accent-fg">OPTIM would recommend</p>
                   <p className="mt-1 text-body text-off-white">{p.bestTraining.splitName}</p>
                   <p className="text-meta text-neutral">{p.bestTraining.explanation.whyItFits}</p>
                 </div>
               ) : null}
               {p.bestNutrition ? (
                 <div className="mt-3">
-                  <p className="text-meta font-semibold uppercase tracking-wide text-accent-strong">Nutrition</p>
+                  <p className="text-meta font-semibold uppercase tracking-wide text-accent-fg">Nutrition</p>
                   <p className="mt-1 text-body text-off-white">
                     {p.bestNutrition.targets.calories} kcal · {p.bestNutrition.targets.proteinG}p / {p.bestNutrition.targets.carbsG}c / {p.bestNutrition.targets.fatG}f
                   </p>
@@ -281,14 +281,14 @@ function SummarySection({
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5">
           {Icon ? (
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
               <Icon size={15} aria-hidden="true" />
             </span>
           ) : null}
           <p className="text-subheading text-off-white">{title}</p>
         </div>
         {onEdit ? (
-          <button type="button" onClick={onEdit} className="flex shrink-0 items-center gap-1 text-meta text-accent-strong hover:underline">
+          <button type="button" onClick={onEdit} className="flex shrink-0 items-center gap-1 text-meta text-accent-fg hover:underline">
             <Pencil size={12} aria-hidden="true" /> Edit
           </button>
         ) : null}

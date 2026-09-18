@@ -150,7 +150,7 @@ export function AddClientSheet({ open, onClose }: AddClientSheetProps) {
                   aria-pressed={durationWeeks === weeks}
                   className={cn(
                     "rounded-[var(--radius-sm)] border-2 px-2 py-2.5 text-sm font-medium transition-colors",
-                    durationWeeks === weeks ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white hover:border-accent/40"
+                    durationWeeks === weeks ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white hover:border-accent/40"
                   )}
                   style={{ transitionDuration: "var(--motion-fast)" }}
                 >
@@ -172,7 +172,7 @@ export function AddClientSheet({ open, onClose }: AddClientSheetProps) {
                 aria-pressed={wantsCheckIn}
                 className={cn(
                   "flex items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border-2 px-3 py-2.5 text-sm font-medium transition-colors",
-                  wantsCheckIn ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white"
+                  wantsCheckIn ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white"
                 )}
                 style={{ transitionDuration: "var(--motion-fast)" }}
               >
@@ -185,7 +185,7 @@ export function AddClientSheet({ open, onClose }: AddClientSheetProps) {
                 aria-pressed={!wantsCheckIn}
                 className={cn(
                   "flex items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border-2 px-3 py-2.5 text-sm font-medium transition-colors",
-                  !wantsCheckIn ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white"
+                  !wantsCheckIn ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white"
                 )}
                 style={{ transitionDuration: "var(--motion-fast)" }}
               >

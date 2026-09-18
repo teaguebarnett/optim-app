@@ -45,7 +45,7 @@ export function ReasonPicker({ value, onChange, name }: ReasonPickerProps) {
             className={cn(
               "min-h-[48px] rounded-[var(--radius-sm)] border px-3 py-2.5 text-left text-sm font-medium transition-colors",
               selected
-                ? "border-accent bg-accent-soft text-accent-strong"
+                ? "border-accent bg-accent-soft text-accent-fg"
                 : "border-border-strong text-off-white hover:border-accent/40"
             )}
           >

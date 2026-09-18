@@ -115,7 +115,7 @@ function ExerciseRow({
                     aria-pressed={exercise.targetRpe === rpe}
                     className={cn(
                       "h-7 rounded-[var(--radius-xs)] border text-xs font-medium transition-colors",
-                      exercise.targetRpe === rpe ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-off-white hover:border-accent/40"
+                      exercise.targetRpe === rpe ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-off-white hover:border-accent/40"
                     )}
                   >
                     {rpe}
@@ -272,7 +272,7 @@ function DayEditor({
               aria-pressed={day.type === "training"}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                day.type === "training" ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-neutral"
+                day.type === "training" ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-neutral"
               )}
             >
               Training
@@ -283,7 +283,7 @@ function DayEditor({
               aria-pressed={day.type === "rest"}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                day.type === "rest" ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-neutral"
+                day.type === "rest" ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-neutral"
               )}
             >
               Rest
@@ -375,7 +375,7 @@ export function ProgramEditor({ workspaceId, name, durationWeeks, weeks, onChang
               onClick={() => setSelectedWeekNumber(weekNumber)}
               className={cn(
                 "flex h-9 min-w-9 items-center justify-center rounded-[var(--radius-sm)] border px-2.5 text-sm font-medium transition-colors",
-                selectedWeekNumber === weekNumber ? "border-accent bg-selected-bg text-accent-strong" : "border-border-strong text-neutral",
+                selectedWeekNumber === weekNumber ? "border-accent bg-selected-bg text-accent-fg" : "border-border-strong text-neutral",
                 !authoredWeekNumbers.has(weekNumber) && selectedWeekNumber !== weekNumber && "opacity-50"
               )}
             >

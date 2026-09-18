@@ -35,7 +35,7 @@ export function BlockerList({ readiness, requirementActions }: { readiness: Acti
               <p className="text-sm font-semibold text-off-white">{req.label}</p>
               {req.reason ? <p className="mt-0.5 text-meta text-neutral">{req.reason}</p> : null}
               {requirementActions[req.id] ? (
-                <Link href={requirementActions[req.id]!.href} className="mt-1.5 inline-flex items-center gap-1 text-sm font-medium text-accent-strong hover:underline">
+                <Link href={requirementActions[req.id]!.href} className="mt-1.5 inline-flex items-center gap-1 text-sm font-medium text-accent-fg hover:underline">
                   {requirementActions[req.id]!.label} <ArrowRight size={13} />
                 </Link>
               ) : null}

@@ -174,7 +174,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
     <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0}>
       {question ? (
         <div>
-          <div className="mb-2 flex items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-strong">
+          <div className="mb-2 flex items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-fg">
             <span>Question {questionIndex + 1}</span>
             <span className="text-neutral">of {questions.length}</span>
           </div>
@@ -239,12 +239,12 @@ function ChapterFrame({
         <div className="min-w-0">
           <div className="mb-6 flex items-center gap-3">
             {canGoBack ? (
-              <button type="button" onClick={onBack} aria-label="Back" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral hover:bg-accent-soft hover:text-accent-strong">
+              <button type="button" onClick={onBack} aria-label="Back" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral hover:bg-accent-soft hover:text-accent-fg">
                 <ArrowLeft size={16} aria-hidden="true" />
               </button>
             ) : null}
             <div>
-              <p className="text-label text-accent-strong">
+              <p className="text-label text-accent-fg">
                 {meta.title} · {chapterNumber} of {chapters.length}
               </p>
               <p className="mt-0.5 text-meta text-neutral">{meta.description}</p>
@@ -271,7 +271,7 @@ function ChapterRail({ chapterId, chapters }: { chapterId: CoachOnboardingChapte
     <aside className="sticky top-12 h-fit space-y-5">
       <div className="rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-5">
         <div className="flex items-center gap-2 text-label text-neutral">
-          <Sparkles size={14} className="text-accent-strong" aria-hidden="true" />
+          <Sparkles size={14} className="text-accent-fg" aria-hidden="true" />
           WHAT OPTIM IS LEARNING
         </div>
         <p className="mt-2.5 text-subheading text-off-white">{summary.percentComplete}% complete</p>

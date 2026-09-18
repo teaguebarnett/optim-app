@@ -72,7 +72,7 @@ function NoticeCard({ item, supportingEvidence, contradictingEvidence, hasAdjust
           already exists for this exact finding, a restrained pointer to
           the review below — never an action button here, never shown on
           a finding with no real proposal. */}
-      {hasAdjustmentProposal ? <p className="mt-2 text-xs text-accent-strong">OPTIM has a proposed adjustment for this — see Training program below.</p> : null}
+      {hasAdjustmentProposal ? <p className="mt-2 text-xs text-accent-fg">OPTIM has a proposed adjustment for this — see Training program below.</p> : null}
     </Card>
   );
 }

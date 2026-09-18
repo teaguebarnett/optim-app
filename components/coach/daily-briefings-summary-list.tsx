@@ -22,7 +22,7 @@ export function DailyBriefingsSummaryList({ briefings, clientNameById }: { brief
         return (
           <Link key={briefing.id} href={`/coach/clients/${briefing.clientId}`} className="block">
             <Card className={`flex items-start gap-3 border-l-2 ${held ? "border-l-error" : "border-l-accent"}`}>
-              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${held ? "bg-error-soft text-error" : "bg-accent-soft text-accent-strong"}`}>
+              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${held ? "bg-error-soft text-error" : "bg-accent-soft text-accent-fg"}`}>
                 {held ? <ShieldAlert size={16} aria-hidden="true" /> : <Newspaper size={16} aria-hidden="true" />}
               </span>
               <div className="min-w-0 flex-1">

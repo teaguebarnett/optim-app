@@ -150,7 +150,7 @@ export function EmomActivePanel({
                 <div>
                   <div className="flex items-center justify-between">
                     <p className="text-meta text-neutral">What you actually did</p>
-                    <button type="button" onClick={() => setDeviated(false)} className="text-action text-accent-strong hover:underline">
+                    <button type="button" onClick={() => setDeviated(false)} className="text-action text-accent-fg hover:underline">
                       Use prescribed
                     </button>
                   </div>

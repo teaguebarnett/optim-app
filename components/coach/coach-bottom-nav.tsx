@@ -80,7 +80,7 @@ export function CoachBottomNav({
                   )}
                   style={{ transitionDuration: "var(--motion-base)" }}
                 >
-                  <Icon size={19} strokeWidth={active ? 2.25 : 1.75} className={active ? "text-accent-strong" : "text-neutral"} />
+                  <Icon size={19} strokeWidth={active ? 2.25 : 1.75} className={active ? "text-accent-fg" : "text-neutral"} />
                   {badge > 0 ? (
                     <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-error px-1 text-[10px] font-semibold leading-none text-on-accent">
                       {badge > 9 ? "9+" : badge}
@@ -99,7 +99,7 @@ export function CoachBottomNav({
               className="flex min-w-[60px] flex-1 flex-col items-center justify-center gap-1 py-2.5"
             >
               <span className={cn("flex h-8 w-11 items-center justify-center rounded-full", moreActive && "bg-accent-soft")}>
-                <MoreHorizontal size={19} strokeWidth={moreActive ? 2.25 : 1.75} className={moreActive ? "text-accent-strong" : "text-neutral"} />
+                <MoreHorizontal size={19} strokeWidth={moreActive ? 2.25 : 1.75} className={moreActive ? "text-accent-fg" : "text-neutral"} />
               </span>
               <span className={cn("text-[11px] font-medium", moreActive ? "text-off-white" : "text-neutral")}>More</span>
             </button>

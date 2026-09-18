@@ -8,7 +8,7 @@ import type { GeneratedTrainingOption } from "@/lib/coach/activation-generation"
 
 const RANK_TONE: Record<string, string> = {
   best_fit: "bg-success-soft text-success",
-  strong_alternative: "bg-accent-soft text-accent-strong",
+  strong_alternative: "bg-accent-soft text-accent-fg",
   wildcard: "bg-warning-soft text-warning-strong",
 };
 
@@ -35,7 +35,7 @@ export function RankedTrainingCard({ option, selected, onSelect }: { option: Gen
           </p>
         </div>
         <div className="text-right">
-          <p className="text-display text-accent-strong">{option.score.total}</p>
+          <p className="text-display text-accent-fg">{option.score.total}</p>
           <p className="text-meta text-neutral">fit score</p>
         </div>
       </div>
@@ -71,7 +71,7 @@ export function RankedTrainingCard({ option, selected, onSelect }: { option: Gen
         >
           {selected ? "Selected" : "Select this option"}
         </button>
-        <button type="button" onClick={() => setExpanded((v) => !v)} className="flex items-center gap-1 text-meta text-accent-strong hover:underline">
+        <button type="button" onClick={() => setExpanded((v) => !v)} className="flex items-center gap-1 text-meta text-accent-fg hover:underline">
           {expanded ? "Hide" : "Expand"} full program {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
       </div>

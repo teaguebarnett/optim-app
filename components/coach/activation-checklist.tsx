@@ -72,7 +72,7 @@ export function ActivationChecklist({
               </div>
               {!compact && !req.met && req.reason ? <p className="mt-0.5 text-meta text-neutral">{req.reason}</p> : null}
               {!compact && !req.met && req.actionHref ? (
-                <Link href={req.actionHref} className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-accent-strong hover:underline">
+                <Link href={req.actionHref} className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-accent-fg hover:underline">
                   {req.actionLabel ?? "Complete it"} <ArrowRight size={13} />
                 </Link>
               ) : null}

@@ -216,7 +216,7 @@ export function PainReportOverlay({ open, onClose, exerciseName, coachName, onSu
                       onClick={() => setOnset(option)}
                       className={cn(
                         "min-h-[44px] rounded-[var(--radius-sm)] border px-3 py-2 text-left text-sm font-medium",
-                        onset === option ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-off-white"
+                        onset === option ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-off-white"
                       )}
                     >
                       {option}
@@ -235,7 +235,7 @@ export function PainReportOverlay({ open, onClose, exerciseName, coachName, onSu
                       onClick={() => setContinuedAfterSet(v)}
                       className={cn(
                         "h-11 flex-1 rounded-[var(--radius-sm)] border text-sm font-medium",
-                        continuedAfterSet === v ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-off-white"
+                        continuedAfterSet === v ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-off-white"
                       )}
                     >
                       {v ? "Yes" : "No"}
@@ -254,7 +254,7 @@ export function PainReportOverlay({ open, onClose, exerciseName, coachName, onSu
                       onClick={() => setAffectsOutsideGym(v)}
                       className={cn(
                         "h-11 flex-1 rounded-[var(--radius-sm)] border text-sm font-medium",
-                        affectsOutsideGym === v ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-off-white"
+                        affectsOutsideGym === v ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-off-white"
                       )}
                     >
                       {v ? "Yes" : "No"}
@@ -277,7 +277,7 @@ export function PainReportOverlay({ open, onClose, exerciseName, coachName, onSu
                         onClick={() => setSymptomQuality(option.value)}
                         className={cn(
                           "min-h-[44px] rounded-[var(--radius-sm)] border px-3 py-2 text-left text-sm font-medium",
-                          selected ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-off-white"
+                          selected ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-off-white"
                         )}
                       >
                         {option.label}
@@ -290,7 +290,7 @@ export function PainReportOverlay({ open, onClose, exerciseName, coachName, onSu
               {showNote ? (
                 <TextArea id="pain-note" label="Optional note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
               ) : (
-                <button type="button" onClick={() => setShowNote(true)} className="text-action text-accent-strong">
+                <button type="button" onClick={() => setShowNote(true)} className="text-action text-accent-fg">
                   + Add a note
                 </button>
               )}

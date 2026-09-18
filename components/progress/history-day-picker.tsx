@@ -52,7 +52,7 @@ export function HistoryDayPicker() {
     <section className="px-4">
       <div className="rounded-[var(--radius-lg)] border border-border bg-charcoal p-4 shadow-[var(--shadow-subtle)]">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-off-white">
-          <History size={16} className="text-accent-strong" aria-hidden="true" />
+          <History size={16} className="text-accent-fg" aria-hidden="true" />
           History
         </h2>
         <div ref={scrollRef} className="mt-3 -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">

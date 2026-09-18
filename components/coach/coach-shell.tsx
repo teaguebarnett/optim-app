@@ -238,7 +238,7 @@ export function CoachShell({
                 className={cn(
                   "flex h-9 w-9 items-center justify-center rounded-full transition-colors",
                   pathname.startsWith("/coach/library") || pathname.startsWith("/coach/programs") || pathname.startsWith("/coach/meals")
-                    ? "bg-accent-soft text-accent-strong"
+                    ? "bg-accent-soft text-accent-fg"
                     : "text-neutral hover:bg-surface-raised hover:text-off-white"
                 )}
                 style={{ transitionDuration: "var(--motion-fast)" }}
@@ -251,7 +251,7 @@ export function CoachShell({
                 aria-label="Playbook & Settings"
                 className={cn(
                   "flex h-9 w-9 items-center justify-center rounded-full transition-colors",
-                  pathname.startsWith("/coach/settings") ? "bg-accent-soft text-accent-strong" : "text-neutral hover:bg-surface-raised hover:text-off-white"
+                  pathname.startsWith("/coach/settings") ? "bg-accent-soft text-accent-fg" : "text-neutral hover:bg-surface-raised hover:text-off-white"
                 )}
                 style={{ transitionDuration: "var(--motion-fast)" }}
               >

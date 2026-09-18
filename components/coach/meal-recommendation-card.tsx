@@ -26,7 +26,7 @@ export function MealRecommendationCard({ recommendation, coachName }: { recommen
   return (
     <Card className="space-y-2.5">
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
           <UtensilsCrossed size={16} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">

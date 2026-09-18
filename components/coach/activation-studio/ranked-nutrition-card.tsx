@@ -5,7 +5,7 @@ import type { GeneratedNutritionStrategy } from "@/lib/coach/activation-generati
 
 const RANK_TONE: Record<string, string> = {
   best_fit: "bg-success-soft text-success",
-  strong_alternative: "bg-accent-soft text-accent-strong",
+  strong_alternative: "bg-accent-soft text-accent-fg",
   wildcard: "bg-warning-soft text-warning-strong",
 };
 
@@ -14,7 +14,7 @@ export function RankedNutritionCard({ option, selected, onSelect }: { option: Ge
     <div className={cn("rounded-[var(--radius-lg)] border-2 p-5 transition-colors", selected ? "border-accent bg-selected-bg" : "border-border-strong bg-charcoal")} style={{ transitionDuration: "var(--motion-fast)" }}>
       <div className="flex items-start justify-between gap-3">
         <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-meta font-semibold uppercase tracking-wide", RANK_TONE[option.kind])}>{option.label}</span>
-        <p className="text-heading text-accent-strong">{option.score.total}</p>
+        <p className="text-heading text-accent-fg">{option.score.total}</p>
       </div>
 
       <p className="mt-2 text-heading text-off-white">{option.targets.calories} kcal</p>

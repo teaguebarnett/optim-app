@@ -36,7 +36,7 @@ export default function ProgramTemplateEditorPage() {
     return (
       <Card className="max-w-lg">
         <p className="text-sm text-neutral">This template doesn&apos;t exist, or belongs to a different coach.</p>
-        <Link href="/coach/programs" className="mt-3 inline-block text-sm text-accent-strong">
+        <Link href="/coach/programs" className="mt-3 inline-block text-sm text-accent-fg">
           Back to programs
         </Link>
       </Card>

@@ -51,7 +51,7 @@ export function PlanNutritionReview({ prescription }: { prescription: CompleteNu
         <p>{prescription.substitutionGuidance}</p>
       </div>
 
-      <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-3 flex items-center gap-1 text-sm font-medium text-accent-strong hover:underline">
+      <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-3 flex items-center gap-1 text-sm font-medium text-accent-fg hover:underline">
         See adherence &amp; monitoring details
         {expanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
       </button>

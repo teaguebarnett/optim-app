@@ -23,7 +23,7 @@ export function SectionCard({ title, icon, headerRight, children, className }: S
     <section className={cn("rounded-[var(--radius-lg)] border border-border bg-charcoal p-4 shadow-[var(--shadow-subtle)]", className)}>
       <div className="flex items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-off-white">
-          {icon ? <span className="text-accent-strong">{icon}</span> : null}
+          {icon ? <span className="text-accent-fg">{icon}</span> : null}
           {title}
         </h2>
         {headerRight}

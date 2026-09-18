@@ -38,7 +38,7 @@ export function ClientIntelligencePanel({ profile, coachModelVersion, dataComple
         <Stat label="Experience" value={profile.trainingExperience.replace(/_/g, " ")} />
       </div>
 
-      <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-3 flex items-center gap-1 text-sm font-medium text-accent-strong hover:underline">
+      <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-3 flex items-center gap-1 text-sm font-medium text-accent-fg hover:underline">
         View complete client intelligence
         {expanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
       </button>

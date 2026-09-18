@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 function IntroPoint({ icon: Icon, children, delay }: { icon: LucideIcon; children: string; delay: string }) {
   return (
     <Card className="flex items-start gap-3 pc-animate-in" style={{ animationDelay: delay }}>
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
         <Icon size={17} aria-hidden="true" />
       </span>
       <p className="text-sm text-off-white">{children}</p>

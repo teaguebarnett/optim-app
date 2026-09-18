@@ -31,7 +31,7 @@ export function AiAuthorityRailCard({ level, onChange }: { level: AiAuthorityLev
           onPreviewChange={(v) => setPreviewLevel(v as AiAuthorityLevel)}
         />
       </div>
-      <Link href="/coach/settings" className="mt-4 inline-block text-action text-accent-strong hover:underline">
+      <Link href="/coach/settings" className="mt-4 inline-block text-action text-accent-fg hover:underline">
         Configure domain overrides
       </Link>
     </Card>

@@ -98,7 +98,7 @@ export default function CoachMessagesPage() {
                   <Avatar initials={client.avatarInitials} size="md" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <p className={cn("truncate text-sm font-semibold", active ? "text-accent-strong" : "text-off-white")}>{client.name}</p>
+                      <p className={cn("truncate text-sm font-semibold", active ? "text-accent-fg" : "text-off-white")}>{client.name}</p>
                       {flagged ? <StatusBadge label="Flagged" tone="error" /> : null}
                     </div>
                     <p className="mt-0.5 truncate text-sm text-neutral">{last ? `${SENDER_PREFIX[last.sender] ?? ""}${last.text || "(attachment)"}` : "No messages yet."}</p>

@@ -32,7 +32,7 @@ function toneClassesForKind(kind: AttentionQueueItem["kind"]): { icon: string } 
   )
     return { icon: "text-warning" };
   if (kind === "milestone") return { icon: "text-success" };
-  return { icon: "text-accent-strong" };
+  return { icon: "text-accent-fg" };
 }
 
 /**
@@ -75,7 +75,7 @@ export function DecisionQueueRows({
             <Icon size={16} className={cn("shrink-0", tone.icon)} aria-hidden="true" />
             <span className="min-w-0 flex-1">
               <span className="flex flex-wrap items-baseline justify-between gap-x-2">
-                <span className={cn("truncate text-sm font-semibold", active ? "text-accent-strong" : "text-off-white")}>{item.clientName}</span>
+                <span className={cn("truncate text-sm font-semibold", active ? "text-accent-fg" : "text-off-white")}>{item.clientName}</span>
                 <span className="shrink-0 text-meta text-neutral">{new Date(item.createdAtIso).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
               </span>
               <span className="mt-0.5 block truncate text-meta text-neutral">{ATTENTION_KIND_LABELS[item.kind]}</span>

@@ -34,7 +34,7 @@ export function CalibrateOptimBanner() {
       <Card className="border-l-2 border-l-accent">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
               <Sparkles size={18} aria-hidden="true" />
             </span>
             <div>
@@ -58,7 +58,7 @@ export function CalibrateOptimBanner() {
     <Card className="border-l-2 border-l-accent-strong">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
             <Sparkles size={18} aria-hidden="true" />
           </span>
           <div>

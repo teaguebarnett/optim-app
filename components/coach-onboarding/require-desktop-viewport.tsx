@@ -31,7 +31,7 @@ export function RequireDesktopViewport({ children }: { children: React.ReactNode
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
         <div className="max-w-sm rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-8 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
             <MonitorSmartphone size={22} aria-hidden="true" />
           </div>
           <h1 className="text-heading text-off-white">Open OPTIM Coach on a computer</h1>

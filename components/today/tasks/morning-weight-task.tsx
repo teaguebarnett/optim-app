@@ -181,7 +181,7 @@ export function MorningWeightTask({
           <span className="min-w-0 text-meta text-neutral">
             {previousWeightLb !== null ? `Previous: ${previousWeightLb} lb` : "Track today's weight."}
           </span>
-          <span className="shrink-0 text-action text-accent-strong">Log weight →</span>
+          <span className="shrink-0 text-action text-accent-fg">Log weight →</span>
         </button>
       </TaskShell>
     );

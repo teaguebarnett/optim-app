@@ -289,7 +289,7 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
       </section>
 
       <section className="space-y-3">
-        <SectionHeader title="Conversation" action={<Link href="/coach/escalations" className="text-action text-accent-strong hover:underline">Escalations</Link>} />
+        <SectionHeader title="Conversation" action={<Link href="/coach/escalations" className="text-action text-accent-fg hover:underline">Escalations</Link>} />
         {history.every((conv) => conv.messages.length === 0) ? (
           <Card><p className="text-sm text-neutral">No conversation yet.</p></Card>
         ) : (

@@ -105,7 +105,7 @@ export function SetLoggingPanel({
                   setActualWeight(fallbackWeight);
                   setActualReps(fallbackReps);
                 }}
-                className="text-action text-accent-strong hover:underline"
+                className="text-action text-accent-fg hover:underline"
               >
                 Use prescribed
               </button>

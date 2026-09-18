@@ -155,8 +155,8 @@ export function Combobox({
                       onClick={() => commit(opt.value)}
                       className={cn(
                         "flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left text-sm transition-colors",
-                        isActive ? "bg-accent-soft text-accent-strong" : "text-off-white",
-                        isSelected && !isActive && "text-accent-strong"
+                        isActive ? "bg-accent-soft text-accent-fg" : "text-off-white",
+                        isSelected && !isActive && "text-accent-fg"
                       )}
                       style={{ transitionDuration: "var(--motion-fast)" }}
                     >

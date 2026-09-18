@@ -67,7 +67,7 @@ export function ExistingWorkChapter({ onContinue }: { onContinue: () => void }) 
                   <p className="text-body font-semibold text-off-white">{inference.label}</p>
                   <p className="mt-1 text-sm text-neutral">{inference.note}</p>
                 </div>
-                <EvidenceChip icon={Sparkles} label={`${Math.round(inference.confidence * 100)}% confidence`} toneClassName="bg-accent-soft text-accent-strong" />
+                <EvidenceChip icon={Sparkles} label={`${Math.round(inference.confidence * 100)}% confidence`} toneClassName="bg-accent-soft text-accent-fg" />
               </div>
               <div className="mt-4 flex gap-2">
                 <Button size="sm" onClick={() => confirm(inference)}>

@@ -61,7 +61,7 @@ export function AiAuthorityPanel() {
         }}
         onPreviewChange={(v) => setPreviewLevel(v as AiAuthorityLevel)}
       />
-      <p className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2.5 text-sm text-accent-strong">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[previewLevel ?? settings.global.level]}</p>
+      <p className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2.5 text-sm text-accent-fg">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[previewLevel ?? settings.global.level]}</p>
 
       <div className="border-t border-border pt-4">
         <button type="button" onClick={() => setAdvancedOpen((v) => !v)} aria-expanded={advancedOpen} className="flex w-full items-center justify-between gap-2 text-left">

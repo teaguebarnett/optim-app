@@ -63,7 +63,7 @@ function statusBadge(status: string) {
     case "deferred":
       return { className: "bg-warning-soft text-warning", label: "Deferred", icon: <Clock3 size={13} /> };
     case "current":
-      return { className: "bg-accent-soft text-accent-strong", label: "In progress", icon: null };
+      return { className: "bg-accent-soft text-accent-fg", label: "In progress", icon: null };
     default:
       return { className: "bg-off-white/[0.04] text-neutral", label: "Not started", icon: null };
   }

@@ -61,7 +61,7 @@ export function PhotoMealSheet({ open, onClose, suggestedPeriod }: PhotoMealShee
                 aria-pressed={p === period}
                 className={cn(
                   "min-h-[36px] rounded-full border px-3 py-1.5 text-[13px] font-medium transition-colors",
-                  p === period ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-neutral"
+                  p === period ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-neutral"
                 )}
               >
                 {MEAL_PERIOD_LABELS[p]}

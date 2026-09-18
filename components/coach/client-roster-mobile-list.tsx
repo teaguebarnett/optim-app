@@ -42,7 +42,7 @@ export function ClientRosterMobileList({ rows }: { rows: RosterRow[] }) {
             <dt className="text-neutral">Last activity</dt>
             <dd className="text-right text-off-white">{row.lastActivityLabel}</dd>
           </dl>
-          <div className="mt-3 flex items-center gap-1.5 border-t border-border pt-2.5 text-action text-accent-strong">
+          <div className="mt-3 flex items-center gap-1.5 border-t border-border pt-2.5 text-action text-accent-fg">
             {row.nextAction}
           </div>
         </Link>

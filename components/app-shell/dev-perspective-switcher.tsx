@@ -38,7 +38,7 @@ export function DevPerspectiveSwitcher() {
           onClick={() => setActiveClientId(CLIENT_PROFILE_DEMO.id)}
           className={cn(
             "flex items-center justify-center gap-2 rounded-[var(--radius-md)] border px-4 py-3 text-sm font-medium",
-            isClientDemoActive ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-off-white"
+            isClientDemoActive ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-off-white"
           )}
         >
           <User size={16} /> Client view
@@ -47,7 +47,7 @@ export function DevPerspectiveSwitcher() {
           onClick={() => setPerspective("coach")}
           className={cn(
             "flex items-center justify-center gap-2 rounded-[var(--radius-md)] border px-4 py-3 text-sm font-medium",
-            perspective === "coach" ? "border-accent bg-accent-soft text-accent-strong" : "border-border-strong text-off-white"
+            perspective === "coach" ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-off-white"
           )}
         >
           <Users size={16} /> Coach view

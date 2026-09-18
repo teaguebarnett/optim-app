@@ -57,7 +57,7 @@ export function TechniqueQuestionSheet({ open, onClose, onFlagForCoach }: Techni
         ) : null}
         <p className="text-sm text-neutral">
           Have a different question about this exercise?{" "}
-          <Link href="/chat" className="font-medium text-accent-strong">
+          <Link href="/chat" className="font-medium text-accent-fg">
             Open chat
           </Link>{" "}
           to ask {coachName} directly.
@@ -72,7 +72,7 @@ export function TechniqueQuestionSheet({ open, onClose, onFlagForCoach }: Techni
             <button
               type="button"
               onClick={() => setFlagging(true)}
-              className="text-action text-accent-strong hover:underline"
+              className="text-action text-accent-fg hover:underline"
             >
               This is specific to me — flag for {coachName}
             </button>

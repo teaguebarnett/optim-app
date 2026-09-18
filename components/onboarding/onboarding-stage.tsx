@@ -95,7 +95,7 @@ export function OnboardingStage({
                     type="button"
                     onClick={onBack}
                     aria-label="Back"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-neutral transition-colors hover:bg-accent-soft hover:text-accent-strong"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-neutral transition-colors hover:bg-accent-soft hover:text-accent-fg"
                     style={{ transitionDuration: "var(--motion-fast)" }}
                   >
                     <ArrowLeft size={16} aria-hidden="true" />

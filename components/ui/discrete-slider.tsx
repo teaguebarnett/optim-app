@@ -172,7 +172,7 @@ export function DiscreteSlider({
             aria-pressed={i === previewIndex}
             className={cn(
               "absolute top-0 -translate-x-1/2 truncate font-medium transition-colors first:left-0 first:translate-x-0 last:left-auto last:right-0 last:translate-x-0",
-              i === previewIndex ? "text-accent-strong" : "hover:text-off-white"
+              i === previewIndex ? "text-accent-fg" : "hover:text-off-white"
             )}
             style={i === 0 || i === lastIndex ? undefined : { left: `${percentForIndex(i)}%` }}
           >

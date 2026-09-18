@@ -117,7 +117,7 @@ export function MessageBubble({
           <button
             type="button"
             onClick={onOpenSchedulePicker}
-            className="mt-2 rounded-[var(--radius-sm)] border border-accent/40 bg-accent-soft px-3.5 py-2 text-sm font-medium text-accent-strong hover:border-accent/70"
+            className="mt-2 rounded-[var(--radius-sm)] border border-accent/40 bg-accent-soft px-3.5 py-2 text-sm font-medium text-accent-fg hover:border-accent/70"
           >
             Update today&apos;s training time
           </button>

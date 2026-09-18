@@ -12,7 +12,7 @@ export function CoachOnboardingWelcome({ businessName, onContinue }: { businessN
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
       <div className="max-w-2xl">
-        <p className="text-label text-accent-strong">OPTIM · {businessName}</p>
+        <p className="text-label text-accent-fg">OPTIM · {businessName}</p>
         <h1 className="mt-2 text-display text-off-white">Let&apos;s teach OPTIM how you coach.</h1>
         <p className="mt-4 text-body text-neutral">
           Answer a focused set of questions about how you actually program, adjust, and communicate — most of it multiple choice, built from real
@@ -38,7 +38,7 @@ export function CoachOnboardingWelcome({ businessName, onContinue }: { businessN
 function PrincipleRow({ icon: Icon, title, body }: { icon: typeof Sparkles; title: string; body: string }) {
   return (
     <div className="flex gap-3">
-      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
         <Icon size={16} aria-hidden="true" />
       </div>
       <div>

@@ -37,7 +37,7 @@ export function MealRecommendationAssignmentCard({
     <Card>
       <div className="flex items-center justify-between gap-3">
         <p className="text-subheading text-off-white">Meal recommendations</p>
-        <Link href="/coach/meals" className="text-sm text-accent-strong hover:underline">
+        <Link href="/coach/meals" className="text-sm text-accent-fg hover:underline">
           Manage
         </Link>
       </div>
@@ -45,7 +45,7 @@ export function MealRecommendationAssignmentCard({
       {recommendations.length === 0 ? (
         <p className="mt-2 text-sm text-neutral">
           No saved recommendations yet.{" "}
-          <Link href="/coach/meals" className="text-accent-strong hover:underline">
+          <Link href="/coach/meals" className="text-accent-fg hover:underline">
             Create one
           </Link>
           .

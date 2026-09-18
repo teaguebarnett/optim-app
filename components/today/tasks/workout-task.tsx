@@ -233,7 +233,7 @@ export function WorkoutTask({
 
         <button
           onClick={() => router.push("/training")}
-          className="mt-3 w-full text-center text-action text-accent-strong hover:underline"
+          className="mt-3 w-full text-center text-action text-accent-fg hover:underline"
         >
           See plan
         </button>

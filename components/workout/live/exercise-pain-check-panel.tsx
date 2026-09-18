@@ -98,7 +98,7 @@ export function ExercisePainCheckPanel({
 
         <Link
           href="/chat"
-          className="flex w-full items-center justify-center py-1 text-action text-accent-strong hover:underline"
+          className="flex w-full items-center justify-center py-1 text-action text-accent-fg hover:underline"
         >
           Message {coachName}
         </Link>

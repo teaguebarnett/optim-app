@@ -9,8 +9,13 @@ import { hexToRgba } from "@/lib/color";
  * tokens at runtime. This is the ONLY place a workspace's configured
  * primaryColor/accentColor touches CSS — every component keeps using the
  * same --pc-accent / --pc-accent-strong / --pc-accent-soft tokens (via the
- * bg-accent / text-accent-strong / bg-accent-soft Tailwind utilities)
- * regardless of which workspace is active.
+ * bg-accent / hover:bg-accent-strong / bg-accent-soft Tailwind utilities)
+ * regardless of which workspace is active. --pc-accent-fg (the small
+ * text/icon/badge-label foreground role — see app/globals.css's own doc)
+ * is deliberately NOT bridged here: it's a pure light/dark theme token,
+ * independent of workspace branding, because a fill color's dark-surface
+ * legibility problem as small text is a theme-contrast issue, not a brand
+ * one — see this phase's visual-QA correction.
  *
  * The OPTIM demo workspace's configured colors already match the
  * stylesheet's defaults (see app/globals.css), so this is a no-op for the

@@ -43,10 +43,10 @@ export function IntervalTimer({ phaseStartedAtIso, durationSeconds }: { phaseSta
 
   return (
     <div className="text-center">
-      <p className={`font-mono text-display tabular-nums ${done ? "text-accent-strong" : "text-off-white"}`}>
+      <p className={`font-mono text-display tabular-nums ${done ? "text-accent-fg" : "text-off-white"}`}>
         {String(minutes).padStart(1, "0")}:{String(seconds).padStart(2, "0")}
       </p>
-      {done ? <p className="mt-1 text-meta text-accent-strong">Time&apos;s up — tap to continue</p> : null}
+      {done ? <p className="mt-1 text-meta text-accent-fg">Time&apos;s up — tap to continue</p> : null}
     </div>
   );
 }

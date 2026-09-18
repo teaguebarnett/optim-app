@@ -163,7 +163,7 @@ export function VoiceRecorder({
     return (
       <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border-strong bg-surface px-3.5 py-2.5">
         <p className="text-sm text-neutral">Voice messages aren&apos;t supported in this browser.</p>
-        <button type="button" onClick={onCancel} className="text-sm font-medium text-accent-strong">
+        <button type="button" onClick={onCancel} className="text-sm font-medium text-accent-fg">
           Close
         </button>
       </div>
@@ -176,7 +176,7 @@ export function VoiceRecorder({
         <p className="text-sm text-off-white">
           Microphone access was denied. Allow it in your browser settings to send a voice message.
         </p>
-        <button type="button" onClick={onCancel} className="shrink-0 text-sm font-medium text-accent-strong">
+        <button type="button" onClick={onCancel} className="shrink-0 text-sm font-medium text-accent-fg">
           Close
         </button>
       </div>
@@ -187,7 +187,7 @@ export function VoiceRecorder({
     return (
       <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-error/40 bg-error-soft px-3.5 py-2.5">
         <p className="text-sm text-off-white">{state.message}</p>
-        <button type="button" onClick={onCancel} className="shrink-0 text-sm font-medium text-accent-strong">
+        <button type="button" onClick={onCancel} className="shrink-0 text-sm font-medium text-accent-fg">
           Close
         </button>
       </div>

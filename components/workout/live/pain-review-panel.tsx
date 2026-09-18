@@ -199,7 +199,7 @@ export function PainReviewPanel({
 
           <Link
             href="/chat"
-            className="mt-1 flex w-full items-center justify-center text-action text-accent-strong hover:underline"
+            className="mt-1 flex w-full items-center justify-center text-action text-accent-fg hover:underline"
           >
             Message {coachName}
           </Link>
