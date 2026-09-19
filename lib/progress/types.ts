@@ -9,7 +9,7 @@
 import type { AuthorKind } from "../history/shared-types";
 import type { CheckInStatus, ProgramPhase } from "../scheduling/types";
 import type { DomainOutcome, OverallAdherenceStatus } from "../history/derive-day-status";
-import type { DayOfWeek, MacroValues, MealPeriod, RpeValue, SkipReason } from "../types";
+import type { DayOfWeek, MacroValues, MealIntent, MealPeriod, RpeValue, SkipReason } from "../types";
 
 export type ProgressSource = "live" | "fixture";
 
@@ -359,6 +359,16 @@ export interface HistoricalMealModel {
   skipReason: SkipReason | null;
   skipNote: string | null;
   macros: MacroValues | null;
+  /** Gate 3D — mirrors MealSelectionSnapshot.mealIntent (see that field's
+   * own doc): the planned meal's preserved rationale, or — for a
+   * `status: "replaced"` meal — the accepted substitution's own preserved
+   * constraint/rationale, read straight from this exact archived day's own
+   * snapshot. Never re-derived from today's live MEAL_OPTIONS catalog or
+   * BOUNDED_SUBSTITUTION_RULES, so a past day's "why" can never drift if
+   * either changes later. Null whenever the underlying selection never had
+   * one (a plain manual entry, a photo estimate, a skip) — never
+   * fabricated. */
+  mealIntent: MealIntent | null;
 }
 
 export interface HistoricalNutritionModel {

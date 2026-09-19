@@ -534,6 +534,129 @@ check("The last (rightmost) entry is always the most recent eligible day — yes
   assert.equal(entries[0].dateIso, addDaysToLocalDate(TODAY, -14));
 });
 
+console.log("\n11. Gate 3D — Meal Intent preserved in historical nutrition evidence\n");
+
+check("An accepted substitution's preserved Meal Intent (the rule's own constraint/rationale) survives into the historical model unchanged", () => {
+  const store = newStore();
+  const dateIso = addDaysToLocalDate(TODAY, -11);
+  const intent = "Use a similar cooked portion size; keep the meal's protein and total calories close to the original. Both are lean, similarly dense poultry proteins with a comparable macro profile per cooked ounce.";
+  store.putDailyRecordIdempotent(
+    record(dateIso, {
+      nutrition: {
+        meals: {
+          postWorkout: {
+            period: "postWorkout",
+            source: "manual",
+            manualName: "turkey breast (substituted for chicken breast)",
+            macros: { calories: 620, proteinG: 52, carbsG: 70, fatG: 12 },
+            mealIntent: intent,
+          },
+        },
+        periodsInPlan: ["postWorkout"],
+        targetsSnapshot: { calories: 2950, proteinG: 200, carbsG: 360, fatG: 85 },
+      },
+    })
+  );
+  const result = buildHistoricalDayReview(baseInput({ store, requestedDateIso: dateIso }));
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const meal = result.review.nutrition.meals.find((m) => m.period === "postWorkout")!;
+  assert.equal(meal.status, "replaced");
+  assert.equal(meal.mealIntent, intent, "the exact snapshotted rationale must survive into the historical model, never paraphrased or dropped");
+});
+
+check("A plain manual entry with no preserved Meal Intent never has one fabricated", () => {
+  const store = newStore();
+  const dateIso = addDaysToLocalDate(TODAY, -12);
+  store.putDailyRecordIdempotent(
+    record(dateIso, {
+      nutrition: {
+        meals: {
+          lunch: { period: "lunch", source: "manual", manualName: "Restaurant sandwich", macros: { calories: 700, proteinG: 30, carbsG: 60, fatG: 25 } },
+        },
+        periodsInPlan: ["lunch"],
+        targetsSnapshot: { calories: 2950, proteinG: 200, carbsG: 360, fatG: 85 },
+      },
+    })
+  );
+  const result = buildHistoricalDayReview(baseInput({ store, requestedDateIso: dateIso }));
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const meal = result.review.nutrition.meals.find((m) => m.period === "lunch")!;
+  assert.equal(meal.status, "replaced");
+  assert.equal(meal.itemName, "Restaurant sandwich", "a plain manual entry stays honestly represented — real item name, real macros");
+  assert.equal(meal.mealIntent, null, "no Meal Intent was ever recorded for this entry — never invented one");
+});
+
+check("A completed, on-plan meal's own preserved planned rationale (Gate 3A) also survives — the 'Coach-approved option' case", () => {
+  const store = newStore();
+  const dateIso = addDaysToLocalDate(TODAY, -13);
+  const intent = "A fast, high-protein start that travels well if you're out the door early.";
+  store.putDailyRecordIdempotent(
+    record(dateIso, {
+      nutrition: {
+        meals: {
+          breakfast: { period: "breakfast", source: "option", optionId: "opt-breakfast", macros: { calories: 600, proteinG: 40, carbsG: 60, fatG: 15 }, mealIntent: intent },
+        },
+        periodsInPlan: ["breakfast"],
+        targetsSnapshot: { calories: 2950, proteinG: 200, carbsG: 360, fatG: 85 },
+      },
+    })
+  );
+  const result = buildHistoricalDayReview(baseInput({ store, requestedDateIso: dateIso }));
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const meal = result.review.nutrition.meals.find((m) => m.period === "breakfast")!;
+  assert.equal(meal.status, "completed");
+  assert.equal(meal.mealIntent, intent);
+});
+
+check("A skipped meal never carries a Meal Intent — absence stays absence", () => {
+  const store = newStore();
+  const dateIso = addDaysToLocalDate(TODAY, -14);
+  store.putDailyRecordIdempotent(
+    record(dateIso, {
+      nutrition: {
+        meals: { dinner: { period: "dinner", source: "skipped", skipReason: "not-hungry" } },
+        periodsInPlan: ["dinner"],
+        targetsSnapshot: { calories: 2950, proteinG: 200, carbsG: 360, fatG: 85 },
+      },
+    })
+  );
+  const result = buildHistoricalDayReview(baseInput({ store, requestedDateIso: dateIso }));
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const meal = result.review.nutrition.meals.find((m) => m.period === "dinner")!;
+  assert.equal(meal.status, "skipped");
+  assert.equal(meal.mealIntent, null);
+});
+
+check("Historical Meal Intent is read purely from the archived snapshot, never re-derived from a live catalog lookup — proven with an optionId that no longer exists in any live catalog", () => {
+  const store = newStore();
+  const dateIso = addDaysToLocalDate(TODAY, -15);
+  const intent = "This exact wording only exists in the archived snapshot — it is never reconstructed from a live MEAL_OPTIONS/BOUNDED_SUBSTITUTION_RULES lookup.";
+  store.putDailyRecordIdempotent(
+    record(dateIso, {
+      nutrition: {
+        meals: {
+          snack: { period: "snack", source: "option", optionId: "opt-retired-long-ago", macros: { calories: 300, proteinG: 20, carbsG: 30, fatG: 8 }, mealIntent: intent },
+        },
+        periodsInPlan: ["snack"],
+        targetsSnapshot: { calories: 2950, proteinG: 200, carbsG: 360, fatG: 85 },
+      },
+    })
+  );
+  const result = buildHistoricalDayReview(baseInput({ store, requestedDateIso: dateIso }));
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const meal = result.review.nutrition.meals.find((m) => m.period === "snack")!;
+  // itemName legitimately resolves to null — the option no longer exists in
+  // the live catalog to look a display name up from — but mealIntent, which
+  // is never looked up live, survives exactly as archived.
+  assert.equal(meal.itemName, null);
+  assert.equal(meal.mealIntent, intent);
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 
 if (failed > 0) {

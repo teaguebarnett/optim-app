@@ -18,6 +18,21 @@ function targetMetLabel(result: "met" | "not_met" | "insufficient_data"): string
   return "Not enough data";
 }
 
+/** Gate 3D — the same provenance vocabulary the live meal card already uses
+ * (see lib/nutrition/view-model.ts's mealProvenanceLabel), reconstructed
+ * here from this model's own already-derived `status` plus whether a Meal
+ * Intent was actually preserved — never a new label, never a guess. A
+ * "replaced" meal with no preserved intent (a plain manual entry, or a
+ * photo estimate) intentionally falls back to no label at all here, exactly
+ * as it already did before this field existed — this only adds the one
+ * distinction Gate 3D asks for (Accepted substitution vs. Coach-approved
+ * option), never a redesign of the existing status badge above it. */
+function provenanceLabel(meal: HistoricalMealModel): string | null {
+  if (meal.status === "completed") return "Coach-approved option";
+  if (meal.status === "replaced" && meal.mealIntent) return "Accepted substitution";
+  return null;
+}
+
 export function NutritionSection({ nutrition }: { nutrition: HistoricalNutritionModel }) {
   if (nutrition.meals.length === 0) {
     return (
@@ -55,6 +70,8 @@ export function NutritionSection({ nutrition }: { nutrition: HistoricalNutrition
                   {meal.isEstimate ? " (estimate)" : ""}
                 </p>
               ) : null}
+              {provenanceLabel(meal) ? <p className="text-xs text-neutral">{provenanceLabel(meal)}</p> : null}
+              {meal.mealIntent ? <p className="mt-0.5 text-xs italic text-neutral">{meal.mealIntent}</p> : null}
               {meal.skipReason ? <p className="text-xs text-neutral">Reason: {SKIP_REASON_LABELS[meal.skipReason]}</p> : null}
               {meal.actualTimeLabel ? <p className="text-xs text-neutral">Logged {meal.actualTimeLabel}</p> : null}
             </div>

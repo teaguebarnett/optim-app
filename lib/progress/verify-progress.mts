@@ -532,6 +532,93 @@ check("Unread human-coach guidance is eligible for the priority card; OPTIM/syst
   assert.equal(guidance.latestMessage, null, "an assistant/system message must never be surfaced as coach guidance");
 });
 
+console.log("\n8b. Gate 3D — Coach guidance recognizes a real relayed Gate 3C decision, never a second messaging mechanism\n");
+
+check("A direct coach-sent message still qualifies as coach guidance, unchanged", () => {
+  const guidance = aggregateCoachGuidance(
+    [{ id: "m1", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "coach", authorCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, text: "Great week — keep it up.", createdAtIso: "2026-08-10T00:00:00.000Z" }],
+    [],
+    "Teague"
+  );
+  assert.equal(guidance.latestMessage?.text, "Great week — keep it up.");
+  assert.equal(guidance.latestMessage?.authorName, "Teague");
+});
+
+check("A genuine relayed coach decision (the exact shape resolveReviewRequest produces when a coach approves/corrects a Gate 3C nutrition review) qualifies as coach guidance", () => {
+  const guidance = aggregateCoachGuidance(
+    [
+      {
+        id: "m1",
+        workspaceId: SCOPE.workspaceId,
+        clientId: SCOPE.clientId,
+        assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId,
+        sender: "assistant",
+        text: "Teague reviewed this and wants you to know: Go ahead and swap in turkey breast for tonight's post-workout meal — logged it for you.",
+        createdAtIso: "2026-08-10T00:00:00.000Z",
+        relayedCoachDecision: { coachDisplayName: "Teague", reviewRequestId: "review-1" },
+      },
+    ],
+    [],
+    "your coach"
+  );
+  assert.ok(guidance.latestMessage, "a real relayed coach decision must surface as coach guidance");
+  assert.match(guidance.latestMessage!.text, /Go ahead and swap in turkey breast/);
+  assert.equal(guidance.latestMessage!.authorName, "Teague", "attribution must come from the decision's own real coach identity, not a generic fallback");
+});
+
+check("An ordinary assistant acknowledgement with no relayedCoachDecision never qualifies, even when it mentions a coach by name in its own text", () => {
+  const guidance = aggregateCoachGuidance(
+    [
+      {
+        id: "m1",
+        workspaceId: SCOPE.workspaceId,
+        clientId: SCOPE.clientId,
+        assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId,
+        sender: "assistant",
+        text: "Sent to Teague — awaiting review.",
+        createdAtIso: "2026-08-10T00:00:00.000Z",
+      },
+    ],
+    [],
+    "Teague"
+  );
+  assert.equal(guidance.latestMessage, null, "mentioning a coach's name in plain assistant text is never the same as a real relayedCoachDecision");
+});
+
+check("When both a direct coach message and a relayed decision exist, the true latest one wins regardless of shape", () => {
+  const olderRelayed = aggregateCoachGuidance(
+    [
+      { id: "m1", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "assistant", text: "Older relayed decision.", createdAtIso: "2026-08-08T00:00:00.000Z", relayedCoachDecision: { coachDisplayName: "Teague", reviewRequestId: "review-1" } },
+      { id: "m2", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "coach", authorCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, text: "Newer direct message.", createdAtIso: "2026-08-10T00:00:00.000Z" },
+    ],
+    [],
+    "Teague"
+  );
+  assert.equal(olderRelayed.latestMessage?.text, "Newer direct message.");
+
+  const olderDirect = aggregateCoachGuidance(
+    [
+      { id: "m1", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "coach", authorCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, text: "Older direct message.", createdAtIso: "2026-08-08T00:00:00.000Z" },
+      { id: "m2", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "assistant", text: "Newer relayed decision.", createdAtIso: "2026-08-10T00:00:00.000Z", relayedCoachDecision: { coachDisplayName: "Teague", reviewRequestId: "review-2" } },
+    ],
+    [],
+    "Teague"
+  );
+  assert.equal(olderDirect.latestMessage?.text, "Newer relayed decision.");
+});
+
+check("A client-authored or system-status message never enters coach guidance, relayedCoachDecision or not", () => {
+  const guidance = aggregateCoachGuidance(
+    [
+      { id: "m1", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "client", text: "A client's own message.", createdAtIso: "2026-08-10T00:00:00.000Z" },
+      { id: "m2", workspaceId: SCOPE.workspaceId, clientId: SCOPE.clientId, assignedCoachId: CLIENT_PROFILE_DEMO.primaryCoachId, sender: "system", text: "Sent to Teague — awaiting review", createdAtIso: "2026-08-11T00:00:00.000Z", reviewRequestId: "review-1" },
+    ],
+    [],
+    "Teague"
+  );
+  assert.equal(guidance.latestMessage, null, "only sender:coach or a real relayedCoachDecision ever qualifies");
+});
+
 check("The capability filter prevents overdue check-in and correction-needed from becoming a clickable priority action", () => {
   const overdueCheckIn = aggregatePriority({ hasUnreadCoachFeedback: false, hasApprovedAdjustmentNeedingReview: false, checkInStatus: "overdue", correctionNeededDates: [] });
   assert.equal(overdueCheckIn.eligible, false, "overdue check-in surfaces on the check-in card, never as a dead-end priority action");

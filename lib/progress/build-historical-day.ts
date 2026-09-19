@@ -207,6 +207,9 @@ function buildNutritionSection(record: DailyRecord | null, timeZone: string): Hi
       skipReason: selection?.skipReason ?? null,
       skipNote: selection?.skipNote ?? null,
       macros: selection?.macros ?? null,
+      // Gate 3D — read straight from this exact archived selection's own
+      // snapshot, never recomputed from the live catalog/rule registry.
+      mealIntent: selection?.mealIntent ?? null,
     };
   });
 
