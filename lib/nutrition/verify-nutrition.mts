@@ -617,5 +617,33 @@ check("SET_MANUAL_MEAL threads unknownMacroFields onto the live selection unchan
   assert.equal(full.meals.breakfast?.unknownMacroFields, undefined, "a fully-entered manual entry has nothing to mark unknown");
 });
 
+console.log("\nGate 3C — a coach's own Meal Intent override, once authored, is what SELECT_MEAL_OPTION actually snapshots\n");
+
+check("SELECT_MEAL_OPTION uses the coach's coachMealPlan override for that period instead of the catalog option's own description, when one exists", () => {
+  const option = MEAL_OPTIONS.breakfast[0];
+  const base = createInitialState();
+  const withOverride = {
+    ...base,
+    coachMealPlan: {
+      ...base.coachMealPlan,
+      breakfast: {
+        mealIntentOverride: "Coach's own note: keep this light before your 7am session.",
+        updatedAtIso: "2026-01-01T00:00:00.000Z",
+        updatedByCoachId: "coach-test",
+        updatedByCoachName: "Teague",
+      },
+    },
+  };
+  const state = reducer(withOverride, { type: "SELECT_MEAL_OPTION", period: "breakfast", optionId: option.id });
+  assert.equal(state.meals.breakfast?.mealIntent, "Coach's own note: keep this light before your 7am session.");
+  assert.notEqual(state.meals.breakfast?.mealIntent, option.description, "once a coach has authored an override, the stock catalog description must never win");
+});
+
+check("a period the coach has never touched still snapshots the catalog option's own description unchanged — Gate 3B's original behavior", () => {
+  const option = MEAL_OPTIONS.lunch[0];
+  const state = reducer(createInitialState(), { type: "SELECT_MEAL_OPTION", period: "lunch", optionId: option.id });
+  assert.equal(state.meals.lunch?.mealIntent, option.description);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

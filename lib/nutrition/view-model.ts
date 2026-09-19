@@ -7,7 +7,7 @@ import { MEAL_ORDER } from "../calculations.ts";
 import { MEAL_OPTIONS } from "../mock-data.ts";
 import type { DailyPlanResult, MealScheduleEntry } from "../planning/types";
 import type { AppState } from "../state";
-import type { DailyTaskId, DailyTaskState, MacroValues, MealEstimateItem, MealIntent, MealPeriod, MealSelection } from "../types";
+import type { DailyTaskId, DailyTaskState, MacroValues, MealEstimateItem, MealIntent, MealOption, MealPeriod, MealSelection } from "../types";
 
 export type MacroKey = "protein" | "carbs" | "fat";
 
@@ -165,4 +165,25 @@ export function deriveMealCardStatus(params: {
     if (minutesPast > MISSED_THRESHOLD_MIN) return "missed";
   }
   return "upcoming";
+}
+
+/** Gate 3B correction pass — moved here (from components/meals/
+ * meal-selection-sheet.tsx) so both the client's own "ask about this meal"
+ * flow and Gate 3C's coach-side authoring/review surfaces share the exact
+ * same honesty check, never two independently-maintained copies: a
+ * registered substitution is only ever contextually relevant, never a
+ * catalog-wide advertisement — it renders only when its own `fromLabel`
+ * ingredient is actually present in the specific meal option being
+ * considered. A case-insensitive substring match in either direction,
+ * matching how the fixture data (lib/mock-data.ts's MEAL_OPTIONS) and a
+ * rule's own fromLabel (lib/nutrition/substitution.ts) both name
+ * ingredients as plain text — never a change to that file's contract,
+ * purely a presentation-layer filter over its existing field. */
+export function mealOptionHasIngredient(option: MealOption | null | undefined, ingredientLabel: string): boolean {
+  if (!option) return false;
+  const needle = ingredientLabel.trim().toLowerCase();
+  return option.mainIngredients.some((ingredient) => {
+    const hay = ingredient.trim().toLowerCase();
+    return hay.includes(needle) || needle.includes(hay);
+  });
 }

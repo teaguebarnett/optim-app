@@ -380,6 +380,47 @@ export interface AttentionQueueItem {
   responseRequiredFromClient?: boolean;
   history?: AttentionHistoryEntry[];
   resolutionReceipt?: ResolutionReceipt;
+  /** Gate 3C — passed straight through from the underlying ReviewRequest
+   * (see lib/types.ts's own doc on this field, and
+   * lib/coach/attention-queue.ts's buildReviewQueueItems). */
+  nutritionContext?: { period: MealPeriod; ruleId?: string };
+}
+
+// ---------------------------------------------------------------------------
+// Gate 3C — coach-authored per-client nutrition plan overrides
+// ---------------------------------------------------------------------------
+
+/**
+ * One meal period's coach-authored overlay on top of the shared MEAL_OPTIONS
+ * catalog (lib/mock-data.ts) and BOUNDED_SUBSTITUTION_RULES (lib/nutrition/
+ * substitution.ts) — never a rewrite of either. Lives on the CLIENT's own
+ * AppState (see lib/state.ts's AppState.coachMealPlan), written directly by
+ * a coach through lib/coach/nutrition-authoring.ts exactly the way
+ * lib/coach/review-lifecycle.ts already writes into a specific client's
+ * AppState from outside that client's own reducer.
+ *
+ * Absent for a period the coach has never touched — every reader falls back
+ * to the exact Gate 3B behavior (the option's own `description` as Meal
+ * Intent; every ingredient-applicable registered rule is eligible) so this
+ * is purely additive, never a required step.
+ */
+export interface CoachMealPlanEntry {
+  /** Overrides the option's own `description` as this period's Meal Intent
+   * wherever it's shown or snapshotted (the client's plan-view rows, and
+   * MealSelection.mealIntent at logging time) — never fabricated text; the
+   * coach wrote exactly this. Absent (or cleared back to empty) means "use
+   * the option's own description," never a blank Meal Intent. */
+  mealIntentOverride?: string;
+  /** Which registered BoundedSubstitutionRule ids this client may be shown
+   * for this meal period. Absent means "every rule whose fromLabel
+   * ingredient is present in the meal is eligible" — Gate 3B's original,
+   * unrestricted behavior, preserved exactly until a coach deliberately
+   * curates this list (even an explicit empty array is a real, deliberate
+   * "none of these for this client," distinct from "never configured"). */
+  eligibleSubstitutionRuleIds?: string[];
+  updatedAtIso: string;
+  updatedByCoachId: CoachProfileId;
+  updatedByCoachName: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -1394,4 +1394,14 @@ export interface ReviewRequest {
   /** Present only once status is "resolved" for a "significant" kind — the
    * full receipt of what was decided, approved, changed, and communicated. */
   resolutionReceipt?: ResolutionReceipt;
+  /** Gate 3C — set only by the nutrition escalation paths (see
+   * components/meals/meal-selection-sheet.tsx's escalateToCoach): which
+   * meal period this is about, and — only when the client was asking about
+   * one specific registered swap, never a free-text guess — which
+   * BoundedSubstitutionRule id. Lets the coach's review detail pull the
+   * client's real evidence for that exact meal and, when a concrete rule is
+   * named, show a real "approve this exact swap" action instead of only a
+   * free-text note. Absent for every other review kind, and for a general
+   * nutrition question with no specific rule attached. */
+  nutritionContext?: { period: MealPeriod; ruleId?: string };
 }

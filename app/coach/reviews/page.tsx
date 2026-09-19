@@ -4,6 +4,7 @@ import { useState } from "react";
 import { PageHeader } from "@/components/coach/page-header";
 import { ReviewQueueList } from "@/components/coach/review-queue-list";
 import { ReviewDetailSheet } from "@/components/coach/review-detail-sheet";
+import { NutritionReviewDetailSheet } from "@/components/coach/nutrition-review-detail-sheet";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
 import { cn } from "@/lib/cn";
 
@@ -79,7 +80,16 @@ export default function CoachReviewsPage() {
         <ReviewQueueList items={items} emptyMessage={EMPTY_MESSAGE[tab]} onSelect={(item) => setSelectedId(item.reviewRequestId)} />
       </div>
 
-      {workspace.coachId ? (
+      {workspace.coachId && selected?.nutritionContext ? (
+        <NutritionReviewDetailSheet
+          item={selected}
+          coachId={workspace.coachId}
+          coachName={workspace.activeContext.coachProfile?.displayName ?? "Your coach"}
+          platform={workspace.platform}
+          onClose={() => setSelectedId(null)}
+          onChanged={handleChanged}
+        />
+      ) : workspace.coachId ? (
         <ReviewDetailSheet
           item={selected}
           coachId={workspace.coachId}

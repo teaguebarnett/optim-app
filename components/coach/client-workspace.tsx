@@ -16,6 +16,7 @@ import { RecentDecisions } from "@/components/coach/recent-decisions";
 import { DailyBriefingCard } from "@/components/coach/daily-briefing-card";
 import { AiAuthorityClientOverrideCard } from "@/components/coach/ai-authority-client-override-card";
 import { MealRecommendationAssignmentCard } from "@/components/coach/meal-recommendation-assignment";
+import { CoachMealPlanCard } from "@/components/coach/coach-meal-plan-card";
 import { useCoachBrief } from "@/hooks/use-coach-brief";
 import { resolveClientStatusLabel, CLIENT_STATUS_LABELS } from "@/lib/coach/client-status";
 import { resolveProgramTiming, describeProgramTimingForCoach } from "@/lib/scheduling/program-timing";
@@ -162,7 +163,7 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
           onClick={() => setMoreOpen((v) => !v)}
           className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border bg-surface-raised px-3.5 py-2.5 text-sm font-medium text-off-white hover:bg-surface-input"
         >
-          More: conversation, meal recommendations, AI authority
+          More: conversation, nutrition plan, meal recommendations, AI authority
           {moreOpen ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
         </button>
         {moreOpen ? (
@@ -179,6 +180,16 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
                 )}
               </div>
             </Card>
+
+            {coachId ? (
+              <CoachMealPlanCard
+                clientId={client.id}
+                clientAppState={clientAppState}
+                coachId={coachId}
+                coachName={view.activeContext.coachProfile?.displayName ?? "Coach"}
+                onChanged={onChanged}
+              />
+            ) : null}
 
             {coachId ? (
               <MealRecommendationAssignmentCard

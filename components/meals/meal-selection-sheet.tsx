@@ -12,7 +12,7 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { usePlatformState } from "@/hooks/use-platform-state";
 import { cn } from "@/lib/cn";
 import { findEarliestIncompleteMealBefore } from "@/lib/calculations";
-import { mealDisplayName, mealIntentFor, mealProvenanceLabel } from "@/lib/nutrition/view-model";
+import { mealDisplayName, mealIntentFor, mealOptionHasIngredient, mealProvenanceLabel } from "@/lib/nutrition/view-model";
 import { isUncertainMealSelection } from "@/lib/nutrition/vision-estimator";
 import {
   BOUNDED_SUBSTITUTION_RULES,
@@ -25,7 +25,7 @@ import { getAiAuthoritySettings } from "@/lib/coach/repository";
 import { nextId } from "@/lib/state";
 import { MEAL_OPTIONS, MEAL_PERIOD_LABELS } from "@/lib/mock-data";
 import type { AiActionDisposition } from "@/lib/coach/ai-authority";
-import type { MacroValues, MealEstimateConfidence, MealEstimateItem, MealIntent, MealOption, MealPeriod, MealSelection, SkipReason } from "@/lib/types";
+import type { MacroValues, MealEstimateConfidence, MealEstimateItem, MealIntent, MealPeriod, MealSelection, SkipReason } from "@/lib/types";
 
 interface MealSelectionSheetProps {
   period: MealPeriod;
@@ -75,25 +75,6 @@ const MEAL_SKIP_REASONS: SkipReason[] = ["not-hungry", "out-of-time", "food-unav
 function formatTime(iso?: string): string | undefined {
   if (!iso) return undefined;
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-}
-
-/** Correction pass — a registered swap is only ever contextually relevant,
- * never a catalog-wide advertisement: it renders only when its own
- * `fromLabel` ingredient is actually present in the specific meal option
- * being considered (whichever the client currently has selected, or has
- * already logged) — never for an unrelated period's fixture just because
- * the rule itself is period-agnostic. A case-insensitive substring match in
- * either direction, matching how the fixture data (lib/mock-data.ts's
- * MEAL_OPTIONS) and the rule's own fromLabel (lib/nutrition/substitution.ts)
- * both name ingredients as plain text — never a change to that file's
- * contract, purely a presentation-layer filter over its existing field. */
-function mealOptionHasIngredient(option: MealOption | null | undefined, ingredientLabel: string): boolean {
-  if (!option) return false;
-  const needle = ingredientLabel.trim().toLowerCase();
-  return option.mainIngredients.some((ingredient) => {
-    const hay = ingredient.trim().toLowerCase();
-    return hay.includes(needle) || needle.includes(hay);
-  });
 }
 
 export function MealSelectionSheet({ period, open, onClose, initialView }: MealSelectionSheetProps) {
@@ -272,7 +253,14 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
   // means no swap can be contextually relevant.
   const loggedOption = currentSelection?.source === "option" ? (options.find((o) => o.id === currentSelection.optionId) ?? null) : null;
   const referenceMealOption = pendingOption ?? loggedOption;
-  const applicableSubstitutionRules = rulesForPeriod.filter((rule) => mealOptionHasIngredient(referenceMealOption, rule.fromLabel));
+  // Gate 3C — a coach may have deliberately curated which registered rules
+  // this client sees for this meal period (see AppState.coachMealPlan);
+  // absent means "every ingredient-applicable rule is eligible," Gate 3B's
+  // original, unrestricted behavior, preserved exactly.
+  const coachEligibleRuleIds = state.coachMealPlan[period]?.eligibleSubstitutionRuleIds;
+  const applicableSubstitutionRules = rulesForPeriod.filter(
+    (rule) => mealOptionHasIngredient(referenceMealOption, rule.fromLabel) && (coachEligibleRuleIds === undefined || coachEligibleRuleIds.includes(rule.id))
+  );
   const authoritySettings = getAiAuthoritySettings(platform, state.primaryCoachId, state.workspaceId);
   const substitutionDisposition: AiActionDisposition | null = pendingSubstitution
     ? resolveSubstitutionDisposition(pendingSubstitution, authoritySettings, state.clientId)
@@ -292,7 +280,7 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
    * system pill) so this shows up in the coach's existing Reviews/Command
    * Center and the client's existing /chat — never a new, parallel
    * notification surface, and never a stale status once resolved. */
-  function escalateToCoach(summary: string) {
+  function escalateToCoach(summary: string, nutritionContext?: { period: MealPeriod; ruleId?: string }) {
     const clientMessageId = nextId("msg");
     dispatch({
       type: "ADD_CHAT_MESSAGE",
@@ -305,6 +293,7 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
       summary,
       sourceMessageId: clientMessageId,
       id: reviewRequestId,
+      nutritionContext,
     });
     dispatch({
       type: "ADD_CHAT_MESSAGE",
@@ -330,14 +319,17 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
   }
 
   function escalateSubstitution(rule: BoundedSubstitutionRule) {
-    escalateToCoach(`Nutrition substitution requested for ${label.toLowerCase()}: ${rule.fromLabel} → ${rule.toLabel}. Needs ${coachName}'s OK before it applies.`);
+    escalateToCoach(
+      `Nutrition substitution requested for ${label.toLowerCase()}: ${rule.fromLabel} → ${rule.toLabel}. Needs ${coachName}'s OK before it applies.`,
+      { period, ruleId: rule.id }
+    );
     setAskSent(true);
   }
 
   function submitAskNote() {
     const note = askNote.trim();
     if (!note) return;
-    escalateToCoach(`Nutrition question about ${label.toLowerCase()}: "${note}"`);
+    escalateToCoach(`Nutrition question about ${label.toLowerCase()}: "${note}"`, { period });
     setAskSent(true);
   }
 
@@ -390,6 +382,14 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
           <div className="divide-y divide-border rounded-[var(--radius-md)] bg-surface-raised px-4">
             {options.map((option) => {
               const isSelected = pendingOptionId === option.id;
+              // Gate 3C — a coach's own edited Meal Intent for this
+              // client's this period (see AppState.coachMealPlan)
+              // supersedes the catalog's own per-option description here,
+              // exactly the way SELECT_MEAL_OPTION now snapshots it — so
+              // this preview and what actually gets logged can never
+              // diverge, regardless of which of the period's options the
+              // client ends up picking.
+              const effectiveDescription = state.coachMealPlan[period]?.mealIntentOverride ?? option.description;
               return (
                 <button
                   key={option.id}
@@ -402,7 +402,7 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
                       <p className={cn("text-[15px] font-medium", isSelected ? "text-accent-fg" : "text-off-white")}>
                         {option.name}
                       </p>
-                      <p className="mt-0.5 text-xs text-neutral">{option.description}</p>
+                      <p className="mt-0.5 text-xs text-neutral">{effectiveDescription}</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       <div className="whitespace-nowrap text-right text-xs text-neutral">

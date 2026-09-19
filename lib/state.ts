@@ -43,6 +43,7 @@ import { MIXED_SESSION_DEMO } from "./training/demo-fixtures.ts";
 import type { CircuitRoundActual, EmomWindowActual, ExecutionRecord, IntervalRoundActual, MobilitySetActual, PowerSetActual, Prescription, Session, UniversalTrainingProgramContent } from "./training/types";
 import { findDuplicateReviewRequest, severityForKind } from "./coach/review-support.ts";
 import { detectMilestoneEscalation, detectPatternEscalations } from "./coach/attention-escalation.ts";
+import type { CoachMealPlanEntry } from "./coach/types.ts";
 import type {
   AssignedNutritionPlan,
   CardioLog,
@@ -168,6 +169,15 @@ export interface AppState {
    * that only ever reads `nutritionTargets` keeps working unmodified.
    * Undefined for a client with no OPTIM-generated plan yet. */
   assignedNutritionPlan?: AssignedNutritionPlan;
+  /** Gate 3C — this client's coach-authored per-meal-period overlay on top
+   * of the shared MEAL_OPTIONS catalog and BOUNDED_SUBSTITUTION_RULES (see
+   * lib/coach/types.ts's CoachMealPlanEntry for the full contract). Written
+   * directly by a coach through lib/coach/nutrition-authoring.ts, never
+   * through this reducer — exactly the same "written from outside this
+   * client's own reducer" pattern lib/coach/review-lifecycle.ts already
+   * uses. A period absent here has no coach override yet; every reader
+   * falls back to Gate 3B's original behavior. */
+  coachMealPlan: Partial<Record<MealPeriod, CoachMealPlanEntry>>;
   /** Phase 5.4B — see DailyEntranceState's doc. */
   dailyEntrance: DailyEntranceState;
   /** Phase 5.4B — consecutive COMPLETE_WORKOUT dispatches with no skipped
@@ -410,6 +420,7 @@ export function createInitialState(options: CreateInitialStateOptions = {}): App
     consecutiveCleanWorkouts: 0,
     morningWeight: { weightLb: null, skipped: false },
     meals: {},
+    coachMealPlan: {},
     cardio: { status: "not-started", durationMin: 0 },
     dailyTrainingPlan: null,
     workoutSession: createInitialWorkoutSession(workspaceId, clientId),
@@ -750,6 +761,9 @@ export type Action =
        * resolved status later. Omitted by every other caller, which keeps
        * generating its id here exactly as before. */
       id?: string;
+      /** Gate 3C — see ReviewRequest.nutritionContext's own doc. Omitted by
+       * every non-nutrition caller. */
+      nutritionContext?: { period: MealPeriod; ruleId?: string };
     }
   /** Phase 5.4B — dispatched once the client-side daily entrance sequence
    * (spec §8) finishes for today, so a second same-day open skips straight
@@ -943,8 +957,12 @@ export function reducer(state: AppState, action: Action): AppState {
         completedAtIso: new Date().toISOString(),
         // Gate 3A — snapshot the option's MealIntent onto the log the same
         // way photoEstimate is already snapshotted below, so it survives
-        // independently of the MEAL_OPTIONS catalog.
-        mealIntent: option.description,
+        // independently of the MEAL_OPTIONS catalog. Gate 3C — a coach's
+        // own edited Meal Intent for this client's this period (see
+        // AppState.coachMealPlan) takes precedence over the catalog's own
+        // description when present, so what gets snapshotted here is
+        // exactly what the coach authored, never silently the stock text.
+        mealIntent: state.coachMealPlan[action.period]?.mealIntentOverride ?? option.description,
       };
       return { ...state, meals: withMealMacros(state.meals, action.period, selection) };
     }
@@ -2727,6 +2745,7 @@ export function reducer(state: AppState, action: Action): AppState {
         summary: action.summary,
         status: "needs_review",
         resolved: false,
+        nutritionContext: action.nutritionContext,
       };
       return { ...state, reviewRequests: [...state.reviewRequests, reviewRequest] };
     }

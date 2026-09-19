@@ -138,6 +138,7 @@ export function buildReviewQueueItems(input: BuildAttentionQueueInput): Attentio
       optimActionsTaken: r.optimActionsTaken,
       recommendedNextAction: r.recommendedNextAction,
       preparedClientMessage: r.preparedClientMessage,
+      nutritionContext: r.nutritionContext,
       waitingOn: r.waitingOn,
       resurfaceAtIso: r.resurfaceAtIso,
       clientNotificationRequired: r.clientNotificationRequired,
