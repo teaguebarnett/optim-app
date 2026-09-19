@@ -7,44 +7,72 @@ import { isValidMacro } from "@/lib/calculations";
 import type { MacroValues } from "@/lib/types";
 
 interface ManualMealFormProps {
-  onSave: (name: string, macros: MacroValues) => void;
+  /** Correction pass — `unknownMacroFields` names which of `macros`' fields
+   * the client never actually entered a value for (0 in `macros` itself for
+   * those, but never to be shown or summed as if measured — see
+   * MealSelection.unknownMacroFields' own doc in lib/types.ts). Always
+   * passed, even when empty (every field was entered). */
+  onSave: (name: string, macros: MacroValues, unknownMacroFields: (keyof MacroValues)[]) => void;
   onCancel: () => void;
   /** Prefills the form for correcting a previously logged entry rather than
    * starting from a blank meal — see the "Edit" path in
-   * components/meals/meal-selection-sheet.tsx's summary view. */
-  initial?: { name: string; macros: MacroValues };
+   * components/meals/meal-selection-sheet.tsx's summary view. A field named
+   * in `unknownMacroFields` restores as blank, not as the stored 0 — re-
+   * opening a partial estimate must never present an unentered field as if
+   * the client had typed a real zero. */
+  initial?: { name: string; macros: MacroValues; unknownMacroFields?: (keyof MacroValues)[] };
   submitLabel?: string;
 }
 
 export function ManualMealForm({ onSave, onCancel, initial, submitLabel = "Save estimate" }: ManualMealFormProps) {
+  const initialUnknown = new Set(initial?.unknownMacroFields ?? []);
   const [name, setName] = useState(initial?.name ?? "");
-  const [calories, setCalories] = useState<number | "">(initial?.macros.calories ?? "");
-  const [protein, setProtein] = useState<number | "">(initial?.macros.proteinG ?? "");
-  const [carbs, setCarbs] = useState<number | "">(initial?.macros.carbsG ?? "");
-  const [fat, setFat] = useState<number | "">(initial?.macros.fatG ?? "");
+  const [calories, setCalories] = useState<number | "">(initialUnknown.has("calories") ? "" : (initial?.macros.calories ?? ""));
+  const [protein, setProtein] = useState<number | "">(initialUnknown.has("proteinG") ? "" : (initial?.macros.proteinG ?? ""));
+  const [carbs, setCarbs] = useState<number | "">(initialUnknown.has("carbsG") ? "" : (initial?.macros.carbsG ?? ""));
+  const [fat, setFat] = useState<number | "">(initialUnknown.has("fatG") ? "" : (initial?.macros.fatG ?? ""));
   const [error, setError] = useState<string | null>(null);
 
+  // Correction pass — a description and at least one meaningful positive
+  // value is the real bar for "there's actual evidence here," not "every
+  // field happens to be filled in." Missing evidence must stay missing —
+  // an untouched blank form (no description, nothing but zeros) can never
+  // become a zero-calorie logged meal, so `canSave` (used to disable the
+  // button below) and this function's own guard use the exact same two
+  // conditions. A field left blank is still recorded as 0 in the macros
+  // object saved (so totals math elsewhere never has to special-case an
+  // absent number), but is also named in `unknownMacroFields` below so
+  // every reader of this selection can tell "genuinely zero" apart from
+  // "never entered."
+  const hasDescription = name.trim().length > 0;
+  const hasPositiveValue = [calories, protein, carbs, fat].some((v) => typeof v === "number" && v > 0);
+  const canSave = hasDescription && hasPositiveValue;
+
   function handleSave() {
-    if (!name.trim()) {
+    if (!hasDescription) {
       setError("Give this meal a name.");
       return;
     }
-    const values = [calories, protein, carbs, fat];
-    if (values.some((v) => v === "")) {
-      setError("Fill in an estimate for every field — rough numbers are fine.");
+    if (!hasPositiveValue) {
+      setError("Add at least one nutrition value greater than zero.");
       return;
     }
     const macros = {
-      calories: calories as number,
-      proteinG: protein as number,
-      carbsG: carbs as number,
-      fatG: fat as number,
+      calories: calories === "" ? 0 : calories,
+      proteinG: protein === "" ? 0 : protein,
+      carbsG: carbs === "" ? 0 : carbs,
+      fatG: fat === "" ? 0 : fat,
     };
     if (Object.values(macros).some((v) => !isValidMacro(v))) {
       setError("Those numbers look off — double check them.");
       return;
     }
-    onSave(name.trim(), macros);
+    const unknownMacroFields: (keyof MacroValues)[] = [];
+    if (calories === "") unknownMacroFields.push("calories");
+    if (protein === "") unknownMacroFields.push("proteinG");
+    if (carbs === "") unknownMacroFields.push("carbsG");
+    if (fat === "") unknownMacroFields.push("fatG");
+    onSave(name.trim(), macros, unknownMacroFields);
   }
 
   return (
@@ -77,7 +105,7 @@ export function ManualMealForm({ onSave, onCancel, initial, submitLabel = "Save 
       {error ? <p className="text-xs text-error">{error}</p> : null}
 
       <div className="flex gap-2">
-        <Button className="flex-1" onClick={handleSave}>
+        <Button className="flex-1" onClick={handleSave} disabled={!canSave}>
           {submitLabel}
         </Button>
         <Button variant="ghost" onClick={onCancel}>

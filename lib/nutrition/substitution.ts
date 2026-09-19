@@ -25,7 +25,7 @@
 import { resolveAiAction } from "../coach/ai-authority.ts";
 import type { AiActionDisposition, CoachAiAuthoritySettings } from "../coach/ai-authority.ts";
 import type { ClientProfileId } from "../tenancy/types";
-import type { MealEstimateConfidence, MealPeriod } from "../types";
+import type { MacroValues, MealEstimateConfidence, MealIntent, MealPeriod } from "../types";
 
 /** Who stands behind this rule's boundary/constraint. "coach" — the
  * client's own assigned coach explicitly authored or approved it (the
@@ -169,4 +169,35 @@ export function resolveSubstitutionDisposition(
 ): AiActionDisposition {
   if (!rule || !isValidationEligible(rule.validation) || rule.confidence === "low") return "escalate";
   return resolveAiAction(settings, clientId, "nutrition_change", "routine", "nutrition_adjustment");
+}
+
+// ---------------------------------------------------------------------------
+// Gate 3B — turning an accepted bounded rule into a real, loggable meal.
+// ---------------------------------------------------------------------------
+
+/** What logging an accepted bounded substitution actually looks like —
+ * reuses the existing "manual" MealSelectionSource (see lib/state.ts's
+ * SET_MANUAL_MEAL) rather than adding a sixth MealSelectionSource value:
+ * mechanically it IS a client-composed entry with known macros, exactly
+ * like a manual entry, and MealSelectionSource is checked directly (never
+ * through an exhaustive switch) in a dozen+ existing call sites — adding a
+ * new value there is the kind of broad, cross-cutting ripple this gate is
+ * told to avoid. What makes an accepted substitution distinct is carried
+ * honestly through fields that already exist: `mealIntent` records the
+ * rule's own constraint/rationale (see lib/nutrition/view-model.ts's
+ * mealProvenanceLabel, which reads a manual entry's mealIntent to label it
+ * "Accepted substitution" instead of a bare "Your manual entry"), and
+ * `macros` is deliberately the ORIGINAL planned meal's own real macros —
+ * never a fabricated number for the substituted food — because the rule's
+ * whole constraint is "keep this close to the original," and the original
+ * is the only real, known value available. */
+export function describeSubstitutionLog(
+  rule: BoundedSubstitutionRule,
+  originalMacros: MacroValues
+): { manualName: string; macros: MacroValues; mealIntent: MealIntent } {
+  return {
+    manualName: `${rule.toLabel} (substituted for ${rule.fromLabel})`,
+    macros: originalMacros,
+    mealIntent: `${rule.constraint} ${rule.rationale}`,
+  };
 }

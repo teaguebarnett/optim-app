@@ -76,7 +76,14 @@ export function sumKnownActualMacros(record: DailyRecord): { totals: MacroValues
   for (const period of periodsInPlan) {
     const selection = meals[period];
     if (!isMealResolvedAdherent(selection)) continue; // skipped/planned-later contribute 0, not "unknown"
-    if (!selection?.macros) {
+    // Correction pass — a manual entry can now be logged with SOME macro
+    // fields genuinely unentered (see MealSelectionSnapshot.
+    // unknownMacroFields' own doc); that selection's `macros` object still
+    // exists (0 in the unentered fields, never null), but this day's
+    // calorie/protein target-met derivation must not treat those 0s as
+    // measured — the same "insufficient data, not zero" contract this
+    // function already enforced at the whole-selection level.
+    if (!selection?.macros || (selection.unknownMacroFields && selection.unknownMacroFields.length > 0)) {
       allKnown = false;
       continue;
     }

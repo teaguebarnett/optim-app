@@ -1,46 +1,106 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Camera } from "lucide-react";
+import { Camera, ChevronRight } from "lucide-react";
 import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { TextArea } from "@/components/ui/textarea";
 import { ReasonPicker, SKIP_REASON_LABELS } from "@/components/ui/reason-picker";
-import { MealOptionCard } from "@/components/meals/meal-option-card";
 import { ManualMealForm } from "@/components/meals/manual-meal-form";
 import { PhotoMealFlow } from "@/components/nutrition/photo/photo-meal-flow";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { usePlatformState } from "@/hooks/use-platform-state";
+import { cn } from "@/lib/cn";
 import { findEarliestIncompleteMealBefore } from "@/lib/calculations";
-import { mealDisplayName, mealProvenanceLabel } from "@/lib/nutrition/view-model";
+import { mealDisplayName, mealIntentFor, mealProvenanceLabel } from "@/lib/nutrition/view-model";
+import { isUncertainMealSelection } from "@/lib/nutrition/vision-estimator";
+import {
+  BOUNDED_SUBSTITUTION_RULES,
+  describeSubstitutionLog,
+  resolveSubstitutionDisposition,
+  type BoundedSubstitutionRule,
+} from "@/lib/nutrition/substitution";
+import { nutritionChangeAckReplyText } from "@/lib/chat/assistant";
+import { getAiAuthoritySettings } from "@/lib/coach/repository";
+import { nextId } from "@/lib/state";
 import { MEAL_OPTIONS, MEAL_PERIOD_LABELS } from "@/lib/mock-data";
-import type { MacroValues, MealEstimateConfidence, MealEstimateItem, MealPeriod, MealSelection, SkipReason } from "@/lib/types";
+import type { AiActionDisposition } from "@/lib/coach/ai-authority";
+import type { MacroValues, MealEstimateConfidence, MealEstimateItem, MealIntent, MealOption, MealPeriod, MealSelection, SkipReason } from "@/lib/types";
 
 interface MealSelectionSheetProps {
   period: MealPeriod;
   open: boolean;
   onClose: () => void;
   /** Skips straight to the photo-capture flow on open — used by the
-   * "current meal" card's camera shortcut. Defaults to the normal options
-   * (or, for an already-logged meal, summary) view. */
+   * "current meal" card's camera shortcut. Defaults to the normal planned-
+   * meal view (or, for an already-logged meal, summary) view. The literal
+   * value "options" is kept as the external contract (see
+   * components/nutrition/meal-card.tsx's callers) even though the internal
+   * view it now resolves to is named "plan" — never worth an unrelated-file
+   * edit just to rename a prop value that already means "the default
+   * entry." */
   initialView?: "options" | "photo";
 }
 
-type View = "summary" | "options" | "manual" | "photo" | "skip" | "sequence-warning";
+// Correction pass — "options" (three bordered cards + five competing
+// top-level actions) is replaced by "plan" (the quiet, object-first primary
+// view: one dominant question — which planned meal, or something else) and
+// "something-else" (the one secondary branch point, itself revealing four
+// outcomes rather than exposing them all as peers). Every other view name
+// is unchanged from Gate 3B.
+type View = "summary" | "plan" | "something-else" | "manual" | "photo" | "skip" | "sequence-warning" | "ask";
 
 type PendingLog =
   | { kind: "option"; optionId: string }
-  | { kind: "manual"; name: string; macros: MacroValues }
+  // Gate 3B — `mealIntent` is set only when this manual entry is really an
+  // accepted bounded substitution (see describeSubstitutionLog); omitted for
+  // a true free-text manual entry, which has none to preserve. Correction
+  // pass — `unknownMacroFields` names which macro fields a free-text entry
+  // was saved without (see ManualMealForm's own doc); always empty for a
+  // substitution, which is built from real, fully-known original macros.
+  | { kind: "manual"; name: string; macros: MacroValues; mealIntent?: MealIntent; unknownMacroFields?: (keyof MacroValues)[] }
   | { kind: "photo"; items: MealEstimateItem[]; macros: MacroValues; confidence: MealEstimateConfidence };
+
+// Correction pass (Gate 3B human-QA) — a meal skip needs its own concise,
+// food-appropriate vocabulary, never the workout set's "equipment
+// unavailable"/"excessive fatigue"/"schedule conflict" (see
+// components/ui/reason-picker.tsx's default REASON_ORDER, still used
+// unchanged by every workout SkipReasonSheet call site and
+// cardio-task.tsx). Reuses the shared SkipReason type and SKIP_REASON_LABELS
+// map — this is a different SUBSET/order of that same vocabulary, plus the
+// two reasons ("not-hungry", "food-unavailable") no workout context would
+// ever need.
+const MEAL_SKIP_REASONS: SkipReason[] = ["not-hungry", "out-of-time", "food-unavailable", "feeling-sick", "forgot", "other"];
 
 function formatTime(iso?: string): string | undefined {
   if (!iso) return undefined;
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/** Correction pass — a registered swap is only ever contextually relevant,
+ * never a catalog-wide advertisement: it renders only when its own
+ * `fromLabel` ingredient is actually present in the specific meal option
+ * being considered (whichever the client currently has selected, or has
+ * already logged) — never for an unrelated period's fixture just because
+ * the rule itself is period-agnostic. A case-insensitive substring match in
+ * either direction, matching how the fixture data (lib/mock-data.ts's
+ * MEAL_OPTIONS) and the rule's own fromLabel (lib/nutrition/substitution.ts)
+ * both name ingredients as plain text — never a change to that file's
+ * contract, purely a presentation-layer filter over its existing field. */
+function mealOptionHasIngredient(option: MealOption | null | undefined, ingredientLabel: string): boolean {
+  if (!option) return false;
+  const needle = ingredientLabel.trim().toLowerCase();
+  return option.mainIngredients.some((ingredient) => {
+    const hay = ingredient.trim().toLowerCase();
+    return hay.includes(needle) || needle.includes(hay);
+  });
+}
+
 export function MealSelectionSheet({ period, open, onClose, initialView }: MealSelectionSheetProps) {
   const { state, dispatch, activeContext, dailyPlan } = usePrototypeState();
+  const { platform } = usePlatformState();
   const coachName = activeContext.primaryCoach?.displayName ?? "your coach";
-  const [view, setView] = useState<View>("options");
+  const [view, setView] = useState<View>("plan");
   const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
   const [skipReason, setSkipReason] = useState<SkipReason | null>(null);
   const [skipNote, setSkipNote] = useState("");
@@ -48,7 +108,19 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
   // confirms past the sequence warning or never triggered one at all.
   const [pendingLog, setPendingLog] = useState<PendingLog | null>(null);
   const [blockingPeriod, setBlockingPeriod] = useState<MealPeriod | null>(null);
-  const [viewBeforeWarning, setViewBeforeWarning] = useState<View>("options");
+  const [viewBeforeWarning, setViewBeforeWarning] = useState<View>("plan");
+  // Gate 3B — the "ask about this meal" flow: a registered bounded rule the
+  // client is considering, plus the free-text note for the "something else"
+  // fallback. Neither is ever applied/sent until the client takes the
+  // explicit action shown for whichever disposition the rule resolves to.
+  const [pendingSubstitution, setPendingSubstitution] = useState<BoundedSubstitutionRule | null>(null);
+  const [askNote, setAskNote] = useState("");
+  const [askSent, setAskSent] = useState(false);
+  // Correction pass — progressive disclosure within "something-else": "I ate
+  // something different" is itself a question, not an action, so tapping it
+  // reveals its two real input methods (photo/manual) inline rather than
+  // jumping straight into one of them.
+  const [differentSubmenuOpen, setDifferentSubmenuOpen] = useState(false);
 
   const currentSelection = state.meals[period];
   const hasExistingSelection =
@@ -70,23 +142,31 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
       setPendingOptionId(null);
       setPendingLog(null);
       setBlockingPeriod(null);
+      setPendingSubstitution(null);
+      setAskNote("");
+      setAskSent(false);
+      setDifferentSubmenuOpen(false);
       if (initialView === "photo") {
         setView("photo");
         return;
       }
-      setView(currentSelection ? "summary" : "options");
+      setView(currentSelection ? "summary" : "plan");
     }, 0);
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialView]);
 
   function resetAndClose() {
-    setView("options");
+    setView("plan");
     setPendingOptionId(null);
     setSkipReason(null);
     setSkipNote("");
     setPendingLog(null);
     setBlockingPeriod(null);
+    setPendingSubstitution(null);
+    setAskNote("");
+    setAskSent(false);
+    setDifferentSubmenuOpen(false);
     onClose();
   }
 
@@ -94,7 +174,14 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
     if (log.kind === "option") {
       dispatch({ type: "SELECT_MEAL_OPTION", period, optionId: log.optionId });
     } else if (log.kind === "manual") {
-      dispatch({ type: "SET_MANUAL_MEAL", period, manualName: log.name, macros: log.macros });
+      dispatch({
+        type: "SET_MANUAL_MEAL",
+        period,
+        manualName: log.name,
+        macros: log.macros,
+        mealIntent: log.mealIntent,
+        unknownMacroFields: log.unknownMacroFields,
+      });
     } else {
       dispatch({ type: "LOG_PHOTO_MEAL", period, items: log.items, macros: log.macros, confidence: log.confidence });
     }
@@ -118,10 +205,12 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
     logNow(log);
   }
 
+  // Correction pass — a tap selects a planned meal; tapping the already-
+  // selected one again deselects it (the only way to change your mind
+  // without a separate Cancel control, now that the row itself IS the
+  // picker). Only one meal may ever be selected at a time.
   function handleSelectOption(optionId: string) {
-    // Selecting only marks the option as pending — the client still has to
-    // explicitly confirm they ate it before it's logged.
-    setPendingOptionId(optionId);
+    setPendingOptionId((prev) => (prev === optionId ? null : optionId));
   }
 
   function confirmSelection() {
@@ -129,8 +218,8 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
     attemptLog({ kind: "option", optionId: pendingOptionId });
   }
 
-  function handleManualSave(name: string, macros: MacroValues) {
-    attemptLog({ kind: "manual", name, macros });
+  function handleManualSave(name: string, macros: MacroValues, unknownMacroFields: (keyof MacroValues)[]) {
+    attemptLog({ kind: "manual", name, macros, unknownMacroFields: unknownMacroFields.length > 0 ? unknownMacroFields : undefined });
   }
 
   function handlePhotoConfirm(items: MealEstimateItem[], macros: MacroValues, confidence: MealEstimateConfidence) {
@@ -157,7 +246,7 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
     if (!currentSelection) return;
     if (currentSelection.source === "option") {
       setPendingOptionId(currentSelection.optionId ?? null);
-      setView("options");
+      setView("plan");
     } else if (currentSelection.source === "manual") {
       setView("manual");
     } else if (currentSelection.source === "photo-estimate") {
@@ -168,22 +257,116 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
   const pendingOption = pendingOptionId ? options.find((o) => o.id === pendingOptionId) : null;
   const editingPhotoEstimate = currentSelection?.source === "photo-estimate" ? currentSelection.photoEstimate : undefined;
 
+  // Gate 3B — the "ask about this meal" flow: reuses Gate 3A's bounded-
+  // substitution contract for a registered swap, and the exact same
+  // review-request + chat-message escalation lib/chat/demo-chat-screen.tsx's
+  // "Talk to Teague"/pain/program-change paths already use for anything
+  // that isn't a registered, sufficiently-confident rule — never a second
+  // escalation model.
+  const rulesForPeriod = BOUNDED_SUBSTITUTION_RULES.filter((rule) => rule.period === null || rule.period === period);
+  // Correction pass — the meal a candidate swap is actually measured
+  // against: whichever option the client currently has selected in the
+  // primary view, falling back to whichever option is already logged (the
+  // "I need help with this meal" entry point is reachable either way). No
+  // reference meal at all (nothing selected, nothing logged yet) honestly
+  // means no swap can be contextually relevant.
+  const loggedOption = currentSelection?.source === "option" ? (options.find((o) => o.id === currentSelection.optionId) ?? null) : null;
+  const referenceMealOption = pendingOption ?? loggedOption;
+  const applicableSubstitutionRules = rulesForPeriod.filter((rule) => mealOptionHasIngredient(referenceMealOption, rule.fromLabel));
+  const authoritySettings = getAiAuthoritySettings(platform, state.primaryCoachId, state.workspaceId);
+  const substitutionDisposition: AiActionDisposition | null = pendingSubstitution
+    ? resolveSubstitutionDisposition(pendingSubstitution, authoritySettings, state.clientId)
+    : null;
+  // The real planned macros this swap is measured against — whichever
+  // option the client has pending/logged for this meal, falling back to
+  // the period's own first catalog option so "keep this close to the
+  // original" always has a real, known reference value, never an invented
+  // one. See lib/nutrition/substitution.ts's describeSubstitutionLog.
+  const substitutionBaseMacros = pendingOption?.macros ?? currentSelection?.macros ?? options[0]?.macros ?? null;
+
+  /** The one place a nutrition ask reaches the coach — mirrors
+   * components/chat/demo-chat-screen.tsx's handleTalkToCoach exactly (a
+   * client-authored message, the review request itself carrying that same
+   * id forward via `id`/`reviewRequestId` per ChatMessage.reviewRequestId's
+   * own doc, then OPTIM's acknowledgement and the "sent, awaiting review"
+   * system pill) so this shows up in the coach's existing Reviews/Command
+   * Center and the client's existing /chat — never a new, parallel
+   * notification surface, and never a stale status once resolved. */
+  function escalateToCoach(summary: string) {
+    const clientMessageId = nextId("msg");
+    dispatch({
+      type: "ADD_CHAT_MESSAGE",
+      message: { id: clientMessageId, createdAtIso: new Date().toISOString(), sender: "client", text: summary, deliveryState: "sent" },
+    });
+    const reviewRequestId = nextId("review");
+    dispatch({
+      type: "CREATE_CHAT_REVIEW_REQUEST",
+      kind: "program-change-request",
+      summary,
+      sourceMessageId: clientMessageId,
+      id: reviewRequestId,
+    });
+    dispatch({
+      type: "ADD_CHAT_MESSAGE",
+      message: { id: nextId("msg"), createdAtIso: new Date().toISOString(), sender: "assistant", text: nutritionChangeAckReplyText(coachName) },
+    });
+    dispatch({
+      type: "ADD_CHAT_MESSAGE",
+      message: {
+        id: nextId("msg"),
+        createdAtIso: new Date().toISOString(),
+        sender: "system",
+        text: `Sent to ${coachName} — awaiting review`,
+        handoffState: "pending_coach_review",
+        reviewRequestId,
+      },
+    });
+  }
+
+  function applySubstitution() {
+    if (!pendingSubstitution || !substitutionBaseMacros) return;
+    const { manualName, macros, mealIntent } = describeSubstitutionLog(pendingSubstitution, substitutionBaseMacros);
+    attemptLog({ kind: "manual", name: manualName, macros, mealIntent });
+  }
+
+  function escalateSubstitution(rule: BoundedSubstitutionRule) {
+    escalateToCoach(`Nutrition substitution requested for ${label.toLowerCase()}: ${rule.fromLabel} → ${rule.toLabel}. Needs ${coachName}'s OK before it applies.`);
+    setAskSent(true);
+  }
+
+  function submitAskNote() {
+    const note = askNote.trim();
+    if (!note) return;
+    escalateToCoach(`Nutrition question about ${label.toLowerCase()}: "${note}"`);
+    setAskSent(true);
+  }
+
   return (
     <Sheet
       open={open}
       onClose={resetAndClose}
       title={
         view === "manual"
-          ? `${label}: something else`
+          ? `${label}: enter manually`
           : view === "photo"
             ? `${label}: photo estimate`
             : view === "skip"
               ? `Skip ${label.toLowerCase()}`
               : view === "sequence-warning"
                 ? "Log out of order?"
-                : label
+                : view === "ask"
+                  ? `Ask about ${label.toLowerCase()}`
+                  : view === "something-else"
+                    ? `${label}: something else`
+                    : label
       }
-      description={view === "options" ? "Pick the option that fits today, or log something else." : undefined}
+      footer={
+        view === "plan" && pendingOption ? (
+          <Button className="w-full" size="lg" onClick={confirmSelection}>
+            Log this meal
+          </Button>
+        ) : undefined
+      }
     >
       {view === "summary" && currentSelection ? (
         <MealSummary
@@ -191,67 +374,128 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
           label={label}
           selection={currentSelection}
           onEdit={hasExistingSelection ? startEdit : undefined}
-          onLogNow={!hasExistingSelection && currentSelection.source !== "skipped" ? () => setView("options") : undefined}
+          onLogNow={!hasExistingSelection && currentSelection.source !== "skipped" ? () => setView("plan") : undefined}
           onClear={handleClear}
         />
       ) : null}
 
-      {view === "options" && (
-        <div className="space-y-3">
-          <Button variant="outline" className="w-full" onClick={() => setView("photo")}>
-            <Camera size={16} aria-hidden="true" /> Log with a photo
-          </Button>
+      {/* Correction pass — the primary view is one dominant question: which
+       * planned meal (a quiet, selectable list — never three bordered cards
+       * each with its own competing "Select" button), or something else (one
+       * quiet secondary link, never a peer-level action). Nothing is
+       * preselected and nothing logs until the client explicitly taps the
+       * one dominant "Log this meal" action in the sheet's footer. */}
+      {view === "plan" && (
+        <div>
+          <div className="divide-y divide-border rounded-[var(--radius-md)] bg-surface-raised px-4">
+            {options.map((option) => {
+              const isSelected = pendingOptionId === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => handleSelectOption(option.id)}
+                  className="w-full py-3.5 text-left"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className={cn("text-[15px] font-medium", isSelected ? "text-accent-fg" : "text-off-white")}>
+                        {option.name}
+                      </p>
+                      <p className="mt-0.5 text-xs text-neutral">{option.description}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <div className="whitespace-nowrap text-right text-xs text-neutral">
+                        <span className="font-semibold text-off-white">{option.macros.calories}</span> cal ·{" "}
+                        {option.macros.proteinG}g P
+                      </div>
+                      {/* Correction pass — a quiet cue that this row is
+                       * selectable (matching the same chevron affordance
+                       * "something-else" rows use), which rotates to read
+                       * as an open disclosure once selected rather than
+                       * adding a second, separate indicator. */}
+                      <ChevronRight
+                        size={14}
+                        className={cn("shrink-0 text-neutral transition-transform", isSelected && "rotate-90")}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </div>
+                  {isSelected ? (
+                    <div className="mt-2.5 space-y-1 border-t border-border pt-2.5">
+                      <p className="text-xs text-neutral">{option.mainIngredients.join(", ")}</p>
+                      <p className="text-xs text-neutral">
+                        {option.macros.calories} cal · {option.macros.proteinG}g protein · {option.macros.carbsG}g carbs ·{" "}
+                        {option.macros.fatG}g fat
+                      </p>
+                    </div>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
 
-          {options.map((option) => (
-            <MealOptionCard
-              key={option.id}
-              option={option}
-              isSelected={pendingOptionId ? pendingOptionId === option.id : currentSelection?.optionId === option.id}
-              onSelect={() => handleSelectOption(option.id)}
-            />
-          ))}
+          <button
+            type="button"
+            onClick={() => {
+              // Correction pass — a fresh visit to "something else" must
+              // never inherit a PRIOR visit's finished ask/substitution
+              // state (otherwise re-entering "I need help with this meal"
+              // for an unrelated reason could wrongly show "already sent"
+              // or a stale swap card from an earlier pass through this
+              // same sheet instance).
+              setPendingSubstitution(null);
+              setAskNote("");
+              setAskSent(false);
+              setView("something-else");
+            }}
+            className="mt-4 flex w-full items-center justify-between text-sm text-off-white/80 hover:text-off-white"
+          >
+            Something else
+            <ChevronRight size={14} className="shrink-0 text-neutral" aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
-          {pendingOption ? (
-            <div className="rounded-[var(--radius-md)] border border-accent/40 bg-accent-soft p-4">
-              <p className="text-sm text-off-white">
-                {hasExistingSelection && currentSelection?.optionId !== pendingOptionId ? (
-                  <>
-                    Replace your selected {label.toLowerCase()} with <strong>{pendingOption.name}</strong>? This
-                    will update today&apos;s nutrition totals.
-                  </>
-                ) : (
-                  <>
-                    Confirm you ate <strong>{pendingOption.name}</strong>? This will log it to today&apos;s
-                    nutrition totals.
-                  </>
-                )}
-              </p>
-              <div className="mt-3 flex gap-2">
-                <Button size="sm" onClick={confirmSelection}>
-                  {hasExistingSelection && currentSelection?.optionId !== pendingOptionId
-                    ? "Replace"
-                    : "Confirm — I ate this"}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setPendingOptionId(null)}>
-                  Cancel
-                </Button>
-              </div>
+      {/* Correction pass — the one secondary branch point. "I ate something
+       * different" is a question, not an action: it reveals its own two
+       * input methods (photo/manual) inline rather than exposing them as
+       * top-level peers. The other three rows reuse existing, unmodified
+       * behavior (help/escalation, plan-for-later, skip) — never a second
+       * implementation of any of them. */}
+      {view === "something-else" && (
+        <div>
+          {!differentSubmenuOpen ? (
+            <div className="divide-y divide-border rounded-[var(--radius-md)] bg-surface-raised px-4">
+              <SomethingElseRow label="I ate something different" onClick={() => setDifferentSubmenuOpen(true)} />
+              <SomethingElseRow label="I need help with this meal" onClick={() => setView("ask")} />
+              <SomethingElseRow label="I'll eat it later" onClick={handlePlanLater} />
+              <SomethingElseRow label="I skipped it" onClick={() => setView("skip")} />
             </div>
           ) : (
-            <div className="space-y-2 pt-1">
-              <Button variant="outline" size="sm" className="w-full" onClick={() => setView("manual")}>
-                I ate something else
+            <div className="space-y-2">
+              <Button variant="outline" className="w-full" onClick={() => setView("photo")}>
+                <Camera size={16} aria-hidden="true" /> Use a photo
               </Button>
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" size="sm" onClick={handlePlanLater}>
-                  Plan for later
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => setView("skip")}>
-                  Mark skipped
-                </Button>
-              </div>
+              <Button variant="outline" className="w-full" onClick={() => setView("manual")}>
+                Enter manually
+              </Button>
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => {
+              if (differentSubmenuOpen) {
+                setDifferentSubmenuOpen(false);
+              } else {
+                setView(currentSelection ? "summary" : "plan");
+              }
+            }}
+            className="mt-4 block text-sm text-neutral hover:text-off-white"
+          >
+            Back
+          </button>
         </div>
       )}
 
@@ -283,10 +527,14 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
       {view === "manual" && (
         <ManualMealForm
           onSave={handleManualSave}
-          onCancel={() => setView(currentSelection ? "summary" : "options")}
+          onCancel={() => setView(currentSelection ? "summary" : "plan")}
           initial={
             currentSelection?.source === "manual" && currentSelection.macros
-              ? { name: currentSelection.manualName ?? "", macros: currentSelection.macros }
+              ? {
+                  name: currentSelection.manualName ?? "",
+                  macros: currentSelection.macros,
+                  unknownMacroFields: currentSelection.unknownMacroFields,
+                }
               : undefined
           }
           submitLabel={currentSelection?.source === "manual" ? "Save changes" : "Save estimate"}
@@ -301,13 +549,14 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
           onConfirm={handlePhotoConfirm}
           onCancel={() => (currentSelection ? setView("summary") : resetAndClose())}
           onFallbackManual={() => setView("manual")}
+          onRequestHelp={() => setView("ask")}
         />
       )}
 
       {view === "skip" && (
         <div className="space-y-4">
           <p className="text-sm text-neutral">What&apos;s the reason you&apos;re skipping {label.toLowerCase()}?</p>
-          <ReasonPicker value={skipReason} onChange={setSkipReason} name={`skip-${period}`} />
+          <ReasonPicker value={skipReason} onChange={setSkipReason} name={`skip-${period}`} reasons={MEAL_SKIP_REASONS} />
           <TextArea
             id={`skip-note-${period}`}
             label="Optional note"
@@ -319,13 +568,123 @@ export function MealSelectionSheet({ period, open, onClose, initialView }: MealS
             <Button className="flex-1" onClick={handleSkipConfirm} disabled={!skipReason}>
               Confirm skip
             </Button>
-            <Button variant="ghost" onClick={() => setView(currentSelection ? "summary" : "options")}>
+            <Button variant="ghost" onClick={() => setView(currentSelection ? "summary" : "plan")}>
               Back
             </Button>
           </div>
         </div>
       )}
+
+      {/* Gate 3B — the client loop's Evidence/Bounded-substitution/Proposal
+       * stages, reached only from "something-else" → "I need help with this
+       * meal" above. A registered rule is ALWAYS presented as one of the
+       * fixed cards below — never matched or interpreted from askNote's free
+       * text — so an unresolved or out-of-bound request can only ever reach
+       * the coach, never be presented as an approved swap. Correction pass —
+       * a rule renders here only when it's actually applicable to the meal
+       * option in play (see applicableSubstitutionRules above); an
+       * inapplicable rule (e.g. a chicken swap for a chicken-free breakfast)
+       * never appears at all. */}
+      {view === "ask" && (
+        <div className="space-y-4">
+          {askSent ? (
+            <div className="space-y-4">
+              <div className="rounded-[var(--radius-md)] bg-surface-raised p-4">
+                <p className="text-body text-off-white">Sent to {coachName} — awaiting review.</p>
+              </div>
+              <Button className="w-full" onClick={() => setView(currentSelection ? "summary" : "plan")}>
+                Done
+              </Button>
+            </div>
+          ) : pendingSubstitution ? (
+            <div className="space-y-4">
+              <div className="rounded-[var(--radius-md)] bg-surface-raised p-4">
+                <p className="text-subheading text-off-white">
+                  {pendingSubstitution.fromLabel} → {pendingSubstitution.toLabel}
+                </p>
+                <p className="mt-1 text-meta text-neutral">{pendingSubstitution.constraint}</p>
+                <p className="mt-1 text-meta text-neutral">{pendingSubstitution.rationale}</p>
+              </div>
+              {substitutionDisposition === "auto_execute" || substitutionDisposition === "suggest" ? (
+                <div className="space-y-2">
+                  <p className="text-meta text-neutral">That swap works with your plan. You can log it now.</p>
+                  <div className="flex gap-2">
+                    <Button className="flex-1" onClick={applySubstitution}>
+                      Log this substitution
+                    </Button>
+                    <Button variant="ghost" onClick={() => setPendingSubstitution(null)}>
+                      Back
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-meta text-neutral">
+                    This one needs {coachName}&apos;s OK before it applies — logging waits until they review it.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button className="flex-1" onClick={() => escalateSubstitution(pendingSubstitution)}>
+                      Ask {coachName}
+                    </Button>
+                    <Button variant="ghost" onClick={() => setPendingSubstitution(null)}>
+                      Back
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {applicableSubstitutionRules.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-label text-neutral">Registered swaps</p>
+                  {applicableSubstitutionRules.map((rule) => (
+                    <button
+                      key={rule.id}
+                      type="button"
+                      onClick={() => setPendingSubstitution(rule)}
+                      className="w-full rounded-[var(--radius-md)] border border-white/10 bg-surface-raised p-3 text-left transition hover:border-accent/40"
+                    >
+                      <p className="text-sm text-off-white">
+                        {rule.fromLabel} → {rule.toLabel}
+                      </p>
+                      <p className="mt-0.5 text-meta text-neutral">{rule.constraint}</p>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <TextArea
+                  id={`ask-note-${period}`}
+                  label={`What do you want to ask ${coachName}?`}
+                  value={askNote}
+                  onChange={(e) => setAskNote(e.target.value)}
+                  placeholder={`Tell ${coachName} what happened with this meal`}
+                />
+                <Button variant="outline" className="w-full" onClick={submitAskNote} disabled={!askNote.trim()}>
+                  Ask {coachName}
+                </Button>
+              </div>
+              <Button variant="ghost" className="w-full" onClick={() => setView(currentSelection ? "summary" : "plan")}>
+                Back
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </Sheet>
+  );
+}
+
+/** Correction pass — the one quiet row shape "something-else" and (via
+ * divide-y/bg-surface-raised) "plan" share: text + a trailing chevron,
+ * never a bordered card, never a competing filled button. */
+function SomethingElseRow({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex w-full items-center justify-between py-3.5 text-left text-[15px] text-off-white">
+      {label}
+      <ChevronRight size={16} className="shrink-0 text-neutral" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -351,6 +710,30 @@ function MealSummary({
   const name = mealDisplayName(period, selection);
   const provenance = mealProvenanceLabel(selection);
   const time = formatTime(selection.completedAtIso);
+  // Gate 3B — Read stage: the preserved reason this meal exists, shown
+  // exactly as snapshotted at logging time (see lib/nutrition/view-model.ts's
+  // mealIntentFor) — never re-derived from the current catalog, so it stays
+  // true even if the underlying option/rule changes later.
+  const intent = mealIntentFor(selection);
+  const photoConfidence = selection.source === "photo-estimate" ? selection.photoEstimate?.confidence : undefined;
+  const confidenceLabel = photoConfidence === "high" ? "High" : photoConfidence === "medium" ? "Medium" : photoConfidence ? "Lower" : null;
+  // A manual entry (including an accepted substitution) is also always an
+  // estimate — see lib/state.ts's SET_MANUAL_MEAL, which stamps isEstimate
+  // unconditionally — just without a specific confidence tier the way a
+  // photo estimate has one; isUncertainMealSelection is the one shared
+  // predicate for "isn't a precise, known quantity," reused here instead of
+  // re-deriving the same check inline.
+  const showsGenericEstimateNote = !confidenceLabel && isUncertainMealSelection(selection);
+  // Correction pass — a field the client never entered renders as "—",
+  // never as the real 0 stored underneath it (see
+  // MealSelection.unknownMacroFields' own doc in lib/types.ts) — this is
+  // the one place a manual entry's macro breakdown is shown, so it's the
+  // one place that has to keep "genuinely zero" and "never entered" from
+  // looking identical.
+  const unknownFields = new Set(selection.unknownMacroFields ?? []);
+  function macroField(value: number, field: keyof MacroValues, unit: string): string {
+    return unknownFields.has(field) ? `—${unit}` : `${Math.round(value)}${unit}`;
+  }
 
   return (
     <div className="space-y-4">
@@ -376,11 +759,21 @@ function MealSummary({
             ) : null}
           </div>
           {time ? <p className="mt-0.5 text-meta text-neutral">Logged at {time}</p> : null}
+          {intent ? <p className="mt-1 text-meta text-neutral">{intent}</p> : null}
+          {confidenceLabel ? (
+            <p className="mt-1 text-meta text-warning">{confidenceLabel} confidence — this is an estimate, not an exact count.</p>
+          ) : showsGenericEstimateNote ? (
+            <p className="mt-1 text-meta text-neutral">Estimated macros.</p>
+          ) : null}
           {selection.macros ? (
             <p className="mt-2 text-meta text-neutral">
-              {Math.round(selection.macros.calories)} cal · {Math.round(selection.macros.proteinG)}g P ·{" "}
-              {Math.round(selection.macros.carbsG)}g C · {Math.round(selection.macros.fatG)}g F
+              {macroField(selection.macros.calories, "calories", " cal")} ·{" "}
+              {macroField(selection.macros.proteinG, "proteinG", "g P")} ·{" "}
+              {macroField(selection.macros.carbsG, "carbsG", "g C")} · {macroField(selection.macros.fatG, "fatG", "g F")}
             </p>
+          ) : null}
+          {unknownFields.size > 0 ? (
+            <p className="mt-1 text-meta text-neutral">Some values weren&apos;t entered.</p>
           ) : null}
           {selection.source === "photo-estimate" && selection.photoEstimate ? (
             <ul className="mt-2 space-y-1">

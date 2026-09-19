@@ -183,6 +183,15 @@ export function programChangeAckReplyText(coachName: string): string {
   return `I can't make that change myself — exercise substitutions and program changes go through ${coachName}. I've sent them your request. Is there anything else about it they should know?`;
 }
 
+/** Gate 3B — the nutrition-specific counterpart to programChangeAckReplyText,
+ * used when a meal substitution or deviation raised from Nutrition (see
+ * components/meals/meal-selection-sheet.tsx) doesn't match a registered
+ * lib/nutrition/substitution.ts bounded rule closely enough to answer
+ * automatically. Never claims OPTIM approved anything itself. */
+export function nutritionChangeAckReplyText(coachName: string): string {
+  return `I can't approve that on my own — anything outside an already-validated swap goes through ${coachName}. I've sent them your request. Is there anything else about it they should know?`;
+}
+
 export function unsupportedHandoffReplyText(coachName: string): string {
   return `I've sent this to ${coachName} so they can take a look.`;
 }

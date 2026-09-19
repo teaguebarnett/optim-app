@@ -106,6 +106,23 @@ export interface MealSelection {
    * "manual"/"photo-estimate"/"skipped"/"planned-later" sources, which have
    * no planned intent to preserve — never fabricated for those. */
   mealIntent?: MealIntent;
+  /** Correction pass (Gate 3B human-QA #1) — a manual entry's `macros`
+   * object always holds a real number in every field (MacroValues itself is
+   * never widened to optional fields — that would ripple into every totals/
+   * catalog/photo-estimate consumer across the app); a field the client
+   * genuinely never entered a value for is recorded here instead of being
+   * silently written as a real, indistinguishable 0. The same "absence
+   * means unknown, never invented" contract `macros` itself already carries
+   * at the whole-selection level (see lib/history/derive-nutrition.ts's
+   * sumKnownActualMacros, which also treats a non-empty list here as "not
+   * fully known" for that day's calorie/protein target-met derivation),
+   * extended to per-field granularity for a manual entry only. Every reader
+   * that displays one of these specific fields for this selection (see
+   * components/meals/meal-selection-sheet.tsx's MealSummary and
+   * components/nutrition/meal-card.tsx) must check this before rendering a
+   * number. Never present for a source other than "manual"; never present
+   * when every field was actually entered. */
+  unknownMacroFields?: (keyof MacroValues)[];
 }
 
 export interface NutritionTargets {
@@ -360,7 +377,16 @@ export type SkipReason =
   | "excessive-fatigue"
   | "schedule-conflict"
   | "forgot"
-  | "other";
+  | "other"
+  // Correction pass (Gate 3B human-QA) — meal-specific reasons, never shown
+  // by a workout skip flow (see components/ui/reason-picker.tsx's default
+  // REASON_ORDER, which every workout SkipReasonSheet call site and
+  // cardio-task.tsx still use unchanged): a client skipping a meal has no
+  // "equipment" to be unavailable, and needs a way to say the food itself
+  // wasn't there rather than reaching for "equipment-unavailable" as a
+  // stand-in.
+  | "not-hungry"
+  | "food-unavailable";
 
 /**
  * Phase 4.4B-2.1 — a concise, high-value symptom-quality classification the

@@ -112,12 +112,18 @@ export function mealDisplayName(period: MealPeriod, selection: MealSelection | u
 }
 
 /** Distinguishes coach-approved catalog picks, the client's own manual
- * entries, and OPTIM's photo estimates — see the Visual Constitution §16 and
- * the product requirement that these three never present as one another. */
+ * entries, OPTIM's photo estimates, and (Gate 3B) an accepted bounded
+ * substitution — see the Visual Constitution §16 and the product
+ * requirement that these never present as one another. A substitution is
+ * mechanically logged as a "manual" selection (see lib/nutrition/
+ * substitution.ts's describeSubstitutionLog) but is never a client's own
+ * free guess — carrying a real `mealIntent` (the rule's own constraint/
+ * rationale) is exactly what tells the two apart here, honestly, without a
+ * sixth MealSelectionSource value. */
 export function mealProvenanceLabel(selection: MealSelection | undefined): string | null {
   if (!selection) return null;
   if (selection.source === "option") return "Coach-approved option";
-  if (selection.source === "manual") return "Your manual entry";
+  if (selection.source === "manual") return selection.mealIntent ? "Accepted substitution" : "Your manual entry";
   if (selection.source === "photo-estimate") return "OPTIM photo estimate";
   return null;
 }

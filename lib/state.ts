@@ -56,6 +56,7 @@ import type {
   MacroValues,
   MealEstimateConfidence,
   MealEstimateItem,
+  MealIntent,
   MealPeriod,
   MealSelection,
   MobilityExecutionProgress,
@@ -456,6 +457,20 @@ export type Action =
       period: MealPeriod;
       manualName: string;
       macros: MacroValues;
+      /** Gate 3B — set only when this manual entry is really an accepted
+       * bounded substitution (see lib/nutrition/substitution.ts's
+       * describeSubstitutionLog), carrying the rule's own constraint/
+       * rationale through exactly the way SELECT_MEAL_OPTION already
+       * snapshots an option's own description below. Omitted for a true
+       * free-text manual entry, which has no MealIntent to preserve. */
+      mealIntent?: MealIntent;
+      /** Correction pass — which of `macros`' fields the client never
+       * actually entered a value for (see MealSelection.unknownMacroFields'
+       * own doc in lib/types.ts). `macros` itself still always carries a
+       * real number in every field for these — 0 remains the correct
+       * numeric contribution to totals — this is purely what tells a
+       * reader "don't render this specific number as if it were measured." */
+      unknownMacroFields?: (keyof MacroValues)[];
     }
   /** Confirmed result of OPTIM's meal-photo estimator (see
    * lib/nutrition/vision-estimator.ts) — dispatched only once the client has
@@ -942,6 +957,12 @@ export function reducer(state: AppState, action: Action): AppState {
         macros: action.macros,
         isEstimate: true,
         completedAtIso: new Date().toISOString(),
+        // Gate 3B — present only for an accepted bounded substitution; see
+        // this action's own doc above.
+        mealIntent: action.mealIntent,
+        // Correction pass — present only for a partial free-text manual
+        // entry; see this action's own doc above.
+        unknownMacroFields: action.unknownMacroFields,
       };
       return { ...state, meals: withMealMacros(state.meals, action.period, selection) };
     }
@@ -2774,6 +2795,10 @@ function buildCompletedDayPreset(
       optionId: option.id,
       macros: option.macros,
       completedAtIso: now,
+      // Gate 3A — mirrors the SELECT_MEAL_OPTION reducer case's own snapshot
+      // exactly (this preset builds AppState directly rather than dispatching
+      // through the reducer, so it needs the same line independently).
+      mealIntent: option.description,
     };
   });
 

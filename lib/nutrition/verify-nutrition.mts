@@ -23,7 +23,13 @@ import {
   sumMealEstimateItems,
 } from "./view-model.ts";
 import { isUncertainMealSelection, localDemoMealVisionEstimator, resolvePhotoEstimateDisposition } from "./vision-estimator.ts";
-import { BOUNDED_SUBSTITUTION_RULES, findBoundedSubstitution, isValidationEligible, resolveSubstitutionDisposition } from "./substitution.ts";
+import {
+  BOUNDED_SUBSTITUTION_RULES,
+  describeSubstitutionLog,
+  findBoundedSubstitution,
+  isValidationEligible,
+  resolveSubstitutionDisposition,
+} from "./substitution.ts";
 import { defaultCoachAiAuthoritySettings } from "../coach/ai-authority.ts";
 import { buildDailyRecordFromLiveState } from "../history/build-daily-record.ts";
 import { MEAL_OPTIONS, NUTRITION_TARGETS } from "../mock-data.ts";
@@ -528,6 +534,87 @@ check("Existing nutrition totals/provenance behavior is unchanged by the Gate 3A
   const totals = computeNutritionTotals(state.meals);
   assert.equal(totals.calories, option.macros.calories, "totals math is unaffected by carrying mealIntent alongside macros");
   assert.equal(mealDisplayName("snack", state.meals.snack), option.name);
+});
+
+// ---------------------------------------------------------------------------
+// Gate 3B — Client Nutrition Loop: accepted substitutions log honestly, and
+// the planned meal is never overwritten or fabricated in the process.
+// ---------------------------------------------------------------------------
+
+console.log("\nGate 3B.1 — An accepted bounded substitution logs the original meal's real macros, never a fabricated number for the swapped food\n");
+
+check("describeSubstitutionLog carries the original planned meal's exact macros, never invents new ones for the substituted food", () => {
+  const rule = findBoundedSubstitution("chicken breast", "turkey breast")!;
+  const originalMacros = { calories: 480, proteinG: 52, carbsG: 45, fatG: 8 };
+  const logged = describeSubstitutionLog(rule, originalMacros);
+  assert.deepEqual(logged.macros, originalMacros, "macros must be the original meal's real values, not a guess for the substituted food");
+  assert.match(logged.manualName, /turkey breast/);
+  assert.match(logged.manualName, /chicken breast/);
+  assert.match(logged.mealIntent, /keep the meal's protein and total calories/i);
+});
+
+check("SET_MANUAL_MEAL preserves an accepted substitution's mealIntent onto the actual logged record, distinct from a true free-text manual entry", () => {
+  const rule = findBoundedSubstitution("chicken breast", "turkey breast")!;
+  const logged = describeSubstitutionLog(rule, { calories: 480, proteinG: 52, carbsG: 45, fatG: 8 });
+
+  const substitutionState = reducer(createInitialState(), {
+    type: "SET_MANUAL_MEAL",
+    period: "dinner",
+    manualName: logged.manualName,
+    macros: logged.macros,
+    mealIntent: logged.mealIntent,
+  });
+  assert.equal(substitutionState.meals.dinner?.mealIntent, logged.mealIntent);
+  assert.equal(mealProvenanceLabel(substitutionState.meals.dinner), "Accepted substitution");
+
+  const freeTextState = reducer(createInitialState(), {
+    type: "SET_MANUAL_MEAL",
+    period: "dinner",
+    manualName: "A sandwich I made at home",
+    macros: { calories: 400, proteinG: 20, carbsG: 40, fatG: 12 },
+  });
+  assert.equal(freeTextState.meals.dinner?.mealIntent, undefined, "a true free-text manual entry has no MealIntent to preserve");
+  assert.equal(mealProvenanceLabel(freeTextState.meals.dinner), "Your manual entry");
+});
+
+check("An accepted substitution never mutates the original catalog option's own description", () => {
+  const option = MEAL_OPTIONS.dinner.find((o) => o.mainIngredients.some((i) => i.toLowerCase().includes("chicken")));
+  assert.ok(option, "fixture must contain a chicken-based dinner option for this swap to be demo-reachable");
+  const originalDescription = option!.description;
+  const rule = findBoundedSubstitution("chicken breast", "turkey breast")!;
+  describeSubstitutionLog(rule, option!.macros);
+  assert.equal(option!.description, originalDescription, "reading a rule to build a log must never touch the planned catalog it was measured against");
+});
+
+console.log("\nGate 3B.2 — Unlogged stays honestly unknown\n");
+
+check("A meal period with no selection at all reports no provenance, no MealIntent, and is never treated as uncertain evidence (there is no evidence yet)", () => {
+  const state = createInitialState();
+  assert.equal(mealProvenanceLabel(state.meals.lunch), null);
+  assert.equal(mealIntentFor(state.meals.lunch), null);
+  assert.equal(isUncertainMealSelection(state.meals.lunch), false);
+});
+
+console.log("\nGate 3B correction pass — a partial manual entry preserves which fields were never entered, distinct from a real zero\n");
+
+check("SET_MANUAL_MEAL threads unknownMacroFields onto the live selection unchanged; omitting it (a fully-entered entry) leaves it absent", () => {
+  const partial = reducer(createInitialState(), {
+    type: "SET_MANUAL_MEAL",
+    period: "breakfast",
+    manualName: "Turkey sandwich",
+    macros: { calories: 450, proteinG: 0, carbsG: 0, fatG: 0 },
+    unknownMacroFields: ["proteinG", "carbsG", "fatG"],
+  });
+  assert.deepEqual(partial.meals.breakfast?.unknownMacroFields, ["proteinG", "carbsG", "fatG"]);
+  assert.equal(partial.meals.breakfast?.macros?.calories, 450, "the known field's real value must still be stored and summable");
+
+  const full = reducer(createInitialState(), {
+    type: "SET_MANUAL_MEAL",
+    period: "breakfast",
+    manualName: "Turkey sandwich",
+    macros: { calories: 450, proteinG: 30, carbsG: 40, fatG: 10 },
+  });
+  assert.equal(full.meals.breakfast?.unknownMacroFields, undefined, "a fully-entered manual entry has nothing to mark unknown");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

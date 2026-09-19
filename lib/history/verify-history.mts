@@ -503,6 +503,37 @@ check("Calorie target-met is symmetric and returns insufficient_data when a coun
   assert.equal(deriveCalorieTargetMet(unknownMacros), "insufficient_data");
 });
 
+check("Correction pass — a manual entry with SOME macro fields genuinely unentered reports insufficient_data, never a target-met verdict computed against a fabricated 0", () => {
+  const partiallyKnown = makeMinimalRecord({
+    nutrition: {
+      meals: {
+        breakfast: {
+          period: "breakfast",
+          source: "manual",
+          manualName: "Turkey sandwich",
+          // Calories real (450), protein/carbs/fat never entered — stored
+          // as 0 in macros (see SET_MANUAL_MEAL), but named here as unknown.
+          macros: { calories: 450, proteinG: 0, carbsG: 0, fatG: 0 },
+          unknownMacroFields: ["proteinG", "carbsG", "fatG"],
+        },
+      },
+      periodsInPlan: ["breakfast"],
+      targetsSnapshot: { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 },
+    },
+  });
+  assert.equal(deriveCalorieTargetMet(partiallyKnown), "insufficient_data", "protein/carbs/fat being unknown must not let calories alone produce a confident verdict");
+  assert.equal(deriveProteinTargetMet(partiallyKnown), "insufficient_data", "protein was never entered — 0 must never be read as a measured value");
+
+  const fullyKnown = makeMinimalRecord({
+    nutrition: {
+      meals: { breakfast: { period: "breakfast", source: "manual", manualName: "Turkey sandwich", macros: { calories: 450, proteinG: 30, carbsG: 40, fatG: 10 } } },
+      periodsInPlan: ["breakfast"],
+      targetsSnapshot: { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 },
+    },
+  });
+  assert.notEqual(deriveProteinTargetMet(fullyKnown), "insufficient_data", "a manual entry with every field genuinely entered must still resolve normally");
+});
+
 check("Protein target-met is asymmetric: below target minus tolerance fails, at or above target is always met, never penalized for being high", () => {
   const targetsSnapshot = { calories: 3000, proteinG: 200, carbsG: 360, fatG: 85 };
   const justBelowTolerance = makeMinimalRecord({

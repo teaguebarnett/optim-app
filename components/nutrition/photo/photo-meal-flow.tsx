@@ -28,6 +28,12 @@ export interface PhotoMealFlowProps {
    * image is available in this case (see the module doc's storage note), so
    * the review UI shows a neutral placeholder instead of a photo. */
   initialReview?: { items: MealEstimateItem[]; confidence: MealEstimateConfidence };
+  /** Gate 3B — offered only on the "unrecognized"/"error" dead-end below:
+   * when OPTIM genuinely cannot form a safe estimate from this photo, the
+   * client can route the evidence to their coach instead of being stuck
+   * with only "try again"/"enter manually." Omit to hide the option (e.g.
+   * if the caller has no coach-review path wired for this context). */
+  onRequestHelp?: () => void;
 }
 
 /**
@@ -45,7 +51,7 @@ export interface PhotoMealFlowProps {
  * never logged to the console and never sent anywhere by the local demo
  * estimator.
  */
-export function PhotoMealFlow({ period, onConfirm, onCancel, onFallbackManual, initialReview }: PhotoMealFlowProps) {
+export function PhotoMealFlow({ period, onConfirm, onCancel, onFallbackManual, initialReview, onRequestHelp }: PhotoMealFlowProps) {
   const [step, setStep] = useState<FlowStep>(
     initialReview
       ? { kind: "review", previewUrl: null, items: initialReview.items, confidence: initialReview.confidence }
@@ -193,6 +199,11 @@ export function PhotoMealFlow({ period, onConfirm, onCancel, onFallbackManual, i
           {onFallbackManual ? (
             <Button type="button" variant="outline" onClick={onFallbackManual}>
               Enter manually instead
+            </Button>
+          ) : null}
+          {onRequestHelp ? (
+            <Button type="button" variant="outline" onClick={onRequestHelp}>
+              Ask my coach for help
             </Button>
           ) : null}
           <Button type="button" variant="ghost" onClick={onCancel}>

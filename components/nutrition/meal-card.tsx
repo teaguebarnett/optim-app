@@ -87,7 +87,13 @@ export function MealCard({ period }: { period: MealPeriod }) {
               {displayName ? ` — ${displayName}` : ""}
             </span>
             <span className="block truncate text-meta text-neutral">
-              {selection?.macros ? `${Math.round(selection.macros.calories)} cal` : ""}
+              {/* Correction pass — a manual entry can be logged with
+               * calories itself genuinely unentered (see MealSelection.
+               * unknownMacroFields' own doc); never render that as "0 cal,"
+               * a real number the client never gave. */}
+              {selection?.macros && !selection.unknownMacroFields?.includes("calories")
+                ? `${Math.round(selection.macros.calories)} cal`
+                : ""}
               {provenance ? ` · ${provenance}` : ""}
             </span>
           </span>

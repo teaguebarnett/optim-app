@@ -119,6 +119,12 @@ export interface MealSelectionSnapshot {
    * at archival time exactly like every other field here. Absent for the
    * same sources mealIntent is always absent for on the live selection. */
   mealIntent?: MealIntent;
+  /** Correction pass — mirrors MealSelection.unknownMacroFields (see that
+   * field's own doc in lib/types.ts): which of a manual entry's macro
+   * fields the client never actually entered, preserved at archival time
+   * exactly like every other field here so a historical review of this
+   * exact meal never fabricates precision it never had. */
+  unknownMacroFields?: (keyof MacroValues)[];
 }
 
 export interface NutritionDaySnapshot {

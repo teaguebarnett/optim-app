@@ -10,6 +10,11 @@ export const SKIP_REASON_LABELS: Record<SkipReason, string> = {
   "schedule-conflict": "Schedule conflict",
   forgot: "Forgot",
   other: "Other",
+  // Correction pass (Gate 3B human-QA) — meal-only reasons; see
+  // MEAL_SKIP_REASONS in components/meals/meal-selection-sheet.tsx, the
+  // only caller that ever shows these two.
+  "not-hungry": "Not hungry",
+  "food-unavailable": "Food unavailable",
 };
 
 const REASON_ORDER: SkipReason[] = [
@@ -27,12 +32,20 @@ interface ReasonPickerProps {
   value: SkipReason | null;
   onChange: (reason: SkipReason) => void;
   name: string;
+  /** Correction pass — the reason vocabulary shown, in order. Defaults to
+   * the full workout/cardio set (REASON_ORDER) so every existing caller
+   * (every workout skip flow via SkipReasonSheet, and cardio-task.tsx)
+   * keeps its exact prior behavior with no change on their part. A caller
+   * whose skip context needs a narrower, more specific vocabulary (meals —
+   * see MEAL_SKIP_REASONS in components/meals/meal-selection-sheet.tsx)
+   * passes its own list instead. */
+  reasons?: SkipReason[];
 }
 
-export function ReasonPicker({ value, onChange, name }: ReasonPickerProps) {
+export function ReasonPicker({ value, onChange, name, reasons = REASON_ORDER }: ReasonPickerProps) {
   return (
     <div role="radiogroup" aria-label="Reason" className="grid grid-cols-2 gap-2">
-      {REASON_ORDER.map((reason) => {
+      {reasons.map((reason) => {
         const selected = value === reason;
         return (
           <button
