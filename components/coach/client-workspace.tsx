@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { MessageSquare, ClipboardList, ChevronDown, ChevronUp, Wand2, Eye } from "lucide-react";
+import { MessageSquare, ClipboardList, ChevronDown, ChevronUp, ChevronRight, Wand2, Eye } from "lucide-react";
+import Link from "next/link";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,10 +34,17 @@ const STATUS_TONE: Record<string, BadgeTone> = { scheduled: "brass", on_track: "
 /**
  * The approved, ongoing Client Workspace (spec §5) for an active client —
  * replaces the activation-heavy layout entirely once a client is active.
- * Progressive disclosure: the overview (header, Coach Brief, active coach
- * actions, Today, trends, recent decisions) loads first; Program/Nutrition/
- * Conversation/AI Authority stay one click away in "More," never
- * competing with the overview for attention.
+ *
+ * Gate 4B — three tiers of hierarchy, not one flat stack of equally-weighted
+ * cards: (1) identity + what's happening + anything to do right now (header,
+ * Coach Brief, Active coach actions, Daily Briefing) is the first thing a
+ * coach sees; (2) "Snapshot" groups Today/Trends/Recent decisions as one
+ * quieter, still-always-visible answer to "what should I inspect next";
+ * (3) Program/Nutrition/Conversation/AI Authority stay one click away in
+ * "More," never competing with either tier above. Nothing in tiers 2-3 is
+ * hidden by default logic — only visual weight and grouping changed; every
+ * card here is the exact same component reading the exact same real data as
+ * before this pass.
  */
 export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; onChanged: () => void }) {
   const router = useRouter();
@@ -92,7 +100,15 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
             {goalLabel} &middot; {programWeekLabel}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Gate 4B fix — min-w-0 lets this block actually shrink below its
+            own unwrapped content width (the flex default is min-width:auto,
+            which otherwise refuses to go below that and overflows the card);
+            flex-wrap lets the badge/buttons drop onto additional rows once
+            it does. Without both together, removing shrink-0 alone has no
+            effect: a row of buttons has no compressible content, so the
+            block still couldn't shrink to fit. Same actions, same order,
+            same destinations — only how they lay out at narrow widths. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <StatusBadge label={CLIENT_STATUS_LABELS[statusLabel]} tone={STATUS_TONE[statusLabel]} />
           <Button
             variant="outline"
@@ -111,14 +127,22 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
           >
             <Eye size={14} aria-hidden="true" /> Preview Today
           </Button>
-          <Button variant="outline" size="sm" onClick={() => router.push("/coach/messages")}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              // Gate 4B — preselects this exact client on arrival (see
+              // app/coach/messages/page.tsx's own `client` query param
+              // handling) instead of dropping the coach on an empty
+              // "Select a conversation" state they'd have to re-find this
+              // same client from.
+              router.push(`/coach/messages?client=${client.id}`)
+            }
+          >
             <MessageSquare size={14} aria-hidden="true" /> Message
           </Button>
           <Button variant="outline" size="sm" onClick={() => router.push(`/coach/clients/${client.id}/activate`)}>
             <Wand2 size={14} aria-hidden="true" /> OPTIM Plan
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => router.push(`/coach/clients/${client.id}/setup/training`)}>
-            <ClipboardList size={14} aria-hidden="true" /> View Program
           </Button>
         </div>
       </Card>
@@ -147,14 +171,15 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
         onSave={(record) => view.dispatchPlatform({ type: "SAVE_DAILY_BRIEFING", record })}
       />
 
-      {/* 4. Today */}
-      <ClientTodaySummary clientAppState={clientAppState} monitoredItems={thisClientItems} />
-
-      {/* 5. Key trends */}
-      <ClientTrends clientAppState={clientAppState} coachDisplayName={view.activeContext.coachProfile?.displayName ?? "your coach"} recentPerformanceFlags={performanceFlags} />
-
-      {/* 6. Recent decisions */}
-      <RecentDecisions resolvedReviews={resolvedReviews} latestPublishedBriefing={latestPublishedBriefing} />
+      {/* 4-6. Snapshot — Today, trends, and recent decisions read together as
+          one quieter answer to "what should I inspect next," never three
+          unrelated top-level cards competing with what's actionable above. */}
+      <section className="space-y-3">
+        <p className="text-label text-neutral">Snapshot</p>
+        <ClientTodaySummary clientAppState={clientAppState} monitoredItems={thisClientItems} />
+        <ClientTrends clientAppState={clientAppState} coachDisplayName={view.activeContext.coachProfile?.displayName ?? "your coach"} recentPerformanceFlags={performanceFlags} />
+        <RecentDecisions resolvedReviews={resolvedReviews} latestPublishedBriefing={latestPublishedBriefing} />
+      </section>
 
       {/* Deeper sections — never competing with the overview. */}
       <div>
@@ -163,11 +188,27 @@ export function ClientWorkspace({ view, onChanged }: { view: CoachClientView; on
           onClick={() => setMoreOpen((v) => !v)}
           className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border bg-surface-raised px-3.5 py-2.5 text-sm font-medium text-off-white hover:bg-surface-input"
         >
-          More: conversation, nutrition plan, meal recommendations, AI authority
+          More: conversation, training program, nutrition plan, meal recommendations, AI authority
           {moreOpen ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
         </button>
         {moreOpen ? (
           <div className="mt-3 space-y-4">
+            {/* Gate 4B — the manual week-by-week editor (distinct from the
+                real "OPTIM Plan" generation/approval system linked above);
+                kept discoverable but no longer an equally-weighted header
+                button, since it edits the same assignedProgram field through
+                a separate, uncoordinated path (see Gate 4A's own finding) —
+                a deeper Gate 4D concern, not something this pass resolves. */}
+            <Link
+              href={`/coach/clients/${client.id}/setup/training`}
+              className="flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-surface-raised px-3.5 py-2.5 text-sm text-off-white hover:bg-surface-input"
+            >
+              <span className="flex items-center gap-2">
+                <ClipboardList size={14} className="text-neutral" aria-hidden="true" /> Manually edit training program
+              </span>
+              <ChevronRight size={14} className="text-neutral" aria-hidden="true" />
+            </Link>
+
             <Card>
               <p className="text-subheading text-off-white">Conversation</p>
               <div className="mt-3 max-h-[360px] space-y-1 overflow-y-auto rounded-[var(--radius-md)] bg-surface-input p-3">

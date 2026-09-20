@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ChevronLeft, MessageSquare, Send } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { StatusBadge } from "@/components/progress/status-badge";
@@ -33,12 +34,37 @@ const SENDER_PREFIX: Record<string, string> = {
  * thread (see app/(client)/chat) — this reads and can append to that same
  * real data (see lib/coach/coach-messaging.ts), never a separate messaging
  * system.
+ *
+ * Gate 4B — a `?client=<id>` param (see components/coach/client-workspace.tsx's
+ * "Message" button) preselects that client's conversation on arrival, so
+ * choosing to message someone from their own workspace never drops the
+ * coach on an empty "Select a conversation" state they'd have to re-find
+ * that same client from. Purely a one-time initial selection — the coach
+ * can still freely pick a different conversation afterward, and this never
+ * fights that choice on a later re-render.
  */
 export default function CoachMessagesPage() {
   const workspace = useCoachWorkspace();
+  const searchParams = useSearchParams();
   const [selectedClientId, setSelectedClientId] = useState<ClientProfileId | null>(null);
+  const [appliedInitialClient, setAppliedInitialClient] = useState(false);
   const [draft, setDraft] = useState("");
   const [, forceRerender] = useState(0);
+
+  // Deferred a tick — react-hooks' set-state-in-effect rule flags a
+  // synchronous setState call directly in an effect body; see
+  // components/meals/meal-selection-sheet.tsx's identical reset-on-open
+  // pattern for the same reasoning.
+  useEffect(() => {
+    if (appliedInitialClient) return;
+    const requested = searchParams.get("client");
+    if (!requested || !workspace.clients.some((c) => c.id === requested)) return;
+    const timeout = setTimeout(() => {
+      setSelectedClientId(requested as ClientProfileId);
+      setAppliedInitialClient(true);
+    }, 0);
+    return () => clearTimeout(timeout);
+  }, [appliedInitialClient, searchParams, workspace.clients]);
 
   const rows = workspace.clients
     .map((client) => {

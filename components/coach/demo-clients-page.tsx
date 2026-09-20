@@ -16,7 +16,7 @@ import { ClientRosterMobileList } from "@/components/coach/client-roster-mobile-
 import { AddClientSheet } from "@/components/coach/add-client-sheet";
 import { LIFECYCLE_LABELS } from "@/lib/coach/labels";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
-import { buildRosterRows } from "@/lib/coach/roster";
+import { buildRosterRows, type RosterRow } from "@/lib/coach/roster";
 import { categorizeRosterStatus, type RosterCategory } from "@/lib/coach/command-center";
 import { cn } from "@/lib/cn";
 
@@ -34,6 +34,17 @@ const FILTERS: { value: FilterValue; label: string }[] = [
 
 function isFilterValue(v: string | null): v is FilterValue {
   return !!v && FILTERS.some((f) => f.value === v);
+}
+
+/** Gate 4B — the one place a row is matched against a portfolio filter,
+ * used both to compute the visible roster and (over the whole, unfiltered
+ * roster) each filter chip's own real count — so "how many clients need
+ * me" is answered by the exact same rule that filtering already uses,
+ * never a second, competing definition. */
+function matchesFilter(row: RosterRow, filter: FilterValue): boolean {
+  if (filter === "all") return true;
+  if (filter === "onboarding" || filter === "ready_to_activate") return row.lifecycle === filter;
+  return categorizeRosterStatus(row.attentionCount > 0, row.lifecycle, row.programPhase) === filter;
 }
 
 export function DemoClientsPage() {
@@ -57,15 +68,21 @@ export function DemoClientsPage() {
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return allRows.filter((row) => {
-      if (filter === "onboarding" || filter === "ready_to_activate") {
-        if (row.lifecycle !== filter) return false;
-      } else if (filter !== "all") {
-        if (categorizeRosterStatus(row.attentionCount > 0, row.lifecycle, row.programPhase) !== filter) return false;
-      }
+      if (!matchesFilter(row, filter)) return false;
       if (q && !row.name.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [allRows, query, filter]);
+
+  // Gate 4B — portfolio awareness: each chip's own real count across the
+  // WHOLE roster (never the currently-filtered/searched subset), so "Needs
+  // coach 2" stays true regardless of what's currently on screen. Same
+  // matchesFilter predicate the visible list itself uses.
+  const filterCounts = useMemo(() => {
+    const counts = new Map<FilterValue, number>();
+    for (const f of FILTERS) counts.set(f.value, allRows.filter((row) => matchesFilter(row, f.value)).length);
+    return counts;
+  }, [allRows]);
 
   const activeUsedFilters = filter !== "all" || query.trim().length > 0;
 
@@ -93,19 +110,32 @@ export function DemoClientsPage() {
           />
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {FILTERS.map((f) => (
-            <button
-              key={f.value}
-              onClick={() => setFilter(f.value)}
-              className={cn(
-                "rounded-[var(--radius-xs)] border px-3 py-1.5 text-xs font-medium transition-colors",
-                filter === f.value ? "border-accent bg-accent-soft text-accent-fg" : "border-border-strong text-neutral hover:text-off-white"
-              )}
-              style={{ transitionDuration: "var(--motion-fast)" }}
-            >
-              {f.label}
-            </button>
-          ))}
+          {FILTERS.map((f) => {
+            const count = filterCounts.get(f.value) ?? 0;
+            // Gate 4B — a filter with nothing in it right now still needs to
+            // exist (the coach may add/onboard into it later), but it never
+            // competes visually with one that actually has something to look
+            // at — real zero-state, never hidden, never emphasized.
+            const isEmpty = f.value !== "all" && count === 0;
+            return (
+              <button
+                key={f.value}
+                onClick={() => setFilter(f.value)}
+                className={cn(
+                  "rounded-[var(--radius-xs)] border px-3 py-1.5 text-xs font-medium transition-colors",
+                  filter === f.value
+                    ? "border-accent bg-accent-soft text-accent-fg"
+                    : isEmpty
+                      ? "border-border-strong text-neutral/60 hover:text-off-white"
+                      : "border-border-strong text-neutral hover:text-off-white"
+                )}
+                style={{ transitionDuration: "var(--motion-fast)" }}
+              >
+                {f.label}
+                {f.value !== "all" ? <span className="ml-1 tabular-nums opacity-70">{count}</span> : null}
+              </button>
+            );
+          })}
         </div>
       </div>
 
