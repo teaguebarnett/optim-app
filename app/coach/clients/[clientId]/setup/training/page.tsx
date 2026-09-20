@@ -2,14 +2,15 @@
 
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, Eye } from "lucide-react";
+import { ChevronLeft, ChevronRight, Eye } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ProgramEditor } from "@/components/coach/program-editor";
 import { ProgramWeekPreviewSheet } from "@/components/coach/program-preview-sheet";
 import { useCoachClientView } from "@/hooks/use-coach-data";
 import { saveClientProgram } from "@/lib/coach/program-assignment";
-import { createEmptyClientProgram, isValidWeek1 } from "@/lib/coach/training";
+import { createEmptyClientProgram, isValidWeek1, resolveProgramOrigin } from "@/lib/coach/training";
 import { cn } from "@/lib/cn";
 import type { ClientAssignedProgram, ProgramWeek } from "@/lib/types";
 
@@ -24,10 +25,18 @@ export default function ClientTrainingEditorPage() {
   const params = useParams<{ clientId: string }>();
   const router = useRouter();
   const view = useCoachClientView(params.clientId);
-  const { client, workspaceId, clientAppState } = view;
+  const { client, workspaceId, clientAppState, platform } = view;
+
+  // Gate 4D — the client's real, currently-live program (if any), read
+  // fresh on every render so it always reflects the true current state,
+  // never a stale snapshot from when this page first opened. Distinct from
+  // `draft` below, which also covers a freshly created empty scaffold that
+  // hasn't been assigned yet.
+  const currentAssignedProgram = clientAppState?.assignedProgram ?? null;
+  const programOrigin = currentAssignedProgram ? resolveProgramOrigin(currentAssignedProgram, platform.activationGenerations, platform.programTemplates) : null;
 
   const initialProgram: ClientAssignedProgram | null =
-    clientAppState?.assignedProgram ??
+    currentAssignedProgram ??
     (client
       ? createEmptyClientProgram({
           workspaceId,
@@ -95,8 +104,34 @@ export default function ClientTrainingEditorPage() {
       <div>
         <p className="text-label text-brass-strong">Training protocol</p>
         <h1 className="mt-1 text-display text-off-white">{client.name}</h1>
-        <p className="mt-1 text-body text-neutral">Build this client&apos;s own program. Nothing here reaches the client until you assign it below.</p>
+        <p className="mt-1 text-body text-neutral">
+          {currentAssignedProgram?.status === "assigned"
+            ? "You're editing the client's real, currently assigned program — every change here saves immediately and reaches what the client sees."
+            : "Build this client's own program. Nothing here reaches the client until you assign it below."}
+        </p>
       </div>
+
+      {/* Gate 4D — a current assigned program's real origin, using only the
+          existing correlation between an ActivationApprovalRecord and the
+          exact program id it produced (see resolveProgramOrigin's own doc)
+          — never a fabricated provenance. Answers "does this client already
+          have a program, where did it come from, and is there somewhere
+          else to see it" before the coach edits anything below. */}
+      {currentAssignedProgram && programOrigin ? (
+        <Card className="space-y-1.5">
+          <p className="text-label text-neutral">Current program</p>
+          <p className="text-sm text-off-white">
+            {programOrigin.kind === "optim_generated"
+              ? `Generated through OPTIM Plan, approved ${new Date(programOrigin.approvedAtIso).toLocaleDateString("en-US", { month: "short", day: "numeric" })}.`
+              : programOrigin.kind === "template"
+                ? `Assigned from your saved template "${programOrigin.templateName}".`
+                : `Built directly for ${client.name.split(" ")[0]} in this editor.`}
+          </p>
+          <Link href={`/coach/clients/${client.id}/activate`} className="inline-flex items-center gap-1 text-sm text-accent-fg hover:underline">
+            View in OPTIM Plan workspace <ChevronRight size={14} aria-hidden="true" />
+          </Link>
+        </Card>
+      ) : null}
 
       <Card
         className={cn(

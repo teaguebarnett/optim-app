@@ -244,3 +244,37 @@ export function isValidWeek1(program: ClientAssignedProgram): boolean {
     return !!day.workout && day.workout.exercises.length > 0 && day.workout.exercises.every(isExerciseUsable);
   });
 }
+
+/**
+ * Gate 4D — a real, honest account of where a client's CURRENT assigned
+ * program actually came from, using only fields the two existing writers
+ * already produce (lib/coach/program-assignment.ts's manual save path, and
+ * lib/coach/activation-lifecycle.ts's approveActivation) — never a
+ * fabricated or inferred origin, and never a third program model. A
+ * template-sourced program always says so (sourceTemplateId survives the
+ * copy — see assignTemplateToClient above). An OPTIM-generated one is
+ * recognized by the one real link between the two systems:
+ * ActivationApprovalRecord.resultingProgramId, which approveActivation
+ * stamps with the exact id of the program it just wrote via
+ * saveClientProgram — the same id already displayed on the OPTIM Plan page
+ * itself (see app/coach/clients/[clientId]/activate/page.tsx). Anything
+ * else (no template, no matching approval) was built directly in the
+ * manual editor.
+ */
+export type ProgramOrigin = { kind: "template"; templateId: string; templateName: string } | { kind: "optim_generated"; approvedAtIso: string } | { kind: "manual" };
+
+export function resolveProgramOrigin(
+  program: ClientAssignedProgram,
+  activationGenerations: readonly { clientId: ClientProfileId; approval?: { resultingProgramId: string; approvedAtIso: string } }[],
+  templates: readonly { id: string; name: string }[]
+): ProgramOrigin {
+  if (program.sourceTemplateId) {
+    const template = templates.find((t) => t.id === program.sourceTemplateId);
+    return { kind: "template", templateId: program.sourceTemplateId, templateName: template?.name || "a saved template" };
+  }
+  const approvedGeneration = activationGenerations.find((g) => g.clientId === program.clientId && g.approval?.resultingProgramId === program.id);
+  if (approvedGeneration?.approval) {
+    return { kind: "optim_generated", approvedAtIso: approvedGeneration.approval.approvedAtIso };
+  }
+  return { kind: "manual" };
+}

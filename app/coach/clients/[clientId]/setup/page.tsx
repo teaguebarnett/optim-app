@@ -63,6 +63,9 @@ export default function CoachClientSetupPage() {
 
   const { client, lifecycle, intendedProgram, clientAppState, workspaceId, dispatchPlatform, coachId, platform } = view;
   const [assignJustHappened, setAssignJustHappened] = useState(false);
+  // Gate 4D — a template selected while a real, already-assigned program
+  // exists must not replace it on the spot; see handleSelectTemplate below.
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
 
   const [startDate, setStartDate] = useState(
     clientAppState?.programEnrollment.startDateIso ?? intendedProgram?.intendedStartDateIso ?? new Date().toISOString().slice(0, 10)
@@ -175,12 +178,28 @@ export default function CoachClientSetupPage() {
                 ? "Assigned — Week 1 is ready."
                 : "Assigned — Week 1 still needs at least one usable exercise.";
 
-          function handleAssignTemplate(templateId: string) {
+          const pendingTemplate = pendingTemplateId ? coachTemplates.find((t) => t.id === pendingTemplateId) : null;
+
+          function applyTemplateAssignment(templateId: string) {
             const template = coachTemplates.find((t) => t.id === templateId);
             if (!template || !coachId) return;
             assignTemplateToClientAppState(client!.id, workspaceId, coachId, template, new Date().toISOString());
+            setPendingTemplateId(null);
             setAssignJustHappened(true);
             window.setTimeout(() => setAssignJustHappened(false), 1500);
+          }
+
+          // Gate 4D — a real, live-assigned program already exists here: a
+          // one-click template swap would silently replace it (and
+          // everything the client currently sees) with zero coach
+          // confirmation. A not-yet-assigned program carries no such risk
+          // and keeps assigning immediately, unchanged from before.
+          function handleSelectTemplate(templateId: string) {
+            if (assignedProgram?.status === "assigned") {
+              setPendingTemplateId(templateId);
+              return;
+            }
+            applyTemplateAssignment(templateId);
           }
 
           return (
@@ -194,15 +213,31 @@ export default function CoachClientSetupPage() {
                 </Button>
               </div>
               {coachTemplates.length > 0 ? (
-                <div className="max-w-sm">
+                <div className="max-w-sm space-y-2">
                   <p className="mb-1.5 text-xs text-neutral">Or assign one of your saved templates (creates an independent copy for this client)</p>
                   <Combobox
                     ariaLabel="Assign a saved template"
                     placeholder="Choose a template…"
                     value={null}
-                    onChange={handleAssignTemplate}
+                    onChange={handleSelectTemplate}
                     options={coachTemplates.map((t) => ({ value: t.id, label: t.name || "Untitled program", description: `${t.durationWeeks} weeks` }))}
                   />
+                  {pendingTemplate ? (
+                    <div className="rounded-[var(--radius-sm)] border border-warning/40 bg-warning-soft/40 p-3 text-sm">
+                      <p className="text-off-white">
+                        Replace {client!.name.split(" ")[0]}&apos;s current assigned program with &ldquo;{pendingTemplate.name || "Untitled program"}&rdquo;? This immediately
+                        replaces what the client sees.
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <Button size="sm" onClick={() => applyTemplateAssignment(pendingTemplate.id)}>
+                          Replace program
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setPendingTemplateId(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>

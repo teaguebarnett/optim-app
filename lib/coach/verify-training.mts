@@ -16,6 +16,7 @@ import {
   duplicateWeek,
   isValidWeek1,
   reorderExercises,
+  resolveProgramOrigin,
 } from "./training.ts";
 import { WORKSPACE_OPTIM_ID, COACH_PROFILE_TEAGUE, COACH_PROFILE_ALEX } from "../tenancy/seed.ts";
 
@@ -258,6 +259,40 @@ check("isValidWeek1 never crosses coach boundaries — validity is purely about 
   const assigned = { ...program, status: "assigned" as const, weeks: [{ weekNumber: 1, days: program.weeks[0].days.map((d) => (d.dayOfWeek === "Monday" ? { ...d, type: "training" as const, workout: usableWorkout() } : d)) }] };
   assert.equal(isValidWeek1(assigned), true);
   assert.equal(assigned.coachId, COACH_PROFILE_ALEX.id);
+});
+
+console.log("\nGate 4D — resolveProgramOrigin: the real, honest account of where a current program came from\n");
+
+check("a template-sourced program reports the real template's name", () => {
+  const template = createEmptyTemplate({ workspaceId: WORKSPACE_OPTIM_ID, coachId: COACH_PROFILE_TEAGUE.id, name: "Hypertrophy Block", durationWeeks: 8, nowIso: "2026-01-01T00:00:00.000Z" });
+  const program = assignTemplateToClient(template, { clientId: "client-1", nowIso: "2026-01-01T00:00:00.000Z" });
+  const origin = resolveProgramOrigin(program, [], [template]);
+  assert.deepEqual(origin, { kind: "template", templateId: template.id, templateName: "Hypertrophy Block" });
+});
+
+check("a template-sourced program whose template was later deleted still reports 'template', never crashing or silently becoming 'manual'", () => {
+  const template = createEmptyTemplate({ workspaceId: WORKSPACE_OPTIM_ID, coachId: COACH_PROFILE_TEAGUE.id, name: "Deleted Later", durationWeeks: 8, nowIso: "2026-01-01T00:00:00.000Z" });
+  const program = assignTemplateToClient(template, { clientId: "client-1", nowIso: "2026-01-01T00:00:00.000Z" });
+  const origin = resolveProgramOrigin(program, [], []);
+  assert.equal(origin.kind, "template");
+});
+
+check("a program matching an approved activation generation's resultingProgramId reports 'optim_generated' with the real approval date", () => {
+  const program = createEmptyClientProgram({ workspaceId: WORKSPACE_OPTIM_ID, clientId: "client-1", coachId: COACH_PROFILE_TEAGUE.id, name: "OPTIM Plan", durationWeeks: 12, nowIso: "2026-01-01T00:00:00.000Z" });
+  const origin = resolveProgramOrigin(program, [{ clientId: "client-1", approval: { resultingProgramId: program.id, approvedAtIso: "2026-02-01T00:00:00.000Z" } }], []);
+  assert.deepEqual(origin, { kind: "optim_generated", approvedAtIso: "2026-02-01T00:00:00.000Z" });
+});
+
+check("a generation record for a DIFFERENT client is never matched, even if the program id happens to collide", () => {
+  const program = createEmptyClientProgram({ workspaceId: WORKSPACE_OPTIM_ID, clientId: "client-1", coachId: COACH_PROFILE_TEAGUE.id, name: "OPTIM Plan", durationWeeks: 12, nowIso: "2026-01-01T00:00:00.000Z" });
+  const origin = resolveProgramOrigin(program, [{ clientId: "client-2", approval: { resultingProgramId: program.id, approvedAtIso: "2026-02-01T00:00:00.000Z" } }], []);
+  assert.equal(origin.kind, "manual", "an approval scoped to another client must never be attributed to this one");
+});
+
+check("no template and no matching activation approval — built directly in the manual editor, never fabricated as OPTIM-generated", () => {
+  const program = createEmptyClientProgram({ workspaceId: WORKSPACE_OPTIM_ID, clientId: "client-1", coachId: COACH_PROFILE_TEAGUE.id, name: "Hand-built", durationWeeks: 12, nowIso: "2026-01-01T00:00:00.000Z" });
+  const origin = resolveProgramOrigin(program, [{ clientId: "client-1", approval: undefined }], []);
+  assert.equal(origin.kind, "manual");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
