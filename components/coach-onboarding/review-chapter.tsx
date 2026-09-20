@@ -72,7 +72,16 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
   const router = useRouter();
   const com = useCoachOperatingModel();
   const model = com.buildDraftModel();
-  const [activated, setActivated] = useState(!!com.activeModel);
+  // Gate 5A fix — this must track only "confirmed during THIS visit," never
+  // "an active model already existed from some earlier visit." Seeding it
+  // from com.activeModel meant a coach returning to revise anything (the
+  // whole point of Gate 5A's per-section "Edit" links landing here) saw the
+  // "already done, return to dashboard" banner immediately and could never
+  // reach the "What's changing" / "Save updated coaching model" flow just
+  // below — the one real path that turns an edited answer into a new
+  // confirmed version. A brand-new coach is unaffected: activeModel is null
+  // for them either way.
+  const [activated, setActivated] = useState(false);
   const lowConfidence = lowConfidenceQuestionIds(model);
   const requiredIds = allRequiredVisibleQuestionIds(com.answers);
   const unansweredRequired = requiredIds.filter((id) => !com.answers[id] && com.answers[id] !== false);

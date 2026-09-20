@@ -51,8 +51,16 @@ const CHAPTER_ICONS: Record<CoachOnboardingChapterId, LucideIcon> = {
   review: ClipboardCheck,
 };
 
-export function CoachOnboardingWizard({ businessName }: { businessName: string }) {
+export function CoachOnboardingWizard({ businessName, initialChapterId }: { businessName: string; initialChapterId?: CoachOnboardingChapterId }) {
   const com = useCoachOperatingModel();
+  // Gate 5A — a coach arriving here to fix one specific Playbook section
+  // (see components/coach/coach-playbook-detail.tsx's per-section "Edit"
+  // links) must land directly on that chapter, not always chapter 1 —
+  // "the coach should not need to redo onboarding merely to change one
+  // rule." Only ever skips the welcome screen when a real, already-
+  // calibrated coach is being deep-linked to a specific section; a
+  // genuinely first-time coach (no progress yet) still sees the welcome
+  // screen even if a stray chapter param were somehow present.
   const [phase, setPhase] = useState<"welcome" | "chapters">(com.progress?.updatedAtIso ? "chapters" : "welcome");
   const chapters = applicableChapters(com.answers);
 
@@ -69,7 +77,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
   // wherever the vanished chapter was in the real canonical order to the
   // next chapter that's still genuinely applicable — never backward to
   // chapter 1, and never left pointing at a chapter that no longer exists.
-  const [chapterId, setChapterId] = useState<CoachOnboardingChapterId>(chapters[0]);
+  const [chapterId, setChapterId] = useState<CoachOnboardingChapterId>(initialChapterId && chapters.includes(initialChapterId) ? initialChapterId : chapters[0]);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [syncedChaptersKey, setSyncedChaptersKey] = useState(chapters.join("|"));
   const chaptersKey = chapters.join("|");
@@ -96,6 +104,16 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
     setChapterId(chapters[chapterIndex + 1]);
     setQuestionIndex(0);
   }
+  // Gate 5A — the same direct jump ReviewChapter's own onEditChapter already
+  // does, now also reachable from the chapter rail on every screen (not
+  // just Review), so a coach fixing one thing can jump straight there and
+  // straight back to Review to confirm — never forced through every
+  // chapter in between just to reach the one they actually want.
+  function jumpToChapter(id: CoachOnboardingChapterId) {
+    if (!chapters.includes(id) || id === chapterId) return;
+    setChapterId(id);
+    setQuestionIndex(0);
+  }
   function goToPreviousChapter() {
     if (chapterIndex === 0) return;
     const prevId = chapters[chapterIndex - 1];
@@ -111,7 +129,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
 
   if (chapterId === "ai_authority") {
     return (
-      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
+      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
         <AiAuthorityChapter onContinue={goToNextChapter} />
       </ChapterFrame>
     );
@@ -119,7 +137,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
 
   if (chapterId === "existing_work") {
     return (
-      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
+      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
         <ExistingWorkChapter onContinue={goToNextChapter} />
       </ChapterFrame>
     );
@@ -127,7 +145,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
 
   if (chapterId === "review") {
     return (
-      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0}>
+      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
         <ReviewChapter
           onEditChapter={(id) => {
             if (chapters.includes(id)) {
@@ -171,7 +189,7 @@ export function CoachOnboardingWizard({ businessName }: { businessName: string }
     (question.type === "multi_select" || question.type === "scenario" ? Array.isArray(currentValue) && currentValue.length > 0 : question.type === "boolean" ? typeof currentValue === "boolean" : currentValue !== undefined && currentValue !== "");
 
   return (
-    <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0}>
+    <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0} onSelectChapter={jumpToChapter}>
       {question ? (
         <div>
           <div className="mb-2 flex items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-fg">
@@ -223,6 +241,7 @@ function ChapterFrame({
   children,
   onBack,
   canGoBack,
+  onSelectChapter,
 }: {
   meta: { title: string; description: string };
   chapterId: CoachOnboardingChapterId;
@@ -231,11 +250,12 @@ function ChapterFrame({
   children: React.ReactNode;
   onBack: () => void;
   canGoBack: boolean;
+  onSelectChapter: (id: CoachOnboardingChapterId) => void;
 }) {
   return (
     <div className="min-h-screen bg-canvas">
       <div className="mx-auto grid max-w-[1240px] grid-cols-[280px_1fr] gap-8 px-10 py-12">
-        <ChapterRail chapterId={chapterId} chapters={chapters} />
+        <ChapterRail chapterId={chapterId} chapters={chapters} onSelectChapter={onSelectChapter} />
         <div className="min-w-0">
           <div className="mb-6 flex items-center gap-3">
             {canGoBack ? (
@@ -262,7 +282,15 @@ function ChapterFrame({
  * applies to them (already filtered by applicableChapters), each marked
  * done / current / upcoming. A coach mid-flow can see exactly how much is
  * behind them and what's still ahead without leaving the question. */
-function ChapterRail({ chapterId, chapters }: { chapterId: CoachOnboardingChapterId; chapters: CoachOnboardingChapterId[] }) {
+function ChapterRail({
+  chapterId,
+  chapters,
+  onSelectChapter,
+}: {
+  chapterId: CoachOnboardingChapterId;
+  chapters: CoachOnboardingChapterId[];
+  onSelectChapter: (id: CoachOnboardingChapterId) => void;
+}) {
   const com = useCoachOperatingModel();
   const summary = computeProgressSummary(com.answers);
   const currentIndex = chapters.indexOf(chapterId);
@@ -288,9 +316,18 @@ function ChapterRail({ chapterId, chapters }: { chapterId: CoachOnboardingChapte
           const isCurrent = index === currentIndex;
           const isDone = index < currentIndex;
           return (
-            <div
+            // Gate 5A — every chapter here is already reachable in some
+            // order by the coach's own answers (`chapters` is pre-filtered
+            // by applicableChapters), so jumping directly to any of them —
+            // forward, backward, or straight to Review — never skips a
+            // real gate; it's the same jump ReviewChapter's own
+            // onEditChapter already performs, just reachable from anywhere.
+            <button
               key={id}
-              className={`flex items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 transition-colors ${
+              type="button"
+              onClick={() => onSelectChapter(id)}
+              aria-current={isCurrent ? "step" : undefined}
+              className={`flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-colors hover:bg-accent-soft/60 ${
                 isCurrent ? "bg-accent-soft" : ""
               }`}
             >
@@ -304,7 +341,7 @@ function ChapterRail({ chapterId, chapters }: { chapterId: CoachOnboardingChapte
               <span className={`text-meta font-medium leading-tight ${isCurrent ? "text-off-white" : isDone ? "text-neutral" : "text-neutral/70"}`}>
                 {chapterMeta.title}
               </span>
-            </div>
+            </button>
           );
         })}
       </nav>

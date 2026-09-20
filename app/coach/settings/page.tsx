@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/coach/page-header";
 import { DevPerspectiveSwitcher } from "@/components/app-shell/dev-perspective-switcher";
 import { AiAuthorityPanel } from "@/components/coach/ai-authority-panel";
 import { YourCoachingMethodCard } from "@/components/coach/your-coaching-method-card";
+import { CoachPlaybookDetail } from "@/components/coach/coach-playbook-detail";
 import { AppearanceSettingsCard } from "@/components/app-shell/appearance-settings-card";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
@@ -15,12 +16,22 @@ import { cn } from "@/lib/cn";
 const DEV_TOOLS_AVAILABLE = process.env.NODE_ENV !== "production";
 
 /**
- * The coach's Playbook — a clear explanation of how OPTIM supports you,
- * grouped into the four categories the Phase 5.0C brief names, rather than
- * one flat list of booleans. Every row here reads the same real, already-
- * governing WorkspaceAiPolicy (see lib/tenancy/types.ts) this always has —
- * nothing here is an editable toggle, because none of these are genuinely
- * user-editable yet; a real playbook editor is a future phase.
+ * The coach's Playbook — a clear explanation of how OPTIM supports you.
+ * The "You always decide" / "may handle" / "always escalate" sections below
+ * read the workspace's real, already-governing WorkspaceAiPolicy (see
+ * lib/tenancy/types.ts) — genuinely real, platform-level policy, but not
+ * yet coach-editable from anywhere in the product, so shown as read-only
+ * fact rather than a toggle that would silently do nothing.
+ *
+ * Gate 5A — CoachPlaybookDetail (below YourCoachingMethodCard) makes the
+ * coach's own structured CoachOperatingModel (methodology, interpretation
+ * rules, communication style, safety) inspectable here too, with each
+ * section deep-linking into the exact onboarding chapter that produced it
+ * — so revising one rule never means redoing the whole calibration survey.
+ * AiAuthorityPanel below is already a real, live editor for
+ * CoachAiAuthoritySettings, including per-domain overrides; a client's own
+ * page carries the equivalent per-client override
+ * (AiAuthorityClientOverrideCard).
  */
 export default function CoachSettingsPage() {
   const { activeContext } = usePrototypeState();
@@ -47,6 +58,7 @@ export default function CoachSettingsPage() {
       <PageHeader title="Playbook" description="How OPTIM supports you — and where it always defers to you." />
 
       <YourCoachingMethodCard />
+      <CoachPlaybookDetail />
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
