@@ -50,6 +50,15 @@ function relativeTime(iso: string, nowMs: number): string {
  * gets its own send-a-prepared-message flow, kept visually distinct from a
  * risk/decision item via its own accent (spec §4's Positive attention
  * rule).
+ *
+ * Gate 4C — a real Gate 3 nutrition decision (`item.nutritionContext`) never
+ * resolves through this surface's own generic one-click path: the situation
+ * above (question, summary, why OPTIM flagged it) still renders identically,
+ * but the action tail hands off to `onOpenNutritionReview` instead, which
+ * the caller wires to the exact same `NutritionReviewDetailSheet` /coach/
+ * reviews already uses — the real evidence/proposal/approve-or-correct
+ * workflow, never a duplicate of it. This is the only branch that reads
+ * `item.nutritionContext`; every other kind's behavior here is unchanged.
  */
 export function DecisionFocusSurface({
   item,
@@ -58,6 +67,7 @@ export function DecisionFocusSurface({
   coachName,
   workspaceId,
   programContextLabel,
+  onOpenNutritionReview,
   onChanged,
 }: {
   item: AttentionQueueItem;
@@ -66,6 +76,11 @@ export function DecisionFocusSurface({
   coachName: string;
   workspaceId: WorkspaceId;
   programContextLabel: string | null;
+  /** Present only when the caller can open the real nutrition review sheet
+   * (see components/coach/demo-coach-dashboard.tsx) — required in practice
+   * whenever `item.nutritionContext` is set, since that's the only case
+   * this component ever calls it. */
+  onOpenNutritionReview?: () => void;
   onChanged: () => void;
 }) {
   const [note, setNote] = useState("");
@@ -76,6 +91,7 @@ export function DecisionFocusSurface({
   const isHealthReview = item.kind === "health_review";
   const isPlanApproval = item.kind === "plan_approval";
   const isMilestone = item.kind === "milestone";
+  const isNutrition = !!item.nutritionContext;
   const noteRequired = item.kind !== "health_review" && item.kind !== "plan_approval" && requiresResolutionNote(item.kind);
   const notificationRequired = item.kind !== "health_review" && item.kind !== "plan_approval" && requiresClientNotificationBeforeResolution(item.kind);
   const noteBlocksResolution = noteRequired && note.trim().length === 0;
@@ -232,6 +248,10 @@ export function DecisionFocusSurface({
           >
             Review plan <ArrowRight size={14} aria-hidden="true" />
           </Link>
+        ) : isNutrition ? (
+          <Button className="w-fit" onClick={onOpenNutritionReview}>
+            Review evidence &amp; decide <ArrowRight size={14} aria-hidden="true" />
+          </Button>
         ) : (
           <>
             {item.status === "needs_review" ? (

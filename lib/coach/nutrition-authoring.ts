@@ -18,7 +18,7 @@
 
 import { loadClientAppState, saveClientAppState } from "../tenancy/client-state-store.ts";
 import { BOUNDED_SUBSTITUTION_RULES, describeSubstitutionLog } from "../nutrition/substitution.ts";
-import type { AttentionQueueItem, CoachMealPlanEntry } from "./types.ts";
+import type { CoachMealPlanEntry } from "./types.ts";
 import type { MacroValues, MealPeriod, MealSelection } from "../types";
 import type { ClientProfileId, CoachProfileId } from "../tenancy/types";
 
@@ -112,17 +112,4 @@ export function applyCoachApprovedSubstitution(input: ApplyCoachApprovedSubstitu
     meals: { ...appState.meals, [input.period]: selection },
   });
   return { ok: true };
-}
-
-/** Gate 3C correction — the exact action a resolved nutrition review
- * actually took, derived from its own existing resolution state rather than
- * a separate tracked flag. "Reviewed" comes straight from resolutionAction;
- * "Approved" is only ever true for the one whatChanged string
- * components/coach/nutrition-review-detail-sheet.tsx's own handleApprove
- * writes (nothing else ever produces that exact prefix) — anything else
- * that resolved (a decline, a redirect, an inapplicable-rule correction) is
- * a correction, and must never be labeled "Approved by {coach}". */
-export function resolutionOutcomeVerb(item: Pick<AttentionQueueItem, "resolutionAction" | "resolutionReceipt">): "Approved" | "Corrected" | "Reviewed" {
-  if (item.resolutionAction === "reviewed_no_change") return "Reviewed";
-  return item.resolutionReceipt?.whatChanged.startsWith("Approved:") ? "Approved" : "Corrected";
 }

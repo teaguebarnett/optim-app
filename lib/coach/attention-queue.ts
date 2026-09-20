@@ -248,3 +248,29 @@ export function attentionBucketForItem(item: AttentionQueueItem, nowIso: string)
   }
   return "needs_attention";
 }
+
+/**
+ * Gate 3C originally, generalized in Gate 4C — the exact action a resolved
+ * review actually took, derived from its own existing resolution state
+ * rather than a separate tracked flag. "Reviewed" comes straight from
+ * resolutionAction; "Approved" is only ever true for the one whatChanged
+ * string components/coach/nutrition-review-detail-sheet.tsx's own
+ * handleApprove writes (nothing else ever produces that exact prefix), and
+ * that distinction (Approved vs Corrected) only means anything when a real
+ * OPTIM-proposed nutrition swap existed to approve or decline in the first
+ * place — see nutritionContext. A generic kind (pain-report, RPE anomaly,
+ * workout-skipped, technique-flag, client-requested, etc.) never had such a
+ * proposal, so calling it "Corrected" would be its own false implication;
+ * "Resolved" is the one honest word for "the coach handled this," with no
+ * approval/correction distinction implied. Moved here (out of the
+ * nutrition-specific lib/coach/nutrition-authoring.ts) because this is now
+ * the generic wording helper both components/coach/review-detail-sheet.tsx
+ * and components/coach/nutrition-review-detail-sheet.tsx render from.
+ */
+export function resolutionOutcomeVerb(
+  item: Pick<AttentionQueueItem, "resolutionAction" | "resolutionReceipt" | "nutritionContext">
+): "Approved" | "Corrected" | "Resolved" | "Reviewed" {
+  if (item.resolutionAction === "reviewed_no_change") return "Reviewed";
+  if (!item.nutritionContext) return "Resolved";
+  return item.resolutionReceipt?.whatChanged.startsWith("Approved:") ? "Approved" : "Corrected";
+}

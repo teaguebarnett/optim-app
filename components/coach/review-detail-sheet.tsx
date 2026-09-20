@@ -5,6 +5,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { TextArea } from "@/components/ui/textarea";
 import { ATTENTION_KIND_LABELS } from "@/lib/coach/labels";
+import { resolutionOutcomeVerb } from "@/lib/coach/attention-queue";
 import {
   moveReviewToWaiting,
   requiresClientNotificationBeforeResolution,
@@ -119,7 +120,9 @@ export function ReviewDetailSheet({
             {item.resolutionNote ? <p className="mt-1.5 text-sm text-neutral">{item.resolutionNote}</p> : null}
             {item.resolutionReceipt ? (
               <div className="mt-2 space-y-1 border-t border-border pt-2 text-meta text-neutral">
-                <p>Approved by {item.resolutionReceipt.approvedByCoachName}</p>
+                <p>
+                  {resolutionOutcomeVerb(item)} by {item.resolutionReceipt.approvedByCoachName}
+                </p>
                 {item.resolutionReceipt.clientCommunicated ? <p>Told {item.clientName.split(" ")[0]}: &ldquo;{item.resolutionReceipt.clientCommunicated}&rdquo;</p> : null}
               </div>
             ) : null}

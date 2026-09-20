@@ -14,6 +14,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { DecisionFocusSurface } from "@/components/coach/decision-focus-surface";
 import { DecisionQueueRows } from "@/components/coach/decision-queue-rows";
+import { NutritionReviewDetailSheet } from "@/components/coach/nutrition-review-detail-sheet";
 import { PersonalTouchList } from "@/components/coach/personal-touch-list";
 import { DailyBriefingsSummaryList } from "@/components/coach/daily-briefings-summary-list";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
@@ -42,6 +43,17 @@ export function DemoCoachDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [, forceRerender] = useState(0);
   const onChanged = () => forceRerender((n) => n + 1);
+
+  // Gate 4C — which real Gate 3 nutrition review, if any, has its full
+  // evidence/proposal sheet open right now. Independent of `selectedId`
+  // (which only ever promotes a different item to the focus card): opening
+  // a nutrition review never replaces the focus card underneath it, it
+  // layers the exact same /coach/reviews sheet on top. Re-looked-up fresh
+  // from the real attentionQueue on every render (never a stale copy), so
+  // a resolution applied from /coach/reviews in another tab/session is
+  // reflected here the instant this data re-reads.
+  const [openNutritionReviewId, setOpenNutritionReviewId] = useState<string | null>(null);
+  const openNutritionItem = workspace.attentionQueue.find((i) => i.reviewRequestId === openNutritionReviewId) ?? null;
 
   // Spec §2/§3 — the same real attentionQueue, split into the buckets the
   // command center's zones need. A "waiting" item whose own resurface time
@@ -151,6 +163,7 @@ export function DemoCoachDashboard() {
                   coachName={coachName}
                   workspaceId={workspace.workspaceId}
                   programContextLabel={focusProgramLabel}
+                  onOpenNutritionReview={() => setOpenNutritionReviewId(focusItem.reviewRequestId)}
                   onChanged={onChanged}
                 />
               </div>
@@ -186,6 +199,22 @@ export function DemoCoachDashboard() {
           </Link>
         </section>
       </div>
+
+      {/* Gate 4C — the exact same sheet /coach/reviews renders for a
+          nutritionContext item; never a second implementation. Rendered
+          here (outside the three-zone grid) so it overlays the whole
+          Command Center rather than being constrained to the Needs You
+          column. */}
+      {workspace.coachId && openNutritionItem ? (
+        <NutritionReviewDetailSheet
+          item={openNutritionItem}
+          coachId={workspace.coachId}
+          coachName={coachName}
+          platform={workspace.platform}
+          onClose={() => setOpenNutritionReviewId(null)}
+          onChanged={onChanged}
+        />
+      ) : null}
     </div>
   );
 }

@@ -12,7 +12,8 @@ import {
   reopenReviewRequest,
   startReviewRequest,
 } from "@/lib/coach/review-lifecycle";
-import { applyCoachApprovedSubstitution, resolutionOutcomeVerb } from "@/lib/coach/nutrition-authoring";
+import { applyCoachApprovedSubstitution } from "@/lib/coach/nutrition-authoring";
+import { resolutionOutcomeVerb } from "@/lib/coach/attention-queue";
 import { getAiAuthoritySettings } from "@/lib/coach/repository";
 import { resolveSubstitutionDisposition, BOUNDED_SUBSTITUTION_RULES } from "@/lib/nutrition/substitution";
 import { mealOptionHasIngredient, mealDisplayName, mealProvenanceLabel } from "@/lib/nutrition/view-model";
@@ -32,6 +33,19 @@ function formatTimestamp(iso: string): string {
  * themselves does — never a real 0 standing in for a field never entered. */
 function macroField(macros: MacroValues, field: keyof MacroValues, unit: string, unknownFields: (keyof MacroValues)[] | undefined): string {
   return unknownFields?.includes(field) ? `—${unit}` : `${Math.round(macros[field])}${unit}`;
+}
+
+/** Gate 4C fix — one name for the exact composite precondition every
+ * resolution action in this sheet already computes (`noteBlocksResolution`,
+ * `messageBlocksResolution`), so the Approve button's disabled state and
+ * handleApprove's own guard can never drift apart again. The original bug
+ * was exactly that drift: the precondition was computed correctly but only
+ * consulted in one of the two places that needed it, so a click could apply
+ * the real substitution before discovering the review couldn't resolve. No
+ * new validation semantics — just a single, exported, directly-testable
+ * home for a check every caller here must use identically. */
+export function canApproveNutritionSubstitution(noteBlocksResolution: boolean, messageBlocksResolution: boolean): boolean {
+  return !noteBlocksResolution && !messageBlocksResolution;
 }
 
 /**
@@ -138,8 +152,13 @@ export function NutritionReviewDetailSheet({
     onChanged();
   }
 
+  /** Gate 4C fix — validate → apply → resolve → receipt, never apply →
+   * discover it can't resolve. Never relies on the button's disabled state
+   * alone: this handler enforces canApproveNutritionSubstitution itself,
+   * before the material substitution. */
   function handleApprove() {
     if (!rule || !evidence?.macros) return;
+    if (!canApproveNutritionSubstitution(noteBlocksResolution, messageBlocksResolution)) return;
     const applied = applyCoachApprovedSubstitution({ clientId: item!.clientId, period, ruleId: rule.id, originalMacros: evidence.macros });
     if (!applied.ok) {
       setBlockedReason("Couldn't apply this swap — the registered rule may have changed.");
@@ -261,7 +280,7 @@ export function NutritionReviewDetailSheet({
             {blockedReason ? <p className="text-meta text-error">{blockedReason}</p> : null}
 
             {canApprove ? (
-              <Button className="w-full" onClick={handleApprove} disabled={messageBlocksResolution && clientMessage.trim().length === 0}>
+              <Button className="w-full" onClick={handleApprove} disabled={!canApproveNutritionSubstitution(noteBlocksResolution, messageBlocksResolution)}>
                 Approve — log {rule!.toLabel} for {periodLabel.toLowerCase()}
               </Button>
             ) : null}
