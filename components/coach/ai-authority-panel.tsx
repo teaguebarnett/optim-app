@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Collapse } from "@/components/ui/collapse";
 import { DiscreteSlider } from "@/components/ui/discrete-slider";
 import { useAiAuthority } from "@/hooks/use-ai-authority";
@@ -25,13 +26,31 @@ const LEVEL_POSITIONS = AI_AUTHORITY_LEVELS.map((level) => ({ value: level, labe
  * the currently-selected value (never four repeated paragraphs at once).
  * No generative AI service exists in this repository; this only controls
  * what a future automation layer would be ALLOWED to do.
+ *
+ * Gate 5B — `confirmChanges` gates the workspace-wide DEFAULT behind an
+ * explicit confirm step (current -> proposed -> confirm/cancel, the same
+ * inline pattern Gate 4D's program-replacement guard uses), since this is
+ * the one control here with the broadest blast radius: it changes the
+ * disposition every routine action resolves to for every client that
+ * doesn't already have its own override. Domain overrides stay immediate
+ * — narrower scope, easily reversible, no confirmation warranted. Defaults
+ * to `false` so components/coach-onboarding/ai-authority-chapter.tsx (which
+ * reuses this exact component — "literally the same live control") keeps
+ * its existing zero-friction behavior: there's no established baseline to
+ * protect during initial calibration, only during later, deliberate edits
+ * from Settings.
  */
-export function AiAuthorityPanel() {
+export function AiAuthorityPanel({ confirmChanges = false }: { confirmChanges?: boolean } = {}) {
   const { settings, setGlobal } = useAiAuthority();
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // Live preview while dragging/keying through the global slider, before
   // the value actually commits — see DiscreteSlider's onPreviewChange doc.
   const [previewLevel, setPreviewLevel] = useState<AiAuthorityLevel | null>(null);
+  // Gate 5B — a selected-but-not-yet-confirmed global level, only ever set
+  // when confirmChanges is true. Never written to canonical state until the
+  // coach explicitly confirms; Cancel (or navigating away) discards it with
+  // zero mutation, since setGlobal is never called until then.
+  const [pendingLevel, setPendingLevel] = useState<AiAuthorityLevel | null>(null);
 
   function setLevel(level: AiAuthorityLevel) {
     setGlobal({ level, domainOverrides: settings.global.domainOverrides });
@@ -44,24 +63,60 @@ export function AiAuthorityPanel() {
     setGlobal({ level: settings.global.level, domainOverrides });
   }
 
+  const displayedLevel = pendingLevel ?? settings.global.level;
+
   return (
     <Card className="space-y-5">
       <div>
         <p className="text-subheading text-off-white">AI Coaching Authority</p>
-        <p className="mt-1 text-meta text-neutral">How much OPTIM handles on its own by default, workspace-wide. Override an individual client from their own page.</p>
+        <p className="mt-1 text-meta text-neutral">
+          How much OPTIM handles on its own by default, workspace-wide. Changing this never touches an existing per-client override — override an
+          individual client from their own page.
+        </p>
       </div>
 
       <DiscreteSlider
         ariaLabel="AI Coaching Authority — workspace default"
         positions={LEVEL_POSITIONS}
-        value={settings.global.level}
+        value={displayedLevel}
         onChange={(v) => {
-          setLevel(v as AiAuthorityLevel);
+          const next = v as AiAuthorityLevel;
+          if (confirmChanges) {
+            setPendingLevel(next === settings.global.level ? null : next);
+          } else {
+            setLevel(next);
+          }
           setPreviewLevel(null);
         }}
         onPreviewChange={(v) => setPreviewLevel(v as AiAuthorityLevel)}
       />
-      <p className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2.5 text-sm text-accent-fg">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[previewLevel ?? settings.global.level]}</p>
+      <p className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2.5 text-sm text-accent-fg">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[previewLevel ?? displayedLevel]}</p>
+
+      {pendingLevel ? (
+        <div className="rounded-[var(--radius-sm)] border border-warning/40 bg-warning-soft/40 p-3.5 text-sm">
+          <p className="text-off-white">
+            Change the workspace default from &ldquo;{AI_AUTHORITY_LEVEL_LABELS[settings.global.level]}&rdquo; to &ldquo;{AI_AUTHORITY_LEVEL_LABELS[pendingLevel]}&rdquo;?
+          </p>
+          <p className="mt-1.5 text-meta text-neutral">
+            This changes what OPTIM may do on its own for every client using the workspace default. Clients with their own explicit override are not
+            affected.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                setLevel(pendingLevel);
+                setPendingLevel(null);
+              }}
+            >
+              Confirm change
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPendingLevel(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="border-t border-border pt-4">
         <button type="button" onClick={() => setAdvancedOpen((v) => !v)} aria-expanded={advancedOpen} className="flex w-full items-center justify-between gap-2 text-left">

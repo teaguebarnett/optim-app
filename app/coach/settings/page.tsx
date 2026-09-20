@@ -1,6 +1,6 @@
 "use client";
 
-import { ShieldCheck, Sparkles, AlertTriangle, MessageCircle, Wrench, Newspaper } from "lucide-react";
+import { Compass, Sparkles, ShieldCheck, Newspaper, Wrench } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/coach/page-header";
 import { DevPerspectiveSwitcher } from "@/components/app-shell/dev-perspective-switcher";
@@ -16,22 +16,31 @@ import { cn } from "@/lib/cn";
 const DEV_TOOLS_AVAILABLE = process.env.NODE_ENV !== "production";
 
 /**
- * The coach's Playbook — a clear explanation of how OPTIM supports you.
- * The "You always decide" / "may handle" / "always escalate" sections below
- * read the workspace's real, already-governing WorkspaceAiPolicy (see
- * lib/tenancy/types.ts) — genuinely real, platform-level policy, but not
- * yet coach-editable from anywhere in the product, so shown as read-only
- * fact rather than a toggle that would silently do nothing.
+ * Gate 5B — reorganized so the page reads as "Settings," grouped by real
+ * job, with the Coach Playbook as its own clearly-owned first group rather
+ * than the page's whole identity (that conflated "how I coach" with
+ * "workspace configuration," which are different things — see this
+ * phase's brief Part 1/6).
  *
- * Gate 5A — CoachPlaybookDetail (below YourCoachingMethodCard) makes the
- * coach's own structured CoachOperatingModel (methodology, interpretation
- * rules, communication style, safety) inspectable here too, with each
- * section deep-linking into the exact onboarding chapter that produced it
- * — so revising one rule never means redoing the whole calibration survey.
- * AiAuthorityPanel below is already a real, live editor for
- * CoachAiAuthoritySettings, including per-domain overrides; a client's own
- * page carries the equivalent per-client override
- * (AiAuthorityClientOverrideCard).
+ * Group order and what each one owns:
+ *  1. Coaching Playbook — YourCoachingMethodCard + CoachPlaybookDetail
+ *     (Gate 5A's real, editable CoachOperatingModel). This IS "how I
+ *     coach"; nothing below duplicates an editable copy of it.
+ *  2. OPTIM authority — AiAuthorityPanel (real, editable
+ *     CoachAiAuthoritySettings — automatic/draft/escalate per the
+ *     resolver in lib/coach/ai-authority.ts) and Daily Briefings
+ *     (real, editable publish-automation setting) — both answer "what
+ *     may OPTIM do on its own."
+ *  3. Workspace baseline — the legacy WorkspaceAiPolicy fields (see
+ *     lib/tenancy/types.ts). Real and structurally required (every
+ *     Workspace has one), but read ONLY by this page — no generation,
+ *     review, or authority-resolution code anywhere consults these
+ *     booleans (verified this phase). Presented explicitly as a fixed,
+ *     non-adjustable-here baseline from account setup, never as a
+ *     competing or overriding source for what's in groups 1-2.
+ *  4. Appearance — local per-account UI preference, never shared
+ *     workspace policy.
+ *  5. Developer tools — unchanged, dev-only.
  */
 export default function CoachSettingsPage() {
   const { activeContext } = usePrototypeState();
@@ -54,75 +63,32 @@ export default function CoachSettingsPage() {
   }
 
   return (
-    <div className="space-y-8">
-      <PageHeader title="Playbook" description="How OPTIM supports you — and where it always defers to you." />
-
-      <YourCoachingMethodCard />
-      <CoachPlaybookDetail />
+    <div className="space-y-10">
+      <PageHeader title="Settings" description="Configure how OPTIM works with you and your clients." />
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
-          <ShieldCheck size={16} className="text-accent-fg" aria-hidden="true" />
-          <h2 className="text-subheading text-off-white">You always decide</h2>
+          <Compass size={16} className="text-accent-fg" aria-hidden="true" />
+          <h2 className="text-subheading text-off-white">Coaching Playbook</h2>
         </div>
-        <Card>
-          <p className="text-sm text-off-white">Program and exercise changes</p>
-          <p className="mt-1 text-meta text-neutral">
-            {policy.requireCoachApprovalForProgramChanges
-              ? "OPTIM never modifies a client's program on its own — every change request routes to you first."
-              : "Approval requirement is off for this workspace."}
-          </p>
-        </Card>
+        <p className="text-meta text-neutral">How you coach — your methodology, interpretation rules, and communication style. Edited here, nowhere else.</p>
+        <YourCoachingMethodCard />
+        <CoachPlaybookDetail />
       </section>
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-brass-strong" aria-hidden="true" />
-          <h2 className="text-subheading text-off-white">OPTIM may handle within approved boundaries</h2>
+          <Sparkles size={16} className="text-accent-fg" aria-hidden="true" />
+          <h2 className="text-subheading text-off-white">OPTIM authority</h2>
         </div>
-        <Card>
-          <p className="text-sm text-off-white">Safe same-day substitutions</p>
-          <p className="mt-1 text-meta text-neutral">
-            {policy.allowImmediateSessionSubstitutions
-              ? "OPTIM can suggest an equivalent same-day swap (e.g. a meal or cardio alternative) without waiting on you."
-              : "Disabled — every substitution routes to you first."}
-          </p>
-        </Card>
-      </section>
+        <p className="text-meta text-neutral">What OPTIM may do with your Playbook on its own, what it drafts for your approval, and what always reaches you.</p>
+        <AiAuthorityPanel confirmChanges />
 
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <AlertTriangle size={16} className="text-error" aria-hidden="true" />
-          <h2 className="text-subheading text-off-white">Always escalate to you</h2>
-        </div>
-        <Card className="space-y-3">
-          <PlaybookRow label="Pain or injury reports" enabled={policy.requireCoachReviewForPainReports} />
-          <PlaybookRow label="Unusual RPE patterns" enabled={policy.requireCoachReviewForRpeAnomalies} />
-          <PlaybookRow label="Skipped work" enabled={policy.requireCoachReviewForSkippedWork} />
-          <p className="border-t border-border pt-2.5 text-meta text-neutral">
-            Pain, injury, and program/exercise decisions always escalate to you regardless of these settings.
-          </p>
-        </Card>
-      </section>
-
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <MessageCircle size={16} className="text-neutral" aria-hidden="true" />
-          <h2 className="text-subheading text-off-white">Tone &amp; communication</h2>
-        </div>
         <Card>
-          <p className="text-sm text-off-white">{activeContext.assistantDisplayName}&apos;s tone</p>
-          <p className="mt-1 text-meta text-neutral">{policy.tone}</p>
-        </Card>
-      </section>
-
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Newspaper size={16} className="text-brass-strong" aria-hidden="true" />
-          <h2 className="text-subheading text-off-white">Daily Briefings</h2>
-        </div>
-        <Card>
-          <p className="text-sm text-off-white">Default publishing behavior</p>
+          <div className="flex items-center gap-2">
+            <Newspaper size={15} className="text-brass-strong" aria-hidden="true" />
+            <p className="text-sm font-medium text-off-white">Daily Briefings</p>
+          </div>
           <p className="mt-1 text-meta text-neutral">
             Review-first holds every day&apos;s briefing for your approval before a client sees it. Auto-publish sends it the
             moment it&apos;s generated — unless the day has a pain flag, an unapproved program change, or a low-confidence
@@ -151,10 +117,25 @@ export default function CoachSettingsPage() {
 
       <section className="space-y-3">
         <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-accent-fg" aria-hidden="true" />
-          <h2 className="text-subheading text-off-white">AI Coaching Authority</h2>
+          <ShieldCheck size={16} className="text-neutral" aria-hidden="true" />
+          <h2 className="text-subheading text-off-white">Workspace baseline</h2>
         </div>
-        <AiAuthorityPanel />
+        <Card className="space-y-3">
+          <p className="text-meta text-neutral">
+            Set when this workspace was created — not adjustable here. Your Coaching Playbook and OPTIM authority above are what OPTIM actually
+            follows day to day.
+          </p>
+          <div className="space-y-2 border-t border-border pt-3">
+            <BaselineRow label="Program changes require your approval" value={policy.requireCoachApprovalForProgramChanges} />
+            <BaselineRow label="Same-day substitutions allowed automatically" value={policy.allowImmediateSessionSubstitutions} />
+            <BaselineRow label="Pain or injury reports escalate to you" value={policy.requireCoachReviewForPainReports} />
+            <BaselineRow label="Unusual RPE patterns escalate to you" value={policy.requireCoachReviewForRpeAnomalies} />
+            <BaselineRow label="Skipped work escalates to you" value={policy.requireCoachReviewForSkippedWork} />
+          </div>
+          <p className="border-t border-border pt-2.5 text-meta text-neutral">
+            Pain, injury, and program/exercise decisions always escalate to you regardless of these settings.
+          </p>
+        </Card>
       </section>
 
       <section className="space-y-3">
@@ -166,7 +147,7 @@ export default function CoachSettingsPage() {
         <section className="space-y-3 border-t border-dashed border-border-strong pt-6">
           <div className="flex items-center gap-2">
             <Wrench size={15} className="text-neutral" aria-hidden="true" />
-            <h2 className="text-label text-neutral">Development only — not part of the coaching Playbook</h2>
+            <h2 className="text-label text-neutral">Development only</h2>
           </div>
           <Card className="border-dashed bg-surface-raised">
             <DevPerspectiveSwitcher />
@@ -177,11 +158,11 @@ export default function CoachSettingsPage() {
   );
 }
 
-function PlaybookRow({ label, enabled }: { label: string; enabled: boolean }) {
+function BaselineRow({ label, value }: { label: string; value: boolean }) {
   return (
     <div className="flex items-center justify-between gap-3 text-sm">
       <span className="text-off-white">{label}</span>
-      <span className={enabled ? "text-error" : "text-neutral"}>{enabled ? "Escalates" : "Off"}</span>
+      <span className="text-neutral">{value ? "Yes" : "No"}</span>
     </div>
   );
 }
