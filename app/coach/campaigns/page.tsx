@@ -5,6 +5,18 @@
 // page — see app/coach/page.tsx's own doc. Functionality unchanged: Part 7
 // forbids a broad messaging redesign in this phase.
 //
+// Gate 5C — the "Personal Coach Note" form that used to live on this page
+// was removed: sending a note is a per-client action (who, exactly, are you
+// noting?) and belongs where the coach already has that client in context —
+// components/coach/live-client-workspace.tsx's "Personal coach notes"
+// section, which calls the exact same publishCoachNoteAction this page
+// used. Two entry points for one action (a generic dropdown here, a
+// contextual one there) was the "collapsed distinct jobs" problem this
+// phase's brief called out — not the coach-DM-thread problem this file's
+// own doc already guarded against. This page is now Adaptive Campaigns
+// only, and reuses the existing Supabase draft/preview/approve/publish/
+// retry pipeline unchanged (lib/production/campaigns.ts) — no rebuild.
+//
 // The distinction this page exists to preserve, in the UI as well as the
 // data: neither a Note nor a Campaign ever opens a coach DM thread. Only a
 // real escalation the coach chooses to answer personally does that (see
@@ -25,7 +37,6 @@ import {
   approveCampaignAction,
   publishCampaignAction,
   retryCampaignDeliveriesAction,
-  publishCoachNoteAction,
 } from "@/app/actions/coach-communications";
 
 const DEFAULT_TEMPLATE =
@@ -52,44 +63,15 @@ export default async function CoachCampaignsPage() {
     await createCampaignDraftAction({ title, bodyTemplate });
   }
 
-  async function sendNote(formData: FormData) {
-    "use server";
-    const clientProfileId = String(formData.get("clientProfileId") ?? "");
-    const body = String(formData.get("body") ?? "").trim();
-    if (!clientProfileId || !body) return;
-    await publishCoachNoteAction({ clientProfileId, body });
-  }
-
   return (
     <div className="mx-auto w-full max-w-[800px] space-y-6">
       <div>
-        <h1 className="text-heading text-off-white">Campaigns &amp; notes</h1>
-        <p className="mt-1 text-body text-neutral">Coach-authored outbound communication — always attributed to you, never to OPTIM.</p>
-      </div>
-
-      <Card>
-        <SectionHeader title="Personal Coach Note" />
-        <p className="mb-3 text-meta text-neutral">
-          One-way and clearly from you. It does not open a thread — if they reply, it goes to OPTIM like any other message and only reaches you if
-          it genuinely needs to.
+        <h1 className="text-heading text-off-white">Campaigns</h1>
+        <p className="mt-1 text-body text-neutral">
+          Coach-authored outbound communication to a group of clients at once — always attributed to you, never to OPTIM. Looking to send one
+          client a personal note instead? Do that from their own client page.
         </p>
-        <form action={sendNote} className="flex flex-col gap-2">
-          <select name="clientProfileId" className={fieldClass} required defaultValue="">
-            <option value="" disabled>
-              Select a client…
-            </option>
-            {clients.map((client) => (
-              <option key={client.id} value={client.id} className="text-black">
-                {client.displayName}
-              </option>
-            ))}
-          </select>
-          <textarea name="body" rows={2} placeholder="Your note…" className={fieldClass} />
-          <Button type="submit" variant="secondary" size="sm" className="self-start">
-            Send note
-          </Button>
-        </form>
-      </Card>
+      </div>
 
       <Card>
         <SectionHeader title="New Adaptive Campaign" />

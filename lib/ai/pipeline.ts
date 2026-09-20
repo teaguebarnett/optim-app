@@ -32,10 +32,20 @@
 //    unresolved clarify becomes an unresolved_uncertainty escalation rather
 //    than an endless clarification loop — the caller passes the previous
 //    assistant decision kind in, since this module holds no state.
+//
+// 4. Gate 5C — "A coach's own communication-authority choice is never left
+//    to the model's judgment alone." lib/ai/communication-authority.ts's
+//    enforceCoachCommunicationAuthority runs after normalizeDecision below
+//    and can force an answer/clarify into an escalate — for a message
+//    matching one of this coach's own coachMustRespondPersonally topics, or
+//    unconditionally when aiMayRespondDirectly is empty (the coach asked to
+//    see everything). See that module's own doc for exactly what this can
+//    and cannot detect.
 
 import { buildSystemPrompt, boundAssistantContext, MAX_CONTEXT_HISTORY_MESSAGES, type AssistantContextSnapshot } from "./context.ts";
 import { resolveChatModelProvider } from "./resolve.ts";
 import { getAiEnvConfig } from "./env.ts";
+import { enforceCoachCommunicationAuthority } from "./communication-authority.ts";
 import {
   AiProviderTimeoutError,
   AiProviderUnavailableError,
@@ -161,7 +171,8 @@ export async function runAssistantDecisionPipeline(input: PipelineInput): Promis
       timeoutMs: env.timeoutMs,
     });
 
-    const decision = normalizeDecision(result.decision, input.priorAssistantDecisionKind ?? null);
+    const normalized = normalizeDecision(result.decision, input.priorAssistantDecisionKind ?? null);
+    const decision = enforceCoachCommunicationAuthority(normalized, input.clientMessage, input.playbook.operatingModel.communication);
 
     return {
       decision,

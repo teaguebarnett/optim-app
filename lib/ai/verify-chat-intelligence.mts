@@ -13,6 +13,7 @@ import { classifyForFakeProvider } from "./providers/fake-provider.ts";
 import { runAssistantDecisionPipeline, normalizeDecision, stripUnverifiedNotificationClaims, providerFailureMessage } from "./pipeline.ts";
 import { boundAssistantContext, buildSystemPrompt, normalizeClientMessage, MAX_CONTEXT_SAFETY_FLAGS, MAX_CONTEXT_PRIOR_RESOLUTIONS, MAX_CLIENT_MESSAGE_CHARS, type AssistantContextSnapshot } from "./context.ts";
 import { buildDefaultPlaybookContent, type CoachPlaybookContent } from "../coach/playbook.ts";
+import { detectMustRespondPersonallyTopic, enforceCoachCommunicationAuthority } from "./communication-authority.ts";
 import { describeEscalationForAssistantMessage, type Escalation } from "../communications/types.ts";
 import { validatePlaybookContent } from "../production/validation.ts";
 import {
@@ -407,6 +408,57 @@ check("buildSystemPrompt takes no client-message parameter at all — there is n
   const prompt = buildSystemPrompt(PLAYBOOK, baseContext());
   assert.doesNotMatch(prompt, /UNIQUE_CLIENT_TEXT_SENTINEL_4f8a1c/);
 });
+// Gate 5C — the Playbook's coachMustRespondPersonally / aiMayRespondDirectly
+// fields (real, coach-configured during onboarding) were never previously
+// rendered into the prompt at all — the model had no way to know either
+// list existed. These assert the fix against the exact contract in
+// lib/coach/playbook.ts's own renderPlaybookForPrompt doc, not just "some
+// text changed".
+check("buildSystemPrompt tells the model which topics this coach always wants to handle personally", () => {
+  // PLAYBOOK's default coachMustRespondPersonally is ["pain_or_injury_report", "emotional_distress"].
+  const prompt = buildSystemPrompt(PLAYBOOK, baseContext());
+  assert.match(prompt, /always wants to respond personally to/i);
+  assert.match(prompt, /pain or injury report/i);
+  assert.match(prompt, /emotional distress/i);
+});
+check("buildSystemPrompt tells the model which topics this coach allows answering directly, with no escalation", () => {
+  // PLAYBOOK's default aiMayRespondDirectly is ["routine_logistics", "how_to_log_a_meal"].
+  const prompt = buildSystemPrompt(PLAYBOOK, baseContext());
+  assert.match(prompt, /may answer directly, with no need to escalate/i);
+  assert.match(prompt, /routine logistics/i);
+  assert.doesNotMatch(prompt, /wants to review everything before you respond independently/i);
+});
+check('an empty aiMayRespondDirectly array (the only way the onboarding "None — I want to see everything first" exclusive option can persist, since the engine filters the literal "none" out) instructs the model to escalate everything', () => {
+  const reviewEverything: CoachPlaybookContent = {
+    ...PLAYBOOK,
+    operatingModel: { ...PLAYBOOK.operatingModel, communication: { ...PLAYBOOK.operatingModel.communication, aiMayRespondDirectly: [] } },
+  };
+  const prompt = buildSystemPrompt(reviewEverything, baseContext());
+  assert.match(prompt, /wants to review everything before you respond independently/i);
+  assert.doesNotMatch(prompt, /may answer directly, with no need to escalate/i);
+});
+check("an unset coachMustRespondPersonally (empty array) adds no personal-response instruction at all — never a stray empty sentence", () => {
+  const none: CoachPlaybookContent = {
+    ...PLAYBOOK,
+    operatingModel: { ...PLAYBOOK.operatingModel, communication: { ...PLAYBOOK.operatingModel.communication, coachMustRespondPersonally: [] } },
+  };
+  const prompt = buildSystemPrompt(none, baseContext());
+  assert.doesNotMatch(prompt, /always wants to respond personally to/i);
+});
+check("aiMayDraftOnly is never rendered into the prompt — no onboarding question sets it, so there is nothing coach-specific to enforce yet (see renderPlaybookForPrompt's own doc)", () => {
+  const prompt = buildSystemPrompt(PLAYBOOK, baseContext());
+  assert.doesNotMatch(prompt, /draft.only/i);
+  assert.doesNotMatch(prompt, /missed_workout_follow_up|weekly_progress_summary/i);
+});
+check("billing_or_account (coachMustRespondPersonally) has no matching EscalationReason in the fixed enum — the prompt instructs escalation without prescribing a specific reason code, and mentions the topic in plain language", () => {
+  const billing: CoachPlaybookContent = {
+    ...PLAYBOOK,
+    operatingModel: { ...PLAYBOOK.operatingModel, communication: { ...PLAYBOOK.operatingModel.communication, coachMustRespondPersonally: ["billing_or_account"] } },
+  };
+  const prompt = buildSystemPrompt(billing, baseContext());
+  assert.match(prompt, /billing or account questions/i);
+  assert.match(prompt, /whichever escalation reason best fits/i);
+});
 check("normalizeClientMessage rejects an empty message rather than silently proceeding", () => {
   const result = normalizeClientMessage("   ");
   assert.equal(result.ok, false);
@@ -421,6 +473,113 @@ check("normalizeClientMessage accepts and trims an ordinary message", () => {
   const result = normalizeClientMessage("  hello there  ");
   assert.deepEqual(result, { ok: true, body: "hello there" });
 });
+
+// ---------------------------------------------------------------------------
+console.log("\nGate 5C. Structural enforcement — a coach's communication-authority choice is never left to the model's judgment alone\n");
+
+check("detectMustRespondPersonallyTopic matches an explicit pain report against a coach who flagged pain_or_injury_report", () => {
+  const topic = detectMustRespondPersonallyTopic("my shoulder has been in a lot of pain since yesterday's session", ["pain_or_injury_report"]);
+  assert.equal(topic, "pain_or_injury_report");
+});
+check('detectMustRespondPersonallyTopic does NOT match a bare "sore" — routine post-training soreness must not flood the coach with false escalations', () => {
+  const topic = detectMustRespondPersonallyTopic("man my legs are so sore today lol", ["pain_or_injury_report"]);
+  assert.equal(topic, null);
+});
+check("detectMustRespondPersonallyTopic matches a billing question only when the coach actually flagged billing_or_account", () => {
+  assert.equal(detectMustRespondPersonallyTopic("can I get a refund for this month?", ["billing_or_account"]), "billing_or_account");
+  assert.equal(detectMustRespondPersonallyTopic("can I get a refund for this month?", ["major_goal_change_request"]), null);
+});
+check("detectMustRespondPersonallyTopic returns null for a message matching none of the coach's configured topics", () => {
+  const topic = detectMustRespondPersonallyTopic("what's my workout today?", ["pain_or_injury_report", "billing_or_account"]);
+  assert.equal(topic, null);
+});
+
+check("enforceCoachCommunicationAuthority forces an 'answer' decision to escalate when the message matches a must-respond-personally topic, using the correct mapped reason", () => {
+  const decision = enforceCoachCommunicationAuthority(
+    { kind: "answer", responseText: "Sure, that's fine." },
+    "can I get a refund for last month's charge?",
+    { aiMayRespondDirectly: ["routine_logistics"], coachMustRespondPersonally: ["billing_or_account"] }
+  );
+  assert.equal(decision.kind, "escalate");
+  assert.equal(decision.escalationReason, "out_of_authority");
+  // The model's own guidance text is preserved, never rewritten by the override.
+  assert.equal(decision.responseText, "Sure, that's fine.");
+});
+check("enforceCoachCommunicationAuthority maps each coachMustRespondPersonally topic to the documented EscalationReason", () => {
+  assert.equal(
+    enforceCoachCommunicationAuthority({ kind: "answer", responseText: "x" }, "my knee has real pain in it", { aiMayRespondDirectly: ["routine_logistics"], coachMustRespondPersonally: ["pain_or_injury_report"] })
+      .escalationReason,
+    "pain_or_safety"
+  );
+  assert.equal(
+    enforceCoachCommunicationAuthority({ kind: "answer", responseText: "x" }, "I'm feeling really burned out lately", { aiMayRespondDirectly: ["routine_logistics"], coachMustRespondPersonally: ["emotional_distress"] })
+      .escalationReason,
+    "adherence_or_sensitive"
+  );
+  assert.equal(
+    enforceCoachCommunicationAuthority({ kind: "answer", responseText: "x" }, "I want a new goal for next block", { aiMayRespondDirectly: ["routine_logistics"], coachMustRespondPersonally: ["major_goal_change_request"] })
+      .escalationReason,
+    "plan_change"
+  );
+});
+check("enforceCoachCommunicationAuthority leaves an answer/clarify decision untouched when the message matches none of the coach's must-respond-personally topics", () => {
+  const decision = enforceCoachCommunicationAuthority({ kind: "answer", responseText: "Today is a push day." }, "what's my workout today?", {
+    aiMayRespondDirectly: ["routine_logistics"],
+    coachMustRespondPersonally: ["pain_or_injury_report"],
+  });
+  assert.deepEqual(decision, { kind: "answer", responseText: "Today is a push day." });
+});
+check("enforceCoachCommunicationAuthority never touches a decision that is already an escalation, even if the message also matches a configured topic", () => {
+  const original = { kind: "escalate" as const, escalationReason: "unresolved_uncertainty" as const, responseText: "Let me get you an answer." };
+  const decision = enforceCoachCommunicationAuthority(original, "I'm in a lot of pain", { aiMayRespondDirectly: ["routine_logistics"], coachMustRespondPersonally: ["pain_or_injury_report"] });
+  assert.deepEqual(decision, original);
+});
+check('enforceCoachCommunicationAuthority forces escalation for EVERY non-escalate decision when aiMayRespondDirectly is empty ("review everything"), independent of coachMustRespondPersonally and independent of message content', () => {
+  const decision = enforceCoachCommunicationAuthority({ kind: "answer", responseText: "Sure, no problem." }, "what time is my session tomorrow?", {
+    aiMayRespondDirectly: [],
+    coachMustRespondPersonally: [],
+  });
+  assert.equal(decision.kind, "escalate");
+  assert.equal(decision.escalationReason, "out_of_authority");
+});
+check("enforceCoachCommunicationAuthority also forces a 'clarify' decision to escalate on a matching topic — OPTIM does not keep asking follow-up questions about something the coach wants to handle personally", () => {
+  const decision = enforceCoachCommunicationAuthority({ kind: "clarify", responseText: "Can you tell me more?" }, "I think I strained something in my back", {
+    aiMayRespondDirectly: ["routine_logistics"],
+    coachMustRespondPersonally: ["pain_or_injury_report"],
+  });
+  assert.equal(decision.kind, "escalate");
+  assert.equal(decision.escalationReason, "pain_or_safety");
+});
+
+await checkAsync(
+  "end-to-end through the real pipeline + fake provider: a billing question the fake provider would otherwise just answer is forced to escalate for a coach who flagged billing_or_account — proving the wiring in runAssistantDecisionPipeline, not just the pure function",
+  async () => {
+    const billingPlaybook: CoachPlaybookContent = {
+      ...PLAYBOOK,
+      operatingModel: { ...PLAYBOOK.operatingModel, communication: { ...PLAYBOOK.operatingModel.communication, coachMustRespondPersonally: ["billing_or_account"] } },
+    };
+    // Confirm the premise first: the fake provider has no billing-keyword awareness at all,
+    // so without enforcement this would come back as a plain "answer".
+    const unenforced = classifyForFakeProvider("can I get a refund for this month's charge?", baseContext(), billingPlaybook);
+    assert.equal(unenforced.kind, "answer");
+
+    const prevProvider = process.env.AI_PROVIDER;
+    process.env.AI_PROVIDER = "fake";
+    try {
+      const result = await runAssistantDecisionPipeline({
+        playbook: billingPlaybook,
+        context: baseContext(),
+        history: [],
+        clientMessage: "can I get a refund for this month's charge?",
+      });
+      assert.equal(result.decision?.kind, "escalate");
+      assert.equal(result.decision?.escalationReason, "out_of_authority");
+    } finally {
+      if (prevProvider === undefined) delete process.env.AI_PROVIDER;
+      else process.env.AI_PROVIDER = prevProvider;
+    }
+  }
+);
 
 // ---------------------------------------------------------------------------
 console.log("\n12. Context is bounded — never an unbounded transcript or field\n");
