@@ -25,6 +25,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { getSupabaseServerClient } from "../supabase/server";
+import { getSupabaseAdminClient } from "../supabase/admin";
 import { getAuthenticatedContext, requireWorkspaceRole, resolveOwnStaffWorkspace } from "./auth";
 import { ActivationNotReadyError } from "./errors";
 import { inviteToWorkspace } from "./invite";
@@ -298,8 +299,31 @@ export async function getOwnLifecycleStatus(): Promise<OwnLifecycleStatus> {
 // existing per-table RLS policies (already sufficient authorization on
 // their own) are used directly rather than introducing a new SECURITY
 // DEFINER function purely for atomicity this action doesn't actually need.
-// Best-effort cleanup below if a later step fails, so a half-created client
-// never lingers silently.
+//
+// Real bug fix (found live, Gate 6B testing): re-inviting an email that
+// already has a client_profiles row in this workspace used to reach
+// inviteToWorkspace, which throws on workspace_invitations'
+// pending_email_idx unique constraint — but by then client_profiles,
+// coach_client_assignments, and client_enrollments had ALL already been
+// created, and the catch block's compensating delete used the caller's own
+// RLS-bound client. client_profiles has no DELETE policy at all (grep-
+// confirmed against supabase/migrations/20260909000008_rls_policies.sql),
+// so that delete silently affected zero rows — `error` was null, so nothing
+// alerted the code that cleanup never happened. Two independent fixes:
+//
+// 1. Fail BEFORE creating anything if a client_profiles row for this email
+//    already exists in this workspace — the actual, meaningful duplicate
+//    signal (a real client record already exists), checked directly rather
+//    than waiting to hit workspace_invitations' constraint indirectly. This
+//    also covers an already-ACCEPTED invitation for the same email
+//    (workspace_invitations.status = 'accepted' would never trip the old
+//    'pending'-only constraint at all) — a case this fix incidentally
+//    closes but was never separately reported/reproduced, so it isn't
+//    separately tested here.
+// 2. If something fails AFTER client_profiles is created for any OTHER
+//    reason, the compensating delete now uses the admin (service-role)
+//    client, which bypasses RLS — restoring the cleanup this code already
+//    intended (see its own prior comment) but which never actually worked.
 // ---------------------------------------------------------------------------
 
 export async function inviteClient(params: { workspaceId: string; email: string; displayName: string; goal: string }): Promise<{ clientProfileId: string }> {
@@ -307,6 +331,29 @@ export async function inviteClient(params: { workspaceId: string; email: string;
   const supabase = await getSupabaseServerClient();
   const email = params.email.trim().toLowerCase();
 
+  const { data: existingClient, error: existingClientError } = await supabase
+    .from("client_profiles")
+    .select("id, display_name")
+    .eq("workspace_id", params.workspaceId)
+    .eq("invited_email", email)
+    .maybeSingle();
+  if (existingClientError) throw new Error(`inviteClient (duplicate check) failed: ${existingClientError.message}`);
+  if (existingClient) {
+    throw new Error(`${(existingClient.display_name as string | null) || email} has already been invited to this workspace.`);
+  }
+
+  // The check above is a SELECT-then-INSERT — real, but not by itself
+  // race-proof: two concurrent invite requests for the same brand-new email
+  // can both pass it before either commits. client_profiles_workspace_
+  // invited_email_idx (20260921000024) is the actual atomicity guarantee —
+  // a partial unique index on (workspace_id, invited_email), so Postgres
+  // itself makes it impossible for both concurrent inserts below to
+  // succeed. The losing request's insert fails with 23505 (unique_
+  // violation), caught just below and turned into the identical friendly
+  // message the pre-check above already gives the common (non-racing)
+  // case — never a raw constraint-violation string, and never a duplicate
+  // row silently created only to be rolled back afterward.
+  //
   // Live-verification finding: chaining .select().single() onto this
   // INSERT (forcing a RETURNING clause) triggers a real, reproducible
   // PostgreSQL RLS defect — confirmed against a local Postgres 17.6 stack
@@ -326,7 +373,16 @@ export async function inviteClient(params: { workspaceId: string; email: string;
   const { error: clientError } = await supabase
     .from("client_profiles")
     .insert({ id: clientProfileId, workspace_id: params.workspaceId, invited_email: email, display_name: params.displayName.trim() || email, goal: params.goal.trim() || null });
-  if (clientError) throw new Error(`inviteClient (client_profiles) failed: ${clientError.message}`);
+  if (clientError) {
+    if ((clientError as { code?: string }).code === "23505") {
+      // Lost the race against a concurrent invite for this exact email in
+      // this exact workspace — client_profiles_workspace_invited_email_idx
+      // is what actually caught it. No row exists from THIS request; no
+      // cleanup is needed.
+      throw new Error(`${params.displayName.trim() || email} has already been invited to this workspace.`);
+    }
+    throw new Error(`inviteClient (client_profiles) failed: ${clientError.message}`);
+  }
 
   try {
     const { error: assignmentError } = await supabase
@@ -342,10 +398,22 @@ export async function inviteClient(params: { workspaceId: string; email: string;
     await inviteToWorkspace({ workspaceId: params.workspaceId, email, role: "client" });
   } catch (err) {
     // Best-effort rollback — never leaves an orphaned client_profiles row
-    // silently on a failed invite. RLS already permits this delete (the
-    // caller just proved workspace-admin authority above), and
-    // client_profiles has no dependent rows yet at this point in the flow.
-    await supabase.from("client_profiles").delete().eq("id", clientProfileId);
+    // silently on a failed invite. Uses the ADMIN (service-role) client
+    // deliberately: client_profiles has no DELETE policy at all (by design
+    // — no client-facing code should ever delete a client record), so the
+    // caller's own RLS-bound client silently deletes zero rows here, which
+    // is the exact defect this fix addresses (see this function's own
+    // module doc). coach_client_assignments/client_enrollments both
+    // reference client_profiles with ON DELETE CASCADE, so deleting the one
+    // row here correctly removes all three.
+    const admin = getSupabaseAdminClient();
+    const { error: cleanupError, count } = await admin.from("client_profiles").delete({ count: "exact" }).eq("id", clientProfileId);
+    if (cleanupError || count !== 1) {
+      // The ORIGINAL error is still what the caller needs to see — a failed
+      // cleanup must never mask it, only be visible in server logs for
+      // whoever investigates an orphaned row.
+      console.error(`inviteClient rollback failed for client_profiles id=${clientProfileId}: ${cleanupError?.message ?? `expected to delete 1 row, deleted ${count}`}`);
+    }
     throw err;
   }
 
