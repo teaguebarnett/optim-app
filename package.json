@@ -63,6 +63,7 @@
     "verify:plan-presentation": "node --experimental-strip-types lib/coach/verify-plan-presentation.mts",
     "verify:communications-contracts": "node --experimental-strip-types lib/communications/verify-communications-contracts.mts",
     "verify:import-contracts": "node --experimental-strip-types lib/imports/verify-import-contracts.mts",
+    "verify:csv-parsing": "node --experimental-strip-types lib/imports/verify-csv-parsing.mts",
     "verify:training-grammar": "node --experimental-strip-types lib/training/verify-training-grammar.mts",
     "verify:legacy-adapter": "node --experimental-strip-types lib/training/verify-legacy-adapter.mts",
     "verify:universal-execution": "node --experimental-strip-types lib/workout/verify-universal-execution.mts",

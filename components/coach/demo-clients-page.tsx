@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/coach/page-header";
 import { ClientRosterTable } from "@/components/coach/client-roster-table";
 import { ClientRosterMobileList } from "@/components/coach/client-roster-mobile-list";
 import { AddClientSheet } from "@/components/coach/add-client-sheet";
+import { AddClientEntrySheet } from "@/components/coach/add-client-entry-sheet";
 import { LIFECYCLE_LABELS } from "@/lib/coach/labels";
 import { useCoachWorkspace } from "@/hooks/use-coach-data";
 import { buildRosterRows, type RosterRow } from "@/lib/coach/roster";
@@ -50,6 +51,7 @@ function matchesFilter(row: RosterRow, filter: FilterValue): boolean {
 export function DemoClientsPage() {
   const workspace = useCoachWorkspace();
   const searchParams = useSearchParams();
+  const [entryOpen, setEntryOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [query, setQuery] = useState("");
   const initialFilter = searchParams.get("filter");
@@ -92,7 +94,7 @@ export function DemoClientsPage() {
         title="Clients"
         description="Every client assigned to you in this workspace."
         action={
-          <Button onClick={() => setAddOpen(true)}>
+          <Button onClick={() => setEntryOpen(true)}>
             <UserPlus size={16} /> Add client
           </Button>
         }
@@ -150,6 +152,7 @@ export function DemoClientsPage() {
         </>
       )}
 
+      <AddClientEntrySheet open={entryOpen} onClose={() => setEntryOpen(false)} onStartNewClient={() => setAddOpen(true)} />
       <AddClientSheet open={addOpen} onClose={() => setAddOpen(false)} />
     </div>
   );

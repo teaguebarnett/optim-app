@@ -29,10 +29,13 @@ interface AddClientEntrySheetProps {
  * real client_profiles + coach_client_assignments + client_enrollments row
  * and a real Auth invitation email) — this component never knows or cares
  * which. "Import existing client(s)" navigates to /coach/clients/import,
- * the same one real (currently non-activating) placeholder for both modes
- * — never a per-mode duplicate. Staging, review, and activation are Gates
- * 6B-6D, not this one. Neither choice here creates, invites, or activates
- * anything by itself — this sheet only routes.
+ * the same one real (never invitation- or activation-triggering) page for
+ * both modes — never a per-mode duplicate. Gate 6B built the real,
+ * workspace-bound staging flow there (upload, review, correct); review
+ * and correction are staging-scoped only — activation is still a later
+ * gate's work (see lib/production/imports.ts's own doc). Neither choice
+ * here creates, invites, or activates anything by itself — this sheet
+ * only routes.
  */
 export function AddClientEntrySheet({ open, onClose, onStartNewClient }: AddClientEntrySheetProps) {
   const router = useRouter();
