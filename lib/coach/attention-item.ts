@@ -107,6 +107,13 @@ export interface AttentionItem {
 export interface CoachAttentionInbox {
   workspaceId: string;
   coachDisplayName: string;
+  /** The real account id backing this coach — in Supabase mode the actual
+   * auth.users id, in demo mode the seeded coach's own id. Added so
+   * app/coach/layout.tsx can pass a real, stable per-account id down to
+   * CoachShell's theme persistence (lib/shared/theme-preference.ts scopes
+   * a stored appearance choice to exactly this id) — see coach-shell.tsx's
+   * own doc on why the Supabase-mode render branch needs it. */
+  coachUserId: string;
   open: AttentionItem[];
   resolved: AttentionItem[];
 }

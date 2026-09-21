@@ -44,11 +44,11 @@ export default async function CoachLayout({ children }: { children: ReactNode })
   // <CoachShell> here would never be caught by a try/catch wrapping its
   // construction anyway (see the react-hooks/error-boundaries rule this
   // avoids). Only the real awaited async call below needs catching.
-  let identity: { coachDisplayName: string; openAttentionCount: number } | null = null;
+  let identity: { coachDisplayName: string; openAttentionCount: number; coachUserId: string } | null = null;
   let accessError: unknown = null;
   try {
     const inbox = await getCoachOperationsRepository().getAttentionInbox();
-    identity = { coachDisplayName: inbox.coachDisplayName, openAttentionCount: inbox.open.length };
+    identity = { coachDisplayName: inbox.coachDisplayName, openAttentionCount: inbox.open.length, coachUserId: inbox.coachUserId };
   } catch (err) {
     accessError = err;
   }

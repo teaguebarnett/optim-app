@@ -123,10 +123,15 @@ export function isWorkspaceStaffRole(role: ProductionRole): boolean {
  * now shared here since both need exactly the same "which workspace, as
  * which coach" answer). A coach who somehow holds staff membership in more
  * than one workspace gets the first one deterministically; every coach
- * surface in the app is scoped to one workspace at a time by design. */
-export async function resolveOwnStaffWorkspace(): Promise<{ workspaceId: string; coachDisplayName: string }> {
+ * surface in the app is scoped to one workspace at a time by design.
+ *
+ * `coachUserId` (added alongside a coach-shell theme-persistence fix) is
+ * the real authenticated auth.users id — the same id lib/shared/
+ * theme-preference.ts scopes a stored appearance choice to. Additive: every
+ * existing caller destructures only the fields it already used. */
+export async function resolveOwnStaffWorkspace(): Promise<{ workspaceId: string; coachDisplayName: string; coachUserId: string }> {
   const ctx = await getAuthenticatedContext();
   const staff = ctx.memberships.find((m) => isWorkspaceStaffRole(m.role));
   if (!staff) throw new UnauthorizedError("The current session holds no coach/owner membership in any workspace.");
-  return { workspaceId: staff.workspaceId, coachDisplayName: ctx.profile.displayName };
+  return { workspaceId: staff.workspaceId, coachDisplayName: ctx.profile.displayName, coachUserId: ctx.userId };
 }

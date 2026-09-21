@@ -79,7 +79,7 @@ export function CoachShell({
   /** Only meaningful (and only ever passed) in Supabase mode — real
    * identity resolved server-side by app/coach/layout.tsx. Undefined in
    * demo mode, where this component reads the demo hooks below instead. */
-  supabaseIdentity?: { coachDisplayName: string; openAttentionCount: number };
+  supabaseIdentity?: { coachDisplayName: string; openAttentionCount: number; coachUserId: string };
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -116,10 +116,20 @@ export function CoachShell({
     router.replace("/coach-onboarding");
   }, [appMode, isGenuinelyNewCoach, router]);
 
+  // Gate 6B fix — this branch never wrapped its own JSX in
+  // RequireThemeChoice, so a coach's stored appearance preference could
+  // never take effect on any Supabase-mode /coach/* route (confirmed live:
+  // document.documentElement.dataset.theme stayed undefined regardless of
+  // localStorage). coachUserId (added to CoachAttentionInbox /
+  // resolveOwnStaffWorkspace alongside this fix) is the real auth.users id
+  // theme persistence needs to scope a preference to the actual signed-in
+  // account, exactly like the demo branch below already does with its own
+  // coachAccountId.
   if (appMode === "supabase") {
-    const identity = supabaseIdentity ?? { coachDisplayName: "Coach", openAttentionCount: 0 };
+    const identity = supabaseIdentity ?? { coachDisplayName: "Coach", openAttentionCount: 0, coachUserId: "" };
     const supabaseBadges = { "/coach/escalations": identity.openAttentionCount };
     return (
+      <RequireThemeChoice accountKind="coach" accountId={identity.coachUserId}>
       <div className="flex min-h-screen flex-col bg-near-black">
         <header className="sticky top-0 z-30 hidden border-b border-border bg-charcoal/95 backdrop-blur-md md:block">
           <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-6 px-8">
@@ -174,6 +184,7 @@ export function CoachShell({
 
         <CoachBottomNav items={SUPABASE_NAV_ITEMS} badgeCounts={supabaseBadges} showMore={false} />
       </div>
+      </RequireThemeChoice>
     );
   }
 

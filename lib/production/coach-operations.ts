@@ -80,6 +80,7 @@ class DemoCoachOperationsRepository implements CoachOperationsRepository {
     return {
       workspaceId: ctx.workspace.id,
       coachDisplayName: ctx.user.displayName,
+      coachUserId: coachId,
       open: mapped.filter((item) => item.status !== "resolved"),
       resolved: mapped.filter((item) => item.status === "resolved"),
     };
@@ -92,7 +93,7 @@ class DemoCoachOperationsRepository implements CoachOperationsRepository {
  * backstop, not the primary gate — see that file's own module doc). */
 class SupabaseCoachOperationsRepository implements CoachOperationsRepository {
   async getAttentionInbox(): Promise<CoachAttentionInbox> {
-    const { workspaceId, coachDisplayName } = await resolveOwnStaffWorkspace();
+    const { workspaceId, coachDisplayName, coachUserId } = await resolveOwnStaffWorkspace();
     const [open, resolved, pendingAdjustments] = await Promise.all([
       getWorkspaceEscalations(workspaceId, ["pending", "proposed", "approved", "coach_responded"]),
       getWorkspaceEscalations(workspaceId, ["resolved"]),
@@ -108,6 +109,7 @@ class SupabaseCoachOperationsRepository implements CoachOperationsRepository {
     return {
       workspaceId,
       coachDisplayName,
+      coachUserId,
       open: openItems,
       resolved: resolved.map(attentionItemFromEscalation),
     };
