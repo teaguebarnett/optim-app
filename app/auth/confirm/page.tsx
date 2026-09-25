@@ -25,11 +25,12 @@
 //   exchange against.
 //
 // So this page — not a Route Handler — is the only place that can
-// correctly handle any of these. It tries, in order: implicit fragment
-// tokens, a PKCE `code`, then explicit `token_hash`+`type` (kept for local
-// dev's own custom templates, and forward-compatible if hosted ever gets
-// custom SMTP later). Whichever one actually has data wins; the others are
-// simply absent.
+// correctly handle any of these. It checks, in order: GoTrue's own
+// error/error_code/error_description (an expired or already-used link —
+// see below), implicit fragment tokens, a PKCE `code`, then explicit
+// `token_hash`+`type` (kept for local dev's own custom templates, and
+// forward-compatible if hosted ever gets custom SMTP later). Whichever one
+// actually has data wins; the others are simply absent.
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -64,17 +65,36 @@ function AuthConfirmPageInner() {
     // finds on creation; reading it first here means this page's own
     // handling is never racing that.
     const rawHash = window.location.hash;
+    const hashParams = new URLSearchParams(rawHash.replace(/^#/, ""));
     const invitationId = searchParams.get("invitation");
     const next = searchParams.get("next") ?? "/auth/account";
     const code = searchParams.get("code");
     const tokenHash = searchParams.get("token_hash");
     const type = searchParams.get("type") as EmailOtpType | null;
 
+    // GoTrue's own /verify endpoint redirects a rejected link (expired,
+    // already used, or otherwise invalid) here with `error`/`error_code`/
+    // `error_description` — present in BOTH the query string and the hash
+    // (confirmed live against a real expired/invalid token: GoTrue puts the
+    // identical error trio in each). Checked first, before any of the
+    // success-path branches below: none of those ever have real data when
+    // this is present, and surfacing GoTrue's own real reason (e.g. "Email
+    // link is invalid or has expired") is the whole point of this check —
+    // silently falling through to this page's own generic "missing_token"
+    // instead (the previous bug here) means every real cause looks
+    // identical and undiagnosable from the outside.
+    const errorDescription = searchParams.get("error_description") ?? hashParams.get("error_description");
+    const errorCode = searchParams.get("error_code") ?? hashParams.get("error_code");
+
     (async () => {
       const supabase = getSupabaseBrowserClient();
 
       try {
-        const hashParams = new URLSearchParams(rawHash.replace(/^#/, ""));
+        if (errorDescription || errorCode) {
+          router.replace(`/auth/error?reason=${encodeURIComponent(errorDescription ?? errorCode ?? "Sign-in link error.")}`);
+          return;
+        }
+
         const accessToken = hashParams.get("access_token");
         const refreshToken = hashParams.get("refresh_token");
 
