@@ -1,0 +1,41 @@
+-- optim-beta hosted-parity fix — service_role has no Data API table grants.
+--
+-- Every prior migration in this schema grants `authenticated` its table
+-- access explicitly (20260909000008's blanket grant + its own
+-- `alter default privileges ... to authenticated`, mirrored per-table
+-- afterwards), on the correct assumption that a real hosted project with
+-- "Automatically expose new tables" disabled will not auto-grant anything.
+-- `service_role` was never given the same treatment, because on a fresh
+-- local `supabase start` (where that dashboard toggle defaults to *on*,
+-- config.toml's own `auto_expose_new_tables` comment confirms this "matches
+-- the cloud default") the local stack auto-grants service_role full
+-- SELECT/INSERT/UPDATE/DELETE on every table for free, silently masking the
+-- gap in every previous `supabase test db` run.
+--
+-- Reproduced directly against a disposable local project started with
+-- `auto_expose_new_tables = false` (i.e. optim-beta's real hosted setting):
+-- `set role service_role; select count(*) from public.workspaces;` fails
+-- with `ERROR: permission denied for table workspaces` — on literally every
+-- table, old and new alike, not just tables created after 20260909000008.
+-- `service_role` carries BYPASSRLS (confirmed separately: RLS policy
+-- evaluation is not the failure here), but BYPASSRLS only skips row-level
+-- security — it has never skipped the ordinary GRANT system, and on
+-- optim-beta nothing ever granted these privileges to begin with.
+--
+-- This is a real, immediate blocker for the invite-only beta: every
+-- server-only privileged path that uses lib/supabase/admin.ts's
+-- service-role client (lib/production/invite.ts, roster.ts, chat.ts,
+-- platform-operations.ts — reading/writing workspaces, client_profiles,
+-- coach_playbooks, conversations, conversation_messages, escalations, and
+-- more) would fail with the same permission-denied error on optim-beta
+-- today.
+--
+-- No per-table narrowing here, unlike `authenticated`'s DELETE revokes in
+-- 20260909000008/since: service_role is the trusted, server-only,
+-- RLS-bypassing path by construction (see lib/supabase/admin.ts's own
+-- "server-only guarded" header) — it needs the same full latitude on every
+-- table that the local dev default silently gave it, including DELETE
+-- (roster.ts's cleanupUnusedClientProfile genuinely deletes a
+-- client_profiles row through this exact client).
+grant select, insert, update, delete on all tables in schema public to service_role;
+alter default privileges in schema public grant select, insert, update, delete on tables to service_role;
