@@ -68,17 +68,26 @@ content can never change; a real edit creates a new version row.
 
 ## 3. Auth and invitation flow
 
-- **Routine sign-in**: `app/auth/sign-in` — six-digit email OTP.
-  `signInWithOtp({ email, options: { shouldCreateUser: false } })`. A
-  generic sign-in attempt against an email with no account **cannot**
-  create one.
-- **Invitation acceptance**: `app/auth/confirm/route.ts` — verifies the
-  magic-link `token_hash`, establishes a session, then (if the link carries
-  our own `?invitation=<id>` param) calls
-  `public.accept_invitation(invitation_id)`, a SECURITY DEFINER Postgres
-  function that matches the invitation's email against the caller's own
-  authenticated email before creating the `workspace_memberships` row —
-  see `20260909000010_accept_invitation.sql`.
+- **Routine sign-in**: `app/auth/sign-in` — email sign-in link (not a typed
+  code — hosted has no custom SMTP, so its stock magic-link email never
+  shows one). `signInWithOtp({ email, options: { shouldCreateUser: false,
+  emailRedirectTo } } )`. A generic sign-in attempt against an email with no
+  account **cannot** create one.
+- **Callback handling**: `app/auth/confirm/page.tsx` — a Client Component,
+  not a Route Handler, because it has to handle three different formats
+  depending on what actually sent the link: an implicit-flow URL fragment
+  (`#access_token=...`, which only client-side JS can ever read — GoTrue's
+  stock invite template uses this), a PKCE `?code=` (which
+  `@supabase/ssr`'s browser client forces for anything it initiates, like
+  `signInWithOtp` — see `lib/supabase/browser.ts`'s own doc for why
+  `detectSessionInUrl` is off and `experimental.appendPkceFlowIdToRedirects`
+  is on), or an explicit `token_hash`+`type` (this repo's own custom local
+  templates). Establishes the session client-side, then (if the link
+  carries our own `?invitation=<id>` param) calls the `acceptInvitationAction`
+  Server Action, which wraps `public.accept_invitation(invitation_id)`, a
+  SECURITY DEFINER Postgres function that matches the invitation's email
+  against the caller's own authenticated email before creating the
+  `workspace_memberships` row — see `20260909000010_accept_invitation.sql`.
 - **The only two code paths that can create a new Supabase Auth user**:
   1. `lib/production/invite.ts`'s `inviteToWorkspace` — requires the caller
      to already hold `workspace_owner`/`platform_admin` in the target
@@ -210,13 +219,23 @@ anything — this is guidance for when Teague does that himself.
    all four Supabase variables pointed at the real production Supabase
    project. Do **not** deploy to Production with `APP_MODE` unset or
    `demo` — the app will refuse to start (§1).
-4. **Custom SMTP is required before any real invitation email can send.**
-   Supabase's default email sending is rate-limited and intended for
-   testing only — see Supabase Dashboard → Project Settings → Auth →
-   SMTP Settings. This must be configured before running
-   `scripts/bootstrap-workspace.mts` or `inviteToWorkspace` against the
-   real project, or invitation emails will not reliably arrive.
-5. Confirm in the Supabase Dashboard (Project Settings → API) that the
+4. **Custom SMTP is not required.** Supabase's default email sending works
+   fine for invite/sign-in emails — it's rate-limited, which matters for a
+   high-volume product but not this pilot's scale — and Auth's Email
+   Templates (which need custom SMTP to unlock) are never relied on:
+   `app/auth/confirm/page.tsx` handles whatever format the stock default
+   templates actually send (see §3). If custom SMTP ever is added later,
+   nothing here needs to change — that page already handles the explicit
+   `token_hash` format this repo's own custom local-dev templates use too.
+5. **Auth → URL Configuration**: Site URL must be the deployed app's own
+   origin (e.g. `https://<your-site>`). Redirect URLs must include that
+   origin as a **wildcard** (`https://<your-site>/**`), not an exact-path
+   entry — `lib/supabase/browser.ts`'s `appendPkceFlowIdToRedirects` flag
+   appends `&sb_flow_id=...` to every PKCE redirect, and Supabase's
+   allow-list matches the full URL including the query string, so an exact
+   `/auth/confirm` entry stops matching the moment that parameter is
+   appended.
+6. Confirm in the Supabase Dashboard (Project Settings → API) that the
    **exposed schemas** for the Data API list only `public` (and `storage`)
    — never `app_private`. The migrations revoke all grants on that schema
    from every API-facing role, but this is worth a manual confirmation

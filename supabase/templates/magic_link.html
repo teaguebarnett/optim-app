@@ -1,15 +1,16 @@
 <!--
-  Phase 6.0A-V live-run fix. app/auth/sign-in/page.tsx asks the user to
-  type in "the 6-digit code sent to {email}" and verifies it with
-  supabase.auth.verifyOtp({ token: code, type: "email" }) — but the stock
-  `supabase init` default magic-link template only ever renders a
-  clickable {{ .ConfirmationURL }} link, never the underlying {{ .Token }}
-  GoTrue also generates for the same request. A real user following the
-  UI as designed would have had no code to type in. This template surfaces
-  the code the app actually asks for; the link is kept as a secondary,
-  equally valid way in for anyone who'd rather click through.
+  app/auth/sign-in/page.tsx no longer asks for a typed code — see that
+  file's own doc: hosted optim-beta has no custom SMTP, so its stock
+  magic-link email never shows one, and asking for a code that mail never
+  delivers would be wrong. This local-dev template is updated to match: a
+  link only, built the same explicit token_hash+type way
+  invite.html already uses, exchanged by app/auth/confirm/page.tsx via
+  supabase.auth.verifyOtp — not {{ .ConfirmationURL }}, which routes
+  through GoTrue's own hosted verify endpoint and back with the session as
+  a PKCE `?code=` (since @supabase/ssr's browser client hardcodes
+  flowType: "pkce" — see app/auth/confirm/page.tsx), unnecessarily tying
+  the link to the same browser that requested it.
 -->
-<h2>Your OPTIM sign-in code</h2>
-<p style="font-size: 32px; font-weight: 600; letter-spacing: 4px;">{{ .Token }}</p>
-<p>Enter this code at the sign-in screen. It expires shortly and can only be used once.</p>
-<p>Prefer to click through instead? <a href="{{ .ConfirmationURL }}">Sign in</a>.</p>
+<h2>Your OPTIM sign-in link</h2>
+<p><a href="{{ .RedirectTo }}&token_hash={{ .TokenHash }}&type=email">Sign in to OPTIM</a></p>
+<p>This link expires shortly and can only be used once.</p>

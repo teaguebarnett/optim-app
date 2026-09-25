@@ -263,23 +263,24 @@ enable_signup = true
 
 # Phase 6.0D-B live-verification fix: the stock default invite template's
 # {{ .ConfirmationURL }} points at GoTrue's own hosted implicit-flow verify
-# endpoint (fragment tokens), which app/auth/confirm/route.ts — a real
-# Next.js server route — can never consume (a URL fragment never reaches
-# the server). Confirmed live: a client invited through the real app could
-# not actually accept their own invitation without this fix. See
+# endpoint (fragment tokens) — a real client invited through the app
+# couldn't accept their own invitation without this fix, since a URL
+# fragment never reaches any server. app/auth/confirm/page.tsx (a client
+# page, not a Route Handler — see its own doc) does now handle that stock
+# format too, but this explicit token_hash link avoids it needing to. See
 # supabase/templates/invite.html's own header for the full story.
 [auth.email.template.invite]
 subject = "You've been invited to OPTIM"
 content_path = "./supabase/templates/invite.html"
 
-# Phase 6.0A-V live-run fix: app/auth/sign-in/page.tsx's UI asks the user
-# for "the 6-digit code sent to {email}" — the stock default template for
-# this email type only shows a magic-link URL, never the {{ .Token }}
-# GoTrue also generates for the same OTP request, so a real user had no
-# code to type in as the UI actually asks for. See
-# supabase/templates/magic_link.html.
+# Sept 2026 hosted-sign-in fix: hosted optim-beta has no custom SMTP, so its
+# stock magic-link email never shows a typed code — app/auth/sign-in/
+# page.tsx no longer asks for one (see that file's own doc). This local-dev
+# template matches: a link only, same explicit token_hash format
+# invite.html uses, exchanged by app/auth/confirm/page.tsx via
+# supabase.auth.verifyOtp.
 [auth.email.template.magic_link]
-subject = "Your OPTIM sign-in code"
+subject = "Your OPTIM sign-in link"
 content_path = "./supabase/templates/magic_link.html"
 
 # Uncomment to customize notification email template
