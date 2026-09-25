@@ -13,7 +13,9 @@ import {
   AI_AUTHORITY_LEVELS,
   AI_AUTHORITY_LEVEL_DESCRIPTIONS,
   AI_AUTHORITY_LEVEL_LABELS,
+  type AiAuthorityConfig,
   type AiAuthorityLevel,
+  type CoachAiAuthoritySettings,
 } from "@/lib/coach/ai-authority";
 import { cn } from "@/lib/cn";
 
@@ -39,9 +41,25 @@ const LEVEL_POSITIONS = AI_AUTHORITY_LEVELS.map((level) => ({ value: level, labe
  * its existing zero-friction behavior: there's no established baseline to
  * protect during initial calibration, only during later, deliberate edits
  * from Settings.
+ *
+ * Gate 6C — `override` lets a Supabase-mode caller (see
+ * components/coach/live-ai-authority-panel.tsx) supply the real,
+ * workspace-scoped settings/setGlobal instead of this component's own
+ * demo-only useAiAuthority() hook, without duplicating the slider/advanced-
+ * overrides UI. useAiAuthority() is still called unconditionally (React's
+ * rules of hooks forbid a conditional call); its result is simply unused
+ * whenever override is provided.
  */
-export function AiAuthorityPanel({ confirmChanges = false }: { confirmChanges?: boolean } = {}) {
-  const { settings, setGlobal } = useAiAuthority();
+export function AiAuthorityPanel({
+  confirmChanges = false,
+  override,
+}: {
+  confirmChanges?: boolean;
+  override?: { settings: CoachAiAuthoritySettings; setGlobal: (config: AiAuthorityConfig) => void };
+} = {}) {
+  const demo = useAiAuthority();
+  const settings = override?.settings ?? demo.settings;
+  const setGlobal = override?.setGlobal ?? demo.setGlobal;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // Live preview while dragging/keying through the global slider, before
   // the value actually commits — see DiscreteSlider's onPreviewChange doc.

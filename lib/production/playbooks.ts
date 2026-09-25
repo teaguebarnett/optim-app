@@ -11,6 +11,7 @@ import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } f
 import { UnauthorizedError } from "./errors.ts";
 import { validatePlaybookContent } from "./validation.ts";
 import { buildDefaultPlaybookContent, type CoachPlaybook, type CoachPlaybookContent, type PlaybookExample } from "../coach/playbook.ts";
+import type { AiAuthorityConfig } from "../coach/ai-authority.ts";
 
 async function requireCoachAuthority(workspaceId: string) {
   const ctx = await getAuthenticatedContext();
@@ -164,6 +165,35 @@ export async function approvePlaybookVersion(params: { workspaceId: string; vers
     .eq("id", params.versionId)
     .eq("workspace_id", params.workspaceId);
   if (error) throw new Error(`approvePlaybookVersion failed: ${error.message}`);
+}
+
+/** Updates only the workspace-wide AI Coaching Authority default on the
+ * CURRENT approved Playbook, in place — never creates a new draft/version.
+ * Every other Playbook edit (operating model, examples) goes through the
+ * draft-then-approve pipeline above because those change coaching
+ * methodology; the AI authority default is a permissions dial with
+ * immediate effect in demo mode too (see AiAuthorityPanel's own doc —
+ * "Domain overrides stay immediate"), so this mirrors that: authorized,
+ * scoped, immediate, no version bump. */
+export async function updateApprovedPlaybookAiAuthorityGlobal(params: { workspaceId: string; config: AiAuthorityConfig }): Promise<CoachPlaybook> {
+  await requireCoachAuthority(params.workspaceId);
+  const current = await getApprovedPlaybook(params.workspaceId);
+  if (!current) throw new Error("updateApprovedPlaybookAiAuthorityGlobal: no approved Playbook exists for this workspace");
+
+  const supabase = await getSupabaseServerClient();
+  const nextContent: CoachPlaybookContent = {
+    ...current.content,
+    aiAuthority: { ...current.content.aiAuthority, global: params.config, updatedAtIso: new Date().toISOString() },
+  };
+  const { data, error } = await supabase
+    .from("coach_playbooks")
+    .update({ content: nextContent })
+    .eq("id", current.id)
+    .eq("workspace_id", params.workspaceId)
+    .select("id, workspace_id, version, status, content, created_by, created_at, approved_by, approved_at")
+    .single();
+  if (error) throw new Error(`updateApprovedPlaybookAiAuthorityGlobal failed: ${error.message}`);
+  return rowToPlaybook(data as PlaybookRow);
 }
 
 /** "Resolved decisions become future context for that client and may
