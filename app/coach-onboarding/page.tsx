@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
@@ -23,6 +24,14 @@ import { ALL_CHAPTER_IDS_IN_ORDER, type CoachOnboardingChapterId } from "@/lib/c
  * initialChapterId handling), never a broken or blank route.
  */
 export default function CoachOnboardingPage() {
+  return (
+    <Suspense>
+      <CoachOnboardingPageInner />
+    </Suspense>
+  );
+}
+
+function CoachOnboardingPageInner() {
   const { activeContext } = usePrototypeState();
   const searchParams = useSearchParams();
   const businessName = activeContext.branding.businessName;
