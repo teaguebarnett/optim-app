@@ -600,7 +600,14 @@ export async function assignNutritionVersionToClient(params: {
  * status to "active", and it refuses to unless a real program AND
  * nutrition assignment already exist.
  * Preserves whatever status already exists (defaults to the column's own
- * "invited" default on first insert) rather than guessing one here. */
+ * "invited" default on first insert) rather than guessing one here.
+ *
+ * Gate 6F — always marks timezone_source: 'coach_override' regardless of
+ * whether the timezone value actually changed. Submitting this form at all
+ * is the explicit coach action "preserve any explicit coach override"
+ * means: from this point on, a client's own onboarding-detected timezone
+ * (set_client_detected_timezone) will never silently replace it, even if
+ * the client re-answers their "about you" chapter later. */
 export async function setClientProgramStartDate(params: {
   workspaceId: string;
   clientProfileId: string;
@@ -622,6 +629,7 @@ export async function setClientProgramStartDate(params: {
       client_profile_id: params.clientProfileId,
       original_program_start_date: params.startDateIso,
       timezone: params.timeZone,
+      timezone_source: "coach_override",
       ...(existing ? {} : { status: "onboarding" }),
     },
     { onConflict: "client_profile_id" }

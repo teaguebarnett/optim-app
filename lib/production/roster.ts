@@ -186,6 +186,7 @@ export interface LiveClientDetail {
   archived: boolean;
   startDateIso: string | null;
   timezone: string;
+  hasConfirmedTimezone: boolean;
   onboarding: { currentStepIndex: number; answers: unknown; completedAtIso: string | null } | null;
   activeProgram: { versionId: string; versionNumber: number; name: string; durationWeeks: number } | null;
   activeNutrition: { versionId: string; versionNumber: number } | null;
@@ -213,7 +214,7 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
   const [{ data: enrollment }, { data: onboarding }, program, nutrition] = await Promise.all([
     supabase
       .from("client_enrollments")
-      .select("status, original_program_start_date, timezone, archived_at")
+      .select("status, original_program_start_date, timezone, timezone_source, archived_at")
       .eq("client_profile_id", clientProfileId)
       .maybeSingle(),
     supabase
@@ -242,6 +243,7 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
     archived: !!enrollment?.archived_at,
     startDateIso: (enrollment?.original_program_start_date as string | null) ?? null,
     timezone: (enrollment?.timezone as string) || "UTC",
+    hasConfirmedTimezone: !!enrollment?.timezone_source,
     onboarding: onboarding ? { currentStepIndex: onboarding.current_step_index as number, answers: onboarding.answers, completedAtIso: onboarding.completed_at as string | null } : null,
     activeProgram: program ? { versionId: program.versionId, versionNumber: program.versionNumber, name: program.content.name, durationWeeks: program.content.durationWeeks } : null,
     activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber } : null,
@@ -462,12 +464,25 @@ export async function activateClientEnrollment(params: { workspaceId: string; cl
   const supabase = await getSupabaseServerClient();
   const { data: enrollment, error: enrollmentReadError } = await supabase
     .from("client_enrollments")
-    .select("original_program_start_date")
+    .select("original_program_start_date, timezone_source")
     .eq("client_profile_id", params.clientProfileId)
     .maybeSingle();
   if (enrollmentReadError) throw new Error(`activateClientEnrollment (read) failed: ${enrollmentReadError.message}`);
   if (!program || !nutrition || !enrollment?.original_program_start_date) {
     throw new ActivationNotReadyError("Cannot activate: this client needs a start date, an assigned program, and an assigned nutrition plan first.");
+  }
+  // Gate 6F — timezone_source is null only when NEITHER the client's own
+  // browser-detected timezone (set_client_detected_timezone, fired from
+  // their "about you" onboarding chapter) NOR an explicit coach override
+  // (setClientProgramStartDate) has ever been recorded — e.g. the client's
+  // browser detection genuinely failed. Every one of this client's
+  // date-derived activity (daily_records, "today") would silently compute
+  // against the raw 'UTC' schema default otherwise, exactly the bug this
+  // gate closes. Refuses activation rather than guessing.
+  if (!enrollment.timezone_source) {
+    throw new ActivationNotReadyError(
+      "Cannot activate: no confirmed timezone for this client yet (their browser detection may have failed) — set one from their start date above first."
+    );
   }
   const { error } = await supabase.from("client_enrollments").update({ status: "active" }).eq("client_profile_id", params.clientProfileId);
   if (error) throw new Error(`activateClientEnrollment failed: ${error.message}`);

@@ -85,7 +85,8 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
   const week = answers.your_week;
   const start = answers.starting_point;
 
-  const readyToActivate = !!detail.startDateIso && !!detail.activeProgram && !!detail.activeNutrition && detail.lifecycle !== "active";
+  const readyToActivate = !!detail.startDateIso && !!detail.activeProgram && !!detail.activeNutrition && detail.hasConfirmedTimezone && detail.lifecycle !== "active";
+  const blockedOnTimezoneOnly = !!detail.startDateIso && !!detail.activeProgram && !!detail.activeNutrition && !detail.hasConfirmedTimezone && detail.lifecycle !== "active";
 
   async function revalidate() {
     "use server";
@@ -278,6 +279,9 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
             <form action={activate}>
               <Button type="submit" size="sm">Activate client</Button>
             </form>
+          ) : null}
+          {blockedOnTimezoneOnly ? (
+            <p className="text-sm text-neutral">Cannot activate: no confirmed timezone yet — set one from the start date field above first.</p>
           ) : null}
           {detail.lifecycle === "active" ? (
             <form action={lifecycleAction.bind(null, "pause")}>

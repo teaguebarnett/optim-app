@@ -113,6 +113,25 @@ export async function saveOnboardingStep(params: {
     .select("current_step_index, answers, completed_at, updated_at, workspace_id")
     .single();
   if (error) throw new Error(`saveOnboardingStep failed: ${error.message}`);
+
+  // Gate 6F — the "about_you" chapter is where the wizard collects the
+  // client's own browser-detected IANA timezone (see
+  // components/onboarding/onboarding-wizard.tsx's timezone_confirm field,
+  // defaulted from lib/shared/timezone.ts's detectTimeZone()). This is the
+  // one write a client is allowed to make to client_enrollments — routed
+  // through the set_client_detected_timezone SECURITY DEFINER function
+  // (never a direct table write; RLS keeps that table staff-only), which
+  // itself never overwrites a coach's own explicit override. Best-effort:
+  // the client's real onboarding answers above are already safely
+  // persisted regardless of whether this secondary sync succeeds.
+  if (params.stepId === "about_you") {
+    const timeZone = (params.answers as { timeZone?: unknown }).timeZone;
+    if (typeof timeZone === "string" && timeZone) {
+      const { error: tzError } = await supabase.rpc("set_client_detected_timezone", { p_time_zone: timeZone });
+      if (tzError) console.error(`saveOnboardingStep: set_client_detected_timezone failed: ${tzError.message}`);
+    }
+  }
+
   return rowToProgress(data, identity.clientProfileId, data.workspace_id as string);
 }
 
