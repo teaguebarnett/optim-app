@@ -3,7 +3,7 @@ import { buildWorkoutSummary } from "./workout-analysis.ts";
 import { CLIENT_PROFILE_DEMO, WORKSPACE_OPTIM_ID, resolveAssignedCoachId } from "./tenancy/seed.ts";
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "./tenancy/types";
 import { setTrainingStatus, setTrainingTime } from "./planning/training-plan.ts";
-import type { TrainingDaySnapshot, NutritionDaySnapshot } from "./history/types";
+import type { TrainingDaySnapshot, NutritionDaySnapshot, WeightSnapshot } from "./history/types";
 import type { DailyTrainingPlan } from "./planning/types";
 import { buildDefaultProgramEnrollmentFor, buildDemoDefaultProgramEnrollment } from "./scheduling/enrollment.ts";
 import { resolveClientLocalDateIso } from "./shared/local-date.ts";
@@ -459,7 +459,7 @@ function clampCardioDurationMin(value: number): number {
 
 export type Action =
   | { type: "HYDRATE"; payload: AppState }
-  | { type: "HYDRATE_SUPABASE_ACTIVITY"; training: TrainingDaySnapshot; nutrition: NutritionDaySnapshot }
+  | { type: "HYDRATE_SUPABASE_ACTIVITY"; training: TrainingDaySnapshot; nutrition: NutritionDaySnapshot; weight?: WeightSnapshot }
   | { type: "SET_MORNING_WEIGHT"; weightLb: number }
   | { type: "SKIP_MORNING_WEIGHT" }
   | { type: "SELECT_MEAL_OPTION"; period: MealPeriod; optionId: string }
@@ -927,6 +927,11 @@ export function reducer(state: AppState, action: Action): AppState {
           exerciseLogs,
         },
         meals: { ...state.meals, ...action.nutrition.meals },
+        // Absent only on a row persisted before this field existed, or a
+        // day the client never touched the check-in — state.morningWeight's
+        // own createInitialState default (never logged) is exactly right
+        // for that case, so this only ever overrides it with a real value.
+        morningWeight: action.weight ?? state.morningWeight,
       };
     }
 

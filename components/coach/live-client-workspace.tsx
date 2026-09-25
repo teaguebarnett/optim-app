@@ -405,6 +405,11 @@ function RecentActivityDayRow({ day, timeZone }: { day: RecentActivityDay; timeZ
           ))}
         </ul>
       ) : null}
+      {day.weightLb !== null ? (
+        <p className="text-neutral">
+          Weight logged — {day.weightLb} lb{day.weightLoggedAtIso ? ` · ${formatInstantForClient(day.weightLoggedAtIso, timeZone)}` : ""}
+        </p>
+      ) : null}
     </div>
   );
 }

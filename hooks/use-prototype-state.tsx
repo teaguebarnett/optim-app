@@ -237,7 +237,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
         dispatch({ type: "START_WORKOUT" });
       }
       if (result.dailyActivity) {
-        dispatch({ type: "HYDRATE_SUPABASE_ACTIVITY", training: result.dailyActivity.training, nutrition: result.dailyActivity.nutrition });
+        dispatch({ type: "HYDRATE_SUPABASE_ACTIVITY", training: result.dailyActivity.training, nutrition: result.dailyActivity.nutrition, weight: result.dailyActivity.weight });
       }
       setSupabaseContext(
         buildSupabaseActiveAppContext({
@@ -258,10 +258,15 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
   }, [appMode]);
 
   // Phase 6.0B — Supabase mode's own autosave: persists today's real
-  // { training, nutrition } snapshot (the exact same pure builder archival
-  // already trusts — see lib/history/build-daily-record.ts) via a Server
-  // Action on every state change once hydrated, instead of demo mode's
-  // saveClientAppState/localStorage below. Never runs in demo mode.
+  // { training, nutrition, weight } snapshot (the exact same pure builder
+  // archival already trusts — see lib/history/build-daily-record.ts) via a
+  // Server Action on every state change once hydrated, instead of demo
+  // mode's saveClientAppState/localStorage below. Never runs in demo mode.
+  // Gate 6E — weight was silently dropped here (only {training, nutrition}
+  // ever reached the Server Action) even though buildDailyRecordFromLiveState
+  // always computed a real weight snapshot from state.morningWeight; a
+  // client's logged check-in was lost the moment anything else re-saved
+  // that day, since this upserts the WHOLE content column, never merges.
   useEffect(() => {
     // Phase 6A — supabaseProgramNotAssigned alone used to gate this off
     // entirely for a real universal-only client (continuous or mixed
@@ -276,7 +281,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
     saveMySupabaseDailyActivityAction({
       dateIso: state.dateIso,
       programAssignmentId: null,
-      content: { training: record.training, nutrition: record.nutrition },
+      content: { training: record.training, nutrition: record.nutrition, weight: record.weight },
     }).catch((err) => {
       // A failed autosave must never be silently swallowed into "looks
       // saved" — surfaced to the console for now; a visible toast/error

@@ -5,6 +5,11 @@
 // read-only and invents nothing: every value here is read straight out of the
 // same daily_records rows that autosave already writes — no second logging
 // system, no demo/mock content.
+//
+// Gate 6E — weight joins that same read once the autosave gap that dropped
+// it (see hooks/use-prototype-state.tsx's own doc) was fixed; a row saved
+// before that fix simply has no "weight" key, which reads here as "not
+// logged," never a fabricated value.
 
 import "server-only";
 import { getSupabaseServerClient } from "../supabase/server";
@@ -31,6 +36,10 @@ export interface RecentActivityDay {
   workingSetsCompleted: number;
   workingSetsPrescribed: number;
   meals: RecentMealEntry[];
+  /** Null when the client never logged (or explicitly skipped) a weight
+   * check-in that day — never a fabricated 0. */
+  weightLb: number | null;
+  weightLoggedAtIso: string | null;
 }
 
 interface DailyRecordRow {
@@ -47,6 +56,7 @@ interface DailyRecordRow {
     nutrition?: {
       meals?: Partial<Record<MealPeriod, { macros?: { calories?: number }; completedAtIso?: string | null }>>;
     } | null;
+    weight?: { weightLb?: number | null; loggedAtIso?: string | null; skipped?: boolean } | null;
   } | null;
 }
 
@@ -89,6 +99,7 @@ export async function getRecentActivityForClient(clientProfileId: string, limit 
             completedAtIso: meal.completedAtIso ?? null,
           };
         });
+      const weight = row.content?.weight ?? null;
       return {
         dateIso: row.date_iso,
         sessionStatus: training?.sessionStatus ?? null,
@@ -98,7 +109,9 @@ export async function getRecentActivityForClient(clientProfileId: string, limit 
         workingSetsCompleted: training?.workingSetsCompleted ?? 0,
         workingSetsPrescribed: training?.workingSetsPrescribed ?? 0,
         meals,
+        weightLb: weight && !weight.skipped ? (weight.weightLb ?? null) : null,
+        weightLoggedAtIso: weight && !weight.skipped ? (weight.loggedAtIso ?? null) : null,
       };
     })
-    .filter((day) => (day.sessionStatus && day.sessionStatus !== "not-started") || day.meals.length > 0);
+    .filter((day) => (day.sessionStatus && day.sessionStatus !== "not-started") || day.meals.length > 0 || day.weightLb !== null);
 }

@@ -28,7 +28,7 @@
 
 import { InvalidPersistedContentError } from "./errors.ts";
 import type { ClientAssignedProgram, AssignedNutritionPlan, Exercise, Workout, ProgramDay, ProgramWeek } from "../types";
-import type { TrainingDaySnapshot, NutritionDaySnapshot } from "../history/types";
+import type { TrainingDaySnapshot, NutritionDaySnapshot, WeightSnapshot } from "../history/types";
 import type { CoachPlaybookContent } from "../coach/playbook";
 import type {
   UniversalTrainingProgramContent,
@@ -479,12 +479,17 @@ export function validateAssignedNutritionPlanContent(raw: unknown): AssignedNutr
 export interface DailyActivityContent {
   training: TrainingDaySnapshot;
   nutrition: NutritionDaySnapshot;
+  /** Optional — absent on any row written before this field existed, and
+   * on a day the client never touched the morning-weight check-in. Never
+   * defaulted/fabricated here; an absent value must read as "no weight
+   * recorded," never as 0 or null-with-different-meaning. */
+  weight?: WeightSnapshot;
 }
 
-/** Validates a daily_records.content payload — the { training, nutrition }
- * envelope lib/production/programs.ts writes via
+/** Validates a daily_records.content payload — the { training, nutrition,
+ * weight? } envelope lib/production/programs.ts writes via
  * lib/history/build-daily-record.ts's own pure snapshot builder. Deliberately
- * loose on the two nested snapshots themselves (they're already produced by
+ * loose on the nested snapshots themselves (they're already produced by
  * that trusted, pure, already-tested function on every write this app makes
  * — the risk this guards against is a malformed/foreign row, not a
  * legitimate write disagreeing with its own producer) — just enough
@@ -502,6 +507,11 @@ export function validateDailyActivityContent(raw: unknown): DailyActivityContent
   if (!isRecord(raw.nutrition.meals)) fail(what, `"nutrition.meals" is not an object`);
   requireArray(raw.nutrition.periodsInPlan, "nutrition.periodsInPlan", what);
   if (!isRecord(raw.nutrition.targetsSnapshot)) fail(what, `"nutrition.targetsSnapshot" is not an object`);
+  if (raw.weight !== undefined) {
+    if (!isRecord(raw.weight)) fail(what, `"weight" is not an object`);
+    if (raw.weight.weightLb !== null && typeof raw.weight.weightLb !== "number") fail(what, `"weight.weightLb" must be a number or null`);
+    if (typeof raw.weight.skipped !== "boolean") fail(what, `"weight.skipped" must be a boolean`);
+  }
   return raw as unknown as DailyActivityContent;
 }
 
