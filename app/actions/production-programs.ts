@@ -14,7 +14,7 @@
 // Supabase query inside server-only code.
 
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "../../lib/production/auth";
-import { UnauthorizedError } from "../../lib/production/errors";
+import { UnauthenticatedError, UnauthorizedError } from "../../lib/production/errors";
 import { getSupabaseServerClient } from "../../lib/supabase/server";
 import {
   getClientProgramContext,
@@ -159,7 +159,16 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
   let identity: OwnClientIdentity;
   try {
     identity = await resolveOwnClientProfile();
-  } catch {
+  } catch (err) {
+    // resolveOwnClientProfile's very first step is getAuthenticatedContext()
+    // — an unauthenticated caller must fail closed here, never be folded
+    // into the same "not_provisioned" outcome a real signed-in user with no
+    // client_profiles row gets. Before this fix, app/(client)/layout.tsx had
+    // no server-side auth gate of its own, and this catch-all was the exact
+    // reason an anonymous visitor's session ended up rendering /today with
+    // demo content instead of hitting a sign-in wall (see that layout's own
+    // doc for the full incident this closes).
+    if (err instanceof UnauthenticatedError) throw err;
     return { kind: "not_provisioned" };
   }
   const ctx = await getAuthenticatedContext();

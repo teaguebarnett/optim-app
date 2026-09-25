@@ -27,13 +27,19 @@ import "server-only";
 
 export type AppMode = "demo" | "supabase";
 
-/** True for Vercel's actual Production environment (as opposed to Preview
- * or local dev) — see https://vercel.com/docs/environment-variables/system-environment-variables,
- * VERCEL_ENV is set automatically by Vercel's build/runtime and is not
- * user-editable from the Vercel dashboard the way a plain env var is. Local
- * `next build`/`next dev` never set it, so this is false outside Vercel. */
+/** True for a real production deployment, on either host this app has
+ * actually been deployed to. VERCEL_ENV="production" is Vercel's own
+ * system env var (not user-editable, unset outside Vercel); CONTEXT="production"
+ * is Netlify's equivalent, injected into both the build and the deployed
+ * Next.js runtime by @netlify/plugin-nextjs ("deploy-preview"/"branch-deploy"
+ * are Netlify's own non-production contexts and never match here). This
+ * used to check VERCEL_ENV only — on the Netlify production deploy, that
+ * was always false, so the "production must be supabase" gate below never
+ * fired and a misconfigured/missing APP_MODE silently ran full demo mode
+ * in production. Local `next build`/`next dev` set neither var, so this
+ * stays false there. */
 function isRealProductionDeploy(): boolean {
-  return process.env.VERCEL_ENV === "production";
+  return process.env.VERCEL_ENV === "production" || process.env.CONTEXT === "production";
 }
 
 /** Resolves which runtime mode is active. Defaults to "demo" everywhere

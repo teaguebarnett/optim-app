@@ -208,7 +208,22 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
     if (appMode !== "supabase") return;
     let cancelled = false;
     (async () => {
-      const result = await getMySupabaseAppStateAction();
+      // app/(client)/layout.tsx already awaits a real server-side identity
+      // check before this component ever mounts, so getMySupabaseAppStateAction
+      // throwing here (session revoked/expired in the gap between that check
+      // and this effect running) should be rare. Caught defensively anyway —
+      // this must render the same honest "not provisioned" state as a
+      // genuinely unprovisioned account, never leave isHydrated stuck false
+      // forever and never fall back to demo content.
+      let result;
+      try {
+        result = await getMySupabaseAppStateAction();
+      } catch {
+        if (cancelled) return;
+        setSupabaseNotProvisioned(true);
+        setIsHydrated(true);
+        return;
+      }
       if (cancelled) return;
       if (result.kind === "not_provisioned") {
         setSupabaseNotProvisioned(true);

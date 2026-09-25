@@ -44,7 +44,9 @@ export function getAiEnvConfig(): AiEnvConfig {
  * uses — duplicated rather than imported so lib/ai never depends on
  * lib/production, keeping the AI boundary genuinely independent of the
  * Supabase/tenancy boundary (a future non-Supabase deployment target would
- * still need this same hard gate). */
+ * still need this same hard gate). Must stay in sync with that copy: it
+ * originally checked VERCEL_ENV only, which is always unset on Netlify —
+ * see that file's own doc for the incident this missed. */
 export function isRealProductionDeploy(): boolean {
-  return process.env.VERCEL_ENV === "production";
+  return process.env.VERCEL_ENV === "production" || process.env.CONTEXT === "production";
 }

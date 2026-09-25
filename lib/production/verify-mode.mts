@@ -113,5 +113,34 @@ check("VERCEL_ENV=production with APP_MODE unset: throws (unset defaults to demo
   });
 });
 
+console.log("\n4. Netlify's CONTEXT=production is an equally real production deploy — the Sept 2026 incident's exact gap\n");
+
+check("CONTEXT=production (Netlify) with APP_MODE unset: throws, same as VERCEL_ENV=production", () => {
+  withEnv({ APP_MODE: undefined, VERCEL_ENV: undefined, CONTEXT: "production" }, () => {
+    assert.throws(() => resolveAppMode(), /Refusing to start/);
+  });
+});
+
+check("CONTEXT=production (Netlify) with APP_MODE=demo: throws", () => {
+  withEnv({ APP_MODE: "demo", VERCEL_ENV: undefined, CONTEXT: "production" }, () => {
+    assert.throws(() => resolveAppMode(), /Refusing to start/);
+  });
+});
+
+check("CONTEXT=production (Netlify) with APP_MODE=supabase: allowed", () => {
+  withEnv({ APP_MODE: "supabase", VERCEL_ENV: undefined, CONTEXT: "production" }, () => {
+    assert.equal(resolveAppMode(), "supabase");
+  });
+});
+
+check("Netlify's own non-production contexts (deploy-preview/branch-deploy) are not treated as real production", () => {
+  withEnv({ APP_MODE: "demo", VERCEL_ENV: undefined, CONTEXT: "deploy-preview" }, () => {
+    assert.equal(resolveAppMode(), "demo");
+  });
+  withEnv({ APP_MODE: "demo", VERCEL_ENV: undefined, CONTEXT: "branch-deploy" }, () => {
+    assert.equal(resolveAppMode(), "demo");
+  });
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

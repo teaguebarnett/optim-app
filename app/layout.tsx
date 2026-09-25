@@ -8,6 +8,30 @@ import { RoleRouteBoundary } from "@/components/app-shell/role-route-boundary";
 import { COACH_PROFILE_TEAGUE, WORKSPACE_OPTIM } from "@/lib/tenancy/seed";
 import { resolveAppMode } from "@/lib/production/mode";
 
+// Security fix (Sept 2026 Netlify incident): forces every route in this app
+// to render fresh, per request — never statically prerendered and cached.
+// Without this, `next build` bakes resolveAppMode()'s result (and every
+// auth check downstream of it, including app/coach/layout.tsx and
+// app/admin/layout.tsx's own real getAuthenticatedContext() calls) into a
+// static HTML file the instant Next.js's build-time dynamic-API detection
+// doesn't happen to execute a cookies()/headers() call — which it won't
+// whenever a route's `if (appMode !== "supabase") { ...demo path with no
+// auth call... }` branch is the one actually taken during that particular
+// build. Confirmed directly: building with APP_MODE unset (demo) marked
+// /today, /coach, /admin, and /coach-onboarding "○ (Static)"; the exact
+// same code, built with APP_MODE=supabase, marked them "ƒ (Dynamic)". A
+// production deploy built without APP_MODE=supabase present in the BUILD
+// environment (as opposed to whatever's configured for the deployed
+// runtime) would silently freeze every one of those pages as demo-mode,
+// no-auth HTML forever — regardless of any runtime env var, and regardless
+// of how correct the per-request auth logic itself is. See
+// node_modules/next/dist/docs/01-app/02-guides/caching-without-cache-components.md's
+// `dynamic` route segment config doc (Cache Components is off in this
+// project's next.config.ts, so this option is still live in this Next.js
+// version — AGENTS.md's "verify, don't assume" applies here too, since
+// v16.0.0 removed it when Cache Components is enabled).
+export const dynamic = "force-dynamic";
+
 // OPTIM's one typeface. Per the Visual Constitution §10, hierarchy comes
 // from scale, weight, line-height, tracking, and spatial placement — never
 // from switching font families. See the text-* semantic tokens in
