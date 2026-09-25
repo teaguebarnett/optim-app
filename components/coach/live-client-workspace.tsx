@@ -19,6 +19,11 @@ import { Button } from "@/components/ui/button";
 import { SectionHeader } from "@/components/coach/section-header";
 import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
 import { getClientDetailAction, setClientLifecycleActionServer, activateClientAction } from "@/app/actions/coach-roster";
+import { getRecentActivityAction } from "@/app/actions/coach-daily-activity";
+import { formatLongDateLabel, resolveClientLocalTime24 } from "@/lib/shared/local-date";
+import { formatTimeLabel } from "@/lib/planning/training-plan";
+import type { RecentActivityDay } from "@/lib/production/daily-activity";
+import type { WorkoutSessionStatus } from "@/lib/types";
 import {
   createProgramProposalAction,
   createPublishAndAssignNutritionAction,
@@ -53,11 +58,12 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
   // fresh-generation alike, through the exact same existing review UI.
   await resolveAdjustmentProposalAction({ workspaceId: detail.workspaceId, clientProfileId: clientId });
 
-  const [history, notes, pendingProposal, clientStateFindings] = await Promise.all([
+  const [history, notes, pendingProposal, clientStateFindings, recentActivity] = await Promise.all([
     getClientChatHistoryForCoachAction(clientId),
     getClientCoachNotesAction(clientId),
     getProgramProposalForReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
     getClientWorkspaceIntelligenceAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
+    getRecentActivityAction(clientId),
   ]);
   const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
@@ -253,6 +259,19 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
       </section>
 
       <section className="space-y-3">
+        <SectionHeader title="Recent activity" />
+        {recentActivity.length === 0 ? (
+          <Card><p className="text-sm text-neutral">No training or nutrition activity logged yet.</p></Card>
+        ) : (
+          <Card className="space-y-4">
+            {recentActivity.map((day) => (
+              <RecentActivityDayRow key={day.dateIso} day={day} timeZone={detail.timezone} />
+            ))}
+          </Card>
+        )}
+      </section>
+
+      <section className="space-y-3">
         <SectionHeader title="Lifecycle" />
         <Card className="flex flex-wrap items-center gap-2">
           {readyToActivate ? (
@@ -339,6 +358,53 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-3">
       <dt className="text-neutral">{label}</dt>
       <dd className="text-off-white">{value}</dd>
+    </div>
+  );
+}
+
+// "not-started" is deliberately absent — a day with no real progress on its
+// session isn't a status worth stating; RecentActivityDayRow only ever
+// renders a training line when this map has an entry for it, so a workout
+// merely started never gets mislabeled "completed" and vice versa.
+const SESSION_STATUS_LABEL: Partial<Record<WorkoutSessionStatus, string>> = {
+  "in-progress": "Workout started",
+  completed: "Workout completed",
+  "ended-early": "Workout ended early",
+  skipped: "Workout skipped",
+};
+
+/** Formats a real ISO instant (startedAtIso/completedAtIso/a meal's own
+ * completedAtIso) in the CLIENT's own saved timezone — never the coach's
+ * browser timezone, which would silently mislabel every timestamp for a
+ * client in a different zone than the coach reading this. */
+function formatInstantForClient(iso: string, timeZone: string): string {
+  return formatTimeLabel(resolveClientLocalTime24(new Date(iso), timeZone));
+}
+
+function RecentActivityDayRow({ day, timeZone }: { day: RecentActivityDay; timeZone: string }) {
+  const statusLabel = day.sessionStatus ? SESSION_STATUS_LABEL[day.sessionStatus] : undefined;
+  return (
+    <div className="space-y-1.5 border-b border-border pb-3 text-sm last:border-b-0 last:pb-0">
+      <p className="font-medium text-off-white">{formatLongDateLabel(day.dateIso)}</p>
+      {statusLabel ? (
+        <p className="text-neutral">
+          {statusLabel}
+          {day.workoutName ? ` — ${day.workoutName}` : ""}
+          {day.workingSetsPrescribed > 0 ? ` (${day.workingSetsCompleted}/${day.workingSetsPrescribed} working sets)` : ""}
+          {day.startedAtIso ? ` · started ${formatInstantForClient(day.startedAtIso, timeZone)}` : ""}
+          {day.completedAtIso ? ` · ended ${formatInstantForClient(day.completedAtIso, timeZone)}` : ""}
+        </p>
+      ) : null}
+      {day.meals.length > 0 ? (
+        <ul className="space-y-0.5 text-neutral">
+          {day.meals.map((meal) => (
+            <li key={meal.period}>
+              {meal.label} logged{meal.calories !== null ? ` — ${meal.calories} cal` : ""}
+              {meal.completedAtIso ? ` · ${formatInstantForClient(meal.completedAtIso, timeZone)}` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
