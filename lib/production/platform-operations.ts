@@ -356,13 +356,17 @@ interface RawPlatformClientRow {
   workspace_id: string;
   workspaces: { display_name: string } | null;
   coach_client_assignments: { coach_user_id: string; is_primary: boolean; profiles: { display_name: string } | null }[] | null;
-  client_enrollments: { status: string; timezone: string; original_program_start_date: string | null; archived_at: string | null }[] | null;
-  client_onboarding_progress: { completed_at: string | null }[] | null;
+  // client_profile_id is UNIQUE on both tables, so PostgREST embeds a
+  // single object, not an array — see lib/production/roster.ts's own note
+  // on this same shape (confirmed live; a prior `?.[0]` here silently
+  // evaluated to undefined for every row).
+  client_enrollments: { status: string; timezone: string; original_program_start_date: string | null; archived_at: string | null } | null;
+  client_onboarding_progress: { completed_at: string | null } | null;
 }
 
 function lifecycleBucketFor(raw: RawPlatformClientRow): LifecycleBucket {
-  const enrollment = raw.client_enrollments?.[0] ?? null;
-  const onboarding = raw.client_onboarding_progress?.[0] ?? null;
+  const enrollment = raw.client_enrollments ?? null;
+  const onboarding = raw.client_onboarding_progress ?? null;
   if (enrollment?.archived_at) return "archived";
   const status = deriveLifecycle({
     enrollmentStatus: enrollment?.status ?? null,
@@ -491,7 +495,7 @@ class SupabasePlatformOperationsRepository implements PlatformOperationsReposito
 
     const operationalWarnings: PlatformWarning[] = [];
     const staleInvitedCount = clientRows.filter((c) => {
-      const enrollment = c.client_enrollments?.[0];
+      const enrollment = c.client_enrollments;
       if (enrollment?.status !== "invited") return false;
       return Date.now() - new Date(c.created_at).getTime() > 14 * 86_400_000;
     }).length;
@@ -597,7 +601,7 @@ class SupabasePlatformOperationsRepository implements PlatformOperationsReposito
 
     return clientRows.map((raw) => {
       const primary = raw.coach_client_assignments?.find((a) => a.is_primary) ?? raw.coach_client_assignments?.[0] ?? null;
-      const onboarding = raw.client_onboarding_progress?.[0] ?? null;
+      const onboarding = raw.client_onboarding_progress ?? null;
       return {
         clientId: raw.id,
         displayName: raw.display_name,
@@ -627,7 +631,7 @@ class SupabasePlatformOperationsRepository implements PlatformOperationsReposito
       .eq("id", clientId)
       .single();
     if (error) throw new Error(`getClientDetail failed: ${error.message}`);
-    const enrollment = (raw.client_enrollments as unknown as { original_program_start_date: string | null; timezone: string }[] | null)?.[0] ?? null;
+    const enrollment = (raw.client_enrollments as unknown as { original_program_start_date: string | null; timezone: string } | null) ?? null;
 
     return {
       ...summary,

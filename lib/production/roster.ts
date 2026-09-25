@@ -51,13 +51,19 @@ interface RawClientRow {
   goal: string | null;
   created_at: string;
   coach_client_assignments: { coach_user_id: string; is_primary: boolean; profiles: { display_name: string } | null }[] | null;
-  client_enrollments: { status: string; original_program_start_date: string | null; timezone: string; archived_at: string | null }[] | null;
-  client_onboarding_progress: { completed_at: string | null; updated_at: string }[] | null;
+  // client_profile_id carries a UNIQUE constraint on both these tables
+  // (20260909000003_coaching_relationships.sql, 20260911000013_client_
+  // onboarding_progress.sql), so PostgREST embeds them as a single object,
+  // not an array — confirmed live against the real Supabase instance. A
+  // prior `?.[0]` here silently evaluated to undefined for every row,
+  // making every real client show as "Invited" regardless of actual status.
+  client_enrollments: { status: string; original_program_start_date: string | null; timezone: string; archived_at: string | null } | null;
+  client_onboarding_progress: { completed_at: string | null; updated_at: string } | null;
 }
 
 async function buildRosterRow(raw: RawClientRow, workspaceId: string, nowIso: string): Promise<RosterRow & { archived: boolean }> {
-  const enrollment = raw.client_enrollments?.[0] ?? null;
-  const onboarding = raw.client_onboarding_progress?.[0] ?? null;
+  const enrollment = raw.client_enrollments ?? null;
+  const onboarding = raw.client_onboarding_progress ?? null;
   const primaryAssignment = raw.coach_client_assignments?.find((a) => a.is_primary) ?? raw.coach_client_assignments?.[0] ?? null;
   const coachName = primaryAssignment?.profiles?.display_name ?? "Unassigned";
 
