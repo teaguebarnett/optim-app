@@ -44,11 +44,20 @@ export function InviteClientSheet({ open, onClose, workspaceId }: InviteClientSh
     setSubmitting(true);
     setError(null);
     try {
-      const { clientProfileId } = await inviteClientAction({ workspaceId, email: email.trim(), displayName: name.trim(), goal: goal.trim() });
+      const result = await inviteClientAction({ workspaceId, email: email.trim(), displayName: name.trim(), goal: goal.trim() });
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
       resetForm();
       onClose();
-      router.push(`/coach/clients/${clientProfileId}`);
+      router.push(`/coach/clients/${result.clientProfileId}`);
     } catch (err) {
+      // A genuine crash (network drop, etc.) rather than the expected-error
+      // path above, which inviteClientAction never throws for — Next.js's
+      // production redaction (see that action's own doc) means err.message
+      // here is only ever its own generic placeholder text, not anything
+      // this code produced, but showing it is still better than nothing.
       setError(err instanceof Error ? err.message : "Failed to invite this client.");
     } finally {
       setSubmitting(false);

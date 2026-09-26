@@ -76,7 +76,12 @@ function check(description: string, condition: boolean, detail?: string): void {
 
 const admin = createClient(url, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
-async function fetchOtpCodeFromMailpit(email: string): Promise<string> {
+// supabase/templates/magic_link.html sends a token_hash link, not a raw
+// 6-digit code (see that file's own doc — changed in the auth-flow work
+// that fixed hosted sign-in against Supabase's stock, no-custom-SMTP
+// emails). Extracts token_hash from the mailed link rather than assuming
+// a numeric code is anywhere in the body.
+async function fetchTokenHashFromMailpit(email: string): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt++) {
     const listRes = await fetch(`${mailpitUrl}/api/v1/messages?limit=5`);
     const list = (await listRes.json()) as { messages: { ID: string; To: { Address: string }[] }[] };
@@ -85,20 +90,20 @@ async function fetchOtpCodeFromMailpit(email: string): Promise<string> {
       const msgRes = await fetch(`${mailpitUrl}/api/v1/message/${match.ID}`);
       const msg = (await msgRes.json()) as { Text: string; HTML: string };
       const body = msg.Text || msg.HTML;
-      const codeMatch = body.match(/\b(\d{6})\b/);
-      if (codeMatch) return codeMatch[1];
+      const tokenMatch = body.match(/token_hash=([A-Za-z0-9_-]+)/);
+      if (tokenMatch) return tokenMatch[1];
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`No OTP email arrived for ${email} within timeout`);
+  throw new Error(`No magic-link email arrived for ${email} within timeout`);
 }
 
 async function signInAsRealSession(email: string) {
   const client = createClient(url, anonKey);
   const { error: otpError } = await client.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
   if (otpError) throw new Error(`signInWithOtp failed for ${email}: ${otpError.message}`);
-  const code = await fetchOtpCodeFromMailpit(email);
-  const { data, error } = await client.auth.verifyOtp({ email, token: code, type: "email" });
+  const tokenHash = await fetchTokenHashFromMailpit(email);
+  const { data, error } = await client.auth.verifyOtp({ token_hash: tokenHash, type: "email" });
   if (error || !data.session) throw new Error(`verifyOtp failed for ${email}: ${error?.message}`);
   return client;
 }
@@ -177,6 +182,39 @@ async function main() {
     .from("coach_client_assignments")
     .insert({ workspace_id: workspaceAId, coach_user_id: coachB.id, client_profile_id: clientProfileId, is_primary: false });
   check("Coach B (unrelated workspace): cannot assign themselves to Coach A's new client", !!coachBAssignError);
+
+  console.log("\n3b. Coach A re-invites the SAME email — the real duplicate-invite precondition\n");
+
+  // Live-reproduced production bug (2026-09-26): a real production build's
+  // Server Action boundary redacts EVERY thrown error's message (confirmed
+  // against node_modules/react-server-dom-turbopack's own production
+  // bundle — Next.js's documented behavior, not a bug in the framework),
+  // so lib/production/roster.ts's inviteClient throwing its own friendly
+  // "already been invited" Error surfaced to the coach as a useless generic
+  // "An error occurred in the Server Components render" instead — for the
+  // ordinary, expected case of re-inviting an email already invited. Fixed
+  // in app/actions/coach-roster.ts's inviteClientAction, which now returns
+  // { ok: false, message } instead of throwing (Next.js's own guidance:
+  // "model expected errors as return values"). This step verifies the DB
+  // precondition that action's catch block depends on still holds: a
+  // second client_profiles insert for the identical (workspace_id,
+  // invited_email) pair must fail, atomically, via
+  // client_profiles_workspace_invited_email_idx (20260921000024) — not
+  // silently succeed or leave a duplicate row.
+  const duplicateClientProfileId = randomUUID();
+  const { error: duplicateInsertError } = await coachAClient
+    .from("client_profiles")
+    .insert({ id: duplicateClientProfileId, workspace_id: workspaceAId, invited_email: pilotEmail, display_name: "Duplicate Attempt", goal: null });
+  check(
+    "REGRESSION GUARD: re-inviting the same email in the same workspace fails with a real unique violation (23505), not a silent success",
+    (duplicateInsertError as { code?: string } | null)?.code === "23505",
+    duplicateInsertError ? `code=${(duplicateInsertError as { code?: string }).code} message=${duplicateInsertError.message}` : "insert unexpectedly succeeded"
+  );
+  const { data: clientProfilesForEmail } = await coachAClient.from("client_profiles").select("id").eq("workspace_id", workspaceAId).eq("invited_email", pilotEmail);
+  check(
+    "REGRESSION GUARD: exactly one client_profiles row exists for this email after the failed duplicate attempt — no orphan from the losing insert",
+    (clientProfilesForEmail ?? []).length === 1
+  );
 
   console.log("\n4. Roster read BEFORE the client has ever signed in — lifecycle derives 'invited'\n");
 
