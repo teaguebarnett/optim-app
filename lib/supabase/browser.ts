@@ -62,7 +62,28 @@ export function getSupabaseBrowserClient() {
     // before the explicit call ran. No page in this app is ever loaded
     // with a foreign auth callback URL it doesn't already handle itself,
     // so disabling automatic detection has no effect anywhere else.
-    auth: { experimental: { appendPkceFlowIdToRedirects: true }, detectSessionInUrl: false },
+    //
+    // skipAutoInitialize: true — this is the fix for the actual production
+    // hang (permanently stuck on "Signing you in…", no error, real
+    // fresh link, clicked immediately). auth-js's constructor, unless told
+    // not to, automatically fires an internal initialize() ->
+    // _recoverAndRefresh() the instant this client is created — entirely
+    // unawaited by our own code, running concurrently with whatever we
+    // call next. Confirmed live with a real Mailpit sign-in: with a STALE
+    // session cookie already present on this origin (the exact situation a
+    // real user retrying a broken sign-in flow — the reported scenario —
+    // ends up in) that concurrent _recoverAndRefresh() raced this page's
+    // own explicit verifyOtp()/exchangeCodeForSession()/setSession() call.
+    // GoTrue's own /verify endpoint logged a real 200 within a second, and
+    // the browser's raw fetch() to the same endpoint resolved instantly
+    // when tested in isolation — so nothing was hanging at the network
+    // layer. The hang was this unrelated, unrequested background
+    // initialization work. Neither of this client's only two call sites
+    // (app/auth/sign-in/page.tsx, this file's own confirm page) reads an
+    // existing session on load — both establish a session explicitly and
+    // deliberately — so skipping the SDK's own automatic recovery here has
+    // no effect on either.
+    auth: { experimental: { appendPkceFlowIdToRedirects: true }, detectSessionInUrl: false, skipAutoInitialize: true },
   });
   return client;
 }

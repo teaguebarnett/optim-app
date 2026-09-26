@@ -31,9 +31,28 @@
 // `token_hash`+`type` (kept for local dev's own custom templates, and
 // forward-compatible if hosted ever gets custom SMTP later). Whichever one
 // actually has data wins; the others are simply absent.
+//
+// Navigation here always uses a hard window.location assignment, never
+// next/navigation's router.replace()/router.refresh(). Traced live: with a
+// stale pre-existing session cookie already on this origin (exactly the
+// state a user retrying a broken sign-in flow — the real reported
+// scenario — is in), the whole exchange completed correctly in well under
+// 100ms (confirmed with an in-page timestamped trace) and router.replace()
+// was reached and called — but no client-side navigation ever visibly
+// happened; the page sat on "Signing you in…" indefinitely regardless. The
+// most likely cause is app/layout.tsx's own globally-mounted
+// PrototypeStateProvider (present on every route, this one included)
+// racing this page's own router-driven transition — but a full root-cause
+// wasn't required once a strictly more reliable alternative was available:
+// a hard navigation is a real browser-level document load, immune to any
+// client-side router/RSC-cache state whatever else on the page is doing,
+// and is arguably the more correct choice for a page whose entire job ends
+// the moment it leaves — the next page should read the just-written
+// session cookie via a genuinely fresh server render, not whatever the
+// client router already had cached from before the session existed.
 
 import { Suspense, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { acceptInvitationAction } from "@/app/actions/auth";
@@ -46,8 +65,11 @@ export default function AuthConfirmPage() {
   );
 }
 
+function goTo(path: string) {
+  window.location.href = path;
+}
+
 function AuthConfirmPageInner() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const ran = useRef(false);
   const [message, setMessage] = useState("Signing you in…");
@@ -81,50 +103,71 @@ function AuthConfirmPageInner() {
     // this is present, and surfacing GoTrue's own real reason (e.g. "Email
     // link is invalid or has expired") is the whole point of this check —
     // silently falling through to this page's own generic "missing_token"
-    // instead (the previous bug here) means every real cause looks
-    // identical and undiagnosable from the outside.
+    // instead (an earlier bug here) means every real cause looks identical
+    // and undiagnosable from the outside.
     const errorDescription = searchParams.get("error_description") ?? hashParams.get("error_description");
     const errorCode = searchParams.get("error_code") ?? hashParams.get("error_code");
 
-    (async () => {
+    async function run() {
+      // getSupabaseBrowserClient() lives INSIDE this function, not outside
+      // it — a throw here (or in anything before the first await) must
+      // still reach the single .catch() this is always driven from below;
+      // see that call site for why a plain try/catch in here wouldn't be
+      // enough on its own.
       const supabase = getSupabaseBrowserClient();
 
-      try {
-        if (errorDescription || errorCode) {
-          router.replace(`/auth/error?reason=${encodeURIComponent(errorDescription ?? errorCode ?? "Sign-in link error.")}`);
-          return;
-        }
-
-        const accessToken = hashParams.get("access_token");
-        const refreshToken = hashParams.get("refresh_token");
-
-        if (accessToken && refreshToken) {
-          const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-          if (error) throw error;
-        } else if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) throw error;
-        } else if (tokenHash && type) {
-          const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
-          if (error) throw error;
-        } else {
-          router.replace("/auth/error?reason=missing_token");
-          return;
-        }
-
-        if (invitationId) {
-          setMessage("Joining your workspace…");
-          await acceptInvitationAction(invitationId);
-        }
-
-        router.replace(next);
-        router.refresh();
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : "Failed to complete sign-in.";
-        router.replace(`/auth/error?reason=${encodeURIComponent(reason)}`);
+      if (errorDescription || errorCode) {
+        goTo(`/auth/error?reason=${encodeURIComponent(errorDescription ?? errorCode ?? "Sign-in link error.")}`);
+        return;
       }
-    })();
-  }, [router, searchParams]);
+
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+
+      if (accessToken && refreshToken) {
+        const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+        if (error) throw error;
+      } else if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) throw error;
+      } else if (tokenHash && type) {
+        const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+        if (error) throw error;
+      } else {
+        goTo("/auth/error?reason=missing_token");
+        return;
+      }
+
+      if (invitationId) {
+        setMessage("Joining your workspace…");
+        await acceptInvitationAction(invitationId);
+      }
+
+      goTo(next);
+    }
+
+    // A thrown/rejected error from run() is only half of "never stuck
+    // forever" — the Supabase client calls above have no built-in timeout,
+    // so a request that never settles (hangs, rather than erroring) would
+    // satisfy neither the success path nor a catch, leaving this page on
+    // "Signing you in…" indefinitely. Racing run() against a bounded
+    // timeout turns that failure mode into the same visible error every
+    // other rejection already gets, and the single top-level .catch() here
+    // is what makes that guarantee unconditional: it fires for a throw
+    // from run() itself (including from getSupabaseBrowserClient(), which
+    // lives inside run() for exactly this reason), a rejected Supabase
+    // call, or the timeout — there is no remaining path through this
+    // effect that reaches neither a goTo() call above nor this .catch().
+    const TIMEOUT_MS = 15_000;
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("Sign-in is taking longer than expected. Please try again.")), TIMEOUT_MS);
+    });
+
+    Promise.race([run(), timeout]).catch((err) => {
+      const reason = err instanceof Error ? err.message : "Failed to complete sign-in.";
+      goTo(`/auth/error?reason=${encodeURIComponent(reason)}`);
+    });
+  }, [searchParams]);
 
   return (
     <main className="flex min-h-full items-center justify-center px-6 py-16">
