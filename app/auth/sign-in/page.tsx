@@ -32,11 +32,18 @@
 // established pattern), which needs a `?query` already present to land on
 // or the resulting link is malformed (no `?` at all). app/auth/confirm/
 // page.tsx ignores this param entirely.
+//
+// Resend cooldown: see lib/auth/signin-cooldown.ts's own doc for the full
+// live-reproduced root cause. It cannot protect against a second request
+// from another tab or device (GoTrue's one-pending-flow-per-email design
+// makes that unavoidable), but it closes the exact reported case: a user
+// re-submitting this same form before their first link arrived.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/text-field";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { DEFAULT_COOLDOWN_SECONDS, parseRetryAfterSeconds, readCooldownMs, writeCooldown } from "@/lib/auth/signin-cooldown";
 
 type Step = "request" | "sent";
 
@@ -45,23 +52,51 @@ export default function SignInPage() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Not stored: cooldownSeconds is read fresh from sessionStorage on every
+  // render (see below), so it's always in sync with the current email with
+  // no separate state to fall out of sync. This tick counter's only job is
+  // to force a re-render once a second so the countdown display advances —
+  // the actual value is never computed inside the effect itself.
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const cooldownSeconds =
+    typeof window === "undefined" ? 0 : Math.ceil(readCooldownMs(window.sessionStorage, normalizedEmail) / 1000);
 
   async function requestLink(e: React.FormEvent) {
     e.preventDefault();
+
+    // Enforce the cooldown ourselves before ever calling signInWithOtp --
+    // see the header doc: it's this request's mere arrival at GoTrue, not
+    // just a successful send, that invalidates a still-outstanding link.
+    if (readCooldownMs(window.sessionStorage, normalizedEmail) > 0) {
+      setTick((t) => t + 1);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       const supabase = getSupabaseBrowserClient();
       const { error: otpError } = await supabase.auth.signInWithOtp({
-        email: email.trim().toLowerCase(),
+        email: normalizedEmail,
         options: {
           shouldCreateUser: false,
           emailRedirectTo: `${window.location.origin}/auth/confirm?source=sign-in`,
         },
       });
       if (otpError) throw otpError;
+      writeCooldown(window.sessionStorage, normalizedEmail, DEFAULT_COOLDOWN_SECONDS);
       setStep("sent");
     } catch (err) {
+      if (err instanceof Error && "status" in err && (err as { status?: number }).status === 429) {
+        writeCooldown(window.sessionStorage, normalizedEmail, parseRetryAfterSeconds(err.message));
+      }
       setError(err instanceof Error ? err.message : "Could not send a sign-in link to that email.");
     } finally {
       setLoading(false);
@@ -90,7 +125,12 @@ export default function SignInPage() {
               onChange={(e) => setEmail(e.target.value)}
             />
             {error ? <p className="text-sm text-error">{error}</p> : null}
-            <Button type="submit" className="w-full" loading={loading}>
+            {cooldownSeconds > 0 && !error ? (
+              <p className="text-sm text-neutral">
+                You can request another link in {cooldownSeconds} second{cooldownSeconds === 1 ? "" : "s"}.
+              </p>
+            ) : null}
+            <Button type="submit" className="w-full" loading={loading} disabled={cooldownSeconds > 0}>
               Send sign-in link
             </Button>
           </form>
