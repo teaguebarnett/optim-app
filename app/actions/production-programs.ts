@@ -21,6 +21,7 @@ import {
   getClientProgramContext,
   getActiveProgramAssignment,
   getActiveNutritionAssignment,
+  archiveUnverifiedPendingProposalsForClient,
   getDailyActivity,
   saveDailyActivity,
   createDraftProgramVersion,
@@ -42,7 +43,7 @@ import { buildUniversalProgramForDirection } from "../../lib/coach/universal-pro
 import { getOnboardingProgressForClient } from "../../lib/production/onboarding";
 import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
 import { getOrBootstrapApprovedPlaybook, getApprovedPlaybook } from "../../lib/production/playbooks";
-import { evaluateGenerationPrerequisites, buildGenerationInputs, hasVerifiedGenerationInputs, checkProposalApproval, GenerationPrerequisitesError, type MissingPrerequisite } from "../../lib/coach/generation-prerequisites";
+import { evaluateGenerationPrerequisites, buildGenerationInputs, hasVerifiedGenerationInputs, checkProposalApproval, isUnverifiedFreshProposal, GenerationPrerequisitesError, type MissingPrerequisite } from "../../lib/coach/generation-prerequisites";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { resolveApplicableCoachRules, getLearnedRuleProvenance, type LearnedRuleProvenance } from "../../lib/production/rule-resolution";
 import { analyzeClientStateForClient, resolveEvidenceDetails } from "../../lib/production/client-state-evidence";
@@ -383,6 +384,8 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
     profile,
     assumptions: prerequisites.assumptions,
     nowIso,
+    rationale: direction.explanation.whyItFits,
+    whyThisPlan: [direction.explanation.primaryAdvantage, `Trade-off: ${direction.explanation.tradeoff}`],
   });
   const contentWithProvenance = {
     ...content,
@@ -463,6 +466,10 @@ async function loadDraftAndOriginal(workspaceId: string, versionId: string, acti
  * yet either — nothing has been decided. */
 export async function createProgramProposalAction(params: { workspaceId: string; clientProfileId: string; title: string; durationWeeks: number }): Promise<{ programId: string; versionId: string; versionNumber: number }> {
   const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  // One pending proposal per client: a second click (or tab) must not create
+  // a parallel proposal family that later resurfaces after a rejection.
+  const existing = await getPendingProgramProposal(params.workspaceId, params.clientProfileId);
+  if (existing) throw new Error("This client already has a pending proposal. Approve or reject it before generating another.");
   const { content } = await generateUniversalProgramProposalContent({ ...params, coachId: ctx.userId });
   return createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content, proposedForClientProfileId: params.clientProfileId });
 }
@@ -824,10 +831,13 @@ export async function approveProgramProposalAction(params: { workspaceId: string
  * looking at) becomes 'archived' and can never become active. It remains
  * real historical evidence — never deleted, never overwritten. An optional
  * concise reason is stored as-is; nothing here interprets it. */
-export async function rejectProgramProposalAction(params: { workspaceId: string; clientProfileId: string; versionId: string; reason?: string }): Promise<void> {
+/** Rejection never depends on the generation prerequisites (a confirmed
+ * method or completed intake) — those govern generating and approving, not
+ * clearing a proposal away. It never generates or activates anything. */
+export async function rejectProgramProposalAction(params: { workspaceId: string; clientProfileId: string; versionId: string; reason?: string }): Promise<{ otherDraftsArchived: number }> {
   const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   const rejected = await getProgramProposalVersion(params.workspaceId, params.versionId);
-  if (!rejected || rejected.status !== "draft") return; // already decided (or gone) — a safe, idempotent no-op
+  if (!rejected || rejected.status !== "draft") return { otherDraftsArchived: 0 }; // already decided (or gone) — a safe, idempotent no-op
   const original = await getOriginalProposalVersion(params.workspaceId, rejected.programId);
   if (!original) throw new Error("rejectProgramProposalAction: original proposal version missing");
 
@@ -853,6 +863,16 @@ export async function rejectProgramProposalAction(params: { workspaceId: string;
     );
   } catch (evidenceError) {
     console.error(`rejectProgramProposalAction: decision evidence projection failed (canonical rejection already saved): ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`);
+  }
+
+  // Clear any other unverified fresh-generation drafts for this client —
+  // otherwise the next one surfaces as "the pending proposal" and the
+  // rejection looks like it did nothing (the reported live failure).
+  try {
+    const otherDraftsArchived = await archiveUnverifiedPendingProposalsForClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, shouldArchive: isUnverifiedFreshProposal });
+    return { otherDraftsArchived };
+  } catch (cleanupError) {
+    throw new Error(`The proposal was rejected, but an older unverified proposal for this client couldn't be cleared: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
   }
 }
 

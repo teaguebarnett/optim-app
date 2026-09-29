@@ -20,9 +20,11 @@ import {
   checkProposalApproval,
   evaluateGenerationPrerequisites,
   hasVerifiedGenerationInputs,
+  isUnverifiedFreshProposal,
   type GenerationPrerequisiteResult,
 } from "./generation-prerequisites.ts";
 import { nutritionTargetsEqual } from "./nutrition-targets-input.ts";
+import { parseRejectionReason } from "./proposal-rejection.ts";
 import { canonicalTimeZone, resolveTimezoneSource } from "../shared/timezone.ts";
 import type { HealthReviewRecord, OnboardingProgress } from "./types";
 
@@ -218,6 +220,29 @@ const T = { calories: 2400, proteinG: 180, carbsG: 250, fatG: 75 };
 check("identical targets are detected (no duplicate version)", () => assert.equal(nutritionTargetsEqual(T, { ...T }), true));
 check("any changed value is a real change", () => {
   for (const k of Object.keys(T) as Array<keyof typeof T>) assert.equal(nutritionTargetsEqual(T, { ...T, [k]: T[k] + 1 }), false, k);
+});
+
+console.log("proposal rejection");
+check("the reason is optional: blank means no reason", () => assert.equal(parseRejectionReason(""), undefined));
+check("a missing reason field means no reason", () => assert.equal(parseRejectionReason(null), undefined));
+check("a known reason is kept", () => assert.equal(parseRejectionReason("too_much_volume"), "too_much_volume"));
+check("the legacy-proposal reason is accepted", () => assert.equal(parseRejectionReason("inputs_unverified"), "inputs_unverified"));
+check("an unknown/forged reason is dropped, not an error", () => assert.equal(parseRejectionReason("<script>"), undefined));
+check("a legacy unverified draft is cleared on rejection", () => assert.equal(isUnverifiedFreshProposal({}), true));
+check("a verified draft is never cleared as a duplicate", () => assert.equal(isUnverifiedFreshProposal({ generationInputs: inputs() }), false));
+check("an adjustment draft is never cleared as a duplicate", () => assert.equal(isUnverifiedFreshProposal({ adjustmentProvenance: { activeProgramVersionId: "v1" } }), false));
+check("rejection needs no prerequisites: the legacy proposal is rejectable even with defaults + no intake", () => {
+  // Approval is refused in that state, but the reject path has no gate.
+  assert.equal(checkProposalApproval({}, evaluate({ model: defaultModel(), onboarding: null })).ok, false);
+  assert.equal(isUnverifiedFreshProposal({}), true);
+});
+check("recorded rationale and 'why this plan' are kept when provided", () => {
+  const r = evaluate({});
+  if (!r.ready) throw new Error("expected ready");
+  const g = buildGenerationInputs({ playbookVersion: 3, operatingModel: confirmedModel(), onboarding: completedOnboarding(), profile: r.profile, assumptions: [], nowIso: NOW, rationale: "Full Body fits 3 days.", whyThisPlan: ["Closest to your method.", "Trade-off: less variety."] });
+  assert.equal(g.rationale, "Full Body fits 3 days.");
+  assert.deepEqual(g.whyThisPlan, ["Closest to your method.", "Trade-off: less variety."]);
+  assert.equal(hasVerifiedGenerationInputs({ generationInputs: g }), true);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

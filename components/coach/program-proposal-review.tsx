@@ -13,6 +13,7 @@
 // surfaces here.
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,8 @@ import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, Block
 import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
 import { ProposalScheduleNavigator } from "@/components/coach/proposal-schedule-navigator";
 import { ProposalApproveForm } from "@/components/coach/proposal-approve-form";
+import { ProposalRejectForm } from "@/components/coach/proposal-reject-form";
+import { parseRejectionReason } from "@/lib/coach/proposal-rejection";
 import type { SaveResult } from "@/components/coach/live-start-date-form";
 import { describeIntervalOverview } from "@/lib/workout/interval";
 import { describeCircuitOverview, isUnboundedRounds } from "@/lib/workout/circuit";
@@ -53,71 +56,12 @@ function stringOrUndefined(formData: FormData, key: string): string | undefined 
   return s ? s : undefined;
 }
 
-/** A concise "what did OPTIM build?" summary — computed from week 1's
- * structure (which weeks of a periodized program) as the representative
- * training pattern (see this phase's completion report: dosage varies
- * week-to-week, the trained-days/session-name structure does not). */
-function buildProgramOverview(content: UniversalTrainingProgramContent) {
-  const week1 = content.weeks.find((w) => w.weekNumber === 1);
-  const trainingDays = (week1?.days ?? []).filter((d) => d.type === "training");
-  const restDays = (week1?.days ?? []).filter((d) => d.type === "rest").length;
-  const sessionNames = trainingDays.flatMap((d) => (d.sessions ?? []).map((s) => `${d.dayOfWeek} — ${s.name}`));
-  let resistanceItems = 0;
-  let continuousItems = 0;
-  let intervalItems = 0;
-  let circuitBlocks = 0;
-  let amrapBlocks = 0;
-  let emomBlocks = 0;
-  let powerItems = 0;
-  let mobilityItems = 0;
-  for (const day of trainingDays) {
-    for (const session of day.sessions ?? []) {
-      for (const block of session.blocks) {
-        // Phase 11D — an AMRAP is structurally still isCircuitBlock (see
-        // that function's own doc), so it's counted in its own bucket
-        // here, checked first, to avoid double-counting it as an
-        // ordinary fixed-round circuit too.
-        if (isCircuitBlock(block) && isUnboundedRounds(block)) amrapBlocks += 1;
-        else if (isCircuitBlock(block)) circuitBlocks += 1;
-        if (isEmomBlock(block)) emomBlocks += 1;
-        for (const item of block.items) {
-          // Phase 11C — power/mobility must be counted in their OWN
-          // buckets, checked before the resistance catch-all below, or
-          // they'd be silently mislabeled as resistance items in the
-          // coach-facing summary line.
-          if (item.category === "interval") intervalItems += 1;
-          else if (item.category === "continuous") continuousItems += 1;
-          else if (item.category === "power") powerItems += 1;
-          else if (item.category === "mobility") mobilityItems += 1;
-          else resistanceItems += 1;
-        }
-      }
-    }
-  }
-  return { trainingDaysPerWeek: trainingDays.length, restDaysPerWeek: restDays, sessionNames, resistanceItems, continuousItems, intervalItems, circuitBlocks, powerItems, mobilityItems, amrapBlocks, emomBlocks };
-}
 
-/** "4 weeks · 3 training days/week · 4 rest days/week · 18 resistance
- * items · 1 interval item (week 1 pattern)" — only categories that are
- * actually present; a zero count is noise, not information. */
-function describeOverview(durationWeeks: number, o: ReturnType<typeof buildProgramOverview>): string {
-  const counted: Array<[number, string, string]> = [
-    [o.resistanceItems, "resistance item", "resistance items"],
-    [o.continuousItems, "continuous item", "continuous items"],
-    [o.intervalItems, "interval item", "interval items"],
-    [o.circuitBlocks, "circuit", "circuits"],
-    [o.amrapBlocks, "AMRAP block", "AMRAP blocks"],
-    [o.emomBlocks, "EMOM block", "EMOM blocks"],
-    [o.powerItems, "power item", "power items"],
-    [o.mobilityItems, "mobility item", "mobility items"],
-  ];
-  const parts = [
-    `${durationWeeks} week${durationWeeks === 1 ? "" : "s"}`,
-    `${o.trainingDaysPerWeek} training day${o.trainingDaysPerWeek === 1 ? "" : "s"}/week`,
-    ...(o.restDaysPerWeek > 0 ? [`${o.restDaysPerWeek} rest day${o.restDaysPerWeek === 1 ? "" : "s"}/week`] : []),
-    ...counted.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`),
-  ];
-  return `${parts.join(" · ")} (week 1 pattern)`;
+/** "3 training days a week · Mon, Wed, Fri" — from week 1. */
+function describeSchedule(content: UniversalTrainingProgramContent): string {
+  const days = (content.weeks[0]?.days ?? []).filter((d) => d.type === "training").map((d) => d.dayOfWeek.slice(0, 3));
+  if (days.length === 0) return "No training days scheduled";
+  return `${days.length} training day${days.length === 1 ? "" : "s"} a week · ${days.join(", ")}`;
 }
 
 function formatShortDate(iso: string): string {
@@ -129,10 +73,12 @@ function formatShortDate(iso: string): string {
  * state. */
 function InputsUsedSection({ inputs }: { inputs: GenerationInputs }) {
   return (
-    <div className="mb-3 grid gap-3 rounded border border-border-strong bg-surface-raised px-3 py-2.5 md:grid-cols-2">
+    <details className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
+    <summary className="cursor-pointer text-xs font-medium text-off-white">Inputs used</summary>
+    <div className="mt-2 grid gap-3 md:grid-cols-2">
       <div>
         <p className="text-xs font-medium uppercase tracking-wide text-neutral">
-          Your confirmed method · Playbook v{inputs.coachMethod.playbookVersion}, {formatShortDate(inputs.coachMethod.confirmedAtIso)}
+          Your coaching method · confirmed {formatShortDate(inputs.coachMethod.confirmedAtIso)}
         </p>
         <dl className="mt-1.5 space-y-0.5 text-xs">
           {inputs.coachMethod.summary.map((f) => (
@@ -161,10 +107,13 @@ function InputsUsedSection({ inputs }: { inputs: GenerationInputs }) {
         ) : null}
       </div>
     </div>
+    </details>
   );
 }
 
 export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, proposal }: { workspaceId: string; clientProfileId: string; clientId: string; proposal: ProgramProposalReviewView }) {
+  // Server actions below close over just this id, not the whole proposal.
+  const versionId = proposal.versionId;
   async function revalidate() {
     "use server";
     revalidatePath(`/coach/clients/${clientId}`);
@@ -173,7 +122,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
   async function approveAction(): Promise<SaveResult> {
     "use server";
     try {
-      await approveProgramProposalAction({ workspaceId, clientProfileId, versionId: proposal.versionId });
+      await approveProgramProposalAction({ workspaceId, clientProfileId, versionId });
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : "Could not approve this proposal." };
     }
@@ -181,11 +130,19 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     return { ok: true, message: "Approved and assigned." };
   }
 
-  async function rejectAction(formData: FormData) {
+  // No prerequisites here: rejecting only clears the proposal away. On
+  // success, redirect so the refreshed page shows the notice and whatever
+  // setup is still missing (the proposal card itself is gone by then).
+  async function rejectAction(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
     "use server";
-    const reason = stringOrUndefined(formData, "reason");
-    await rejectProgramProposalAction({ workspaceId, clientProfileId, versionId: proposal.versionId, reason });
+    const reason = parseRejectionReason(formData.get("reason"));
+    try {
+      await rejectProgramProposalAction({ workspaceId, clientProfileId, versionId, reason });
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "Could not reject this proposal." };
+    }
     await revalidate();
+    redirect(`/coach/clients/${clientId}?notice=proposal-rejected`);
   }
 
   function editActionFor(path: TrainingItemPath, category: "resistance" | "continuous" | "interval" | "power" | "mobility") {
@@ -255,7 +212,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                 warmupInstruction: stringOrUndefined(formData, "warmupInstruction"),
                 warmupSets: numberOrUndefined(formData, "warmupSets"),
               };
-      await editProgramProposalItemAction({ workspaceId, clientProfileId, versionId: proposal.versionId, path, patch });
+      await editProgramProposalItemAction({ workspaceId, clientProfileId, versionId, path, patch });
       await revalidate();
     }
     return edit;
@@ -264,7 +221,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
   function removeActionFor(path: TrainingItemPath) {
     async function remove() {
       "use server";
-      await removeProgramProposalItemAction({ workspaceId, clientProfileId, versionId: proposal.versionId, path });
+      await removeProgramProposalItemAction({ workspaceId, clientProfileId, versionId, path });
       await revalidate();
     }
     return remove;
@@ -273,7 +230,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
   function moveBlockActionFor(path: BlockPath, direction: "up" | "down") {
     async function move() {
       "use server";
-      await moveProgramProposalBlockAction({ workspaceId, clientProfileId, versionId: proposal.versionId, path, direction });
+      await moveProgramProposalBlockAction({ workspaceId, clientProfileId, versionId, path, direction });
       await revalidate();
     }
     return move;
@@ -291,7 +248,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
         terminationMode: stringOrUndefined(formData, "terminationMode") as BlockPatch["terminationMode"],
         cadenceSeconds: numberOrUndefined(formData, "cadenceSeconds"),
       };
-      await editProgramProposalBlockAction({ workspaceId, clientProfileId, versionId: proposal.versionId, path, patch });
+      await editProgramProposalBlockAction({ workspaceId, clientProfileId, versionId, path, patch });
       await revalidate();
     }
     return edit;
@@ -302,7 +259,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       "use server";
       const name = stringOrUndefined(formData, "name");
       if (!name) return;
-      await renameProgramProposalSessionAction({ workspaceId, clientProfileId, versionId: proposal.versionId, path, name });
+      await renameProgramProposalSessionAction({ workspaceId, clientProfileId, versionId, path, name });
       await revalidate();
     }
     return rename;
@@ -311,7 +268,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
   function convertToRestActionFor(weekNumber: number, dayOfWeek: TrainingItemPath["dayOfWeek"]) {
     async function convert() {
       "use server";
-      await convertProgramProposalDayToRestAction({ workspaceId, clientProfileId, versionId: proposal.versionId, weekNumber, dayOfWeek });
+      await convertProgramProposalDayToRestAction({ workspaceId, clientProfileId, versionId, weekNumber, dayOfWeek });
       await revalidate();
     }
     return convert;
@@ -323,7 +280,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       const name = stringOrUndefined(formData, "newItemName");
       const category = stringOrUndefined(formData, "newItemCategory") as "resistance" | "continuous" | undefined;
       if (!name || !category) return;
-      await addProgramProposalItemAction({ workspaceId, clientProfileId, versionId: proposal.versionId, sessionPath, name, category });
+      await addProgramProposalItemAction({ workspaceId, clientProfileId, versionId, sessionPath, name, category });
       await revalidate();
     }
     return add;
@@ -673,33 +630,53 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     );
   }
 
-  const overview = buildProgramOverview(proposal.content);
   const adjustment = proposal.content.adjustmentProvenance;
+  const inputs = proposal.content.generationInputs;
+  const weeks = proposal.content.durationWeeks;
+  const title = adjustment ? "Adjustment proposal" : `Training proposal · ${weeks} week${weeks === 1 ? "" : "s"}${proposal.wasEdited ? " · edited" : ""}`;
+
+  // A legacy proposal made before inputs were verified: say only that, and
+  // offer the one sensible action. Its stored explanation ("Best fit…",
+  // "your preferred…") is not shown anywhere — it was built from defaults
+  // and placeholders, so it isn't evidence of anything.
+  if (!proposal.inputsVerified) {
+    return (
+      <Card id="proposal-review" className="border-l-2 border-l-warning">
+        <p className="text-sm font-medium text-off-white">{title}</p>
+        <p className="mt-0.5 text-xs text-neutral">{describeSchedule(proposal.content)}</p>
+        <div className="mt-3 space-y-3 rounded border border-warning bg-warning-soft/40 px-3 py-3">
+          <p className="text-sm font-medium text-warning-strong">Inputs unverified. Reject this proposal.</p>
+          <ProposalRejectForm action={rejectAction} defaultReason="inputs_unverified" />
+        </div>
+      </Card>
+    );
+  }
+
+  const whyThisPlan = inputs?.whyThisPlan ?? [];
 
   return (
     <Card id="proposal-review" className="border-l-2 border-l-accent">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-sm font-medium text-off-white">
-            {adjustment ? "OPTIM proposes an adjustment" : `Proposed program ${proposal.wasEdited ? "(edited)" : "(as generated)"} — ${proposal.content.durationWeeks} weeks`}
-          </p>
-          <p className="mt-0.5 text-xs text-neutral">{proposal.content.directionLabel ?? proposal.content.name}</p>
-          {proposal.content.generationRationale ? <p className="mt-1 text-xs text-neutral">{proposal.content.generationRationale}</p> : null}
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-off-white">{title}</p>
+          <p className="mt-0.5 text-xs text-neutral">{describeSchedule(proposal.content)}</p>
+          {inputs?.rationale ? <p className="mt-2 text-sm text-off-white">{inputs.rationale}</p> : null}
         </div>
-        <ProposalApproveForm
-          action={approveAction}
-          blockedReason={proposal.inputsVerified ? null : "Generated before OPTIM verified its inputs (your confirmed method and the client's intake). Reject it below and generate a new one."}
-        />
+        <ProposalApproveForm action={approveAction} blockedReason={null} />
       </div>
 
       {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
-      {proposal.content.generationInputs ? <InputsUsedSection inputs={proposal.content.generationInputs} /> : null}
-
-      <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-neutral">What OPTIM built</p>
-        <p className="mt-1 text-xs text-off-white">{describeOverview(proposal.content.durationWeeks, overview)}</p>
-        {overview.sessionNames.length > 0 ? <p className="mt-1 text-xs text-neutral">{overview.sessionNames.join(" · ")}</p> : null}
-      </div>
+      {whyThisPlan.length > 0 ? (
+        <details className="mb-2 rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Why this plan</summary>
+          <ul className="mt-1.5 space-y-0.5 text-xs text-neutral">
+            {whyThisPlan.map((line) => (
+              <li key={line}>• {line}</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {inputs ? <InputsUsedSection inputs={inputs} /> : null}
 
       <RuleProvenanceSection proposal={proposal} />
 
@@ -733,7 +710,6 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
           const restDays = week.days.filter((d) => d.type === "rest");
           return {
             weekNumber: week.weekNumber,
-            summary: `${trainingDays.length} training day${trainingDays.length === 1 ? "" : "s"}, ${restDays.length} rest`,
             restDaysLabel: restDays.length > 0 ? restDays.map((d) => d.dayOfWeek.slice(0, 3)).join(", ") : null,
             days: trainingDays.map((day) => ({
               key: day.dayOfWeek,
@@ -745,22 +721,9 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
         })}
       />
 
-      <form action={rejectAction} className="mt-3 flex flex-wrap items-end gap-2 border-t border-border pt-3">
-        <label className="flex flex-col gap-1 text-xs text-neutral">
-          Reason (optional)
-          <select name="reason" defaultValue="" className="w-48 rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
-            <option value="">No reason given</option>
-            <option value="too_much_volume">Too much volume</option>
-            <option value="wrong_exercise_selection">Wrong exercise selection</option>
-            <option value="too_aggressive">Too aggressive</option>
-            <option value="does_not_fit_schedule">Doesn&apos;t fit schedule</option>
-            <option value="other">Other</option>
-          </select>
-        </label>
-        <Button type="submit" variant="secondary" size="sm">
-          Reject &amp; regenerate later
-        </Button>
-      </form>
+      <div className="mt-3 border-t border-border pt-3">
+        <ProposalRejectForm action={rejectAction} />
+      </div>
     </Card>
   );
 }

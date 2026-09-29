@@ -49,7 +49,7 @@ async function loadDetail(clientId: string) {
   }
 }
 
-export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
+export async function LiveClientWorkspace({ clientId, notice = null }: { clientId: string; notice?: "proposal-rejected" | null }) {
   const detail = await loadDetail(clientId);
 
   // Phase 10B — resolved BEFORE the pending-proposal read below: bounded,
@@ -237,6 +237,11 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
           <p className="mb-2 text-sm text-neutral">
             Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
           </p>
+          {notice === "proposal-rejected" && !pendingProposal ? (
+            <p role="status" className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2 text-sm text-success">
+              Proposal rejected. Nothing was generated or activated.
+            </p>
+          ) : null}
           {pendingProposal ? (
             <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
           ) : (

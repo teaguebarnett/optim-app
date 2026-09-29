@@ -20,7 +20,6 @@ export interface NavigatorDay {
 
 export interface NavigatorWeek {
   weekNumber: number;
-  summary: string;
   restDaysLabel: string | null;
   days: NavigatorDay[];
 }
@@ -74,10 +73,7 @@ export function ProposalScheduleNavigator({ weeks }: { weeks: NavigatorWeek[] })
         </button>
       </div>
 
-      <p className="text-xs text-neutral">
-        {week.summary}
-        {week.restDaysLabel ? ` · Rest: ${week.restDaysLabel}` : ""}
-      </p>
+      {week.restDaysLabel ? <p className="text-xs text-neutral">Rest: {week.restDaysLabel}</p> : null}
 
       {week.days.length > 0 ? (
         <div className="flex gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label={`Week ${week.weekNumber} training days`}>

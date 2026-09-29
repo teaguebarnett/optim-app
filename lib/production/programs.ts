@@ -445,13 +445,52 @@ export async function getOriginalProposalVersion(workspaceId: string, programId:
 export async function rejectProgramProposalVersion(params: { workspaceId: string; versionId: string }): Promise<void> {
   await requireCoachAuthority(params.workspaceId);
   const supabase = await getSupabaseServerClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("training_program_versions")
     .update({ status: "archived" })
     .eq("id", params.versionId)
     .eq("workspace_id", params.workspaceId)
-    .eq("status", "draft");
+    .eq("status", "draft")
+    .select("id");
   if (error) throw new Error(`rejectProgramProposalVersion failed: ${error.message}`);
+  // An UPDATE that matches nothing (RLS, a concurrent change) reports no
+  // error — never report success unless the row is really no longer a draft.
+  if (!data || data.length === 0) {
+    const current = await getProgramProposalVersion(params.workspaceId, params.versionId);
+    if (current?.status === "draft") throw new Error("The rejection wasn't saved — the proposal is still pending. Please try again.");
+  }
+}
+
+/** Archives every other still-draft FRESH-GENERATION proposal for this
+ * client that lacks verified generation inputs. Such drafts can never be
+ * approved (see lib/coach/generation-prerequisites.ts) and are invisible
+ * duplicates: before the generate form had pending state, a double click
+ * could create two separate proposal families, and rejecting the visible
+ * one simply surfaced the other — "the proposal remains." Adjustment
+ * proposals and verified proposals are left alone. Returns how many were
+ * archived. */
+export async function archiveUnverifiedPendingProposalsForClient(params: { workspaceId: string; clientProfileId: string; shouldArchive: (content: UniversalTrainingProgramContent) => boolean }): Promise<number> {
+  await requireCoachAuthority(params.workspaceId);
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("training_program_versions")
+    .select("id, program_id, version_number, status, content, created_at")
+    .eq("workspace_id", params.workspaceId)
+    .eq("proposed_for_client_profile_id", params.clientProfileId)
+    .eq("status", "draft")
+    .limit(50);
+  if (error) throw new Error(`archiveUnverifiedPendingProposalsForClient (read) failed: ${error.message}`);
+  const ids = (data ?? []).map(rowToProposalVersion).filter((v) => params.shouldArchive(v.content)).map((v) => v.versionId);
+  if (ids.length === 0) return 0;
+  const { data: archived, error: updateError } = await supabase
+    .from("training_program_versions")
+    .update({ status: "archived" })
+    .eq("workspace_id", params.workspaceId)
+    .eq("status", "draft")
+    .in("id", ids)
+    .select("id");
+  if (updateError) throw new Error(`archiveUnverifiedPendingProposalsForClient failed: ${updateError.message}`);
+  return archived?.length ?? 0;
 }
 
 /** Phase 8D — archives every OTHER still-'draft' sibling version in the

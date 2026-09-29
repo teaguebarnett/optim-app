@@ -555,6 +555,11 @@ export interface AdjustmentProvenance {
 export interface GenerationInputs {
   version: 1;
   recordedAtIso: string;
+  /** One short sentence on why this plan fits (absent on proposals made
+   * before it was recorded). */
+  rationale?: string;
+  /** Supporting points shown under "Why this plan". */
+  whyThisPlan?: string[];
   coachMethod: {
     playbookVersion: number;
     operatingModelVersion: number;

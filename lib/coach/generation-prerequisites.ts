@@ -141,6 +141,8 @@ export function buildGenerationInputs(params: {
   profile: ClientProgrammingProfile;
   assumptions: string[];
   nowIso: string;
+  rationale?: string;
+  whyThisPlan?: string[];
 }): GenerationInputs {
   const method = getMethodologyConfirmation(params.operatingModel);
   if (!method.confirmed || !method.confirmedAtIso) throw new Error("buildGenerationInputs: coach method is not confirmed");
@@ -149,6 +151,8 @@ export function buildGenerationInputs(params: {
   return {
     version: 1,
     recordedAtIso: params.nowIso,
+    ...(params.rationale ? { rationale: params.rationale } : {}),
+    ...(params.whyThisPlan && params.whyThisPlan.length > 0 ? { whyThisPlan: params.whyThisPlan } : {}),
     coachMethod: {
       playbookVersion: params.playbookVersion,
       operatingModelVersion: method.operatingModelVersion,
@@ -197,4 +201,12 @@ export function checkProposalApproval(
   }
   if (!currentPrerequisites.ready) return { ok: false, message: currentPrerequisites.missing.map((m) => m.message).join(" ") };
   return { ok: true };
+}
+
+/** A still-pending fresh-generation proposal that can never be approved
+ * (no verified inputs). Rejecting a proposal also archives any other such
+ * draft for the same client, so a hidden duplicate can't resurface as "the
+ * pending proposal." Adjustment proposals are never matched. */
+export function isUnverifiedFreshProposal(content: { generationInputs?: unknown; adjustmentProvenance?: unknown }): boolean {
+  return !content.adjustmentProvenance && !hasVerifiedGenerationInputs(content);
 }
