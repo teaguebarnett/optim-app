@@ -52,10 +52,15 @@ export function TimeZonePicker({ value, onChange, label = "Time zone" }: { value
         placeholder="Search by city, region, or UTC offset…"
         emptyMessage="No matching time zone."
         renderTrigger={() => (
-          <span className="flex items-baseline gap-2">
-            <span>{friendlyTimeZoneDisplayLabel(value)}</span>
-            <span className="text-meta text-neutral">{currentLocalTimeLabel(value, nowTick)}</span>
-          </span>
+          value ? (
+            <span className="flex items-baseline gap-2">
+              <span>{friendlyTimeZoneDisplayLabel(value)}</span>
+              <span className="text-meta text-neutral">{currentLocalTimeLabel(value, nowTick)}</span>
+            </span>
+          ) : (
+            // Empty means "not chosen yet" — never an implied zone.
+            <span className="text-neutral">Select a time zone</span>
+          )
         )}
       />
     </div>

@@ -73,3 +73,9 @@ export function validateNutritionTargets(input: Record<keyof NutritionTargets, u
     targets: { calories: input.calories as number, proteinG: input.proteinG as number, carbsG: input.carbsG as number, fatG: input.fatG as number },
   };
 }
+
+/** True when two target sets are identical — used to refuse publishing a
+ * nutrition version that duplicates the one already assigned. */
+export function nutritionTargetsEqual(a: NutritionTargets, b: NutritionTargets): boolean {
+  return a.calories === b.calories && a.proteinG === b.proteinG && a.carbsG === b.carbsG && a.fatG === b.fatG;
+}

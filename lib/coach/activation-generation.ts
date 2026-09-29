@@ -18,6 +18,9 @@
 
 import { buildPrescribedSets, DAYS_OF_WEEK_ORDER } from "./training.ts";
 import { EXERCISE_LIBRARY, type EquipmentTag, type LibraryExercise, type MovementPattern } from "./exercise-library.ts";
+import { optionLabel, humanize } from "./methodology.ts";
+import { ONBOARDING_STEPS } from "./onboarding-steps.ts";
+import { formatFieldValue } from "./onboarding-format.ts";
 import type { ClientAssignedProgram, DayOfWeek, Exercise, NutritionTargets, ProgramDay, ProgramWeek, RpeValue, Workout } from "../types";
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 import type { OnboardingProgress, OnboardingStepAnswers } from "./types";
@@ -517,24 +520,35 @@ export function scoreTrainingOption(kind: OptionKind, snapshot: ClientOnboarding
   return { total, goalFit, methodologyFit, experienceFit, scheduleFit, adherenceLikelihood };
 }
 
+/** The client's own intake wording for an answer (e.g. "some_experience" ->
+ * the intake option's label) — never a raw enum or a re-derived tier. */
+function intakeAnswerLabel(key: string, value: string): string {
+  for (const step of ONBOARDING_STEPS) {
+    const field = step.fields.find((f) => f.key === key);
+    if (field) return formatFieldValue(field, value);
+  }
+  return humanize(value);
+}
+
 export function buildTrainingExplanation(kind: OptionKind, snapshot: ClientOnboardingSnapshot, com: CoachOperatingModel, splitName: string): TrainingOptionExplanation {
-  const tier = experienceTier(snapshot);
+  const days = snapshot.availableDays.length;
   const clientFacts = [
-    `${snapshot.availableDays.length} available training days/week`,
+    `${days} available training day${days === 1 ? "" : "s"}/week`,
     `${snapshot.maxSessionLengthMinutes}-minute session limit`,
-    `${tier} training experience`,
-    `Goal: ${snapshot.primaryGoal.replace(/_/g, " ")}${isRecompositionGoal(snapshot) ? " (recognized as body recomposition)" : ""}`,
+    `Training experience: ${intakeAnswerLabel("trainingExperience", snapshot.trainingExperience)}`,
+    `Goal: ${intakeAnswerLabel("primaryGoal", snapshot.primaryGoal)}${isRecompositionGoal(snapshot) ? " (treated as body recomposition)" : ""}`,
   ];
+  const arch = com.programArchitecture;
   const coachRules = [
-    `Preferred splits: ${com.programArchitecture.preferredSplits.join(", ") || "none specified"}`,
-    `Rep-range philosophy: ${com.programArchitecture.repRangePhilosophy}`,
-    `Proximity to failure: ${com.programArchitecture.proximityToFailure}`,
-    `Deload every ${com.programArchitecture.deloadFrequencyWeeks ?? "—"} weeks`,
+    `Splits: ${arch.preferredSplits.map((v) => optionLabel("program_splits", v)).join(", ") || "none specified"}`,
+    `Rep ranges: ${optionLabel("program_rep_philosophy", arch.repRangePhilosophy)}`,
+    ...(arch.usesRpeOrRir === "neither" ? [] : [`Proximity to failure: ${optionLabel("program_proximity_to_failure", arch.proximityToFailure)}`]),
+    arch.deloadFrequencyWeeks === null ? "Deloads: only when fatigue signals call for it" : `Deloads: every ${arch.deloadFrequencyWeeks} weeks`,
   ];
 
   if (kind === "best_fit") {
     return {
-      whyItFits: `${splitName} matches your top preferred split for a ${tier} client training ${snapshot.availableDays.length} days/week.`,
+      whyItFits: `${splitName} is the first of your splits that fits this client's ${days} available training day${days === 1 ? "" : "s"}.`,
       primaryAdvantage: "Closest alignment with your own stated methodology and this client's real schedule.",
       tradeoff: "Prioritizes proven consistency with your style over novelty.",
       whatOptimWillMonitor: ["RPE trend vs. prescribed", "Missed sessions", "Rep-target adherence"],

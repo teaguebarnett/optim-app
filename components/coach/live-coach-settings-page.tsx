@@ -45,7 +45,7 @@ export async function LiveCoachSettingsPage() {
     <div className="space-y-10">
       <PageHeader title="Settings" description="Configure how OPTIM works with you and your clients." />
 
-      <section className="space-y-3">
+      <section id="coaching-method" className="scroll-mt-24 space-y-3">
         <div className="flex items-center gap-2">
           <Compass size={16} className="text-accent-fg" aria-hidden="true" />
           <h2 className="text-subheading text-off-white">Coaching Playbook</h2>

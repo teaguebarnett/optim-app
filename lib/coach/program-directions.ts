@@ -34,7 +34,7 @@ import {
 import { buildPrescribedSets, DAYS_OF_WEEK_ORDER } from "./training.ts";
 import type { EquipmentTag, LibraryExercise, MovementPattern } from "./exercise-library.ts";
 import { computeProgramPhases, computeWeekParameters, shiftRepRange, applyRpeOffset, type ProgramPhase, type WeekParameters } from "./program-periodization.ts";
-import type { ClientProgrammingProfile } from "./programming-profile.ts";
+import { resolveProgrammingProfileReadiness, type ClientProgrammingProfile } from "./programming-profile.ts";
 import type { CoachOperatingModel } from "./operating-model.ts";
 import type { ClientAssignedProgram, DayOfWeek, Exercise, ProgramDay, ProgramWeek, RpeValue, Workout } from "../types";
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
@@ -257,7 +257,13 @@ function buildDirectionSummary(kind: OptionKind, splitKey: string, plan: { split
     howItReflectsCoach: explanation.coachingRulesUsed.join(" "),
     tradeoff: explanation.tradeoff,
     constraintsHonored: constraintsHonoredFor(profile, com),
-    confidenceNote: profile.dailyActivityLevelIsAssumed || profile.cardioPreferenceIsAssumed ? "Some inputs were assumed — see the client's programming readiness note." : "Every input below was directly reported by the client.",
+    // Names each assumption explicitly (resolveProgrammingProfileReadiness's
+    // own plain-language list) instead of pointing at a note the live
+    // review never shows.
+    confidenceNote: (() => {
+      const assumptions = resolveProgrammingProfileReadiness({ profile }).assumptions;
+      return assumptions.length > 0 ? `Assumed (not answered in intake): ${assumptions.join(" ")}` : "Every client input was reported in the client's intake.";
+    })(),
     rankingRationale: "", // filled in once all three are known — see below.
     score: scoreTrainingOption(kind, profile, com, splitKey),
     explanation,

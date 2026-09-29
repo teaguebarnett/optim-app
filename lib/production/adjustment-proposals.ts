@@ -28,17 +28,13 @@ import { getOrBootstrapApprovedPlaybook } from "./playbooks.ts";
 import { resolveApplicableCoachRules } from "./rule-resolution.ts";
 import { resolveClientStateEvidence } from "./client-state-evidence.ts";
 import { extractClientProgrammingProfile } from "../coach/programming-profile.ts";
-import { buildPlaceholderProgrammingProfile } from "../coach/universal-program-generation.ts";
 import { avoidedTermsForProfile } from "../coach/program-directions.ts";
 import { deriveProgramWeek } from "../scheduling/enrollment.ts";
 import { analyzeClientState } from "../client-state/analyze-client-state.ts";
 import { selectFindingsForCoachUI } from "../client-state/presentation.ts";
 import { evaluateAdjustmentForFinding, type AdjustmentEngineParams } from "../adjustment/build-proposal.ts";
-import { DAYS_OF_WEEK_ORDER } from "../coach/training.ts";
 import type { NoProposalReason } from "../adjustment/types.ts";
 import type { AdjustmentProvenance } from "../training/types.ts";
-
-const DEFAULT_AVAILABLE_DAYS = [DAYS_OF_WEEK_ORDER[0], DAYS_OF_WEEK_ORDER[2], DAYS_OF_WEEK_ORDER[4]];
 
 export type AdjustmentResolution = { kind: "existing_pending"; versionId: string; isAdjustment: boolean } | { kind: "no_proposal"; reason: NoProposalReason; detail: string } | { kind: "new_proposal"; versionId: string; programId: string };
 
@@ -78,8 +74,11 @@ export async function resolveAdjustmentProposal(params: { workspaceId: string; c
     const com = playbook.content.operatingModel;
 
     const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
-    const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
-    const avoidedTerms = avoidedTermsForProfile(profile, com);
+    // Adjustments modify the already-approved active plan (and are re-checked
+    // against it at approval); intake only contributes client restrictions.
+    // Without intake that's just the coach's own avoided exercises — never a
+    // placeholder client.
+    const avoidedTerms = "profile" in profileResult ? avoidedTermsForProfile(profileResult.profile, com) : [...com.programArchitecture.exercisesAvoided];
 
     const currentProgramWeek = programContext.enrollment ? deriveProgramWeek(programContext.enrollment, new Date().toISOString().slice(0, 10)) : null;
     const applicableRules = await resolveApplicableCoachRules({ clientProfileId: params.clientProfileId });

@@ -16,10 +16,11 @@
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "../../lib/production/auth";
 import { UnauthenticatedError, UnauthorizedError } from "../../lib/production/errors";
 import { getSupabaseServerClient } from "../../lib/supabase/server";
-import { validateNutritionTargets } from "../../lib/coach/nutrition-targets-input";
+import { validateNutritionTargets, nutritionTargetsEqual } from "../../lib/coach/nutrition-targets-input";
 import {
   getClientProgramContext,
   getActiveProgramAssignment,
+  getActiveNutritionAssignment,
   getDailyActivity,
   saveDailyActivity,
   createDraftProgramVersion,
@@ -37,11 +38,11 @@ import {
 } from "../../lib/production/programs";
 import { universalProgramToClientAssignedProgram } from "../../lib/training/legacy-adapter";
 import { generateProgramDirectionSummaries, avoidedTermsForProfile } from "../../lib/coach/program-directions";
-import { buildUniversalProgramForDirection, buildPlaceholderProgrammingProfile } from "../../lib/coach/universal-program-generation";
-import { DAYS_OF_WEEK_ORDER } from "../../lib/coach/training";
+import { buildUniversalProgramForDirection } from "../../lib/coach/universal-program-generation";
 import { getOnboardingProgressForClient } from "../../lib/production/onboarding";
 import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
-import { getOrBootstrapApprovedPlaybook } from "../../lib/production/playbooks";
+import { getOrBootstrapApprovedPlaybook, getApprovedPlaybook } from "../../lib/production/playbooks";
+import { evaluateGenerationPrerequisites, buildGenerationInputs, hasVerifiedGenerationInputs, checkProposalApproval, GenerationPrerequisitesError, type MissingPrerequisite } from "../../lib/coach/generation-prerequisites";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { resolveApplicableCoachRules, getLearnedRuleProvenance, type LearnedRuleProvenance } from "../../lib/production/rule-resolution";
 import { analyzeClientStateForClient, resolveEvidenceDetails } from "../../lib/production/client-state-evidence";
@@ -283,11 +284,6 @@ export async function saveMySupabaseDailyActivityAction(params: {
 // ---------------------------------------------------------------------------
 
 // Phase 6B — this conservative, non-demographic default cadence is now
-// ONLY a genuine fallback: used exclusively when a client hasn't completed
-// real onboarding yet (see extractClientProgrammingProfile below). Every
-// client with real onboarding data gets their own real availableDays
-// instead.
-const DEFAULT_AVAILABLE_DAYS = [DAYS_OF_WEEK_ORDER[0], DAYS_OF_WEEK_ORDER[2], DAYS_OF_WEEK_ORDER[4]];
 
 /** Phase 8C — the one authorization gate every proposal review/edit/
  * approve/reject/regenerate action shares: workspace staff role AND,
@@ -313,27 +309,41 @@ async function requireAssignedCoachAuthority(workspaceId: string, clientProfileI
   return ctx;
 }
 
+/** Resolves everything a NEW proposal may be generated from, and whether
+ * it is allowed at all (lib/coach/generation-prerequisites.ts): a
+ * coach-confirmed method, completed intake, and no open health review.
+ * Reads the approved playbook WITHOUT bootstrapping one — a bootstrapped
+ * default is never a confirmed method anyway. */
+async function resolveGenerationContext(workspaceId: string, clientProfileId: string) {
+  const [playbook, onboarding, healthReview] = await Promise.all([
+    getApprovedPlaybook(workspaceId),
+    getOnboardingProgressForClient(clientProfileId),
+    resolveHealthReviewRecordForClient(clientProfileId, workspaceId),
+  ]);
+  const intake = extractClientProgrammingProfile(onboarding, healthReview);
+  const prerequisites = evaluateGenerationPrerequisites({
+    playbook: playbook ? { version: playbook.version, operatingModel: playbook.content.operatingModel } : null,
+    onboarding,
+    intake,
+    clientProfileId,
+  });
+  return { playbook, onboarding, prerequisites };
+}
+
 /**
  * Phase 5/6B's real generation pipeline (Coach Playbook + real onboarding +
- * real health review, normalized through extractClientProgrammingProfile),
- * unchanged in substance — Phase 8C only extracts it into its own function
- * so it can be called from createProgramProposalAction WITHOUT also
- * publishing/assigning the result (see this phase's own completion report,
- * "program lifecycle before vs after"). See the prior version of this file
- * (git history) for the full original doc on why each of these context
- * sources is resolved the way it is.
+ * real health review, normalized through extractClientProgrammingProfile).
+ * It now refuses to run without a coach-confirmed method and completed
+ * intake — the placeholder client profile and the bootstrapped default
+ * method it used to fall back to are never generation inputs — and records
+ * exactly what it used as content.generationInputs.
  */
 async function generateUniversalProgramProposalContent(params: { workspaceId: string; clientProfileId: string; coachId: string; title: string; durationWeeks: number }) {
-  const supabase = await getSupabaseServerClient();
-  const { data: workspaceRow, error: workspaceError } = await supabase.from("workspaces").select("business_name").eq("id", params.workspaceId).single();
-  if (workspaceError) throw new Error(`generateUniversalProgramProposalContent (workspace lookup) failed: ${workspaceError.message}`);
-  const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: workspaceRow.business_name as string });
-  const com = playbook.content.operatingModel;
-
-  const onboarding = await getOnboardingProgressForClient(params.clientProfileId);
-  const healthReview = await resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId);
-  const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
-  const profile = "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+  const { playbook, onboarding, prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
+  if (!prerequisites.ready) throw new GenerationPrerequisitesError(prerequisites.missing);
+  // evaluateGenerationPrerequisites only returns ready with both present.
+  const com = playbook!.content.operatingModel;
+  const profile = prerequisites.profile;
 
   const directions = generateProgramDirectionSummaries({ profile, com, durationWeeks: params.durationWeeks });
   const direction = directions.find((d) => d.kind === "best_fit") ?? directions[0];
@@ -366,9 +376,18 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
   // "now" (spec section 18/41). Only ever set when non-empty — an absent
   // field reads as "no provenance," identical to legacy content.
   const methodologyConflictedLearnedRuleIds = ruleApplication.skippedRules.filter((s) => s.reason === "explicit_methodology_conflict").map((s) => s.ruleId);
+  const generationInputs = buildGenerationInputs({
+    playbookVersion: playbook!.version,
+    operatingModel: com,
+    onboarding: onboarding!,
+    profile,
+    assumptions: prerequisites.assumptions,
+    nowIso,
+  });
   const contentWithProvenance = {
     ...content,
     name: params.title,
+    generationInputs,
     ...(ruleApplication.appliedRuleIds.length > 0 ? { appliedLearnedRuleIds: ruleApplication.appliedRuleIds } : {}),
     ...(methodologyConflictedLearnedRuleIds.length > 0 ? { methodologyConflictedLearnedRuleIds } : {}),
   };
@@ -376,19 +395,30 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
   return { content: contentWithProvenance, direction, profile, com, nowIso, ruleApplication };
 }
 
+export interface GenerationPrerequisitesView {
+  ready: boolean;
+  missing: MissingPrerequisite[];
+}
+
+/** The client-setup page's view of whether a new proposal can be generated,
+ * and what's missing (with links to the screens that resolve it). */
+export async function getGenerationPrerequisitesAction(params: { workspaceId: string; clientProfileId: string }): Promise<GenerationPrerequisitesView> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
+  return prerequisites.ready ? { ready: true, missing: [] } : { ready: false, missing: prerequisites.missing };
+}
+
 function proposalSummaryFrom(content: { durationWeeks: number; directionLabel?: string; generationRationale?: string }): ProgramProposalSummary {
   return { durationWeeks: content.durationWeeks, directionLabel: content.directionLabel ?? "Unlabeled direction", rationale: content.generationRationale ?? "No rationale recorded." };
 }
 
-/** The same real onboarding + health-review + fallback resolution every
- * proposal action needs — factored out once in Phase 8D (previously
- * duplicated in the generation path and the review-read path, and about to
- * be needed by every new structural-edit action too). */
+/** The client's real programming profile, or null when intake isn't
+ * complete — never a placeholder standing in for missing answers. */
 async function resolveClientProgrammingProfile(workspaceId: string, clientProfileId: string) {
   const onboarding = await getOnboardingProgressForClient(clientProfileId);
   const healthReview = await resolveHealthReviewRecordForClient(clientProfileId, workspaceId);
   const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
-  return "profile" in profileResult ? profileResult.profile : buildPlaceholderProgrammingProfile(DEFAULT_AVAILABLE_DAYS);
+  return "profile" in profileResult ? profileResult.profile : null;
 }
 
 /** The one shared "apply a pure transform to the current draft, validate,
@@ -463,6 +493,11 @@ export interface ProgramProposalReviewView {
    * (legacy content, or a coach/client with no applicable rules at
    * generation time) — never fabricated. */
   appliedRuleProvenance: LearnedRuleProvenance[];
+  /** False for a fresh-generation proposal with no verified generation
+   * inputs (made before these checks, or from placeholders): it cannot be
+   * approved and must be rejected and regenerated. Always true for an
+   * adjustment proposal, which is checked against the active plan instead. */
+  inputsVerified: boolean;
   /** A deliberately narrow, bounded subset — see lib/training/types.ts's
    * methodologyConflictedLearnedRuleIds doc: only the one skip reason
    * that's materially coach-meaningful ("this would have applied but your
@@ -479,7 +514,9 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
 
   const profile = await resolveClientProgrammingProfile(params.workspaceId, params.clientProfileId);
   const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: "" });
-  const avoidedTerms = avoidedTermsForProfile(profile, playbook.content.operatingModel);
+  // Without intake there are no client restrictions to add — only the
+  // coach's own avoided exercises (exactly what the placeholder produced).
+  const avoidedTerms = profile ? avoidedTermsForProfile(profile, playbook.content.operatingModel) : [...playbook.content.operatingModel.programArchitecture.exercisesAvoided];
 
   const original = pending.versionNumber > 1 ? await getOriginalProposalVersion(params.workspaceId, pending.programId) : pending;
   const changesSummary = original ? diffProgramProposal(original.content, pending.content).map(describeProgramDiffEntry) : [];
@@ -502,6 +539,7 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     restrictionWarnings: findRestrictionConflicts(pending.content, avoidedTerms),
     changesSummary,
     appliedRuleProvenance,
+    inputsVerified: !!pending.content.adjustmentProvenance || hasVerifiedGenerationInputs(pending.content),
     methodologyConflictedRuleProvenance,
   };
 }
@@ -742,6 +780,16 @@ export async function approveProgramProposalAction(params: { workspaceId: string
     }
   }
 
+  // A fresh-generation proposal must carry verified inputs AND its
+  // prerequisites must still hold right now (the method could have been
+  // unconfirmed or a health review opened since generation). Adjustment
+  // proposals are bounded by the active-plan staleness check above.
+  if (!approved.content.adjustmentProvenance) {
+    const { prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
+    const gate = checkProposalApproval(approved.content, prerequisites);
+    if (!gate.ok) throw new Error(gate.message);
+  }
+
   await publishProgramVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
   const assignmentId = await assignProgramVersionToClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, versionId: params.versionId });
 
@@ -815,7 +863,7 @@ export async function createPublishAndAssignNutritionAction(params: {
   proteinG: number;
   carbsG: number;
   fatG: number;
-}): Promise<{ assignmentId: string; versionId: string }> {
+}): Promise<{ assignmentId: string; versionId: string; versionNumber: number | null; unchanged: boolean }> {
   // A minimal, real AssignedNutritionPlan — this proof surface only ever
   // collects the four macro targets from the coach (see the form in
   // assign-live/page.tsx); the richer coaching-guidance fields this type
@@ -829,6 +877,12 @@ export async function createPublishAndAssignNutritionAction(params: {
   // persist a missing/NaN/out-of-range target as prescribed nutrition.
   const checked = validateNutritionTargets(params);
   if (!checked.ok) throw new Error(checked.message);
+  // A resubmission of the targets already assigned (double click, retry,
+  // stale tab) must not publish another identical version.
+  const active = await getActiveNutritionAssignment(params.clientProfileId);
+  if (active && nutritionTargetsEqual(active.content.targets, checked.targets)) {
+    return { assignmentId: active.assignmentId, versionId: active.versionId, versionNumber: active.versionNumber, unchanged: true };
+  }
   const content = {
     id: `nutrition-${crypto.randomUUID()}`,
     targets: checked.targets,
@@ -858,7 +912,8 @@ export async function createPublishAndAssignNutritionAction(params: {
     clientProfileId: params.clientProfileId,
     versionId,
   });
-  return { assignmentId, versionId };
+  const assigned = await getActiveNutritionAssignment(params.clientProfileId);
+  return { assignmentId, versionId, versionNumber: assigned?.versionId === versionId ? assigned.versionNumber : null, unchanged: false };
 }
 
 export async function setProgramStartDateAction(params: {

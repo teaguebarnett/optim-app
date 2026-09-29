@@ -12,6 +12,7 @@ import { UnauthorizedError } from "./errors.ts";
 import { validatePlaybookContent } from "./validation.ts";
 import { buildDefaultPlaybookContent, type CoachPlaybook, type CoachPlaybookContent, type PlaybookExample } from "../coach/playbook.ts";
 import type { AiAuthorityConfig } from "../coach/ai-authority.ts";
+import { confirmMethodology, type MethodAnswers } from "../coach/methodology.ts";
 
 async function requireCoachAuthority(workspaceId: string) {
   const ctx = await getAuthenticatedContext();
@@ -63,7 +64,14 @@ export async function getApprovedPlaybook(workspaceId: string): Promise<CoachPla
   return data ? rowToPlaybook(data as PlaybookRow) : null;
 }
 
-/** Bootstraps version 1, approved, for a workspace that has never had a
+/** NOTE: the row this bootstraps is "approved" only so the playbook-backed
+ * features (AI authority, chat) have a row to read; its operating model is
+ * createDefaultCoachOperatingModel's status "draft" defaults with empty
+ * provenance. Never treat it as the coach's confirmed method — use
+ * lib/coach/methodology.ts's getMethodologyConfirmation, which program
+ * generation requires.
+ *
+ * Bootstraps version 1, approved, for a workspace that has never had a
  * Playbook — not a rewrite of an existing one (there isn't one), the same
  * "legacy coach who skips calibration" default posture
  * createDefaultCoachOperatingModel's own doc describes. Idempotent: if a
@@ -219,4 +227,21 @@ export async function proposePlaybookExampleFromEscalation(params: {
   };
   const draftContent: CoachPlaybookContent = { ...current.content, examples: [...current.content.examples, example] };
   return createDraftPlaybookVersion({ workspaceId: params.workspaceId, content: draftContent });
+}
+
+/** Settings -> Your Coaching Method: the coach's explicit review-and-confirm
+ * of the fields program generation reads. Applies the submitted answers
+ * (already validated by parseMethodAnswers) through the existing onboarding
+ * mapper, which records coach_selected provenance, activates the model, and
+ * saves it as a new approved Playbook version via the existing
+ * draft-then-approve pipeline — prior versions stay in history. */
+export async function confirmCoachMethodology(params: { workspaceId: string; businessName: string; answers: Required<MethodAnswers> }): Promise<CoachPlaybook> {
+  const current = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: params.businessName });
+  const nowIso = new Date().toISOString();
+  const operatingModel = confirmMethodology(current.content.operatingModel, params.answers, nowIso);
+  const draft = await createDraftPlaybookVersion({ workspaceId: params.workspaceId, content: { ...current.content, operatingModel } });
+  await approvePlaybookVersion({ workspaceId: params.workspaceId, versionId: draft.id });
+  const approved = await getApprovedPlaybook(params.workspaceId);
+  if (!approved || approved.id !== draft.id) throw new Error("confirmCoachMethodology: the confirmed version did not become the approved Playbook");
+  return approved;
 }

@@ -158,3 +158,35 @@ export function matchTimeZoneEntries(query: string): TimeZoneEntry[] {
   const otherMatches = entries.filter((e) => !cityMatches.includes(e) && e.searchText.includes(q));
   return [...cityMatches, ...otherMatches];
 }
+
+/** Server-side validation for a timezone a coach submits: returns the
+ * canonical IANA id, or null for anything that isn't a real zone (empty,
+ * free text, a raw offset like "+05:00"). "UTC" is accepted only because a
+ * coach may genuinely choose it — callers must never default to it. */
+export function canonicalTimeZone(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const value = input.trim();
+  if (!value || /^[+-]\d/.test(value)) return null;
+  let resolved: string;
+  try {
+    resolved = new Intl.DateTimeFormat("en-US", { timeZone: value }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+  if (resolved.toLowerCase() === value.toLowerCase()) return resolved;
+  // Accept a known alias (e.g. "US/Central") only if the runtime lists it.
+  try {
+    const supported = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+    return supported.includes(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export type TimezoneSource = "client_detected" | "coach_override";
+
+/** Keeping the client's own detected zone stays "client_detected"; any
+ * genuinely different (or first) choice is the coach's override. */
+export function resolveTimezoneSource(existing: { timezone: string | null; timezone_source: string | null } | null, submittedTimeZone: string): TimezoneSource {
+  return existing?.timezone_source === "client_detected" && existing.timezone === submittedTimeZone ? "client_detected" : "coach_override";
+}

@@ -38,6 +38,7 @@ import { DEFAULT_WEEK_STARTS_ON } from "../shared/local-date";
 import { resolveUniversalProgramContent } from "../training/legacy-adapter";
 import { projectTrainingDayObservations } from "../signals/project-training-day";
 import { recordObservations } from "./signals";
+import { canonicalTimeZone, resolveTimezoneSource } from "../shared/timezone";
 import type { AssignedNutritionPlan } from "../types";
 import type { ProgramEnrollment } from "../scheduling/types";
 import type { UniversalTrainingProgramContent } from "../training/types";
@@ -615,21 +616,34 @@ export async function setClientProgramStartDate(params: {
   timeZone: string;
 }): Promise<void> {
   await requireCoachAuthority(params.workspaceId);
+  // Validated here, not just in the form: a free-text or empty value must
+  // never be stored as a confirmed timezone (it used to default to "UTC"
+  // and be saved as coach_override, silently satisfying activation's
+  // confirmed-timezone check).
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(params.startDateIso) || Number.isNaN(Date.parse(`${params.startDateIso}T00:00:00Z`))) {
+    throw new Error("Choose a valid start date.");
+  }
+  const timeZone = canonicalTimeZone(params.timeZone);
+  if (!timeZone) throw new Error("Choose the client's time zone from the list.");
+
   const supabase = await getSupabaseServerClient();
   const { data: existing, error: readError } = await supabase
     .from("client_enrollments")
-    .select("status")
+    .select("status, timezone, timezone_source")
     .eq("client_profile_id", params.clientProfileId)
     .maybeSingle();
   if (readError) throw new Error(`setClientProgramStartDate (read) failed: ${readError.message}`);
+  // Keeping the client's own detected zone stays "client_detected"; only a
+  // genuinely different choice becomes the coach's override.
+  const timezoneSource = resolveTimezoneSource(existing ? { timezone: existing.timezone as string | null, timezone_source: existing.timezone_source as string | null } : null, timeZone);
 
   const { error } = await supabase.from("client_enrollments").upsert(
     {
       workspace_id: params.workspaceId,
       client_profile_id: params.clientProfileId,
       original_program_start_date: params.startDateIso,
-      timezone: params.timeZone,
-      timezone_source: "coach_override",
+      timezone: timeZone,
+      timezone_source: timezoneSource,
       ...(existing ? {} : { status: "onboarding" }),
     },
     { onConflict: "client_profile_id" }

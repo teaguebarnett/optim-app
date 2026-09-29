@@ -199,6 +199,10 @@ export interface LiveClientDetail {
   /** targets are the assigned published version's own saved values —
    * never a form default. Null means nutrition is genuinely not assigned. */
   activeNutrition: { versionId: string; versionNumber: number; targets: NutritionTargets } | null;
+  /** Where `timezone` came from: the client's own device, the coach, or
+   * nowhere yet (null — `timezone` is then only the schema's 'UTC'
+   * default and must not be shown or used as the client's zone). */
+  timezoneSource: "client_detected" | "coach_override" | null;
 }
 
 async function requireCoachAuthority(workspaceId: string) {
@@ -253,6 +257,7 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
     startDateIso: (enrollment?.original_program_start_date as string | null) ?? null,
     timezone: (enrollment?.timezone as string) || "UTC",
     hasConfirmedTimezone: !!enrollment?.timezone_source,
+    timezoneSource: (enrollment?.timezone_source as "client_detected" | "coach_override" | null | undefined) ?? null,
     onboarding: onboarding ? { currentStepIndex: onboarding.current_step_index as number, answers: onboarding.answers, completedAtIso: onboarding.completed_at as string | null } : null,
     activeProgram: program ? { versionId: program.versionId, versionNumber: program.versionNumber, name: program.content.name, durationWeeks: program.content.durationWeeks } : null,
     activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber, targets: nutrition.content.targets } : null,

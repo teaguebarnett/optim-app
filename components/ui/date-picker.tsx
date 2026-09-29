@@ -259,9 +259,10 @@ export function StartDateField({ label, value, onChange }: StartDateFieldProps) 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
+  // An empty value means "nothing chosen yet" (never an implicit today).
   const isToday = value === min;
   const isNextMonday = value === nextMonday;
-  const isCustom = !isToday && !isNextMonday;
+  const isCustom = !!value && !isToday && !isNextMonday;
 
   function closePicker(returnFocus: boolean) {
     setPickerMode("closed");
@@ -269,7 +270,7 @@ export function StartDateField({ label, value, onChange }: StartDateFieldProps) 
   }
 
   function openPicker() {
-    setFocusedIso(isLocalDateBefore(value, min) ? min : value);
+    setFocusedIso(!value || isLocalDateBefore(value, min) ? min : value);
     const isDesktop = typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches;
     setPickerMode(isDesktop ? "popover" : "sheet");
   }
@@ -315,7 +316,7 @@ export function StartDateField({ label, value, onChange }: StartDateFieldProps) 
           ) : null}
         </div>
       </div>
-      <p className="mt-2.5 text-sm font-medium text-off-white">{formatLongDateLabel(value)}</p>
+      <p className="mt-2.5 text-sm font-medium text-off-white">{value ? formatLongDateLabel(value) : "No date selected"}</p>
 
       {pickerMode === "sheet" ? (
         <Sheet open onClose={() => closePicker(true)} title="Choose a date">

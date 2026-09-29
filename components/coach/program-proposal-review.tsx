@@ -28,7 +28,10 @@ import {
   type ProgramProposalReviewView,
 } from "@/app/actions/production-programs";
 import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, BlockPatch } from "@/lib/training/program-proposal-editing";
-import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance } from "@/lib/training/types";
+import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
+import { ProposalScheduleNavigator } from "@/components/coach/proposal-schedule-navigator";
+import { ProposalApproveForm } from "@/components/coach/proposal-approve-form";
+import type { SaveResult } from "@/components/coach/live-start-date-form";
 import { describeIntervalOverview } from "@/lib/workout/interval";
 import { describeCircuitOverview, isUnboundedRounds } from "@/lib/workout/circuit";
 import { describePowerOverview } from "@/lib/workout/power";
@@ -94,16 +97,88 @@ function buildProgramOverview(content: UniversalTrainingProgramContent) {
   return { trainingDaysPerWeek: trainingDays.length, restDaysPerWeek: restDays, sessionNames, resistanceItems, continuousItems, intervalItems, circuitBlocks, powerItems, mobilityItems, amrapBlocks, emomBlocks };
 }
 
+/** "4 weeks · 3 training days/week · 4 rest days/week · 18 resistance
+ * items · 1 interval item (week 1 pattern)" — only categories that are
+ * actually present; a zero count is noise, not information. */
+function describeOverview(durationWeeks: number, o: ReturnType<typeof buildProgramOverview>): string {
+  const counted: Array<[number, string, string]> = [
+    [o.resistanceItems, "resistance item", "resistance items"],
+    [o.continuousItems, "continuous item", "continuous items"],
+    [o.intervalItems, "interval item", "interval items"],
+    [o.circuitBlocks, "circuit", "circuits"],
+    [o.amrapBlocks, "AMRAP block", "AMRAP blocks"],
+    [o.emomBlocks, "EMOM block", "EMOM blocks"],
+    [o.powerItems, "power item", "power items"],
+    [o.mobilityItems, "mobility item", "mobility items"],
+  ];
+  const parts = [
+    `${durationWeeks} week${durationWeeks === 1 ? "" : "s"}`,
+    `${o.trainingDaysPerWeek} training day${o.trainingDaysPerWeek === 1 ? "" : "s"}/week`,
+    ...(o.restDaysPerWeek > 0 ? [`${o.restDaysPerWeek} rest day${o.restDaysPerWeek === 1 ? "" : "s"}/week`] : []),
+    ...counted.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`),
+  ];
+  return `${parts.join(" · ")} (week 1 pattern)`;
+}
+
+function formatShortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** Exactly what this proposal was built from — recorded at generation time
+ * (lib/coach/generation-prerequisites.ts), never recomputed from today's
+ * state. */
+function InputsUsedSection({ inputs }: { inputs: GenerationInputs }) {
+  return (
+    <div className="mb-3 grid gap-3 rounded border border-border-strong bg-surface-raised px-3 py-2.5 md:grid-cols-2">
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wide text-neutral">
+          Your confirmed method · Playbook v{inputs.coachMethod.playbookVersion}, {formatShortDate(inputs.coachMethod.confirmedAtIso)}
+        </p>
+        <dl className="mt-1.5 space-y-0.5 text-xs">
+          {inputs.coachMethod.summary.map((f) => (
+            <div key={f.label} className="flex gap-2">
+              <dt className="shrink-0 text-neutral">{f.label}:</dt>
+              <dd className="text-off-white">{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wide text-neutral">
+          Client intake · completed {formatShortDate(inputs.clientIntake.completedAtIso)}
+          {inputs.clientIntake.healthReview === "resolved" ? " · health review resolved" : ""}
+        </p>
+        <dl className="mt-1.5 space-y-0.5 text-xs">
+          {inputs.clientIntake.summary.map((f) => (
+            <div key={f.label} className="flex gap-2">
+              <dt className="shrink-0 text-neutral">{f.label}:</dt>
+              <dd className="text-off-white">{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+        {inputs.clientIntake.assumptions.length > 0 ? (
+          <p className="mt-1.5 text-xs text-warning-strong">Assumed (not answered in intake): {inputs.clientIntake.assumptions.join(" ")}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, proposal }: { workspaceId: string; clientProfileId: string; clientId: string; proposal: ProgramProposalReviewView }) {
   async function revalidate() {
     "use server";
     revalidatePath(`/coach/clients/${clientId}`);
   }
 
-  async function approveAction() {
+  async function approveAction(): Promise<SaveResult> {
     "use server";
-    await approveProgramProposalAction({ workspaceId, clientProfileId, versionId: proposal.versionId });
+    try {
+      await approveProgramProposalAction({ workspaceId, clientProfileId, versionId: proposal.versionId });
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "Could not approve this proposal." };
+    }
     await revalidate();
+    return { ok: true, message: "Approved and assigned." };
   }
 
   async function rejectAction(formData: FormData) {
@@ -254,75 +329,8 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     return add;
   }
 
-  const overview = buildProgramOverview(proposal.content);
-  const adjustment = proposal.content.adjustmentProvenance;
-
-  return (
-    <Card id="proposal-review" className="border-l-2 border-l-accent">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-sm font-medium text-off-white">
-            {adjustment ? "OPTIM proposes an adjustment" : `Proposed program ${proposal.wasEdited ? "(edited)" : "(as generated)"} — ${proposal.content.durationWeeks} weeks`}
-          </p>
-          <p className="mt-0.5 text-xs text-neutral">{proposal.content.directionLabel ?? proposal.content.name}</p>
-          {proposal.content.generationRationale ? <p className="mt-1 text-xs text-neutral">{proposal.content.generationRationale}</p> : null}
-        </div>
-        <div className="flex items-center gap-2">
-          <form action={approveAction}>
-            <Button type="submit" variant="primary" size="sm">
-              Approve &amp; activate
-            </Button>
-          </form>
-        </div>
-      </div>
-
-      {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
-
-      <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-neutral">What OPTIM built</p>
-        <p className="mt-1 text-xs text-off-white">
-          {proposal.content.durationWeeks} weeks · {overview.trainingDaysPerWeek} training days/week · {overview.restDaysPerWeek} rest days/week · {overview.resistanceItems} resistance items · {overview.continuousItems} continuous items · {overview.intervalItems} interval items · {overview.circuitBlocks} circuit blocks · {overview.powerItems} power items · {overview.mobilityItems} mobility items · {overview.amrapBlocks} AMRAP blocks · {overview.emomBlocks} EMOM blocks (week 1 pattern)
-        </p>
-        {overview.sessionNames.length > 0 ? <p className="mt-1 text-xs text-neutral">{overview.sessionNames.join(" · ")}</p> : null}
-      </div>
-
-      <RuleProvenanceSection proposal={proposal} />
-
-      {proposal.changesSummary.length > 0 ? (
-        <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
-          <p className="text-xs font-medium text-off-white">
-            {proposal.changesSummary.length} change{proposal.changesSummary.length === 1 ? "" : "s"} from OPTIM&apos;s original proposal:
-          </p>
-          <ul className="mt-1 space-y-0.5 text-xs text-neutral">
-            {proposal.changesSummary.map((c, i) => (
-              <li key={i}>• {c}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {proposal.restrictionWarnings.length > 0 ? (
-        <div className="mb-3 rounded border border-warning bg-warning-soft/40 px-3 py-2">
-          <p className="text-xs font-medium text-warning-strong">This proposal may conflict with a documented client restriction:</p>
-          <ul className="mt-1 space-y-0.5 text-xs text-warning-strong">
-            {proposal.restrictionWarnings.map((w, i) => (
-              <li key={i}>• {w}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <div className="space-y-2">
-        {proposal.content.weeks.map((week) => {
-          const trainingDays = week.days.filter((d) => d.type === "training");
-          const restDays = week.days.filter((d) => d.type === "rest");
-          return (
-            <details key={week.weekNumber} className="rounded border border-border-strong" open={week.weekNumber === 1}>
-              <summary className="cursor-pointer px-2.5 py-2 text-xs font-medium uppercase tracking-wide text-neutral">
-                Week {week.weekNumber} — {trainingDays.length} training day{trainingDays.length === 1 ? "" : "s"}, {restDays.length} rest
-              </summary>
-              <div className="space-y-2.5 px-2.5 pb-2.5">
-                {trainingDays.map((day) => (
+  function renderTrainingDay(week: UniversalProgramWeek, day: UniversalProgramDay) {
+    return (
                   <div key={day.dayOfWeek} className="rounded border border-border-strong p-2.5">
                     <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs font-medium text-off-white">{day.dayOfWeek}</p>
@@ -337,10 +345,10 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                         const sessionPath: SessionPath = { weekNumber: week.weekNumber, dayOfWeek: day.dayOfWeek, sessionIndex };
                         return (
                           <div key={`${day.dayOfWeek}-${sessionIndex}`} className="rounded bg-surface-raised p-2">
-                            <form action={renameActionFor(sessionPath)} className="mb-2 flex flex-wrap items-end gap-2">
-                              <label className="flex flex-col text-xs text-neutral">
+                            <form action={renameActionFor(sessionPath)} className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 sm:max-w-md">
+                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                 Session name
-                                <input type="text" name="name" defaultValue={session.name} className="w-48 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                <input type="text" name="name" defaultValue={session.name} className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
                               </label>
                               <Button type="submit" variant="secondary" size="sm">
                                 Rename
@@ -398,10 +406,10 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                             </Button>
                                           </form>
                                         </div>
-                                        <form action={editActionFor(path, editCategory)} className="mt-2 flex flex-wrap items-end gap-2">
-                                          <label className="flex flex-col text-xs text-neutral">
+                                        <form action={editActionFor(path, editCategory)} className="mt-2 grid grid-cols-2 items-end gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                                          <label className="col-span-2 flex flex-col gap-1 text-xs text-neutral">
                                             Name
-                                            <input type="text" name="name" defaultValue={item.name} className="w-40 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                            <input type="text" name="name" defaultValue={item.name} className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
                                           </label>
                                           {editCategory === "interval" ? (
                                             <>
@@ -409,18 +417,18 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                               <NumField label="Work (sec)" name="workIntervalSeconds" defaultValue={item.prescription.workInterval?.seconds} />
                                               <NumField label="Recovery (sec)" name="recoveryIntervalSeconds" defaultValue={item.prescription.recoveryInterval?.seconds} />
                                               <NumField label="Work distance" name="distanceValue" defaultValue={item.prescription.distance?.value} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Unit
-                                                <select name="distanceUnit" defaultValue={item.prescription.distance?.unit ?? "m"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="distanceUnit" defaultValue={item.prescription.distance?.unit ?? "m"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="m">m</option>
                                                   <option value="km">km</option>
                                                   <option value="mi">mi</option>
                                                 </select>
                                               </label>
                                               <NumField label="Recovery distance" name="recoveryDistanceValue" defaultValue={item.prescription.recoveryDistance?.value} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Unit
-                                                <select name="recoveryDistanceUnit" defaultValue={item.prescription.recoveryDistance?.unit ?? "m"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="recoveryDistanceUnit" defaultValue={item.prescription.recoveryDistance?.unit ?? "m"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="m">m</option>
                                                   <option value="km">km</option>
                                                   <option value="mi">mi</option>
@@ -428,9 +436,9 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                               </label>
                                               <NumField label="RPE" name="rpe" defaultValue={item.prescription.rpe} />
                                               <NumField label="Pace" name="paceValue" defaultValue={item.prescription.pace?.value} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Pace unit
-                                                <select name="paceUnit" defaultValue={item.prescription.pace?.unit ?? "min_per_mi"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="paceUnit" defaultValue={item.prescription.pace?.unit ?? "min_per_mi"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="min_per_mi">min/mi</option>
                                                   <option value="min_per_km">min/km</option>
                                                 </select>
@@ -445,9 +453,9 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                               <NumField label="Reps high" name="repsHigh" defaultValue={item.prescription.reps?.high} />
                                               <NumField label="Contacts" name="contactsValue" defaultValue={item.prescription.contacts} />
                                               <NumField label="Distance" name="distanceValue" defaultValue={item.prescription.distance?.value} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Unit
-                                                <select name="distanceUnit" defaultValue={item.prescription.distance?.unit ?? "m"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="distanceUnit" defaultValue={item.prescription.distance?.unit ?? "m"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="m">m</option>
                                                   <option value="km">km</option>
                                                   <option value="mi">mi</option>
@@ -461,9 +469,9 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                               <NumField label="Hold (sec)" name="durationSeconds" defaultValue={item.prescription.duration?.seconds} />
                                               <NumField label="Reps low" name="repsLow" defaultValue={item.prescription.reps?.low} />
                                               <NumField label="Reps high" name="repsHigh" defaultValue={item.prescription.reps?.high} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Side
-                                                <select name="side" defaultValue={item.prescription.side ?? ""} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="side" defaultValue={item.prescription.side ?? ""} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="">—</option>
                                                   <option value="left">Left</option>
                                                   <option value="right">Right</option>
@@ -477,9 +485,9 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                             <>
                                               <NumField label="Duration (sec)" name="durationSeconds" defaultValue={item.prescription.duration?.seconds} />
                                               <NumField label="Distance" name="distanceValue" defaultValue={item.prescription.distance?.value} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Unit
-                                                <select name="distanceUnit" defaultValue={item.prescription.distance?.unit ?? "mi"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="distanceUnit" defaultValue={item.prescription.distance?.unit ?? "mi"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="mi">mi</option>
                                                   <option value="km">km</option>
                                                   <option value="m">m</option>
@@ -489,9 +497,9 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                               <NumField label="HR high" name="heartRateHigh" defaultValue={item.prescription.heartRate?.high} />
                                               <NumField label="RPE" name="rpe" defaultValue={item.prescription.rpe} />
                                               <NumField label="Pace" name="paceValue" defaultValue={item.prescription.pace?.value} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Pace unit
-                                                <select name="paceUnit" defaultValue={item.prescription.pace?.unit ?? "min_per_mi"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="paceUnit" defaultValue={item.prescription.pace?.unit ?? "min_per_mi"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="min_per_mi">min/mi</option>
                                                   <option value="min_per_km">min/km</option>
                                                 </select>
@@ -505,22 +513,22 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                               <NumField label="RPE" name="rpe" defaultValue={item.prescription.rpe} />
                                               <NumField label="RIR" name="rir" defaultValue={item.prescription.rir} />
                                               <NumField label="Load" name="loadValue" defaultValue={item.prescription.load?.value} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Unit
-                                                <select name="loadUnit" defaultValue={item.prescription.load?.unit ?? "lb"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                                <select name="loadUnit" defaultValue={item.prescription.load?.unit ?? "lb"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                                   <option value="lb">lb</option>
                                                   <option value="kg">kg</option>
                                                 </select>
                                               </label>
                                               <NumField label="Rest (sec)" name="restSeconds" defaultValue={item.prescription.restSeconds} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="flex flex-col gap-1 text-xs text-neutral">
                                                 Tempo
-                                                <input type="text" name="tempo" defaultValue={item.prescription.tempo ?? ""} className="w-20 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                                <input type="text" name="tempo" defaultValue={item.prescription.tempo ?? ""} className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
                                               </label>
                                               <NumField label="Warmup sets" name="warmupSets" defaultValue={item.prescription.warmupSets} />
-                                              <label className="flex flex-col text-xs text-neutral">
+                                              <label className="col-span-2 flex flex-col gap-1 text-xs text-neutral">
                                                 Warmup instruction
-                                                <input type="text" name="warmupInstruction" defaultValue={item.prescription.warmupInstruction ?? ""} className="w-40 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                                <input type="text" name="warmupInstruction" defaultValue={item.prescription.warmupInstruction ?? ""} className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
                                               </label>
                                             </>
                                           )}
@@ -570,10 +578,10 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                           ) : null}
                                         </div>
                                       </div>
-                                      <form action={editBlockActionFor(blockPathForBlock)} className="flex flex-wrap items-end gap-2">
-                                        <label className="flex flex-col text-xs text-neutral">
+                                      <form action={editBlockActionFor(blockPathForBlock)} className="grid grid-cols-2 items-end gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                                        <label className="flex flex-col gap-1 text-xs text-neutral">
                                           Protocol name
-                                          <input type="text" name="blockName" defaultValue={block.name ?? ""} className="w-40 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                          <input type="text" name="blockName" defaultValue={block.name ?? ""} className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
                                         </label>
                                         <NumField label="Cadence (sec)" name="cadenceSeconds" defaultValue={block.cadenceSeconds} />
                                         <NumField label="Total windows" name="blockRounds" defaultValue={block.rounds} />
@@ -615,14 +623,14 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                         ) : null}
                                       </div>
                                     </div>
-                                    <form action={editBlockActionFor(blockPathForBlock)} className="flex flex-wrap items-end gap-2">
-                                      <label className="flex flex-col text-xs text-neutral">
+                                    <form action={editBlockActionFor(blockPathForBlock)} className="grid grid-cols-2 items-end gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                                      <label className="flex flex-col gap-1 text-xs text-neutral">
                                         Circuit name
-                                        <input type="text" name="blockName" defaultValue={block.name ?? ""} className="w-40 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                        <input type="text" name="blockName" defaultValue={block.name ?? ""} className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
                                       </label>
-                                      <label className="flex flex-col text-xs text-neutral">
+                                      <label className="flex flex-col gap-1 text-xs text-neutral">
                                         Termination
-                                        <select name="terminationMode" defaultValue={block.terminationMode ?? "fixed_rounds"} className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                        <select name="terminationMode" defaultValue={block.terminationMode ?? "fixed_rounds"} className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                           <option value="fixed_rounds">Fixed rounds</option>
                                           <option value="time_cap">AMRAP (time cap only)</option>
                                           <option value="rounds_or_time_cap">Rounds or time cap</option>
@@ -640,14 +648,14 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                                   </div>
                                 );
                               })}
-                              <form action={addItemActionFor(sessionPath)} className="flex flex-wrap items-end gap-2 pt-1">
-                                <label className="flex flex-col text-xs text-neutral">
+                              <form action={addItemActionFor(sessionPath)} className="grid grid-cols-2 items-end gap-2 pt-1 sm:grid-cols-[minmax(0,1fr)_10rem_auto]">
+                                <label className="col-span-2 flex flex-col gap-1 text-xs text-neutral sm:col-span-1">
                                   Add exercise — name
-                                  <input type="text" name="newItemName" className="w-40 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+                                  <input type="text" name="newItemName" className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
                                 </label>
-                                <label className="flex flex-col text-xs text-neutral">
+                                <label className="flex flex-col gap-1 text-xs text-neutral">
                                   Type
-                                  <select name="newItemCategory" defaultValue="resistance" className="rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
+                                  <select name="newItemCategory" defaultValue="resistance" className="w-full rounded border border-border-strong bg-surface px-2 py-1.5 text-off-white">
                                     <option value="resistance">Resistance</option>
                                     <option value="continuous">Continuous</option>
                                   </select>
@@ -662,15 +670,83 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
                       })}
                     </div>
                   </div>
-                ))}
-              </div>
-            </details>
-          );
-        })}
+    );
+  }
+
+  const overview = buildProgramOverview(proposal.content);
+  const adjustment = proposal.content.adjustmentProvenance;
+
+  return (
+    <Card id="proposal-review" className="border-l-2 border-l-accent">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium text-off-white">
+            {adjustment ? "OPTIM proposes an adjustment" : `Proposed program ${proposal.wasEdited ? "(edited)" : "(as generated)"} — ${proposal.content.durationWeeks} weeks`}
+          </p>
+          <p className="mt-0.5 text-xs text-neutral">{proposal.content.directionLabel ?? proposal.content.name}</p>
+          {proposal.content.generationRationale ? <p className="mt-1 text-xs text-neutral">{proposal.content.generationRationale}</p> : null}
+        </div>
+        <ProposalApproveForm
+          action={approveAction}
+          blockedReason={proposal.inputsVerified ? null : "Generated before OPTIM verified its inputs (your confirmed method and the client's intake). Reject it below and generate a new one."}
+        />
       </div>
 
+      {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
+      {proposal.content.generationInputs ? <InputsUsedSection inputs={proposal.content.generationInputs} /> : null}
+
+      <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-neutral">What OPTIM built</p>
+        <p className="mt-1 text-xs text-off-white">{describeOverview(proposal.content.durationWeeks, overview)}</p>
+        {overview.sessionNames.length > 0 ? <p className="mt-1 text-xs text-neutral">{overview.sessionNames.join(" · ")}</p> : null}
+      </div>
+
+      <RuleProvenanceSection proposal={proposal} />
+
+      {proposal.changesSummary.length > 0 ? (
+        <div className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <p className="text-xs font-medium text-off-white">
+            {proposal.changesSummary.length} change{proposal.changesSummary.length === 1 ? "" : "s"} from OPTIM&apos;s original proposal:
+          </p>
+          <ul className="mt-1 space-y-0.5 text-xs text-neutral">
+            {proposal.changesSummary.map((c, i) => (
+              <li key={i}>• {c}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {proposal.restrictionWarnings.length > 0 ? (
+        <div className="mb-3 rounded border border-warning bg-warning-soft/40 px-3 py-2">
+          <p className="text-xs font-medium text-warning-strong">This proposal may conflict with a documented client restriction:</p>
+          <ul className="mt-1 space-y-0.5 text-xs text-warning-strong">
+            {proposal.restrictionWarnings.map((w, i) => (
+              <li key={i}>• {w}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <ProposalScheduleNavigator
+        weeks={proposal.content.weeks.map((week) => {
+          const trainingDays = week.days.filter((d) => d.type === "training");
+          const restDays = week.days.filter((d) => d.type === "rest");
+          return {
+            weekNumber: week.weekNumber,
+            summary: `${trainingDays.length} training day${trainingDays.length === 1 ? "" : "s"}, ${restDays.length} rest`,
+            restDaysLabel: restDays.length > 0 ? restDays.map((d) => d.dayOfWeek.slice(0, 3)).join(", ") : null,
+            days: trainingDays.map((day) => ({
+              key: day.dayOfWeek,
+              label: day.dayOfWeek,
+              sublabel: (day.sessions ?? []).map((session) => session.name).filter(Boolean).join(" + ") || "Training",
+              panel: renderTrainingDay(week, day),
+            })),
+          };
+        })}
+      />
+
       <form action={rejectAction} className="mt-3 flex flex-wrap items-end gap-2 border-t border-border pt-3">
-        <label className="flex flex-col text-xs text-neutral">
+        <label className="flex flex-col gap-1 text-xs text-neutral">
           Reason (optional)
           <select name="reason" defaultValue="" className="w-48 rounded border border-border-strong bg-surface px-2 py-1 text-off-white">
             <option value="">No reason given</option>
@@ -779,9 +855,9 @@ function RuleProvenanceSection({ proposal }: { proposal: ProgramProposalReviewVi
 
 function NumField({ label, name, defaultValue }: { label: string; name: string; defaultValue?: number }) {
   return (
-    <label className="flex flex-col text-xs text-neutral">
+    <label className="flex flex-col gap-1 text-xs text-neutral">
       {label}
-      <input type="number" name={name} defaultValue={defaultValue ?? ""} step="any" className="w-16 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
+      <input type="number" name={name} defaultValue={defaultValue ?? ""} step="any" inputMode="decimal" className="w-full min-w-0 rounded border border-border-strong bg-transparent px-2 py-1.5 text-off-white" />
     </label>
   );
 }

@@ -477,6 +477,12 @@ export interface UniversalTrainingProgramContent {
    * content that predates this field or wasn't produced through the
    * direction-based generator. */
   generationRationale?: string;
+  /** What a fresh-generation proposal was actually built from — the
+   * coach-confirmed method version and the client intake it used (see
+   * lib/coach/generation-prerequisites.ts). Absent on legacy content and
+   * adjustment proposals; a fresh proposal without it is unverified and
+   * cannot be approved. */
+  generationInputs?: GenerationInputs;
   /** Phase 8C — the real ProgramDirectionSummary.label this content was
    * generated from (e.g. "Best fit — Push/Pull/Legs"), preserved the same
    * way generationRationale already is: content.name may later be
@@ -544,4 +550,24 @@ export interface AdjustmentProvenance {
   learnedRuleIdsUsed: string[];
   changeDescriptions: AdjustmentProvenanceChange[];
   proposalSignature: string;
+}
+
+export interface GenerationInputs {
+  version: 1;
+  recordedAtIso: string;
+  coachMethod: {
+    playbookVersion: number;
+    operatingModelVersion: number;
+    confirmedAtIso: string;
+    summary: Array<{ label: string; value: string }>;
+  };
+  clientIntake: {
+    source: "client_onboarding";
+    completedAtIso: string;
+    healthReview: "not_required" | "resolved";
+    summary: Array<{ label: string; value: string }>;
+    /** Plain-language assumptions for optional intake answers the client
+     * left blank — shown, never hidden. */
+    assumptions: string[];
+  };
 }

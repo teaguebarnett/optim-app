@@ -31,8 +31,10 @@ import {
 } from "@/app/actions/production-programs";
 import { ProgramProposalReview } from "@/components/coach/program-proposal-review";
 import { LiveNutritionAssignmentForm, type NutritionAssignResult } from "@/components/coach/live-nutrition-assignment-form";
+import { LiveStartDateForm, type SaveResult } from "@/components/coach/live-start-date-form";
+import { LiveProposalGenerateForm } from "@/components/coach/live-proposal-generate-form";
 import { parseNutritionTargetsInput } from "@/lib/coach/nutrition-targets-input";
-import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction, resolveAdjustmentProposalAction } from "@/app/actions/production-programs";
+import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction, resolveAdjustmentProposalAction, getGenerationPrerequisitesAction } from "@/app/actions/production-programs";
 import { ClientStateNoticeSection } from "@/components/coach/client-state-notice";
 import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
@@ -60,12 +62,13 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
   // fresh-generation alike, through the exact same existing review UI.
   await resolveAdjustmentProposalAction({ workspaceId: detail.workspaceId, clientProfileId: clientId });
 
-  const [history, notes, pendingProposal, clientStateFindings, recentActivity] = await Promise.all([
+  const [history, notes, pendingProposal, clientStateFindings, recentActivity, generationPrerequisites] = await Promise.all([
     getClientChatHistoryForCoachAction(clientId),
     getClientCoachNotesAction(clientId),
     getProgramProposalForReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
     getClientWorkspaceIntelligenceAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
     getRecentActivityAction(clientId),
+    getGenerationPrerequisitesAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
   ]);
   const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
@@ -96,21 +99,35 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
     revalidatePath("/coach/clients");
   }
 
-  async function setStartDateAction(formData: FormData) {
+  // No fallbacks: a missing date or time zone is reported, never replaced
+  // with "UTC" (setClientProgramStartDate re-validates both).
+  async function setStartDateAction(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
     "use server";
-    const startDateIso = String(formData.get("startDateIso") ?? "");
-    const timeZone = String(formData.get("timeZone") ?? "UTC");
-    if (!startDateIso) return;
-    await setProgramStartDateAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, startDateIso, timeZone });
+    const startDateIso = String(formData.get("startDateIso") ?? "").trim();
+    const timeZone = String(formData.get("timeZone") ?? "").trim();
+    if (!startDateIso || !timeZone) return { ok: false, message: "Choose both a start date and the client's time zone. Nothing was saved." };
+    try {
+      await setProgramStartDateAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, startDateIso, timeZone });
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "Could not save the start date." };
+    }
     await revalidate();
+    return { ok: true, message: "Start date saved." };
   }
 
-  async function createProgramProposalFormAction(formData: FormData) {
+  async function createProgramProposalFormAction(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
     "use server";
-    const title = String(formData.get("title") ?? "Training program");
-    const durationWeeks = Number(formData.get("durationWeeks") ?? 4);
-    await createProgramProposalAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, title, durationWeeks });
+    const title = String(formData.get("title") ?? "").trim();
+    const durationWeeks = Number(formData.get("durationWeeks"));
+    if (!title) return { ok: false, message: "Give the program a name." };
+    if (!Number.isInteger(durationWeeks) || durationWeeks < 1 || durationWeeks > 20) return { ok: false, message: "Weeks must be a whole number from 1 to 20." };
+    try {
+      await createProgramProposalAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, title, durationWeeks });
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "Could not generate a proposal." };
+    }
     await revalidate();
+    return { ok: true, message: "Proposal generated — review it below." };
   }
 
   // Only explicitly entered values are ever saved — a blank field is
@@ -125,13 +142,16 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
       fatG: formData.get("fatG"),
     });
     if (!parsed.ok) return parsed;
+    let saved;
     try {
-      await createPublishAndAssignNutritionAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, ...parsed.targets });
+      saved = await createPublishAndAssignNutritionAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, ...parsed.targets });
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : "Failed to assign this nutrition plan." };
     }
+    if (saved.unchanged) return { ok: true, message: `No change — these targets are already assigned${saved.versionNumber ? ` (v${saved.versionNumber})` : ""}.` };
     await revalidate();
-    return { ok: true };
+    const t = parsed.targets;
+    return { ok: true, message: `Saved and assigned${saved.versionNumber ? ` v${saved.versionNumber}` : ""}: ${t.calories} kcal · ${t.proteinG}g protein · ${t.carbsG}g carbs · ${t.fatG}g fat.` };
   }
 
   async function activate() {
@@ -208,19 +228,8 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
       <section className="space-y-3">
         <SectionHeader title="Program setup" />
         <Card>
-          <h3 className="mb-2 text-sm font-medium text-off-white">Start date</h3>
-          <p className="mb-2 text-sm text-neutral">Current: <span className="text-off-white">{detail.startDateIso ?? "not set"}</span></p>
-          <form action={setStartDateAction} className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col text-xs text-neutral">
-              Date
-              <input type="date" name="startDateIso" defaultValue={detail.startDateIso ?? ""} className="rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" required />
-            </label>
-            <label className="flex flex-col text-xs text-neutral">
-              Timezone
-              <input type="text" name="timeZone" defaultValue={detail.timezone} className="rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-            </label>
-            <Button type="submit" variant="secondary" size="sm">Set start date</Button>
-          </form>
+          <h3 className="mb-3 text-sm font-medium text-off-white">Start date</h3>
+          <LiveStartDateForm action={setStartDateAction} initialDateIso={detail.startDateIso} timezone={detail.timezone} timezoneSource={detail.timezoneSource} />
         </Card>
 
         <Card>
@@ -231,17 +240,7 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
           {pendingProposal ? (
             <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
           ) : (
-            <form action={createProgramProposalFormAction} className="flex flex-wrap items-end gap-2">
-              <label className="flex flex-col text-xs text-neutral">
-                Title
-                <input type="text" name="title" defaultValue="Training program" className="rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-              </label>
-              <label className="flex flex-col text-xs text-neutral">
-                Weeks
-                <input type="number" name="durationWeeks" defaultValue={4} min={1} max={20} className="w-20 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-              </label>
-              <Button type="submit" variant="primary" size="sm">Generate proposal</Button>
-            </form>
+            <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} />
           )}
         </Card>
 
@@ -260,7 +259,7 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
               <span className="text-off-white">Nutrition not assigned.</span> Enter targets below to create, publish, and assign a plan.
             </p>
           )}
-          <LiveNutritionAssignmentForm action={createNutritionFormAction} assignedTargets={detail.activeNutrition?.targets ?? null} />
+          <LiveNutritionAssignmentForm action={createNutritionFormAction} assignedTargets={detail.activeNutrition?.targets ?? null} assignedVersionNumber={detail.activeNutrition?.versionNumber ?? null} />
         </Card>
       </section>
 
