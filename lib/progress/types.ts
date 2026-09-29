@@ -378,7 +378,9 @@ export interface HistoricalNutritionModel {
    * lib/history/derive-nutrition.ts's sumKnownActualMacros; never a
    * partial/misleading sum. */
   totals: MacroValues | null;
-  targets: MacroValues;
+  /** Null when no targets were in effect (no record, or no nutrition
+   * assigned that day) — never zeros standing in for missing. */
+  targets: MacroValues | null;
   calorieResult: TargetMetResult;
   proteinResult: TargetMetResult;
 }

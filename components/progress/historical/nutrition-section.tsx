@@ -47,11 +47,11 @@ export function NutritionSection({ nutrition }: { nutrition: HistoricalNutrition
       {nutrition.totals ? (
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
           <p className="text-off-white">
-            {nutrition.totals.calories} <span className="text-neutral">/ {nutrition.targets.calories} cal</span>
+            {nutrition.totals.calories} <span className="text-neutral">{nutrition.targets ? `/ ${nutrition.targets.calories} cal` : "cal · no target assigned"}</span>
           </p>
           <p className="text-neutral">{targetMetLabel(nutrition.calorieResult)}</p>
           <p className="text-off-white">
-            {nutrition.totals.proteinG}g <span className="text-neutral">/ {nutrition.targets.proteinG}g protein</span>
+            {nutrition.totals.proteinG}g <span className="text-neutral">{nutrition.targets ? `/ ${nutrition.targets.proteinG}g protein` : "protein · no target assigned"}</span>
           </p>
           <p className="text-neutral">{targetMetLabel(nutrition.proteinResult)}</p>
         </div>

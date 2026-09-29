@@ -506,7 +506,10 @@ export function validateDailyActivityContent(raw: unknown): DailyActivityContent
   requireNumber(raw.training.workingSetsPrescribed, "training.workingSetsPrescribed", what);
   if (!isRecord(raw.nutrition.meals)) fail(what, `"nutrition.meals" is not an object`);
   requireArray(raw.nutrition.periodsInPlan, "nutrition.periodsInPlan", what);
-  if (!isRecord(raw.nutrition.targetsSnapshot)) fail(what, `"nutrition.targetsSnapshot" is not an object`);
+  // null = no nutrition assigned that day (see lib/history/types.ts).
+  if (raw.nutrition.targetsSnapshot !== null && !isRecord(raw.nutrition.targetsSnapshot)) {
+    fail(what, `"nutrition.targetsSnapshot" must be an object or null`);
+  }
   if (raw.weight !== undefined) {
     if (!isRecord(raw.weight)) fail(what, `"weight" is not an object`);
     if (raw.weight.weightLb !== null && typeof raw.weight.weightLb !== "number") fail(what, `"weight.weightLb" must be a number or null`);

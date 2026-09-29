@@ -4,6 +4,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Card } from "@/components/ui/card";
 import { CoachNote } from "@/components/today/coach-note";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { NUTRITION_NOT_ASSIGNED_LABEL } from "@/lib/calculations";
 import type { ProgramTiming } from "@/lib/scheduling/program-timing";
 import type { AppState } from "@/lib/state";
 
@@ -78,12 +79,12 @@ export function PreStartToday({ timing, state, todaysEdgeText }: { timing: Progr
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Daily calories</span>
-          <span className="font-medium text-off-white">{targets.calories} cal</span>
+          <span className="font-medium text-off-white">{targets ? `${targets.calories} cal` : NUTRITION_NOT_ASSIGNED_LABEL}</span>
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Macros</span>
           <span className="font-medium text-off-white">
-            {targets.proteinG}P / {targets.carbsG}C / {targets.fatG}F
+            {targets ? `${targets.proteinG}P / ${targets.carbsG}C / ${targets.fatG}F` : NUTRITION_NOT_ASSIGNED_LABEL}
           </span>
         </div>
         <div className="flex items-center justify-between text-sm">

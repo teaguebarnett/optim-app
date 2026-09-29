@@ -137,8 +137,9 @@ export interface NutritionDaySnapshot {
   /** The nutrition targets actually in effect that day — snapshotted rather
    * than always reading the live NUTRITION_TARGETS constant, so a future
    * per-client/per-phase target change can't rewrite the meaning of past
-   * days. */
-  targetsSnapshot: NutritionTargets;
+   * days. Null when no nutrition was assigned that day — never zeros or
+   * demo defaults; target-met results then read as insufficient data. */
+  targetsSnapshot: NutritionTargets | null;
 }
 
 // ---------------------------------------------------------------------------

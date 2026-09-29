@@ -8,6 +8,7 @@ import { ProgressBar } from "@/components/ui/progress-bar";
 import { CoachSourceList } from "@/components/nutrition/coach-source-list";
 import { MACRO_EDUCATION } from "@/lib/nutrition/education-content";
 import { MACRO_ACCENTS, macroRemainingCaption } from "@/lib/nutrition/view-model";
+import { NUTRITION_NOT_ASSIGNED_LABEL } from "@/lib/calculations";
 import type { MacroKey } from "@/lib/nutrition/view-model";
 
 interface MacroDetailSheetProps {
@@ -15,7 +16,8 @@ interface MacroDetailSheetProps {
   open: boolean;
   onClose: () => void;
   consumed: number;
-  target: number;
+  /** Null = no nutrition assigned (see AppState.nutritionTargets). */
+  target: number | null;
 }
 
 /**
@@ -29,7 +31,7 @@ export function MacroDetailSheet({ macro, open, onClose, consumed, target }: Mac
   const [showFull, setShowFull] = useState(false);
   const content = MACRO_EDUCATION[macro];
   const accent = MACRO_ACCENTS[macro];
-  const percent = target > 0 ? (consumed / target) * 100 : 0;
+  const percent = target !== null && target > 0 ? (consumed / target) * 100 : 0;
 
   // Deferred a tick (matches components/today/training-time-sheet.tsx's
   // established convention) rather than calling setState synchronously in
@@ -52,11 +54,11 @@ export function MacroDetailSheet({ macro, open, onClose, consumed, target }: Mac
               </div>
               <div className="text-right">
                 <p className="text-label text-neutral">Target</p>
-                <p className="mt-1 text-heading text-neutral">{target}g</p>
+                <p className="mt-1 text-heading text-neutral">{target !== null ? `${target}g` : "Not assigned"}</p>
               </div>
             </div>
             <ProgressBar percent={percent} color={accent} trackClassName="mt-1.5" />
-            <p className="mt-2 text-meta text-neutral">{macroRemainingCaption(consumed, target)}</p>
+            <p className="mt-2 text-meta text-neutral">{target !== null ? macroRemainingCaption(consumed, target) : `${NUTRITION_NOT_ASSIGNED_LABEL} — your coach will set this target.`}</p>
           </div>
 
           <DetailSection heading="What it does" body={content.whatItDoes} />

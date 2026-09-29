@@ -27,6 +27,8 @@
     "verify:onboarding-intake": "node --experimental-strip-types lib/coach/verify-onboarding-intake.mts",
     "verify:review-lifecycle": "node --experimental-strip-types lib/coach/verify-review-lifecycle.mts",
     "verify:nutrition-authoring": "node --experimental-strip-types lib/coach/verify-nutrition-authoring.mts",
+    "verify:nutrition-targets-input": "node --experimental-strip-types lib/coach/verify-nutrition-targets-input.mts",
+    "verify:nutrition-not-assigned": "node --experimental-strip-types lib/nutrition/verify-nutrition-not-assigned.mts",
     "verify:training": "node --experimental-strip-types lib/coach/verify-training.mts",
     "verify:meal-recommendations": "node --experimental-strip-types lib/coach/verify-meal-recommendations.mts",
     "verify:ai-authority": "node --experimental-strip-types lib/coach/verify-ai-authority.mts",

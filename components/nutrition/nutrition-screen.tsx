@@ -128,7 +128,7 @@ export function NutritionScreen() {
           open={!!activeMacro}
           onClose={() => setActiveMacro(null)}
           consumed={nutritionTotals[MACRO_FIELD[activeMacro]]}
-          target={targets[MACRO_FIELD[activeMacro]]}
+          target={targets ? targets[MACRO_FIELD[activeMacro]] : null}
         />
       ) : null}
 

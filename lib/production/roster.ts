@@ -38,6 +38,7 @@ import { deriveLifecycle } from "../coach/roster";
 import type { RosterRow } from "../coach/roster";
 import type { ClientLifecycleStatus } from "../coach/types";
 import type { ProgramEnrollment } from "../scheduling/types";
+import type { NutritionTargets } from "../types";
 
 export { deriveLifecycle };
 
@@ -195,7 +196,9 @@ export interface LiveClientDetail {
   hasConfirmedTimezone: boolean;
   onboarding: { currentStepIndex: number; answers: unknown; completedAtIso: string | null } | null;
   activeProgram: { versionId: string; versionNumber: number; name: string; durationWeeks: number } | null;
-  activeNutrition: { versionId: string; versionNumber: number } | null;
+  /** targets are the assigned published version's own saved values —
+   * never a form default. Null means nutrition is genuinely not assigned. */
+  activeNutrition: { versionId: string; versionNumber: number; targets: NutritionTargets } | null;
 }
 
 async function requireCoachAuthority(workspaceId: string) {
@@ -252,7 +255,7 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
     hasConfirmedTimezone: !!enrollment?.timezone_source,
     onboarding: onboarding ? { currentStepIndex: onboarding.current_step_index as number, answers: onboarding.answers, completedAtIso: onboarding.completed_at as string | null } : null,
     activeProgram: program ? { versionId: program.versionId, versionNumber: program.versionNumber, name: program.content.name, durationWeeks: program.content.durationWeeks } : null,
-    activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber } : null,
+    activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber, targets: nutrition.content.targets } : null,
   };
 }
 

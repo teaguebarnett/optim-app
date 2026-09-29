@@ -30,6 +30,8 @@ import {
   setProgramStartDateAction,
 } from "@/app/actions/production-programs";
 import { ProgramProposalReview } from "@/components/coach/program-proposal-review";
+import { LiveNutritionAssignmentForm, type NutritionAssignResult } from "@/components/coach/live-nutrition-assignment-form";
+import { parseNutritionTargetsInput } from "@/lib/coach/nutrition-targets-input";
 import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction, resolveAdjustmentProposalAction } from "@/app/actions/production-programs";
 import { ClientStateNoticeSection } from "@/components/coach/client-state-notice";
 import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
@@ -111,14 +113,25 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
     await revalidate();
   }
 
-  async function createNutritionFormAction(formData: FormData) {
+  // Only explicitly entered values are ever saved — a blank field is
+  // reported back as missing, never defaulted (this used to fall back to
+  // hardcoded 2200/160/220/70, and a blank field became 0).
+  async function createNutritionFormAction(_prev: NutritionAssignResult, formData: FormData): Promise<NutritionAssignResult> {
     "use server";
-    const calories = Number(formData.get("calories") ?? 2200);
-    const proteinG = Number(formData.get("proteinG") ?? 160);
-    const carbsG = Number(formData.get("carbsG") ?? 220);
-    const fatG = Number(formData.get("fatG") ?? 70);
-    await createPublishAndAssignNutritionAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, calories, proteinG, carbsG, fatG });
+    const parsed = parseNutritionTargetsInput({
+      calories: formData.get("calories"),
+      proteinG: formData.get("proteinG"),
+      carbsG: formData.get("carbsG"),
+      fatG: formData.get("fatG"),
+    });
+    if (!parsed.ok) return parsed;
+    try {
+      await createPublishAndAssignNutritionAction({ workspaceId: detail.workspaceId, clientProfileId: clientId, ...parsed.targets });
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "Failed to assign this nutrition plan." };
+    }
     await revalidate();
+    return { ok: true };
   }
 
   async function activate() {
@@ -236,26 +249,18 @@ export async function LiveClientWorkspace({ clientId }: { clientId: string }) {
 
         <Card>
           <h3 className="mb-2 text-sm font-medium text-off-white">Nutrition plan</h3>
-          <p className="mb-2 text-sm text-neutral">Active: {detail.activeNutrition ? `v${detail.activeNutrition.versionNumber}` : "none"}</p>
-          <form action={createNutritionFormAction} className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col text-xs text-neutral">
-              Calories
-              <input type="number" name="calories" defaultValue={2200} className="w-24 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-            </label>
-            <label className="flex flex-col text-xs text-neutral">
-              Protein g
-              <input type="number" name="proteinG" defaultValue={160} className="w-20 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-            </label>
-            <label className="flex flex-col text-xs text-neutral">
-              Carbs g
-              <input type="number" name="carbsG" defaultValue={220} className="w-20 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-            </label>
-            <label className="flex flex-col text-xs text-neutral">
-              Fat g
-              <input type="number" name="fatG" defaultValue={70} className="w-20 rounded border border-border-strong bg-transparent px-2 py-1 text-off-white" />
-            </label>
-            <Button type="submit" variant="primary" size="sm">Create, publish &amp; assign</Button>
-          </form>
+          {detail.activeNutrition ? (
+            <p className="mb-2 text-sm text-neutral">
+              Assigned: <span className="text-off-white">v{detail.activeNutrition.versionNumber}</span> ·{" "}
+              {detail.activeNutrition.targets.calories} kcal · {detail.activeNutrition.targets.proteinG}g protein · {detail.activeNutrition.targets.carbsG}g carbs ·{" "}
+              {detail.activeNutrition.targets.fatG}g fat
+            </p>
+          ) : (
+            <p className="mb-2 text-sm text-neutral">
+              <span className="text-off-white">Nutrition not assigned.</span> Enter targets below to create, publish, and assign a plan.
+            </p>
+          )}
+          <LiveNutritionAssignmentForm action={createNutritionFormAction} assignedTargets={detail.activeNutrition?.targets ?? null} />
         </Card>
       </section>
 

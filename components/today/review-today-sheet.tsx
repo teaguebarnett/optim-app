@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Sheet } from "@/components/ui/sheet";
 import { SKIP_REASON_LABELS } from "@/components/ui/reason-picker";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { NUTRITION_NOT_ASSIGNED_LABEL } from "@/lib/calculations";
 import { cardioPrescriptionForClient } from "@/lib/mock-data";
 import { MEAL_OPTIONS, MEAL_PERIOD_LABELS } from "@/lib/mock-data";
 import type { MealPeriod, MealSelection } from "@/lib/types";
@@ -71,10 +72,22 @@ export function ReviewTodaySheet({ open, onClose }: { open: boolean; onClose: ()
     <Sheet open={open} onClose={onClose} title="Today's review" description="Everything logged so far today, in one place.">
       <div className="space-y-5">
         <Section title="Nutrition">
-          <Row label="Calories" value={`${nutritionTotals.calories} / ${state.nutritionTargets.calories}`} />
-          <Row label="Protein" value={`${nutritionTotals.proteinG}g / ${state.nutritionTargets.proteinG}g`} />
-          <Row label="Carbs" value={`${nutritionTotals.carbsG}g / ${state.nutritionTargets.carbsG}g`} />
-          <Row label="Fat" value={`${nutritionTotals.fatG}g / ${state.nutritionTargets.fatG}g`} />
+          {state.nutritionTargets ? (
+            <>
+              <Row label="Calories" value={`${nutritionTotals.calories} / ${state.nutritionTargets.calories}`} />
+              <Row label="Protein" value={`${nutritionTotals.proteinG}g / ${state.nutritionTargets.proteinG}g`} />
+              <Row label="Carbs" value={`${nutritionTotals.carbsG}g / ${state.nutritionTargets.carbsG}g`} />
+              <Row label="Fat" value={`${nutritionTotals.fatG}g / ${state.nutritionTargets.fatG}g`} />
+            </>
+          ) : (
+            <>
+              <Row label="Targets" value={NUTRITION_NOT_ASSIGNED_LABEL} />
+              <Row label="Calories" value={`${nutritionTotals.calories} logged`} />
+              <Row label="Protein" value={`${nutritionTotals.proteinG}g logged`} />
+              <Row label="Carbs" value={`${nutritionTotals.carbsG}g logged`} />
+              <Row label="Fat" value={`${nutritionTotals.fatG}g logged`} />
+            </>
+          )}
         </Section>
 
         <Section title="Meals">

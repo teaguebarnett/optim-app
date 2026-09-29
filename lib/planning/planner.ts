@@ -426,9 +426,12 @@ const SNACK_GAP_THRESHOLD_MIN = 240; // 4 hours
 const MIN_MEANINGFUL_GAP_RATIO = 0.2; // 20% of target remaining
 
 function evaluateSnackRecommendation(state: AppState, totals: MacroValues, now: Date): { show: boolean; reason?: string } {
+  // Null targets (no nutrition assigned): the gap-closing reason below is
+  // skipped entirely rather than computed against invented numbers. The
+  // meal-timing reasons don't depend on targets and still apply.
   const targets = state.nutritionTargets;
-  const remainingCalRatio = Math.max(0, targets.calories - totals.calories) / targets.calories;
-  const remainingProteinRatio = Math.max(0, targets.proteinG - totals.proteinG) / targets.proteinG;
+  const remainingCalRatio = targets ? Math.max(0, targets.calories - totals.calories) / targets.calories : null;
+  const remainingProteinRatio = targets ? Math.max(0, targets.proteinG - totals.proteinG) / targets.proteinG : null;
 
   const resolvedMealTimes: number[] = (["breakfast", "postWorkout", "lunch", "dinner"] as MealPeriod[])
     .map((period) => state.meals[period])
@@ -455,6 +458,8 @@ function evaluateSnackRecommendation(state: AppState, totals: MacroValues, now: 
     (p) => !state.meals[p] || state.meals[p]?.source === "planned-later"
   ).length;
   if (
+    remainingCalRatio !== null &&
+    remainingProteinRatio !== null &&
     remainingCalRatio >= MIN_MEANINGFUL_GAP_RATIO &&
     remainingProteinRatio >= MIN_MEANINGFUL_GAP_RATIO &&
     unresolvedMeals <= 1

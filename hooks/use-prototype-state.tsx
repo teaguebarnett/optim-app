@@ -101,7 +101,8 @@ interface PrototypeStateValue {
   tasks: DailyTask[];
   nextActionTaskId: DailyTaskId | null;
   nutritionTotals: ReturnType<typeof computeNutritionTotals>;
-  nutritionRemaining: ReturnType<typeof computeRemaining>;
+  /** Null when no nutrition plan is assigned (state.nutritionTargets null). */
+  nutritionRemaining: ReturnType<typeof computeRemaining> | null;
   nutritionMessage: string;
   dailyCompletionPercent: number;
   resetToday: () => void;
@@ -431,7 +432,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
 
   const nutritionTotals = useMemo(() => computeNutritionTotals(state.meals), [state.meals]);
   const nutritionRemaining = useMemo(
-    () => computeRemaining(nutritionTotals, state.nutritionTargets),
+    () => (state.nutritionTargets ? computeRemaining(nutritionTotals, state.nutritionTargets) : null),
     [nutritionTotals, state.nutritionTargets]
   );
   const nutritionMessage = useMemo(

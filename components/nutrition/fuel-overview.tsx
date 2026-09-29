@@ -3,12 +3,15 @@
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { MacroTile } from "@/components/nutrition/macro-tile";
 import { remainingCalorieCaption } from "@/lib/nutrition/view-model";
+import { NUTRITION_NOT_ASSIGNED_LABEL } from "@/lib/calculations";
 import type { MacroKey } from "@/lib/nutrition/view-model";
 import type { MacroValues } from "@/lib/types";
 
 interface FuelOverviewProps {
   totals: MacroValues;
-  targets: MacroValues;
+  /** Null = no nutrition assigned: consumed values still show, but no
+   * target, progress, or remaining is ever computed. */
+  targets: MacroValues | null;
   onOpenMacro: (macro: MacroKey) => void;
   /** The intelligent daily status line (see lib/nutrition/status.ts) — shown
    * as a quiet, intentionally designed footer inside this card, separated
@@ -25,7 +28,7 @@ interface FuelOverviewProps {
  * (see components/today/fuel-section.tsx).
  */
 export function FuelOverview({ totals, targets, onOpenMacro, statusLine }: FuelOverviewProps) {
-  const caloriePercent = targets.calories > 0 ? (totals.calories / targets.calories) * 100 : 0;
+  const caloriePercent = targets && targets.calories > 0 ? (totals.calories / targets.calories) * 100 : 0;
 
   return (
     <div className="mx-4 mt-4 divide-y divide-border/70 overflow-hidden rounded-[var(--radius-lg)] bg-charcoal shadow-[var(--shadow-subtle)]">
@@ -38,12 +41,18 @@ export function FuelOverview({ totals, targets, onOpenMacro, statusLine }: FuelO
             strokeWidth={10}
             color="var(--pc-brass)"
             label={String(Math.round(totals.calories))}
-            sublabel={`of ${targets.calories} cal`}
+            sublabel={targets ? `of ${targets.calories} cal` : "cal"}
           />
           <div className="min-w-0 flex-1 space-y-2">
             <FuelRow label="Consumed" value={`${Math.round(totals.calories)} cal`} />
-            <FuelRow label="Target" value={`${targets.calories} cal`} />
-            <FuelRow label="Remaining" value={remainingCalorieCaption(totals.calories, targets.calories)} />
+            {targets ? (
+              <>
+                <FuelRow label="Target" value={`${targets.calories} cal`} />
+                <FuelRow label="Remaining" value={remainingCalorieCaption(totals.calories, targets.calories)} />
+              </>
+            ) : (
+              <FuelRow label="Target" value={NUTRITION_NOT_ASSIGNED_LABEL} />
+            )}
           </div>
         </div>
       </div>
@@ -54,17 +63,17 @@ export function FuelOverview({ totals, targets, onOpenMacro, statusLine }: FuelO
             macroKey="protein"
             label="Protein"
             consumed={totals.proteinG}
-            target={targets.proteinG}
+            target={targets?.proteinG ?? null}
             onOpen={() => onOpenMacro("protein")}
           />
           <MacroTile
             macroKey="carbs"
             label="Carbs"
             consumed={totals.carbsG}
-            target={targets.carbsG}
+            target={targets?.carbsG ?? null}
             onOpen={() => onOpenMacro("carbs")}
           />
-          <MacroTile macroKey="fat" label="Fat" consumed={totals.fatG} target={targets.fatG} onOpen={() => onOpenMacro("fat")} />
+          <MacroTile macroKey="fat" label="Fat" consumed={totals.fatG} target={targets?.fatG ?? null} onOpen={() => onOpenMacro("fat")} />
         </div>
       </div>
 

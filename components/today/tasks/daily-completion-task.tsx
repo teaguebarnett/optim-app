@@ -31,9 +31,14 @@ export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
     );
   }
 
-  const proteinTarget = appState.nutritionTargets.proteinG;
+  // No assigned targets: report what was logged, never a % of an invented target.
+  const proteinTarget = appState.nutritionTargets?.proteinG ?? null;
   const proteinStatus =
-    nutritionTotals.proteinG >= proteinTarget ? "Target reached" : `${Math.round((nutritionTotals.proteinG / proteinTarget) * 100)}% of target`;
+    proteinTarget === null
+      ? `${Math.round(nutritionTotals.proteinG)}g logged — no target assigned`
+      : nutritionTotals.proteinG >= proteinTarget
+        ? "Target reached"
+        : `${Math.round((nutritionTotals.proteinG / proteinTarget) * 100)}% of target`;
 
   // Phase 4.1 corrective — "today" and "tomorrow" resolve from the real
   // client-local effective date rather than being hardcoded to Monday/

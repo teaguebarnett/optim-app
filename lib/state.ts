@@ -142,8 +142,15 @@ export interface AppState {
    * Defaults to the same NUTRITION_TARGETS every client has always used
    * (lib/mock-data.ts) so the seeded demo client's behavior is unchanged —
    * a newly coach-activated client gets their own real values written here
-   * instead by the coach setup flow. */
-  nutritionTargets: NutritionTargets;
+   * instead by the coach setup flow.
+   *
+   * Null means "nutrition not assigned": a real Supabase client whose coach
+   * hasn't published a nutrition plan yet (see app/actions/production-
+   * programs.ts's getMySupabaseAppStateAction). Never replaced with the demo
+   * NUTRITION_TARGETS or zeros — every reader must treat null as missing
+   * and must not compute progress or recommendations against it. Demo mode
+   * always has a non-null value. */
+  nutritionTargets: NutritionTargets | null;
   /** Phase 5.2 — this client's own independent training-protocol copy,
    * created directly by the coach or assigned from one of their saved
    * templates (see lib/coach/training.ts). Null/undefined means no coach

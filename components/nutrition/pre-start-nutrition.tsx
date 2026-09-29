@@ -2,6 +2,7 @@ import { CalendarClock, MessageCircle } from "lucide-react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { NUTRITION_NOT_ASSIGNED_LABEL } from "@/lib/calculations";
 import { formatLongDateLabel } from "@/lib/shared/local-date";
 import type { ProgramTiming } from "@/lib/scheduling/program-timing";
 import type { AppState } from "@/lib/state";
@@ -21,8 +22,11 @@ export function PreStartNutrition({ timing, state }: { timing: ProgramTiming; st
   const coach = activeContext.primaryCoach;
   const days = timing.daysUntilStart ?? 0;
   const startLabel = formatLongDateLabel(state.programEnrollment.startDateIso);
-  const relative = days === 1 ? "Your nutrition plan starts tomorrow." : days > 1 ? `Your nutrition plan starts in ${days} days.` : "Your nutrition plan starts today.";
   const targets = state.nutritionTargets;
+  // With no assigned targets there is no nutrition plan to "start" — name
+  // the program start instead of implying one exists.
+  const subject = targets ? "Your nutrition plan" : "Your program";
+  const relative = days === 1 ? `${subject} starts tomorrow.` : days > 1 ? `${subject} starts in ${days} days.` : `${subject} starts today.`;
 
   return (
     <div className="px-4 pb-6 pt-5">
@@ -48,12 +52,12 @@ export function PreStartNutrition({ timing, state }: { timing: ProgramTiming; st
       <Card className="space-y-3">
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Daily calories</span>
-          <span className="font-medium text-off-white">{targets.calories} cal</span>
+          <span className="font-medium text-off-white">{targets ? `${targets.calories} cal` : NUTRITION_NOT_ASSIGNED_LABEL}</span>
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Macros</span>
           <span className="font-medium text-off-white">
-            {targets.proteinG}P / {targets.carbsG}C / {targets.fatG}F
+            {targets ? `${targets.proteinG}P / ${targets.carbsG}C / ${targets.fatG}F` : NUTRITION_NOT_ASSIGNED_LABEL}
           </span>
         </div>
       </Card>

@@ -118,7 +118,7 @@ export function buildDailyRecordFromLiveState(state: AppState, enrollment: Progr
   const nutrition: NutritionDaySnapshot = {
     meals,
     periodsInPlan,
-    targetsSnapshot: deepClone(state.nutritionTargets),
+    targetsSnapshot: state.nutritionTargets ? deepClone(state.nutritionTargets) : null,
   };
 
   const cardioOption =

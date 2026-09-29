@@ -180,7 +180,7 @@ function buildNutritionSection(record: DailyRecord | null, timeZone: string): Hi
       mealPlanOutcome: "no_record",
       meals: [],
       totals: null,
-      targets: { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+      targets: null,
       calorieResult: "insufficient_data",
       proteinResult: "insufficient_data",
     };

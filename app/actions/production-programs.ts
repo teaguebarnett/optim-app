@@ -16,6 +16,7 @@
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "../../lib/production/auth";
 import { UnauthenticatedError, UnauthorizedError } from "../../lib/production/errors";
 import { getSupabaseServerClient } from "../../lib/supabase/server";
+import { validateNutritionTargets } from "../../lib/coach/nutrition-targets-input";
 import {
   getClientProgramContext,
   getActiveProgramAssignment,
@@ -49,7 +50,6 @@ import { selectFindingsForCoachUI, type PresentedFinding } from "../../lib/clien
 import type { ClientStateAnalysis } from "../../lib/client-state/types";
 import type { EvidenceDetailLine } from "../../lib/client-state/evidence-display";
 import { createInitialState } from "../../lib/state";
-import { NUTRITION_TARGETS } from "../../lib/mock-data";
 import { projectProgramApprovalDecision, projectProgramRejectionDecision, type ProgramProposalSummary } from "../../lib/decisions/project-program-generation";
 import { projectPrescriptionEditDecision } from "../../lib/decisions/project-prescription-edit";
 import { recordDecisionEvidence } from "../../lib/production/decision-evidence";
@@ -224,11 +224,16 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
   if (context.enrollment && legacyCompatibleProgram) {
     state.assignedProgram = legacyCompatibleProgram;
   }
+  // No assigned plan = no targets. This used to substitute the demo
+  // NUTRITION_TARGETS (3000 kcal / 200P / 360C / 85F), which every client
+  // screen, the planner, and the saved daily snapshot then presented as
+  // this real client's prescription.
   if (context.nutritionPlan) {
     state.assignedNutritionPlan = context.nutritionPlan;
     state.nutritionTargets = context.nutritionPlan.targets;
   } else {
-    state.nutritionTargets = NUTRITION_TARGETS;
+    state.assignedNutritionPlan = undefined;
+    state.nutritionTargets = null;
   }
 
   const dateIso = resolveClientLocalDateIso(new Date(), state.programEnrollment.timeZone);
@@ -819,9 +824,14 @@ export async function createPublishAndAssignNutritionAction(params: {
   // composer (lib/coach/nutrition-directions.ts) — out of this minimal
   // page's scope, so they're honestly left blank/zero rather than
   // fabricated placeholder coaching advice.
+  //
+  // Targets are re-validated here, not just in the form: nothing may
+  // persist a missing/NaN/out-of-range target as prescribed nutrition.
+  const checked = validateNutritionTargets(params);
+  if (!checked.ok) throw new Error(checked.message);
   const content = {
     id: `nutrition-${crypto.randomUUID()}`,
-    targets: { calories: params.calories, proteinG: params.proteinG, carbsG: params.carbsG, fatG: params.fatG },
+    targets: checked.targets,
     usesTrainingRestSplit: false,
     mealsPerDay: 4,
     mealStructureDescription: "",

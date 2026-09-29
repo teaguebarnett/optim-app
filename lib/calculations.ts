@@ -141,7 +141,13 @@ export function findEarliestIncompleteMealBefore(
   return null;
 }
 
-export function nutritionStatusMessage(totals: MacroValues, meals: AppState["meals"], targets: NutritionTargets = NUTRITION_TARGETS): string {
+/** Shown wherever a client's own targets would appear but no nutrition
+ * plan is assigned (AppState.nutritionTargets === null). */
+export const NUTRITION_NOT_ASSIGNED_LABEL = "Nutrition not assigned";
+
+export function nutritionStatusMessage(totals: MacroValues, meals: AppState["meals"], targets: NutritionTargets | null = NUTRITION_TARGETS): string {
+  // No assigned targets: never judge progress against invented numbers.
+  if (!targets) return `${NUTRITION_NOT_ASSIGNED_LABEL} yet — your coach will set your daily targets.`;
   const remainingMeals = countRemainingMeals(meals);
   const calorieRatio = totals.calories / targets.calories;
   const proteinRatio = totals.proteinG / targets.proteinG;

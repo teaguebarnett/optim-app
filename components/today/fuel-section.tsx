@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
+import { NUTRITION_NOT_ASSIGNED_LABEL } from "@/lib/calculations";
 
 const MACRO_META = [
   { key: "proteinG", label: "P", color: "var(--pc-brass)" },
@@ -30,8 +31,10 @@ const MACRO_META = [
  */
 export function FuelSection() {
   const { state, nutritionTotals, nutritionMessage } = usePrototypeState();
+  // Null = no nutrition assigned: logged intake still shows, but no ring
+  // progress or macro fill is computed against a target that doesn't exist.
   const targets = state.nutritionTargets;
-  const percent = Math.round((nutritionTotals.calories / targets.calories) * 100);
+  const percent = targets ? Math.round((nutritionTotals.calories / targets.calories) * 100) : 0;
 
   return (
     <Link href="/plan?tab=nutrition" className="block p-4">
@@ -44,13 +47,13 @@ export function FuelSection() {
         <ProgressRing percent={percent} size={62} strokeWidth={6} color="var(--pc-brass)" />
         <div className="shrink-0">
           <p className="text-metric text-off-white">{nutritionTotals.calories}</p>
-          <p className="text-meta text-neutral">of {targets.calories} cal</p>
+          <p className="text-meta text-neutral">{targets ? `of ${targets.calories} cal` : NUTRITION_NOT_ASSIGNED_LABEL}</p>
         </div>
 
         <div className="ml-auto min-w-0 flex-1 space-y-1.5 pl-2">
           {MACRO_META.map((macro) => {
             const consumed = nutritionTotals[macro.key];
-            const macroPercent = Math.max(0, Math.min(100, (consumed / targets[macro.key]) * 100));
+            const macroPercent = targets ? Math.max(0, Math.min(100, (consumed / targets[macro.key]) * 100)) : 0;
             return (
               <div key={macro.key} className="flex items-center gap-2">
                 <span className="w-3 shrink-0 text-label text-neutral">{macro.label}</span>
