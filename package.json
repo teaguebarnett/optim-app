@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "verify:signin-cooldown": "node --experimental-strip-types lib/auth/verify-signin-cooldown.mts",
+    "verify:post-sign-in": "node --experimental-strip-types lib/auth/verify-post-sign-in.mts",
     "verify:tenancy": "node --experimental-strip-types lib/tenancy/verify-isolation.mts",
     "verify:active-coach-identity": "node --experimental-strip-types lib/tenancy/verify-active-coach-identity.mts",
     "verify:planner": "node --experimental-strip-types lib/planning/verify-planner.mts",

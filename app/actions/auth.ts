@@ -10,7 +10,17 @@
 // moment setSession/exchangeCodeForSession/verifyOtp resolves — before this
 // action is ever called).
 import { acceptInvitation } from "../../lib/production/invite";
+import { resolveSignInAccess } from "../../lib/production/post-sign-in";
+import { resolvePostSignInDestination } from "../../lib/auth/post-sign-in";
 
 export async function acceptInvitationAction(invitationId: string): Promise<void> {
   await acceptInvitation(invitationId);
+}
+
+/** Where app/auth/confirm/page.tsx sends a just-signed-in browser: the
+ * carried `next` only if the caller's real, server-resolved role may enter
+ * it, otherwise that role's home (see lib/auth/post-sign-in.ts). Called
+ * after acceptInvitationAction, so a freshly accepted membership counts. */
+export async function resolvePostSignInDestinationAction(next: string | null): Promise<string> {
+  return resolvePostSignInDestination(next, await resolveSignInAccess());
 }

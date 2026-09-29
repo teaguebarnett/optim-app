@@ -7,9 +7,12 @@
 // surface for Phase 6.0A, not a redesign of the existing coach/client
 // dashboards (those stay on the demo/localStorage path until Phase 6.0B).
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { resolveAppMode } from "@/lib/production/mode";
 import { getAuthenticatedContext } from "@/lib/production/auth";
+import { resolveSignInAccess } from "@/lib/production/post-sign-in";
+import { resolveRoleHome } from "@/lib/auth/post-sign-in";
 import { ProductionConfigError, UnauthenticatedError } from "@/lib/production/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
@@ -20,6 +23,14 @@ async function signOutAction() {
   await supabase.auth.signOut();
   redirect("/auth/sign-in");
 }
+
+// Keyed by lib/auth/post-sign-in.ts's resolveRoleHome — the same
+// destination a fresh sign-in lands on, so this page is never a dead end.
+const HOME_LABELS: Record<string, string> = {
+  "/coach": "Go to coach dashboard",
+  "/admin": "Go to Command Center",
+  "/today": "Go to Today",
+};
 
 export default async function AccountPage() {
   if (resolveAppMode() !== "supabase") {
@@ -37,8 +48,10 @@ export default async function AccountPage() {
   }
 
   let context;
+  let home: string | null;
   try {
     context = await getAuthenticatedContext();
+    home = resolveRoleHome(await resolveSignInAccess());
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
       redirect("/auth/sign-in");
@@ -85,7 +98,16 @@ export default async function AccountPage() {
           )}
         </div>
 
-        <form action={signOutAction} className="mt-6">
+        {home ? (
+          <Link
+            href={home}
+            className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-[var(--radius-md)] bg-accent px-4 text-[15px] font-medium text-on-accent transition-colors hover:bg-accent-strong"
+          >
+            {HOME_LABELS[home] ?? "Go to home"}
+          </Link>
+        ) : null}
+
+        <form action={signOutAction} className={home ? "mt-3" : "mt-6"}>
           <Button type="submit" variant="secondary" className="w-full">
             Sign out
           </Button>

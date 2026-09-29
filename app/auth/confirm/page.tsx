@@ -55,7 +55,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-import { acceptInvitationAction } from "@/app/actions/auth";
+import { acceptInvitationAction, resolvePostSignInDestinationAction } from "@/app/actions/auth";
 
 export default function AuthConfirmPage() {
   return (
@@ -89,7 +89,11 @@ function AuthConfirmPageInner() {
     const rawHash = window.location.hash;
     const hashParams = new URLSearchParams(rawHash.replace(/^#/, ""));
     const invitationId = searchParams.get("invitation");
-    const next = searchParams.get("next") ?? "/auth/account";
+    // Never navigated to as-is: resolvePostSignInDestinationAction only
+    // honors it when it's a same-origin path the signed-in role may enter,
+    // else routes to that role's home. (This used to default straight to
+    // /auth/account — a dead end for every real coach/client sign-in.)
+    const next = searchParams.get("next");
     const code = searchParams.get("code");
     const tokenHash = searchParams.get("token_hash");
     const type = searchParams.get("type") as EmailOtpType | null;
@@ -143,7 +147,7 @@ function AuthConfirmPageInner() {
         await acceptInvitationAction(invitationId);
       }
 
-      goTo(next);
+      goTo(await resolvePostSignInDestinationAction(next));
     }
 
     // A thrown/rejected error from run() is only half of "never stuck
