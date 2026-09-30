@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   description: "How OPTIM handles the information you share when you join the beta list.",
 };
 
-const CONTACT = "privacy@useoptim.ai";
+const CONTACT = "teaguebarnett@gmail.com";
 
 function Block({ heading, children }: { heading: string; children: React.ReactNode }) {
   return (

@@ -18,7 +18,7 @@ layout gates, unchanged.
   lead never creates an auth user, profile, membership, or access. Statuses:
   `waitlist` (default), `invited`, `converted`. The consent notice shown is
   stored with each lead (`BETA_CONSENT_TEXT`).
-- Privacy: `/privacy` (contact privacy@useoptim.ai), linked from the footer and
+- Privacy: `/privacy` (contact teaguebarnett@gmail.com), linked from the footer and
   the form.
 - Components: `components/marketing/`.
 - Product stills: `public/marketing/*.webp` — real captures of the current beta
