@@ -169,7 +169,7 @@ async function LiveCoachDashboard() {
         <p className="text-label text-accent-fg">
           {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
         </p>
-        <h1 className="mt-1 text-display text-off-white">Good {timeOfDayGreeting()}, {inbox.coachDisplayName.split(" ")[0]}.</h1>
+        <h1 className="mt-1 text-display text-off-white">Good {timeOfDayGreeting()}, {inbox.coachDisplayName.trim().split(/\s+/)[0] || "Coach"}.</h1>
       </div>
 
       {/* One bounded composition, three zones on the same baseline — never

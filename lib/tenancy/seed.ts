@@ -32,10 +32,14 @@ import type { ChatMessage, ReviewRequest } from "../types";
 export const PLATFORM: Platform = { id: "platform-optim", name: "OPTIM" };
 
 // ---------------------------------------------------------------------------
-// Workspace 1 — Teague's coaching business (the live demo)
+// Workspace 1 — the OPTIM demonstration workspace (neutral demo coach "Coach")
 // ---------------------------------------------------------------------------
 
-export const TEAGUE_USER: PlatformUser = { id: "user-teague", displayName: "Teague" };
+// The demo workspace's owner/coach. Ids keep their historical "teague" names
+// (stored demo sessions and tests reference them), but the DISPLAYED identity
+// is a neutral "Coach": demo screens appear in public marketing stills, and a
+// demonstration workspace must not present a real person as its coach.
+export const TEAGUE_USER: PlatformUser = { id: "user-teague", displayName: "Coach" };
 export const CLIENT_USER: PlatformUser = { id: "user-client-demo", displayName: "Client" };
 export const ALEX_USER: PlatformUser = { id: "user-alex", displayName: "Alex" };
 
@@ -73,9 +77,9 @@ export const COACH_PROFILE_TEAGUE: CoachProfile = {
   id: "coach-teague",
   workspaceId: WORKSPACE_OPTIM_ID,
   userId: TEAGUE_USER.id,
-  displayName: "Teague",
+  displayName: "Coach",
   title: "Your Coach",
-  avatarInitials: "TB",
+  avatarInitials: "C",
 };
 
 /** A second coach inside the same OPTIM workspace, used only to prove

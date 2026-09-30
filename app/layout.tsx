@@ -5,7 +5,7 @@ import { PrototypeStateProvider } from "@/hooks/use-prototype-state";
 import { PlatformStateProvider } from "@/hooks/use-platform-state";
 import { WorkspaceTheme } from "@/components/app-shell/workspace-theme";
 import { RoleRouteBoundary } from "@/components/app-shell/role-route-boundary";
-import { COACH_PROFILE_TEAGUE, WORKSPACE_OPTIM } from "@/lib/tenancy/seed";
+import { WORKSPACE_OPTIM } from "@/lib/tenancy/seed";
 import { resolveAppMode } from "@/lib/production/mode";
 
 // Security fix (Sept 2026 Netlify incident): forces every route in this app
@@ -48,7 +48,7 @@ const manrope = Manrope({
 // hardcoded string.
 export const metadata: Metadata = {
   title: WORKSPACE_OPTIM.branding.businessName,
-  description: `Your daily coaching plan from ${COACH_PROFILE_TEAGUE.displayName} — training, nutrition, and progress in one place.`,
+  description: "Your daily coaching plan — training, nutrition, and progress in one place.",
 };
 
 export const viewport: Viewport = {

@@ -80,8 +80,8 @@ check("getDemoCoachSession/resolveActiveContext resolve the corrected browser's 
   memoryStorage.setItem(ACTIVE_COACH_KEY, ALEX_USER.id);
   const ctx = resolveActiveContext(getDemoCoachSession());
   assert.equal(ctx.coachProfile?.id, COACH_PROFILE_TEAGUE.id);
-  assert.equal(ctx.coachProfile?.displayName, "Teague");
-  assert.equal(ctx.coachProfile?.avatarInitials, "TB");
+  assert.equal(ctx.coachProfile?.displayName, "Coach");
+  assert.equal(ctx.coachProfile?.avatarInitials, "C");
 });
 
 check("The exact coachOverride shape components/chat/message-bubble.tsx attributes coach-authored messages to resolves to Teague", () => {
@@ -94,7 +94,7 @@ check("The exact coachOverride shape components/chat/message-bubble.tsx attribut
   const coachOverride = ctx.coachProfile
     ? { displayName: ctx.coachProfile.displayName, avatarInitials: ctx.coachProfile.avatarInitials }
     : null;
-  assert.deepEqual(coachOverride, { displayName: "Teague", avatarInitials: "TB" });
+  assert.deepEqual(coachOverride, { displayName: "Coach", avatarInitials: "C" });
 });
 
 console.log("\n2. The correction is one-time only — it never reverts a later, genuine choice\n");

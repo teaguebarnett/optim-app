@@ -66,7 +66,7 @@ check("OPTIM demo session resolves OPTIM/Teague/OPTIM Assistant/Client", () => {
   const ctx = resolveActiveContext(getDemoClientSession());
   assert.equal(ctx.branding.businessName, "OPTIM");
   assert.equal(ctx.assistantDisplayName, "OPTIM Assistant");
-  assert.equal(ctx.primaryCoach?.displayName, "Teague");
+  assert.equal(ctx.primaryCoach?.displayName, "Coach"); // neutral demo coach identity (see seed.ts)
   assert.equal(ctx.clientProfile?.name, "Client");
   assert.equal(ctx.role, "client");
 });
