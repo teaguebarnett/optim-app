@@ -20,11 +20,11 @@ export default function PublicLayout({ children }: { children: ReactNode }) {
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-[10px] focus:bg-charcoal focus:px-4 focus:py-3 focus:text-off-white">
         Skip to content
       </a>
-      <PublicHeader {...links} />
+      <PublicHeader betaLoginHref={links.betaLoginHref} />
       <main id="main" className="flex-1">
         {children}
       </main>
-      <PublicFooter {...links} />
+      <PublicFooter betaLoginHref={links.betaLoginHref} />
     </div>
   );
 }

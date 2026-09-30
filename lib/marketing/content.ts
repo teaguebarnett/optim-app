@@ -17,9 +17,9 @@ export const NAV = {
   product: "Product",
   howItWorks: "How it works",
   pricing: "Pricing",
-  coachLogin: "Coach login",
-  clientLogin: "OPTIM for Clients",
   requestAccess: "Request beta access",
+  betaLogin: "Beta login",
+  privacy: "Privacy",
   menu: "Menu",
 };
 
@@ -76,7 +76,7 @@ export const CLIENT = {
   heading: "A clearer next step for every client.",
   body: "OPTIM is being developed around the client’s day: what matters now, what to do next, and how it connects to their goal—with their coach still central to the experience.",
   entryLine: "Already using OPTIM with your coach?",
-  button: "Client login",
+  button: "Beta login",
 };
 
 export const SETUP = {
@@ -114,7 +114,7 @@ export const FAQ_HEADING = "Questions coaches ask";
 export const FAQS: Array<{ q: string; a: string }> = [
   {
     q: "Is OPTIM for coaches or clients?",
-    a: "OPTIM is software for coaches and the clients they coach. Coaches choose the software plan. Clients join through their coach’s invitation. If you already use OPTIM, choose Coach login or OPTIM for Clients.",
+    a: "OPTIM is software for coaches and the clients they coach. Coaches choose the software plan. Clients join through their coach’s invitation. If you’re already in the beta, use Beta login.",
   },
   {
     q: "Will OPTIM replace my judgment?",
@@ -138,27 +138,29 @@ export const FAQS: Array<{ q: string; a: string }> = [
   },
   {
     q: "How do my clients get in?",
-    a: "New clients join through their coach’s invitation. Existing clients use OPTIM for Clients to sign in to their own coaching experience. Installation instructions will reflect the devices and app behavior verified for launch.",
+    a: "New clients join through their coach’s invitation. Clients already in the beta use Beta login to reach their own coaching experience. Installation instructions will reflect the devices and app behavior verified for launch.",
   },
 ];
 
 export const REQUEST = {
   heading: "See whether OPTIM fits the way you coach.",
-  body: "Tell us about your practice. We’ll follow up about beta fit and a walkthrough.",
+  body: "Join the beta list. We’ll email you when OPTIM opens for access.",
   labels: {
-    name: "Name",
+    firstName: "First name",
     email: "Email",
-    clientCount: "How many clients do you currently coach?",
-    platform: "Current platform (optional)",
+    clientCount: "How many active clients do you currently coach?",
+    link: "Instagram or website (optional)",
   },
   submit: "Request beta access",
-  purpose: "We’ll use these details to contact you about OPTIM beta access.",
+  /** Shown beside the button: how the email will be used. */
+  notice: "We’ll use your email only to contact you about OPTIM beta access and launch.",
+  noticeLink: "Privacy",
   sending: "Sending your request…",
-  success: (email: string) => `Your request is in. We’ll contact you at ${email} about beta fit and a walkthrough.`,
+  successHeading: "You’re on the list.",
+  successBody: "We’ll email you when OPTIM opens for access.",
+  duplicateHeading: "You’re already on the list.",
+  duplicateBody: (email: string) => `${email} is already on the OPTIM beta list. We’ll email you when OPTIM opens for access.`,
   error: "Your request wasn’t sent. Your details are still here—please try again.",
-  /** Shown while no approved receiver exists (LEAD_RECEIVER is null). */
-  closed: "Beta requests aren’t being accepted through this form yet. Meanwhile, you can explore the product workflow.",
-  closedLink: "See how OPTIM works",
   interestPrefix: "Plan interest:",
   interestNote: "Interest only — no plan is reserved and nothing is charged.",
 };

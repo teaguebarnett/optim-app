@@ -2,34 +2,16 @@
 // DO lives here, so an unverified action can never appear by accident.
 //
 // - MARKETING_MODE is "beta": every plan and call to action requests beta
-//   access. There is deliberately no "paid" mode, checkout URL, or
-//   entitlement here — the paid journey (plan -> Stripe checkout -> setup
-//   email -> account -> calibration) belongs to later, separately verified
-//   gates.
-// - LEAD_RECEIVER is null: no approved destination for beta requests exists
-//   in this project yet (no leads table, form service, or email provider).
-//   While it is null the request form renders for review with submission
-//   disabled. It must only be set to a real, approved, persisted receiver,
-//   together with a published privacy notice.
+//   access (a waitlist entry). There is deliberately no "paid" mode,
+//   checkout URL, or entitlement here — the paid journey (plan -> Stripe
+//   checkout -> setup email -> account -> calibration) belongs to later,
+//   separately verified gates.
+// - Beta requests are stored as waitlist leads in optim-beta
+//   (public.beta_leads) through lib/marketing/lead-store.ts. A lead is not an
+//   account: no auth user, profile, or access is created.
 
 export type MarketingMode = "beta";
 export const MARKETING_MODE: MarketingMode = "beta";
-
-export interface BetaRequest {
-  name: string;
-  email: string;
-  clientCount: string;
-  currentPlatform: string;
-  /** A plan the visitor showed interest in — interest only, never an entitlement. */
-  planInterest: PlanId | null;
-}
-
-export interface LeadReceiver {
-  /** Resolves only once the request is durably stored by the receiver. */
-  submit(request: BetaRequest): Promise<{ ok: true } | { ok: false }>;
-}
-
-export const LEAD_RECEIVER: LeadReceiver | null = null;
 
 /** No approved Scale/sales contact destination exists; Scale uses the beta
  * request path until one is supplied. */

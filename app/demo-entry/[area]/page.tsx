@@ -20,6 +20,6 @@ import { DemoEntry } from "@/components/marketing/demo-entry";
 export default async function DemoEntryPage({ params }: { params: Promise<{ area: string }> }) {
   const { area } = await params;
   if (area !== "coach" && area !== "client") notFound();
-  if (resolveAppMode() === "supabase") redirect(signInHref(area));
+  if (resolveAppMode() === "supabase") redirect(signInHref(area as "coach" | "client"));
   return <DemoEntry area={area} />;
 }

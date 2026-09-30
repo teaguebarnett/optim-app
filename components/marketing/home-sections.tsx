@@ -125,7 +125,7 @@ export function AttentionSection() {
   );
 }
 
-export function ClientSection({ clientLoginHref }: { clientLoginHref: string }) {
+export function ClientSection({ betaLoginHref }: { betaLoginHref: string }) {
   return (
     <Section labelledBy="client-heading">
       <div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
@@ -133,7 +133,7 @@ export function ClientSection({ clientLoginHref }: { clientLoginHref: string }) 
           <SectionHeading id="client-heading" heading={CLIENT.heading} body={CLIENT.body} />
           <div className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-3">
             <p className="text-[0.9375rem] text-off-white">{CLIENT.entryLine}</p>
-            <CtaLink href={clientLoginHref} variant="secondary">
+            <CtaLink href={betaLoginHref} variant="quiet" className="px-0">
               {CLIENT.button}
             </CtaLink>
           </div>
@@ -242,13 +242,13 @@ export function FaqList({ items = FAQS, headingId = "faq-heading" }: { items?: t
   );
 }
 
-export function PublicFooter({ coachLoginHref, clientLoginHref }: { coachLoginHref: string; clientLoginHref: string }) {
+export function PublicFooter({ betaLoginHref }: { betaLoginHref: string }) {
   const links = [
     { href: "/#product", label: NAV.product },
     { href: "/#how-it-works", label: NAV.howItWorks },
     { href: "/pricing", label: NAV.pricing },
-    { href: coachLoginHref, label: NAV.coachLogin },
-    { href: clientLoginHref, label: NAV.clientLogin },
+    { href: "/privacy", label: NAV.privacy },
+    { href: betaLoginHref, label: NAV.betaLogin },
   ];
   return (
     <footer className="border-t border-border bg-charcoal">

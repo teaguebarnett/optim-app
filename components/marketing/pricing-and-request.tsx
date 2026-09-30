@@ -7,7 +7,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { LeadForm } from "@/components/marketing/lead-form";
 import { Section, SectionHeading, FOCUS_RING } from "@/components/marketing/primitives";
-import { LEAD_RECEIVER, PLANS, SCALE_CONTACT_HREF } from "@/lib/marketing/config";
+import { PLANS, SCALE_CONTACT_HREF } from "@/lib/marketing/config";
 import { PRICING, REQUEST } from "@/lib/marketing/content";
 
 export function PricingCards({ requestPath }: { requestPath: string }) {
@@ -67,7 +67,7 @@ export function RequestSection() {
         {/* useSearchParams (plan interest) needs a Suspense boundary; the
             fallback is the same form without a preselected plan. */}
         <Suspense fallback={null}>
-          <LeadForm accepting={LEAD_RECEIVER !== null} />
+          <LeadForm />
         </Suspense>
       </div>
     </Section>

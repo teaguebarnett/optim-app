@@ -13,14 +13,14 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage() {
-  const { clientLoginHref } = publicAuthLinks();
+  const { betaLoginHref } = publicAuthLinks();
   return (
     <>
       <Hero />
       <WorkflowDemo />
       <MethodSection />
       <AttentionSection />
-      <ClientSection clientLoginHref={clientLoginHref} />
+      <ClientSection betaLoginHref={betaLoginHref} />
       <SetupSteps />
       <PricePreview />
       <FounderNote />

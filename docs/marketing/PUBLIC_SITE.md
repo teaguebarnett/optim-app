@@ -7,48 +7,49 @@ layout gates, unchanged.
 
 - Copy: `lib/marketing/content.ts` (the approved safe beta copy — edit here).
 - Controls: `lib/marketing/config.ts` — `MARKETING_MODE = "beta"` (there is no
-  paid mode, checkout URL, or entitlement), `LEAD_RECEIVER = null`,
-  `SCALE_CONTACT_HREF = null`, and the accepted plan prices.
+  paid mode, checkout URL, or entitlement), `SCALE_CONTACT_HREF = null`, and the
+  accepted plan prices.
+- Beta waitlist ("lead bank"): the form saves to `public.beta_leads` in
+  optim-beta (migration `20260930000028_beta_leads.sql`) through the one public
+  write path `public.submit_beta_lead()`, called server-side with the anon key
+  (`lib/marketing/lead-store.ts`). RLS on, no table privileges for anon /
+  authenticated, reads for platform owners/admins only. Duplicates (case-
+  insensitive email) change nothing and show "You’re already on the list." A
+  lead never creates an auth user, profile, membership, or access. Statuses:
+  `waitlist` (default), `invited`, `converted`. The consent notice shown is
+  stored with each lead (`BETA_CONSENT_TEXT`).
+- Privacy: `/privacy` (contact privacy@useoptim.ai), linked from the footer and
+  the form.
 - Components: `components/marketing/`.
 - Product stills: `public/marketing/*.webp` — real captures of the current beta
   interface running in demo mode (demonstration data), always captioned so.
   The demo coach's displayed identity is the neutral "Coach" / "C"
   (`lib/tenancy/seed.ts`), so no real person appears as the demo coach.
 
-## Returning coaches and clients
+## Returning beta users
 
-All entry points (both headers, the phone second row, footers, and the
-homepage's inline Client login) read one source: `publicAuthLinks()` in
+The public site's only login entry is a quiet "Beta login" (header, mobile
+menu, footer, and the client section), from `publicAuthLinks()` in
 `lib/marketing/auth-links.ts`.
 
-- Real (Supabase) mode: "Coach login" → `/auth/sign-in?next=/coach`; "OPTIM for
-  Clients" / "Client login" → `/auth/sign-in?next=/today`. The sign-in page
-  forwards an already-signed-in visitor through `lib/auth/post-sign-in.ts`;
-  `next` is honored only when the account's own roles allow it, otherwise the
-  role's home. A new email sign-in carries `next` to `/auth/confirm`, which
-  applies the same rule. Links never grant a role.
-- Demo mode: `/demo-entry/coach` and `/demo-entry/client`. Demo identity is a
-  stored "dev perspective" read once when the app provider mounts, and
-  `RoleRouteBoundary` redirects any route that perspective isn't allowed on —
-  so a plain link to `/today` could land on `/coach` (or the reverse). The
-  demo-entry route selects the seeded demo coach/client, then opens `/coach` or
-  `/today`. In Supabase mode it only forwards to sign-in.
+- Real (Supabase) mode: `/auth/sign-in` with no destination hint, so the
+  account's own role decides — coach → `/coach`, client → `/today`
+  (`lib/auth/post-sign-in.ts`). An already-signed-in visitor is forwarded
+  straight there. Links never grant a role.
+- Demo mode: `/demo-entry/coach` (demo mode has no sign-in; the demo-entry
+  route selects the demo identity explicitly, then opens `/coach`).
 
-## Blockers before public release
+## Still open before wider launch
 
-1. **Lead receiver.** No approved destination exists (no leads table, form
-   service, or email provider). The beta-request form renders for review with
-   submission disabled; `submitBetaRequestAction` returns "closed" and never
-   reports success. Set `LEAD_RECEIVER` only to a real, approved, persisted
-   receiver.
-2. **Privacy notice and Terms.** No approved text exists, so no pages or footer
-   links were created. The form must not open without a factual privacy notice.
-3. **Canonical domain.** None supplied. No canonical tags; `sitemap.xml` and the
-   robots sitemap line use the deployment's `NEXT_PUBLIC_SITE_URL` only when set.
-4. **Scale contact.** No sales/contact destination; Scale uses the beta path.
-5. **Founding Ten.** Only "Ask about founding-coach access" is shown until the
+1. **Terms.** No approved Terms text exists; no Terms page was created.
+2. **Canonical domain.** None supplied. `sitemap.xml` and the robots sitemap
+   line use the deployment's `NEXT_PUBLIC_SITE_URL`.
+3. **Scale contact.** No sales/contact destination; Scale uses the beta path.
+4. **Founding Ten.** Only "Ask about founding-coach access" is shown until the
    allocation ledger and terms are supplied.
-6. **Walkthrough video.** No recorded asset; no player is shown.
+5. **Walkthrough video.** No recorded asset; no player is shown.
+6. **Spam.** Submissions have a honeypot and database validation, but no rate
+   limit; revisit if the lead bank sees abuse.
 
 ## Analytics event contract (not collected)
 

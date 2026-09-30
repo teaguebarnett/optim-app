@@ -1,11 +1,12 @@
 "use client";
 
-// Public header. Coach login and OPTIM for Clients stay visible at every
-// width (a compact second row on phones) and go straight to the existing
-// sign-in — never through a marketing detour. Product / How it works /
-// Pricing sit in a disclosure menu on small screens. No Admin link: /admin
-// is protected by its own server-side layout, not by being unlisted.
-// Not sticky, so it can never cover content or a focused control.
+// Public header (pre-launch). "Request beta access" is the one primary
+// action. Current beta testers keep a quiet "Beta login" that opens the
+// existing sign-in; their own account role decides whether they land on
+// /coach or /today. Product / How it works / Pricing / Beta login sit in a
+// disclosure menu on small screens. No Admin link: /admin is protected by
+// its own server-side layout, not by being unlisted. Not sticky, so it can
+// never cover content or a focused control.
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -20,7 +21,7 @@ const SECONDARY = [
   { href: "/pricing", label: NAV.pricing },
 ];
 
-export function PublicHeader({ coachLoginHref, clientLoginHref }: { coachLoginHref: string; clientLoginHref: string }) {
+export function PublicHeader({ betaLoginHref }: { betaLoginHref: string }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -35,8 +36,6 @@ export function PublicHeader({ coachLoginHref, clientLoginHref }: { coachLoginHr
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
-
-  const loginLink = `inline-flex min-h-11 items-center justify-center rounded-[12px] px-3 text-[0.9375rem] font-semibold text-off-white hover:bg-off-white/[0.05] ${FOCUS_RING}`;
 
   return (
     <header className="border-b border-border bg-charcoal/80">
@@ -57,18 +56,13 @@ export function PublicHeader({ coachLoginHref, clientLoginHref }: { coachLoginHr
           </ul>
         </nav>
 
-        <div className="ml-auto flex items-center gap-1">
-          <div className="hidden items-center gap-1 sm:flex">
-            <Link href={coachLoginHref} className={loginLink}>
-              {NAV.coachLogin}
-            </Link>
-            <Link href={clientLoginHref} className={loginLink}>
-              {NAV.clientLogin}
-            </Link>
-          </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Link href={betaLoginHref} className={`hidden min-h-11 items-center rounded-[10px] px-3 text-[0.875rem] font-medium text-neutral hover:text-off-white lg:inline-flex ${FOCUS_RING}`}>
+            {NAV.betaLogin}
+          </Link>
           {/* Visibility on a wrapper: CtaLink's own display class would win over a
               competing `hidden` on the link itself. Below 400px it's in the menu. */}
-          <span className="ml-1 hidden min-[400px]:block">
+          <span className="hidden min-[400px]:block">
             <CtaLink href="/#request" className="whitespace-nowrap">
               {NAV.requestAccess}
             </CtaLink>
@@ -87,19 +81,14 @@ export function PublicHeader({ coachLoginHref, clientLoginHref }: { coachLoginHr
         </div>
       </Container>
 
-      {/* Phone second row: returning coaches and clients reach sign-in in one tap. */}
-      <Container className="grid grid-cols-2 gap-2 pb-2 sm:hidden">
-        <Link href={coachLoginHref} className={`${loginLink} whitespace-nowrap border border-border-strong px-2! text-[0.875rem] max-[359px]:text-[0.8125rem]`}>
-          {NAV.coachLogin}
-        </Link>
-        <Link href={clientLoginHref} className={`${loginLink} whitespace-nowrap border border-border-strong px-2! text-[0.875rem] max-[359px]:text-[0.8125rem]`}>
-          {NAV.clientLogin}
-        </Link>
-      </Container>
-
       <nav id="public-menu" aria-label="Site" hidden={!open} className="border-t border-border lg:hidden">
         <Container className="py-2">
           <ul>
+            <li className="min-[400px]:hidden">
+              <Link href="/#request" onClick={() => setOpen(false)} className={`flex min-h-11 items-center rounded-[10px] px-2 text-base font-semibold text-accent-fg ${FOCUS_RING}`}>
+                {NAV.requestAccess}
+              </Link>
+            </li>
             {SECONDARY.map((item) => (
               <li key={item.href}>
                 <Link href={item.href} onClick={() => setOpen(false)} className={`flex min-h-11 items-center rounded-[10px] px-2 text-base font-medium text-off-white ${FOCUS_RING}`}>
@@ -107,9 +96,9 @@ export function PublicHeader({ coachLoginHref, clientLoginHref }: { coachLoginHr
                 </Link>
               </li>
             ))}
-            <li className="min-[400px]:hidden">
-              <Link href="/#request" onClick={() => setOpen(false)} className={`flex min-h-11 items-center rounded-[10px] px-2 text-base font-semibold text-accent-fg ${FOCUS_RING}`}>
-                {NAV.requestAccess}
+            <li className="mt-1 border-t border-border pt-1">
+              <Link href={betaLoginHref} onClick={() => setOpen(false)} className={`flex min-h-11 items-center rounded-[10px] px-2 text-base font-medium text-neutral ${FOCUS_RING}`}>
+                {NAV.betaLogin}
               </Link>
             </li>
           </ul>
