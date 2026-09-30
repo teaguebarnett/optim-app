@@ -13,9 +13,12 @@ import { Check } from "lucide-react";
 import { Container, ProductStill, FOCUS_RING } from "@/components/marketing/primitives";
 import { ATTENTION, CLIENT, FOUNDER, MOBILE } from "@/lib/marketing/content";
 
+// The coach stills are the complete desktop screenshots, scaled down to the
+// phone's width at their own aspect ratio — never a cropped phone version, so
+// every edge of the real interface stays visible.
 const STILL = {
-  calibration: { src: "/marketing/calibration-question-v2-phone.webp", width: 545, height: 600 },
-  attention: { src: "/marketing/coach-attention-neutral-v3-phone.webp", width: 780, height: 690 },
+  calibration: { src: "/marketing/calibration-desktop.webp", width: 1600, height: 699 },
+  attention: { src: "/marketing/coach-attention-neutral-v2-desktop.webp", width: 1600, height: 311 },
   clientNext: { src: "/marketing/client-today-next-v1-phone.webp", width: 780, height: 585 },
 };
 
@@ -51,7 +54,7 @@ export function MobileHowItWorks() {
             {i === 0 ? (
               <ProductStill
                 desktop={STILL.calibration}
-                alt="OPTIM coach calibration: the question Who do you typically coach?, with options such as general population, team-sport athletes, and postpartum or return-to-training."
+                alt="OPTIM coach calibration survey: chapters from your coaching practice through reviewing your coaching model, with the first question, Who do you typically coach?, and options such as general population, strength athletes, and endurance athletes."
                 caption={MOBILE.stillCaption}
                 sizes="100vw"
                 className="mt-8"
@@ -82,7 +85,7 @@ export function MobileCoachControl() {
       </ul>
       <ProductStill
         desktop={STILL.attention}
-        alt="OPTIM coach Command Center on a phone: Good morning, Coach, with the Needs you and Worth knowing zones, shown with demonstration counts."
+        alt="OPTIM coach Command Center: a greeting with three zones labelled Needs you, Worth knowing, and Handled, shown with demonstration counts."
         caption={MOBILE.stillCaption}
         sizes="100vw"
         tone="navy"
