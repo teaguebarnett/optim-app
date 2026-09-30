@@ -5,7 +5,7 @@
 
 import { OptimWordmark } from "@/components/brand/optim-wordmark";
 import { Container, CtaLink, ProductStill, Section, SectionHeading, FOCUS_RING } from "@/components/marketing/primitives";
-import { ATTENTION, CLIENT, DEMO, FAQS, FAQ_HEADING, FOOTER, FOUNDER, HERO, METHOD, NAV, PRICING, SETUP, STILLS } from "@/lib/marketing/content";
+import { ATTENTION, CLIENT, DEMO, FAQS, FAQ_HEADING, FOOTER, FOUNDER, HERO, METHOD, MOBILE, NAV, PRICING, SETUP, STILLS } from "@/lib/marketing/content";
 import { PLANS } from "@/lib/marketing/config";
 import Link from "next/link";
 
@@ -33,7 +33,10 @@ export function Hero() {
             <span className="block">{first}.</span>
             <span className="block">{rest.join(". ")}</span>
           </h1>
-          <p className="mt-6 max-w-xl text-[1.0625rem] leading-relaxed text-neutral sm:text-lg">{HERO.body}</p>
+          <p className="mt-6 max-w-xl text-[1.0625rem] leading-relaxed text-neutral sm:text-lg">
+            <span className="md:hidden">{MOBILE.heroBody}</span>
+            <span className="hidden md:inline">{HERO.body}</span>
+          </p>
           <div className="mt-8 flex flex-col gap-3 min-[400px]:flex-row">
             <CtaLink href="#request">{HERO.primary}</CtaLink>
             <CtaLink href="#how-it-works" variant="secondary">
@@ -47,6 +50,7 @@ export function Hero() {
           phone={STILL.clientTodayPhone}
           alt="OPTIM client Today screen: a greeting, the day's fuel targets, a prompt to enter training time, a morning weight check-in, and day progress."
           caption={STILLS.clientToday}
+          captionPhone={MOBILE.stillCaption}
           sizes="(min-width: 1024px) 340px, (min-width: 640px) 300px, 100vw"
           priority
           className="w-full max-w-[400px] sm:max-w-[300px] lg:ml-auto lg:max-w-[340px]"
@@ -64,7 +68,7 @@ export function WorkflowDemo() {
     caption: STILLS.calibration,
   };
   return (
-    <Section id="how-it-works" labelledBy="demo-heading" className="border-t border-border bg-charcoal">
+    <Section labelledBy="demo-heading" className="border-t border-border bg-charcoal">
       <SectionHeading id="demo-heading" heading={DEMO.heading} body={DEMO.body} />
       <div className="mt-10 grid gap-10 sm:mt-12 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:items-start">
         <ol className="space-y-8 sm:space-y-6">
@@ -90,7 +94,7 @@ export function WorkflowDemo() {
 
 export function MethodSection() {
   return (
-    <Section id="product" labelledBy="method-heading">
+    <Section labelledBy="method-heading">
       <SectionHeading id="method-heading" heading={METHOD.heading} body={METHOD.body} />
       <dl className="mt-10 grid gap-6 sm:mt-12 sm:grid-cols-3 sm:gap-8">
         {METHOD.labels.map((item) => (
@@ -214,6 +218,23 @@ export function PricePreview() {
         ))}
       </ul>
       <p className="mt-4 text-[0.875rem] text-neutral">{PRICING.note}</p>
+      <details className="group mt-6 rounded-[14px] border border-border-strong bg-charcoal px-5 md:hidden">
+        <summary className={`flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 text-[0.9375rem] font-semibold text-off-white [&::-webkit-details-marker]:hidden ${FOCUS_RING}`}>
+          {MOBILE.setupMore}
+          <span aria-hidden="true" className="text-lg transition-transform group-open:rotate-45">+</span>
+        </summary>
+        <ol className="space-y-4 pb-5">
+          {SETUP.steps.map((step, i) => (
+            <li key={step.title} className="grid grid-cols-[1.5rem_1fr] gap-x-3">
+              <span aria-hidden="true" className="font-semibold text-accent-fg">{i + 1}</span>
+              <div>
+                <p className="font-semibold text-off-white">{step.title}</p>
+                <p className="mt-0.5 text-[0.9375rem] leading-relaxed text-neutral">{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </details>
       <CtaLink href="/pricing" variant="secondary" className="mt-6 w-full sm:hidden">
         {PRICING.previewLink}
       </CtaLink>

@@ -169,3 +169,33 @@ export const FOOTER = {
   tagline: "Coaching software built around your method.",
   stage: "Private beta. Paid signup is not open yet.",
 };
+
+/** Phone-only composition (below 768px). Shorter wording of the same claims
+ * as the desktop sections above — nothing here adds a claim. */
+export const MOBILE = {
+  heroBody: "Designed to reduce repetitive coaching work, while your method, client relationships, and decisions stay at the center.",
+  stillCaption: "Current beta screen, shown with demonstration data.",
+  how: {
+    heading: "How OPTIM works",
+    steps: [
+      { title: "Teach OPTIM your coaching method", body: "Coach calibration asks how you program, adjust training, and communicate." },
+      { title: "OPTIM organizes client information and prepares decisions", body: "Each client’s intake sits alongside your method, and program proposals are prepared for you." },
+      { title: "You review what matters and remain in control", body: "Approve, edit, or reject every program proposal." },
+    ],
+  },
+  control: {
+    heading: "Your method. Your final say.",
+    body: "OPTIM prepares and organizes. You make the meaningful decisions.",
+  },
+  client: {
+    heading: "A clearer day for every client.",
+    intro: "Being developed around each client’s day:",
+    points: ["What matters today", "What to do next", "Guidance within their coach’s approach"],
+  },
+  founder: {
+    heading: "Built from real coaching work.",
+    short: "Every client meant another check-in to interpret, program to review, and message to answer. The coaching was personal. The work behind it kept repeating.",
+    more: "Why I built OPTIM",
+  },
+  setupMore: "How setup will work when paid signup opens",
+};

@@ -26,10 +26,25 @@ layout gates, unchanged.
   The demo coach's displayed identity is the neutral "Coach" / "C"
   (`lib/tenancy/seed.ts`), so no real person appears as the demo coach.
 
+## Phone composition (below 768px)
+
+Phones get their own homepage composition, not the desktop sections stacked:
+`components/marketing/mobile-sections.tsx` (copy in `MOBILE`,
+`lib/marketing/content.ts`). The desktop/tablet sections are hidden below
+`md` and the phone sections are hidden from `md` up; the Hero, pricing, FAQ,
+and request form are shared and responsive. Order: hero (one still) → how
+OPTIM works (3 steps, one still) → "Your method. Your final say." (one still)
+→ client (one still) → pricing (setup journey in a disclosure) → short founder
+note ("Why I built OPTIM" disclosure) → FAQ → request form. One idea and at
+most one still per section; no still repeats. Section anchors (`#how-it-works`,
+`#product`) live on wrappers around both variants so ids stay unique. Desktop
+changes belong in `home-sections.tsx`; check phones separately.
+
 ## Returning beta users
 
-The public site's only login entry is a quiet "Beta login" (header, mobile
-menu, footer, and the client section), from `publicAuthLinks()` in
+The public site's only login entry is a quiet "Beta login" (header — shown
+directly beside "Request beta access" on phones, in the menu from 640–1023px —
+footer, and the client section), from `publicAuthLinks()` in
 `lib/marketing/auth-links.ts`.
 
 - Real (Supabase) mode: `/auth/sign-in` with no destination hint, so the
@@ -74,11 +89,13 @@ belong to later integration gates.
   public-site image that shows the coach dashboard or coach screens, using the
   finished interface: `coach-attention-neutral-v2-desktop.webp`,
   `coach-attention-neutral-v3-phone.webp`, `calibration-desktop.webp`,
-  `calibration-question-v2-phone.webp` (phones get their own focused crops —
+  `calibration-question-v2-phone.webp`, and the phone client stills
+  `client-today-hero-v2-phone.webp` / `client-today-next-v1-phone.webp` if the
+  client Today screen changes (phones get their own focused crops —
   keep that pattern), (and any client stills
   whose screens changed). Keep the neutral demo identity and the
   demonstration-data captions, and update image dimensions in
-  `components/marketing/home-sections.tsx`. This is a follow-up to the revamp;
+  `components/marketing/home-sections.tsx` and `mobile-sections.tsx`. This is a follow-up to the revamp;
   the current neutral-identity screenshot correction does not start it.
 
 ## Known styling quirk (pre-existing, app-wide)

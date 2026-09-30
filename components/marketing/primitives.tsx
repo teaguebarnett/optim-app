@@ -61,6 +61,7 @@ export function ProductStill({
   phone,
   alt,
   caption,
+  captionPhone,
   sizes,
   priority = false,
   tone = "light",
@@ -70,6 +71,8 @@ export function ProductStill({
   phone?: StillSource;
   alt: string;
   caption: string;
+  /** Optional shorter caption for phones (below 768px). */
+  captionPhone?: string;
   sizes: string;
   priority?: boolean;
   tone?: "light" | "navy";
@@ -90,7 +93,16 @@ export function ProductStill({
           <img {...imgProps} className="block h-auto w-full" />
         </picture>
       </div>
-      <figcaption className={`mt-3 text-[0.8125rem] leading-snug ${tone === "navy" ? "text-navy-ink-muted" : "text-neutral"}`}>{caption}</figcaption>
+      <figcaption className={`mt-3 text-[0.8125rem] leading-snug ${tone === "navy" ? "text-navy-ink-muted" : "text-neutral"}`}>
+        {captionPhone ? (
+          <>
+            <span className="md:hidden">{captionPhone}</span>
+            <span className="hidden md:inline">{caption}</span>
+          </>
+        ) : (
+          caption
+        )}
+      </figcaption>
     </figure>
   );
 }
