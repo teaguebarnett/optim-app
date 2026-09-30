@@ -72,8 +72,10 @@ belong to later integration gates.
 
 - [ ] **After the coach interface revamp ships**, recapture and replace every
   public-site image that shows the coach dashboard or coach screens, using the
-  finished interface: `coach-attention-neutral-v2-desktop.webp`, `coach-attention-neutral-v2-phone.webp` (give replacements a new versioned filename so old optimized/browser-cached copies can never be reused),
-  `calibration-desktop.webp`, `calibration-phone.webp` (and any client stills
+  finished interface: `coach-attention-neutral-v2-desktop.webp`,
+  `coach-attention-neutral-v3-phone.webp`, `calibration-desktop.webp`,
+  `calibration-question-v2-phone.webp` (phones get their own focused crops —
+  keep that pattern), (and any client stills
   whose screens changed). Keep the neutral demo identity and the
   demonstration-data captions, and update image dimensions in
   `components/marketing/home-sections.tsx`. This is a follow-up to the revamp;
