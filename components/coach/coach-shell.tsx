@@ -13,9 +13,9 @@ import { cn } from "@/lib/cn";
 import { Avatar } from "@/components/ui/avatar";
 import { OptimWordmark } from "@/components/brand/optim-wordmark";
 import { CoachBottomNav, type CoachNavItem } from "@/components/coach/coach-bottom-nav";
+import { CoachAccountMenu } from "@/components/coach/coach-account-menu";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
 import type { AppMode } from "@/lib/production/mode";
-import { initialsFromDisplayName } from "@/lib/shared/initials";
 
 // Phase 5.5A — OPTIM is AI-first: training and nutrition are no longer
 // standalone top-level departments here. Each client's real
@@ -167,17 +167,16 @@ export function CoachShell({
             </nav>
 
             <div className="flex shrink-0 items-center gap-2 border-l border-border pl-3">
-              <Avatar initials={initialsFromDisplayName(identity.coachDisplayName)} size="sm" />
-              <p className="hidden text-xs text-neutral xl:block">
-                <span className="font-medium text-off-white">{identity.coachDisplayName}</span>
-              </p>
+              <CoachAccountMenu coachDisplayName={identity.coachDisplayName} showName />
             </div>
           </div>
         </header>
 
         <header className="flex items-center justify-between border-b border-border bg-charcoal px-4 py-3 pc-safe-top md:hidden">
-          <OptimWordmark size={18} className="text-off-white" />
-          <Avatar initials={initialsFromDisplayName(identity.coachDisplayName)} size="sm" />
+          <Link href="/coach" aria-label="Command Center" className="flex min-h-11 items-center">
+            <OptimWordmark size={18} className="text-off-white" />
+          </Link>
+          <CoachAccountMenu coachDisplayName={identity.coachDisplayName} />
         </header>
 
         <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pt-5 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:px-8 md:py-8 lg:px-12">{children}</main>

@@ -59,7 +59,9 @@ export default async function CoachEscalationsPage() {
       clientId: item.clientId,
       workspaceId,
       status: item.healthReviewStatus ?? "review_needed",
-      reasons: item.proposedResponse ? [item.proposedResponse] : [],
+      // The client's own words when the report came through chat; otherwise
+      // the recorded report summary. Never OPTIM's drafted reply.
+      reasons: item.sourceMessageBody ? [item.sourceMessageBody] : item.proposedResponse ? [item.proposedResponse] : [],
       createdAtIso: item.createdAtIso,
       updatedAtIso: item.createdAtIso,
       documentedLimitations: item.documentedLimitations ?? undefined,

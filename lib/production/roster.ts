@@ -58,11 +58,24 @@ interface RawClientRow {
   // not an array — confirmed live against the real Supabase instance. A
   // prior `?.[0]` here silently evaluated to undefined for every row,
   // making every real client show as "Invited" regardless of actual status.
-  client_enrollments: { status: string; original_program_start_date: string | null; timezone: string; archived_at: string | null } | null;
+  client_enrollments: { status: string; original_program_start_date: string | null; timezone: string; timezone_source: string | null; archived_at: string | null } | null;
   client_onboarding_progress: { completed_at: string | null; updated_at: string } | null;
 }
 
-async function buildRosterRow(raw: RawClientRow, workspaceId: string, nowIso: string): Promise<RosterRow & { archived: boolean }> {
+/** Gate 2 — the facts the live coach dashboard needs beyond the shared
+ * RosterRow, all already read by this same query (nothing new is fetched):
+ * when the client was invited, their latest onboarding activity, and the
+ * same four facts the client workspace's own "Activate client" gate checks
+ * (components/coach/live-client-workspace.tsx). */
+export interface LiveRosterRow extends RosterRow {
+  archived: boolean;
+  invitedAtIso: string;
+  onboardingUpdatedAtIso: string | null;
+  programStartDateIso: string | null;
+  setup: { hasProgram: boolean; hasNutrition: boolean; hasStartDate: boolean; hasConfirmedTimezone: boolean };
+}
+
+async function buildRosterRow(raw: RawClientRow, workspaceId: string, nowIso: string): Promise<LiveRosterRow> {
   const enrollment = raw.client_enrollments ?? null;
   const onboarding = raw.client_onboarding_progress ?? null;
   const primaryAssignment = raw.coach_client_assignments?.find((a) => a.is_primary) ?? raw.coach_client_assignments?.[0] ?? null;
@@ -118,13 +131,22 @@ async function buildRosterRow(raw: RawClientRow, workspaceId: string, nowIso: st
     lastActivityLabel,
     nextAction: resolveNextCoachAction(lifecycle, false, readinessReady),
     archived: !!enrollment?.archived_at,
+    invitedAtIso: raw.created_at,
+    onboardingUpdatedAtIso: onboarding?.updated_at ?? null,
+    programStartDateIso: enrollment?.original_program_start_date ?? null,
+    setup: {
+      hasProgram: !!program,
+      hasNutrition: !!nutrition,
+      hasStartDate: !!enrollment?.original_program_start_date,
+      hasConfirmedTimezone: !!enrollment?.timezone_source,
+    },
   };
 }
 
 export interface LiveRoster {
   workspaceId: string;
   coachDisplayName: string;
-  rows: (RosterRow & { archived: boolean })[];
+  rows: LiveRosterRow[];
 }
 
 export async function listRosterForOwnWorkspace(): Promise<LiveRoster> {
@@ -143,7 +165,7 @@ export async function listRosterForOwnWorkspace(): Promise<LiveRoster> {
     .select(
       `id, display_name, goal, created_at,
        coach_client_assignments(coach_user_id, is_primary, profiles:coach_user_id(display_name)),
-       client_enrollments(status, original_program_start_date, timezone, archived_at),
+       client_enrollments(status, original_program_start_date, timezone, timezone_source, archived_at),
        client_onboarding_progress(completed_at, updated_at)`
     )
     .eq("workspace_id", workspaceId)

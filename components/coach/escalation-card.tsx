@@ -57,7 +57,9 @@ export function EscalationCard({
   const statusLabel = (item.escalationStatus ?? item.status).replaceAll("_", " ");
 
   return (
-    <Card>
+    // Gate 2 — a stable anchor so the dashboard can link straight to this
+    // item on /coach/escalations (#escalation-<id>). Presentation only.
+    <Card id={`escalation-${item.id}`} className="scroll-mt-24">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="rounded-full border border-border-strong px-2.5 py-0.5 text-label text-neutral">{item.kindLabel}</span>
         <span className="text-meta text-neutral">{item.clientDisplayName}</span>

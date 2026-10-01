@@ -15,18 +15,16 @@
 // the shared EscalationCard component and CoachOperationsRepository so
 // there is exactly one presentation and one data source, never two.
 
-import Link from "next/link";
-import { ChevronRight } from "lucide-react";
-import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
-import { AdjustmentAttentionCard } from "@/components/coach/adjustment-attention-card";
+import type { EscalationHealthReview } from "@/components/coach/escalation-card";
+import { EscalationDecisionPanel } from "@/components/coach/escalation-decision-panel";
+import { CoachDashboardView } from "@/components/coach/coach-dashboard-view";
 import { DemoCoachDashboard } from "@/components/coach/demo-coach-dashboard";
 import { PatternCandidateSection } from "@/components/coach/pattern-candidate-section";
 import { LearnedRulesList } from "@/components/coach/learned-rules-list";
 import { resolveAppMode } from "@/lib/production/mode";
-import { getCoachOperationsRepository } from "@/lib/production/coach-operations";
+import { getCoachDashboardData } from "@/lib/production/coach-dashboard";
 import { getOnboardingProgressForClient } from "@/lib/production/onboarding";
-import { listRosterForOwnWorkspace } from "@/lib/production/roster";
-import { buildRosterPulse } from "@/lib/coach/command-center";
+import { buildCoachDashboard, firstNameOf } from "@/lib/coach/dashboard-zones";
 import {
   getCoachThreadMessagesAction,
   approveEscalationResponseAction,
@@ -37,10 +35,8 @@ import {
   proposePlaybookExampleAction,
   recordHealthReviewDecisionAction,
 } from "@/app/actions/coach-communications";
-import { getEligibleCandidatesForReviewAction, getMyLearnedRulesAction } from "@/app/actions/coach-learned-rules";
 import type { AttentionItem } from "@/lib/production/coach-operations";
 import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
-import type { ClientProfileId } from "@/lib/tenancy/types";
 
 export default function CoachOverviewPage() {
   if (resolveAppMode() !== "supabase") return <DemoCoachDashboard />;
@@ -48,20 +44,31 @@ export default function CoachOverviewPage() {
 }
 
 async function LiveCoachDashboard() {
-  const inbox = await getCoachOperationsRepository().getAttentionInbox();
+  // Gate 2 — every real record the dashboard uses is gathered in one place
+  // (lib/production/coach-dashboard.ts), and every decision about what
+  // belongs in NEEDS YOU / WORTH KNOWING / HANDLED is made by the pure,
+  // unit-tested buildCoachDashboard (lib/coach/dashboard-zones.ts). This
+  // page only wires the existing escalation actions to the focus item and
+  // renders the result.
+  const nowIso = new Date().toISOString();
+  const { inbox, input, patternCandidates, learnedRules } = await getCoachDashboardData(nowIso);
   const { workspaceId } = inbox;
+  const dashboard = buildCoachDashboard(input);
 
-  // Only the top-priority open item needs its temporary-thread messages
-  // fetched inline (the focus card is the only one rendered expanded) — the
-  // remaining open items render compactly below, matching the demo
-  // dashboard's own focus-item + compact-rows pattern.
-  const focus = inbox.open[0] ?? null;
-  const rest = inbox.open.slice(1);
-  const focusThreadMessages = focus?.hasOpenCoachThread ? await getCoachThreadMessagesAction({ workspaceId, escalationId: focus.id }) : [];
+  // When the focus item is an escalation, its decision opens inline: the
+  // same bound approve/edit/respond/resolve/teach actions and health-review
+  // decision EscalationCard uses (still the presentation on
+  // /coach/escalations), laid out as one ordered decision without repeating
+  // what the navy briefing above already shows.
+  const focusItem = dashboard.needsYou[0] ?? null;
+  const focusEscalation: AttentionItem | null =
+    focusItem?.attentionItemId && (focusItem.kind === "escalation" || focusItem.kind === "client_replied")
+      ? (inbox.open.find((i) => i.id === focusItem.attentionItemId && !i.adjustmentProposal) ?? null)
+      : null;
+  const focusThreadMessages = focusEscalation?.hasOpenCoachThread ? await getCoachThreadMessagesAction({ workspaceId, escalationId: focusEscalation.id }) : [];
 
-  // Phase 7B — pain_or_safety always sorts first (ESCALATION_PRIORITY,
-  // lib/production/chat.ts), so whenever one is open it IS the focus item;
-  // this never needs to look inside `rest`.
+  // Phase 7B — unchanged: a pain_or_safety focus item carries its real
+  // health-review record and decision action.
   async function healthReviewFor(item: AttentionItem): Promise<EscalationHealthReview | undefined> {
     if (item.escalationReason !== "pain_or_safety") return undefined;
     const onboarding = await getOnboardingProgressForClient(item.clientId);
@@ -71,7 +78,9 @@ async function LiveCoachDashboard() {
       clientId: item.clientId,
       workspaceId,
       status: item.healthReviewStatus ?? "review_needed",
-      reasons: item.proposedResponse ? [item.proposedResponse] : [],
+      // The client's own words when the report came through chat; otherwise
+      // the recorded report summary. Never OPTIM's drafted reply.
+      reasons: item.sourceMessageBody ? [item.sourceMessageBody] : item.proposedResponse ? [item.proposedResponse] : [],
       createdAtIso: item.createdAtIso,
       updatedAtIso: item.createdAtIso,
       documentedLimitations: item.documentedLimitations ?? undefined,
@@ -82,31 +91,7 @@ async function LiveCoachDashboard() {
     }
     return { clientFirstName: item.clientDisplayName.split(" ")[0], record, clientReportedDetail, onResolve };
   }
-  const focusHealthReview = focus ? await healthReviewFor(focus) : undefined;
-
-  // Phase 9B — a light-touch, easily-ignored reflective section; belongs to
-  // the quieter "Worth Knowing" zone below, never competing with real
-  // attention items in "Needs You".
-  const patternCandidates = await getEligibleCandidatesForReviewAction({ workspaceId });
-  const learnedRules = await getMyLearnedRulesAction({ workspaceId });
-  const activeLearnedRuleCount = learnedRules.filter((r) => r.status === "active").length;
-
-  // Phase 13A — real roster counts for the "Handled" zone's quiet summary
-  // (never a fabricated automation count). Reuses the same
-  // listRosterForOwnWorkspace + buildRosterPulse the Clients page and the
-  // demo Command Center already use — no new backend logic, just the
-  // existing read applied in a new place.
-  const { rows: rosterRows } = await listRosterForOwnWorkspace();
-  const visibleRosterRows = rosterRows.filter((r) => !r.archived);
-  const lifecycleByClientId = new Map(visibleRosterRows.map((r) => [r.clientId, r.lifecycle]));
-  const programPhaseByClientId = new Map(visibleRosterRows.map((r) => [r.clientId, r.programPhase]));
-  const needsCoachClientIds = new Set<ClientProfileId>(inbox.open.map((i) => i.clientId as ClientProfileId));
-  const rosterPulse = buildRosterPulse(
-    visibleRosterRows.map((r) => r.clientId),
-    lifecycleByClientId,
-    needsCoachClientIds,
-    programPhaseByClientId
-  );
+  const focusHealthReview = focusEscalation ? await healthReviewFor(focusEscalation) : undefined;
 
   // Phase 7A — approve/editAndSend/respondPersonally all send an actual
   // message to the client (approving/editing/replacing "what OPTIM
@@ -148,7 +133,7 @@ async function LiveCoachDashboard() {
       "use server";
       const resolution = String(formData.get("resolution") ?? "").trim();
       if (!resolution) return;
-      const item = [focus, ...rest].find((i) => i?.id === escalationId);
+      const item = inbox.open.find((i) => i.id === escalationId);
       await proposePlaybookExampleAction({ escalationId, situation: item?.summary ?? "Client message", resolution });
     }
     return {
@@ -161,103 +146,27 @@ async function LiveCoachDashboard() {
     };
   }
 
-  const worthKnowingCount = patternCandidates.length;
+  const activeLearnedRuleCount = learnedRules.filter((r) => r.status === "active").length;
 
   return (
-    <div className="mx-auto w-full max-w-[820px] space-y-10">
-      <div>
-        <p className="text-label text-accent-fg">
-          {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-        </p>
-        <h1 className="mt-1 text-display text-off-white">Good {timeOfDayGreeting()}, {inbox.coachDisplayName.trim().split(/\s+/)[0] || "Coach"}.</h1>
-      </div>
-
-      {/* One bounded composition, three zones on the same baseline — never
-          stretched edge-to-edge. Proportional columns (not a fixed-width
-          rail) keep Worth Knowing and Handled close enough to Needs You to
-          read as one status band, even when Needs You itself is just a
-          bare "0". Needs You still owns most of the width (and, with a
-          real item, the only real height); Worth Knowing and Handled
-          recede via scale and color, not physical distance. */}
-      <div className="grid grid-cols-1 gap-16 lg:grid-cols-[1.6fr_0.8fr_0.8fr] lg:gap-x-12 lg:items-start">
-        {/* NEEDS YOU — the dominant working surface. Zero is a complete
-            state on its own; a real item is the one expanded object plus
-            compact rows for the rest — actions only ever live on the
-            focused item. /coach/escalations already carries the full
-            open+resolved history, so nothing here duplicates it. */}
-        <section className="min-w-0">
-          <p className="text-label text-neutral">Needs You</p>
-          {focus ? (
-            <div className="mt-2 space-y-4">
-              {focus.adjustmentProposal ? <AdjustmentAttentionCard item={focus} /> : <EscalationCard item={focus} threadMessages={focusThreadMessages} actions={actionsFor(focus.id, focus.sourceMessageBody !== null)} healthReview={focusHealthReview} />}
-              {rest.length > 0 && (
-                <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-lg)] border border-border">
-                  {rest.map((item) =>
-                    item.adjustmentProposal ? (
-                      <Link key={item.id} href={`/coach/clients/${item.adjustmentProposal.clientProfileId}#proposal-review`} className="flex items-center gap-3 bg-charcoal px-4 py-3 hover:bg-surface-raised">
-                        <span className="rounded-full border border-border-strong px-2.5 py-0.5 text-label text-neutral">{item.kindLabel}</span>
-                        <p className="min-w-0 flex-1 truncate text-body text-off-white">{item.clientDisplayName}</p>
-                        <span className="shrink-0 text-meta text-neutral">{new Date(item.createdAtIso).toLocaleDateString()}</span>
-                      </Link>
-                    ) : (
-                      <div key={item.id} className="flex items-center gap-3 bg-charcoal px-4 py-3">
-                        <span className="rounded-full border border-border-strong px-2.5 py-0.5 text-label text-neutral">{item.kindLabel}</span>
-                        <p className="min-w-0 flex-1 truncate text-body text-off-white">{item.clientDisplayName}</p>
-                        <span className="shrink-0 text-meta text-neutral">{new Date(item.createdAtIso).toLocaleDateString()}</span>
-                      </div>
-                    )
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="mt-2 text-metric text-off-white">0</p>
-          )}
-        </section>
-
-        {/* WORTH KNOWING — quieter secondary territory. */}
-        <section className="min-w-0">
-          <p className="text-label text-neutral">Worth Knowing</p>
-          <p className="mt-2 text-heading text-off-white">{worthKnowingCount}</p>
-          {worthKnowingCount > 0 ? (
-            <div className="mt-3">
-              <PatternCandidateSection workspaceId={workspaceId} candidates={patternCandidates.slice(0, 1)} />
-            </div>
-          ) : null}
-        </section>
-
-        {/* HANDLED — recessive/ambient. A nonzero count is a real link into
-            the roster it's counting, with a small chevron (not an
-            underline, which read as a stray dash) as the disclosure cue. */}
-        <section className="min-w-0">
-          <p className="text-label text-neutral">Handled</p>
-          <Link
-            href="/coach/clients"
-            aria-label={`${rosterPulse.onTrack} handled — view clients`}
-            className="mt-2 inline-flex items-center gap-0.5 text-subheading text-neutral transition-colors hover:text-off-white"
-          >
-            {rosterPulse.onTrack}
-            <ChevronRight size={14} className="shrink-0 opacity-60" aria-hidden="true" />
-          </Link>
-          {activeLearnedRuleCount > 0 && (
-            <details className="mt-3">
-              <summary className="cursor-pointer text-meta text-neutral hover:text-off-white">
-                {activeLearnedRuleCount} confirmed pattern{activeLearnedRuleCount === 1 ? "" : "s"}
-              </summary>
-              <div className="mt-2">
-                <LearnedRulesList workspaceId={workspaceId} rules={learnedRules} />
-              </div>
-            </details>
-          )}
-        </section>
-      </div>
-    </div>
+    <CoachDashboardView
+      dashboard={dashboard}
+      coachFirstName={firstNameOf(inbox.coachDisplayName) || "Coach"}
+      nowIso={nowIso}
+      focusEscalation={
+        focusEscalation ? (
+          <EscalationDecisionPanel
+            item={focusEscalation}
+            threadMessages={focusThreadMessages}
+            actions={actionsFor(focusEscalation.id, focusEscalation.sourceMessageBody !== null)}
+            healthReview={focusHealthReview}
+          />
+        ) : undefined
+      }
+      patternSlot={(signature) => (
+        <PatternCandidateSection workspaceId={workspaceId} candidates={patternCandidates.filter((c) => c.candidateSignature === signature)} />
+      )}
+      learnedRules={activeLearnedRuleCount > 0 ? { count: activeLearnedRuleCount, content: <LearnedRulesList workspaceId={workspaceId} rules={learnedRules} /> } : null}
+    />
   );
-}
-
-function timeOfDayGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "morning";
-  if (hour < 18) return "afternoon";
-  return "evening";
 }

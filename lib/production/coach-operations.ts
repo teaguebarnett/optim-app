@@ -45,6 +45,7 @@
 // is rewritten to go through it.
 
 import "server-only";
+import { cache } from "react";
 import { resolveAppMode } from "./mode.ts";
 import { resolveOwnStaffWorkspace } from "./auth.ts";
 import { getWorkspaceEscalations } from "./chat.ts";
@@ -123,6 +124,12 @@ export function getCoachOperationsRepository(): CoachOperationsRepository {
   cached = resolveAppMode() === "supabase" ? new SupabaseCoachOperationsRepository() : new DemoCoachOperationsRepository();
   return cached;
 }
+
+/** Gate 2 — the attention inbox, read at most once per request. The coach
+ * layout (nav badge, identity) and the dashboard page both need it; React's
+ * per-request cache() dedupes the second call instead of re-running every
+ * escalation/adjustment query. Never shared across requests or users. */
+export const getAttentionInboxForRequest = cache((): Promise<CoachAttentionInbox> => getCoachOperationsRepository().getAttentionInbox());
 
 /** Test-only: lets verify scripts exercise both adapters deterministically
  * without relying on module-load-order caching — mirrors

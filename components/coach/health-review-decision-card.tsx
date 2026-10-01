@@ -27,6 +27,7 @@ export function HealthReviewDecisionCard({
   healthReview,
   clientReportedDetail,
   onResolve,
+  variant = "card",
 }: {
   clientFirstName: string;
   healthReview: HealthReviewRecord;
@@ -35,6 +36,11 @@ export function HealthReviewDecisionCard({
    * summarized into something they didn't say. */
   clientReportedDetail?: string | null;
   onResolve: (status: HealthReviewStatus, documentedLimitations?: string) => void;
+  /** Gate 2 — "inline" renders only the decision itself (no card, header, or
+   * "what they reported" box) for a surface that already shows the client's
+   * own words directly above it — the coach dashboard's decision panel. Same
+   * statuses, same grouping, same documented-limitation requirement. */
+  variant?: "card" | "inline";
 }) {
   const resolved = RESOLVED_HEALTH_REVIEW_STATUSES.has(healthReview.status);
   const [limitationDraft, setLimitationDraft] = useState(healthReview.documentedLimitations ?? "");
@@ -57,6 +63,65 @@ export function HealthReviewDecisionCard({
   function confirmLimitations() {
     if (!limitationDraft.trim()) return;
     onResolve("proceed_with_limitations", limitationDraft.trim());
+  }
+
+  if (variant === "inline") {
+    const option = (status: HealthReviewStatus, tone: "pending" | "resolved", onClick: () => void) => (
+      <button
+        key={status}
+        type="button"
+        onClick={onClick}
+        aria-pressed={healthReview.status === status}
+        className={cn(
+          "min-h-11 rounded-[var(--radius-sm)] border px-3 py-2 text-left text-sm font-medium transition-colors sm:min-h-0",
+          healthReview.status === status
+            ? tone === "pending"
+              ? "border-warning bg-warning-soft text-warning-strong"
+              : "border-success bg-success-soft text-success"
+            : "border-border-strong bg-transparent text-off-white hover:bg-surface-raised"
+        )}
+      >
+        {HEALTH_REVIEW_STATUS_LABELS[status]}
+      </button>
+    );
+    return (
+      <div>
+        {resolved ? (
+          <p className="mb-3 flex items-start gap-2 text-sm text-off-white">
+            <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
+            <span>
+              {HEALTH_REVIEW_STATUS_LABELS[healthReview.status]}
+              {healthReview.status === "proceed_with_limitations" && healthReview.documentedLimitations ? ` — ${healthReview.documentedLimitations}` : ""}. OPTIM can program around this.
+            </span>
+          </p>
+        ) : null}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <p className="mb-1.5 text-meta text-neutral">Keep blocked</p>
+            <div className="flex flex-col gap-1.5">{PENDING_HEALTH_REVIEW_STATUSES.map((status) => option(status, "pending", () => choosePending(status)))}</div>
+          </div>
+          <div>
+            <p className="mb-1.5 text-meta text-neutral">Clear to proceed</p>
+            <div className="flex flex-col gap-1.5">{RESOLVED_HEALTH_REVIEW_STATUS_ORDER.map((status) => option(status, "resolved", () => chooseResolved(status)))}</div>
+          </div>
+        </div>
+        {showLimitationInput ? (
+          <div className="mt-3">
+            <TextArea
+              id="documented-limitations"
+              label={`What should OPTIM program around for ${clientFirstName}?`}
+              placeholder="e.g. No overhead pressing; cap load on unilateral knee work."
+              value={limitationDraft}
+              onChange={(e) => setLimitationDraft(e.target.value)}
+              rows={2}
+            />
+            <Button size="sm" className="mt-2" onClick={confirmLimitations} disabled={!limitationDraft.trim()}>
+              Confirm and proceed
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   return (

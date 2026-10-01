@@ -20,6 +20,7 @@ export function SupabaseHealthReviewDecisionCard({
   healthReview,
   clientReportedDetail,
   onResolve,
+  variant,
 }: {
   clientFirstName: string;
   healthReview: HealthReviewRecord;
@@ -29,6 +30,7 @@ export function SupabaseHealthReviewDecisionCard({
    * workspaceId, so this component only ever supplies the coach's actual
    * decision. */
   onResolve: (status: HealthReviewStatus, documentedLimitations?: string) => Promise<void>;
+  variant?: "card" | "inline";
 }) {
   const [, startTransition] = useTransition();
 
@@ -37,6 +39,7 @@ export function SupabaseHealthReviewDecisionCard({
       clientFirstName={clientFirstName}
       healthReview={healthReview}
       clientReportedDetail={clientReportedDetail}
+      variant={variant}
       onResolve={(status, documentedLimitations) => {
         startTransition(() => {
           void onResolve(status, documentedLimitations);

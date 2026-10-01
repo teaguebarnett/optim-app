@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ShieldAlert } from "lucide-react";
 import { CoachShell } from "@/components/coach/coach-shell";
 import { resolveAppMode } from "@/lib/production/mode";
-import { getCoachOperationsRepository } from "@/lib/production/coach-operations";
+import { getAttentionInboxForRequest } from "@/lib/production/coach-operations";
 import { UnauthenticatedError, UnauthorizedError } from "@/lib/production/errors";
 
 // Phase 6.0C: appMode is resolved server-side here (this layout is a
@@ -47,7 +47,7 @@ export default async function CoachLayout({ children }: { children: ReactNode })
   let identity: { coachDisplayName: string; openAttentionCount: number; coachUserId: string } | null = null;
   let accessError: unknown = null;
   try {
-    const inbox = await getCoachOperationsRepository().getAttentionInbox();
+    const inbox = await getAttentionInboxForRequest();
     identity = { coachDisplayName: inbox.coachDisplayName, openAttentionCount: inbox.open.length, coachUserId: inbox.coachUserId };
   } catch (err) {
     accessError = err;
