@@ -23,7 +23,7 @@ import "server-only";
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "./auth";
 import { UnauthorizedError } from "./errors";
 import { getMyDecisionEvidence } from "./decision-evidence.ts";
-import { getApprovedPlaybook } from "./playbooks.ts";
+import { getOwnCoachIntelligence } from "./coach-brain.ts";
 import { analyzeCoachDecisionPatterns } from "../patterns/analyze-coach-decision-patterns.ts";
 import type { PatternAnalysisResult } from "../patterns/types.ts";
 
@@ -41,10 +41,12 @@ async function requireCoachAuthority(workspaceId: string) {
 export async function analyzeMyCoachPatterns(workspaceId: string): Promise<PatternAnalysisResult> {
   const ctx = await requireCoachAuthority(workspaceId);
   const evidence = await getMyDecisionEvidence();
-  const playbook = await getApprovedPlaybook(workspaceId);
+  // Gate 3 — conflicts are judged against the coach's OWN confirmed method.
+  void workspaceId;
+  const intelligence = await getOwnCoachIntelligence();
   return analyzeCoachDecisionPatterns({
     coachUserId: ctx.userId,
     evidence,
-    operatingModel: playbook?.content.operatingModel ?? null,
+    operatingModel: intelligence.method?.operatingModel ?? null,
   });
 }

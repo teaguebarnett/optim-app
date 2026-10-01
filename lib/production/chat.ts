@@ -32,11 +32,12 @@ import { getSupabaseServerClient } from "../supabase/server.ts";
 import { getSupabaseAdminClient } from "../supabase/admin.ts";
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "./auth.ts";
 import { UnauthorizedError } from "./errors.ts";
-import { validatePlaybookContent } from "./validation.ts";
 import { getClientProgramContext } from "./programs.ts";
 import { runAssistantDecisionPipeline, providerFailureMessage, type ProviderFailureKind } from "../ai/pipeline.ts";
 import { normalizeClientMessage, MAX_CLIENT_MESSAGE_CHARS, MAX_CONTEXT_HISTORY_MESSAGES, MAX_CONTEXT_PRIOR_RESOLUTIONS, type AssistantContextSnapshot } from "../ai/context.ts";
-import { buildDefaultPlaybookContent, type CoachPlaybookContent } from "../coach/playbook.ts";
+import type { CoachPlaybookContent } from "../coach/playbook.ts";
+import { resolveCoachIntelligenceForClient } from "./coach-brain.ts";
+import { methodAsPlaybookContent, systemDefaultPlaybookContent } from "../coach/coach-brain.ts";
 import {
   resolveEffectiveAiAuthorityLevel,
   resolveAiActionDisposition,
@@ -205,58 +206,30 @@ async function checkRateLimit(supabase: Awaited<ReturnType<typeof getSupabaseSer
 // a silent edit of an existing approved version.
 // ---------------------------------------------------------------------------
 
-async function getOrBootstrapPlaybookContentViaAdmin(workspaceId: string): Promise<CoachPlaybookContent> {
+/**
+ * Gate 3 — whose methodology applies to this client's chat: the client's
+ * PRIMARY assigned coach's confirmed Coach Brain (lib/production/
+ * coach-brain.ts's canonical read path), read via the service role because
+ * the caller is the client. Replaces the old workspace-level bootstrap,
+ * which silently created an "approved" playbook of OPTIM defaults on a
+ * client's first message — a default must never become coach truth.
+ *
+ * No confirmed Brain → OPTIM's system defaults are used only as technical
+ * scaffolding (formatting, the communication-policy shape), never persisted,
+ * never presented to the model as the coach's methodology
+ * (coachMethodConfirmed: false makes buildSystemPrompt restrict OPTIM to
+ * logistics and escalate anything methodology-dependent), with the most
+ * conservative authority (Advisor).
+ */
+async function resolveChatCoachContent(workspaceId: string, clientProfileId: string): Promise<{ content: CoachPlaybookContent; coachMethodConfirmed: boolean }> {
+  const intelligence = await resolveCoachIntelligenceForClient({ workspaceId, clientProfileId });
+  if (intelligence.method) return { content: methodAsPlaybookContent(intelligence.method), coachMethodConfirmed: true };
   const admin = getSupabaseAdminClient();
-
-  const { data: existing, error: existingError } = await admin
-    .from("coach_playbooks")
-    .select("content")
-    .eq("workspace_id", workspaceId)
-    .eq("status", "approved")
-    .maybeSingle();
-  if (existingError) throw new Error(`getOrBootstrapPlaybookContentViaAdmin (read) failed: ${existingError.message}`);
-  if (existing) return validatePlaybookContent(existing.content);
-
-  const { data: workspaceRow, error: workspaceError } = await admin
-    .from("workspaces")
-    .select("owner_user_id, business_name")
-    .eq("id", workspaceId)
-    .single();
-  if (workspaceError) throw new Error(`getOrBootstrapPlaybookContentViaAdmin (workspace) failed: ${workspaceError.message}`);
-
-  const nowIso = new Date().toISOString();
-  const content = buildDefaultPlaybookContent({
-    coachId: workspaceRow.owner_user_id as string,
-    workspaceId,
-    nowIso,
-    businessName: workspaceRow.business_name as string,
-  });
-
-  const { error: insertError } = await admin.from("coach_playbooks").insert({
-    workspace_id: workspaceId,
-    version: 1,
-    status: "approved",
-    content,
-    created_by: workspaceRow.owner_user_id,
-    approved_by: workspaceRow.owner_user_id,
-    approved_at: nowIso,
-  });
-  // A concurrent bootstrap racing this one is fine — the partial unique
-  // index (coach_playbooks_one_approved_per_workspace_idx) means at most one
-  // insert wins; either way, re-reading returns a real approved Playbook, so
-  // this never needs to distinguish "I created it" from "lost the race".
-  if (insertError && insertError.code !== "23505") {
-    throw new Error(`getOrBootstrapPlaybookContentViaAdmin (insert) failed: ${insertError.message}`);
-  }
-
-  const { data: finalRow, error: finalError } = await admin
-    .from("coach_playbooks")
-    .select("content")
-    .eq("workspace_id", workspaceId)
-    .eq("status", "approved")
-    .single();
-  if (finalError) throw new Error(`getOrBootstrapPlaybookContentViaAdmin (final read) failed: ${finalError.message}`);
-  return validatePlaybookContent(finalRow.content);
+  const { data: workspaceRow } = await admin.from("workspaces").select("business_name").eq("id", workspaceId).maybeSingle();
+  return {
+    content: systemDefaultPlaybookContent({ workspaceId, nowIso: new Date().toISOString(), businessName: (workspaceRow?.business_name as string | undefined) ?? "OPTIM" }),
+    coachMethodConfirmed: false,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +303,7 @@ function summarizeRecentActivity(rows: { date_iso: string; content: unknown }[])
 /** Real, client-reported safety signals only — pain reports this client
  * actually logged during a session, plus the coach's own absolute override
  * rules from the Playbook. Never invented, never another client's. */
-function collectSafetyFlags(rows: { date_iso: string; content: unknown }[], playbook: CoachPlaybookContent): string[] {
+function collectSafetyFlags(rows: { date_iso: string; content: unknown }[], playbook: CoachPlaybookContent | null): string[] {
   const flags: string[] = [];
   for (const row of rows) {
     const content = row.content as Partial<DailyActivityContent> | null;
@@ -340,7 +313,9 @@ function collectSafetyFlags(rows: { date_iso: string; content: unknown }[], play
       flags.push(`Client logged a pain report on ${row.date_iso}${where}`);
     }
   }
-  for (const rule of playbook.operatingModel.safety.absoluteOverrideRules) flags.push(rule);
+  // Only a coach's CONFIRMED safety rules — OPTIM defaults are never
+  // presented as that coach's rules for this client (Gate 3).
+  if (playbook) for (const rule of playbook.operatingModel.safety.absoluteOverrideRules) flags.push(rule);
   return flags;
 }
 
@@ -350,6 +325,8 @@ export async function assembleAssistantContext(params: {
   clientDisplayName: string;
   coachDisplayName: string;
   playbook: CoachPlaybookContent;
+  /** Gate 3 — false when the client's coach has no confirmed Coach Brain. */
+  coachMethodConfirmed?: boolean;
 }): Promise<AssistantContextSnapshot> {
   const supabase = await getSupabaseServerClient();
 
@@ -415,7 +392,7 @@ export async function assembleAssistantContext(params: {
     goalSummary: (clientRow?.goal as string | null) ?? null,
     nutritionTargetsSummary,
     recentTrainingSummary: summarizeRecentActivity(activity),
-    safetyFlags: collectSafetyFlags(activity, params.playbook),
+    safetyFlags: collectSafetyFlags(activity, params.coachMethodConfirmed === false ? null : params.playbook),
     priorCoachResolutions: (resolvedRows ?? []).map((r) => {
       const reason = (r.reason_category as string).replaceAll("_", " ");
       const outcome = (r.proposed_response as string | null) ?? "resolved by the coach directly";
@@ -423,6 +400,7 @@ export async function assembleAssistantContext(params: {
     }),
     authoritySummary,
     hasOpenEscalation: (openRows ?? []).length > 0,
+    coachMethodConfirmed: params.coachMethodConfirmed !== false,
   };
 }
 
@@ -520,7 +498,7 @@ export async function sendClientChatMessage(params: {
     };
   }
 
-  const playbook = await getOrBootstrapPlaybookContentViaAdmin(params.workspaceId);
+  const { content: playbook, coachMethodConfirmed } = await resolveChatCoachContent(params.workspaceId, params.clientProfileId);
   const [context, history] = await Promise.all([
     assembleAssistantContext({
       workspaceId: params.workspaceId,
@@ -528,6 +506,7 @@ export async function sendClientChatMessage(params: {
       clientDisplayName: params.clientDisplayName,
       coachDisplayName: params.coachDisplayName,
       playbook,
+      coachMethodConfirmed,
     }),
     getConversationMessages(conversationId, MAX_CONTEXT_HISTORY_MESSAGES + 1),
   ]);

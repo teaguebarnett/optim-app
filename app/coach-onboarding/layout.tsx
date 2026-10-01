@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { ShieldAlert } from "lucide-react";
+import { LogOut, ShieldAlert } from "lucide-react";
+import { OptimWordmark } from "@/components/brand/optim-wordmark";
+import { signOutAction } from "@/app/actions/sign-out";
 import { resolveAppMode } from "@/lib/production/mode";
 import { resolveOwnStaffWorkspace } from "@/lib/production/auth";
 import { UnauthenticatedError } from "@/lib/production/errors";
@@ -29,7 +31,22 @@ export default async function CoachOnboardingLayout({ children }: { children: Re
     return <CoachOnboardingAccessDenied error={err} />;
   }
 
-  return <>{children}</>;
+  // Gate 3 — calibration is the only workspace step an uncalibrated coach
+  // can reach, so leaving (signing out) must always be one tap away.
+  return (
+    <div className="min-h-screen bg-canvas">
+      <header className="flex items-center justify-between border-b border-border bg-charcoal px-4 py-2 pc-safe-top sm:px-6">
+        <OptimWordmark size={18} className="text-off-white" />
+        <form action={signOutAction}>
+          <button type="submit" className="flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium text-neutral hover:text-off-white">
+            <LogOut size={16} aria-hidden="true" />
+            Sign out
+          </button>
+        </form>
+      </header>
+      {children}
+    </div>
+  );
 }
 
 function CoachOnboardingAccessDenied({ error }: { error: unknown }) {

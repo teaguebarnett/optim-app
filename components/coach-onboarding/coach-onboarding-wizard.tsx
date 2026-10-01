@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -18,7 +18,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useCoachOperatingModel } from "@/hooks/use-coach-operating-model";
+import { useCalibration } from "@/components/coach-onboarding/calibration-context";
+import { AiAuthorityPanel } from "@/components/coach/ai-authority-panel";
 import {
   ALL_CHAPTER_IDS_IN_ORDER,
   COACH_ONBOARDING_CHAPTERS,
@@ -26,7 +27,7 @@ import {
   type CoachOnboardingAnswerValue,
   type CoachOnboardingChapterId,
 } from "@/lib/coach/coach-onboarding-questions";
-import { applicableChapters, computeProgressSummary } from "@/lib/coach/coach-onboarding-engine";
+import { computeProgressSummary } from "@/lib/coach/coach-onboarding-engine";
 import { QuestionField } from "@/components/coach-onboarding/question-field";
 import { AiAuthorityChapter } from "@/components/coach-onboarding/ai-authority-chapter";
 import { ExistingWorkChapter } from "@/components/coach-onboarding/existing-work-chapter";
@@ -51,8 +52,8 @@ const CHAPTER_ICONS: Record<CoachOnboardingChapterId, LucideIcon> = {
   review: ClipboardCheck,
 };
 
-export function CoachOnboardingWizard({ businessName, initialChapterId }: { businessName: string; initialChapterId?: CoachOnboardingChapterId }) {
-  const com = useCoachOperatingModel();
+export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?: CoachOnboardingChapterId }) {
+  const cal = useCalibration();
   // Gate 5A — a coach arriving here to fix one specific Playbook section
   // (see components/coach/coach-playbook-detail.tsx's per-section "Edit"
   // links) must land directly on that chapter, not always chapter 1 —
@@ -61,8 +62,11 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
   // calibrated coach is being deep-linked to a specific section; a
   // genuinely first-time coach (no progress yet) still sees the welcome
   // screen even if a stray chapter param were somehow present.
-  const [phase, setPhase] = useState<"welcome" | "chapters">(com.progress?.updatedAtIso ? "chapters" : "welcome");
-  const chapters = applicableChapters(com.answers);
+  const [phase, setPhase] = useState<"welcome" | "chapters">(cal.hasProgress || initialChapterId ? "chapters" : "welcome");
+  const chapters = cal.chapters;
+  // Gate 3 — a live coach resumes exactly where they left off (saved
+  // server-side with every navigation); an explicit ?chapter= still wins.
+  const resumeChapter = initialChapterId ?? cal.initialPosition?.chapterId;
 
   // Coach-onboarding refinement pass — tracked by chapter ID, not a raw
   // array index. `chapters` is recomputed every render from the coach's
@@ -77,8 +81,8 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
   // wherever the vanished chapter was in the real canonical order to the
   // next chapter that's still genuinely applicable — never backward to
   // chapter 1, and never left pointing at a chapter that no longer exists.
-  const [chapterId, setChapterId] = useState<CoachOnboardingChapterId>(initialChapterId && chapters.includes(initialChapterId) ? initialChapterId : chapters[0]);
-  const [questionIndex, setQuestionIndex] = useState(0);
+  const [chapterId, setChapterId] = useState<CoachOnboardingChapterId>(resumeChapter && chapters.includes(resumeChapter) ? resumeChapter : chapters[0]);
+  const [questionIndex, setQuestionIndex] = useState(!initialChapterId && cal.initialPosition && resumeChapter === cal.initialPosition.chapterId ? cal.initialPosition.questionIndex : 0);
   const [syncedChaptersKey, setSyncedChaptersKey] = useState(chapters.join("|"));
   const chaptersKey = chapters.join("|");
   if (chaptersKey !== syncedChaptersKey) {
@@ -91,8 +95,15 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
     }
   }
 
+  const { recordPosition, markReviewReached } = cal;
+  useEffect(() => {
+    if (phase !== "chapters") return;
+    recordPosition(chapterId, questionIndex);
+    if (chapterId === "review") markReviewReached();
+  }, [phase, chapterId, questionIndex, recordPosition, markReviewReached]);
+
   if (phase === "welcome") {
-    return <CoachOnboardingWelcome businessName={businessName} onContinue={() => setPhase("chapters")} />;
+    return <CoachOnboardingWelcome businessName={cal.businessName} onContinue={() => setPhase("chapters")} />;
   }
 
   const chapterIndex = Math.max(0, chapters.indexOf(chapterId));
@@ -122,7 +133,7 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
     // reviewing/correcting earlier answers via Back expects to land on the
     // last thing before where they are now, not be thrown back to that
     // chapter's start.
-    const prevQuestionCount = visibleQuestionsForChapter(prevId, com.answers).length;
+    const prevQuestionCount = visibleQuestionsForChapter(prevId, cal.answers).length;
     setChapterId(prevId);
     setQuestionIndex(Math.max(0, prevQuestionCount - 1));
   }
@@ -130,7 +141,7 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
   if (chapterId === "ai_authority") {
     return (
       <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
-        <AiAuthorityChapter onContinue={goToNextChapter} />
+        {cal.authority ? <LiveAuthorityStep onContinue={goToNextChapter} /> : <AiAuthorityChapter onContinue={goToNextChapter} />}
       </ChapterFrame>
     );
   }
@@ -158,12 +169,14 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
     );
   }
 
-  const questions = visibleQuestionsForChapter(chapterId, com.answers);
+  const questions = visibleQuestionsForChapter(chapterId, cal.answers);
   const question = questions[Math.min(questionIndex, questions.length - 1)];
   const isLastQuestionInChapter = questionIndex >= questions.length - 1;
 
   function handleChange(id: string, value: CoachOnboardingAnswerValue) {
-    com.saveAnswers({ ...com.answers, [id]: value });
+    // Free text is saved shortly after typing stops; choices save at once.
+    const isText = id.endsWith("_depends_detail") || question?.type === "text";
+    cal.saveAnswers({ ...cal.answers, [id]: value }, { debounce: isText });
   }
 
   function handleContinue() {
@@ -182,11 +195,13 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
     goToPreviousChapter();
   }
 
-  const currentValue = question ? com.answers[question.id] : undefined;
+  const currentValue = question ? cal.answers[question.id] : undefined;
+  const saveBlocked = cal.saveStatus === "saving" || cal.saveStatus === "error";
   const canContinue =
-    !question ||
+    !saveBlocked &&
+    (!question ||
     !question.required ||
-    (question.type === "multi_select" || question.type === "scenario" ? Array.isArray(currentValue) && currentValue.length > 0 : question.type === "boolean" ? typeof currentValue === "boolean" : currentValue !== undefined && currentValue !== "");
+    (question.type === "multi_select" || question.type === "scenario" ? Array.isArray(currentValue) && currentValue.length > 0 : question.type === "boolean" ? typeof currentValue === "boolean" : currentValue !== undefined && currentValue !== ""));
 
   return (
     <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0} onSelectChapter={jumpToChapter}>
@@ -199,12 +214,13 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
           <h2 className="max-w-2xl text-heading text-off-white">{question.prompt}</h2>
           {question.explanation ? <p className="mt-2 max-w-xl text-body text-neutral">{question.explanation}</p> : null}
           <div className="mt-7">
-            <QuestionField question={question} answers={com.answers} onChange={handleChange} />
+            <QuestionField question={question} answers={cal.answers} onChange={handleChange} />
           </div>
-          <div className="mt-8 flex gap-3">
+          <div className="mt-8 flex flex-wrap items-center gap-3">
             <Button size="lg" onClick={handleContinue} disabled={!canContinue}>
               Continue <ArrowRight size={16} aria-hidden="true" />
             </Button>
+            <SaveIndicator />
           </div>
         </div>
       ) : (
@@ -219,7 +235,7 @@ export function CoachOnboardingWizard({ businessName, initialChapterId }: { busi
           <p className="text-body text-neutral">Nothing to ask here yet.</p>
           {process.env.NODE_ENV !== "production" ? (
             <pre className="mt-3 max-w-2xl overflow-x-auto rounded-[var(--radius-sm)] border border-dashed border-warning/40 bg-warning-soft p-3 text-xs text-warning-strong">
-              {JSON.stringify({ chapterId, questionIndex, visibleQuestionCount: questions.length, answers: com.answers }, null, 2)}
+              {JSON.stringify({ chapterId, questionIndex, visibleQuestionCount: questions.length, answers: cal.answers }, null, 2)}
             </pre>
           ) : null}
           <div className="mt-6">
@@ -254,8 +270,11 @@ function ChapterFrame({
 }) {
   return (
     <div className="min-h-screen bg-canvas">
-      <div className="mx-auto grid max-w-[1240px] grid-cols-[280px_1fr] gap-8 px-10 py-12">
-        <ChapterRail chapterId={chapterId} chapters={chapters} onSelectChapter={onSelectChapter} />
+      <div className="mx-auto grid max-w-[1240px] grid-cols-1 gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[280px_1fr] lg:gap-8 lg:px-10 lg:py-12">
+        <div className="hidden lg:block">
+          <ChapterRail chapterId={chapterId} chapters={chapters} onSelectChapter={onSelectChapter} />
+        </div>
+        <CompactProgress chapterId={chapterId} chapters={chapters} chapterNumber={chapterNumber} onSelectChapter={onSelectChapter} />
         <div className="min-w-0">
           <div className="mb-6 flex items-center gap-3">
             {canGoBack ? (
@@ -270,7 +289,7 @@ function ChapterFrame({
               <p className="mt-0.5 text-meta text-neutral">{meta.description}</p>
             </div>
           </div>
-          <div className="rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-8 shadow-[var(--shadow-subtle)]">{children}</div>
+          <div className="rounded-[var(--radius-lg)] border border-border-strong bg-charcoal p-5 shadow-[var(--shadow-subtle)] sm:p-8">{children}</div>
         </div>
       </div>
     </div>
@@ -291,8 +310,8 @@ function ChapterRail({
   chapters: CoachOnboardingChapterId[];
   onSelectChapter: (id: CoachOnboardingChapterId) => void;
 }) {
-  const com = useCoachOperatingModel();
-  const summary = computeProgressSummary(com.answers);
+  const cal = useCalibration();
+  const summary = computeProgressSummary(cal.answers);
   const currentIndex = chapters.indexOf(chapterId);
 
   return (
@@ -346,5 +365,104 @@ function ChapterRail({
         })}
       </nav>
     </aside>
+  );
+}
+
+/** Live only: whether the coach's latest answer is actually saved. A failed
+ * save is shown as failed (with retry) and blocks Continue — never hidden. */
+function SaveIndicator() {
+  const cal = useCalibration();
+  if (cal.mode !== "live" || cal.saveStatus === "idle") return null;
+  if (cal.saveStatus === "error") {
+    return (
+      <span role="alert" className="flex flex-wrap items-center gap-2 text-meta text-error-strong">
+        Not saved{cal.saveError ? ` — ${cal.saveError}` : ""}
+        <button type="button" onClick={cal.retrySave} className="min-h-11 font-semibold text-accent-fg underline-offset-2 hover:underline sm:min-h-0">
+          Retry
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="text-meta text-neutral" aria-live="polite">
+      {cal.saveStatus === "saving" ? "Saving…" : "Saved"}
+    </span>
+  );
+}
+
+/** Phones/tablets: the chapter rail collapses to one line of progress with a
+ * chapter picker — same chapters, same jumps, no sidebar. */
+function CompactProgress({
+  chapterId,
+  chapters,
+  chapterNumber,
+  onSelectChapter,
+}: {
+  chapterId: CoachOnboardingChapterId;
+  chapters: CoachOnboardingChapterId[];
+  chapterNumber: number;
+  onSelectChapter: (id: CoachOnboardingChapterId) => void;
+}) {
+  const cal = useCalibration();
+  const summary = computeProgressSummary(cal.answers);
+  return (
+    <div className="lg:hidden">
+      <div className="flex items-center justify-between gap-3 text-meta text-neutral">
+        <span>
+          Chapter {chapterNumber} of {chapters.length} · {summary.percentComplete}% complete
+        </span>
+        <label className="sr-only" htmlFor="calibration-chapter-picker">
+          Jump to chapter
+        </label>
+        <select
+          id="calibration-chapter-picker"
+          value={chapterId}
+          onChange={(e) => onSelectChapter(e.target.value as CoachOnboardingChapterId)}
+          className="min-h-11 max-w-[55%] rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 text-meta text-off-white"
+        >
+          {chapters.map((id) => (
+            <option key={id} value={id}>
+              {CHAPTER_META.get(id)!.title}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">
+        <div className="h-full rounded-full bg-accent" style={{ width: `${summary.percentComplete}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** Live AI-authority step: the same AiAuthorityPanel, backed by the coach's
+ * real calibration draft. Starts at Advisor (OPTIM only suggests); nothing
+ * broader is ever assumed. Continuing records the coach's explicit choice —
+ * and only advances once that's saved. */
+function LiveAuthorityStep({ onContinue }: { onContinue: () => void }) {
+  const cal = useCalibration();
+  const authority = cal.authority!;
+  const [busy, setBusy] = useState(false);
+  async function handleContinue() {
+    setBusy(true);
+    const ok = await authority.confirm();
+    setBusy(false);
+    if (ok) onContinue();
+  }
+  return (
+    <div className="max-w-2xl">
+      <h2 className="text-heading text-off-white sm:text-display">How much should OPTIM do on its own?</h2>
+      <p className="mt-2 text-body text-neutral">
+        This starts at Advisor — OPTIM only suggests and you decide. Choose what fits how you coach; you can change it any time in Settings. Pain, injury, and out-of-bounds situations always come to you.
+      </p>
+      <div className="mt-6">
+        <AiAuthorityPanel live confirmChanges override={{ settings: authority.settings, setGlobal: authority.setGlobal }} />
+      </div>
+      <div className="mt-8 flex flex-wrap items-center gap-3">
+        <Button size="lg" onClick={handleContinue} disabled={busy || cal.saveStatus === "saving"}>
+          {authority.confirmed ? "Continue" : "Confirm and continue"} <ArrowRight size={16} aria-hidden="true" />
+        </Button>
+        <SaveIndicator />
+      </div>
+    </div>
   );
 }

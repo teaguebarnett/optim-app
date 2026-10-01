@@ -65,9 +65,12 @@ export function evaluateGenerationPrerequisites(input: GenerationPrerequisiteInp
   if (!method.confirmed) {
     missing.push({
       id: "coach_method",
-      message: "Your coaching method hasn't been confirmed. OPTIM won't build programs from its defaults.",
-      href: "/coach/settings#coaching-method",
-      linkLabel: "Review & confirm your method",
+      // Gate 3 — the method is the client's PRIMARY coach's confirmed Coach
+      // Brain. No link: the acting coach may not be that coach, and must
+      // never be sent to confirm their own method on someone else's behalf.
+      message: "This client's coach hasn't confirmed their coaching method in OPTIM yet. OPTIM won't build programs from its defaults.",
+      href: null,
+      linkLabel: null,
     });
   }
 
@@ -136,6 +139,8 @@ const METHOD_SUMMARY_FIELDS: MethodQuestionId[] = ["program_splits", "program_re
 
 export function buildGenerationInputs(params: {
   playbookVersion: number;
+  /** Gate 3 — the confirmed Coach Brain method version used. */
+  methodVersionId?: string;
   operatingModel: CoachOperatingModel;
   onboarding: OnboardingProgress;
   profile: ClientProgrammingProfile;
@@ -154,6 +159,7 @@ export function buildGenerationInputs(params: {
     ...(params.rationale ? { rationale: params.rationale } : {}),
     ...(params.whyThisPlan && params.whyThisPlan.length > 0 ? { whyThisPlan: params.whyThisPlan } : {}),
     coachMethod: {
+      ...(params.methodVersionId ? { methodVersionId: params.methodVersionId } : {}),
       playbookVersion: params.playbookVersion,
       operatingModelVersion: method.operatingModelVersion,
       confirmedAtIso: method.confirmedAtIso,

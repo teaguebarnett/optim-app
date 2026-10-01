@@ -273,7 +273,7 @@ console.log("\n10. No calibration completion\n");
 check("an unconfirmed method is a NEEDS YOU item linking to the real confirmation card", () => {
   const d = buildCoachDashboard(DASHBOARD_FIXTURES.uncalibrated.input);
   assert.deepEqual(kinds(d.needsYou), ["confirm_method"]);
-  assert.equal(d.needsYou[0].action?.href, "/coach/settings#coaching-method");
+  assert.equal(d.needsYou[0].action?.href, "/coach-onboarding");
   assert.equal(d.briefing.headline, "One thing needs you today.");
   assert.equal(d.briefing.detail, "Confirm your coaching method so OPTIM can start building client programs.");
   assert.notEqual(d.briefing.headline, "Everything’s under control.");
@@ -323,7 +323,7 @@ check("no item in any fixture has an empty title or a fabricated action href", (
     const d = buildCoachDashboard(f.input);
     for (const i of [...d.needsYou, ...d.worthKnowing, ...d.handled]) {
       assert.ok(i.title.length > 0, `${name}: empty title`);
-      if (i.action) assert.match(i.action.href, /^\/coach(\/|$)/, `${name}: ${i.action.href}`);
+      if (i.action) assert.match(i.action.href, /^\/coach(\/|$|-onboarding$)/, `${name}: ${i.action.href}`);
       if (i.actionRequired) assert.ok(i.action, `${name}: action required but no action (${i.kind})`);
     }
   }

@@ -2,34 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, ArrowRight, Check, Pencil, Users2, Dumbbell, TrendingUp, Utensils, MessageCircle, ShieldCheck, ShieldAlert, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useCoachOperatingModel } from "@/hooks/use-coach-operating-model";
+import { useCalibration } from "@/components/coach-onboarding/calibration-context";
+import { MethodSummaryGrid } from "@/components/coach-onboarding/method-summary";
 import { generateThreeNutritionStrategies, generateThreeTrainingOptions, type ClientOnboardingSnapshot } from "@/lib/coach/activation-generation";
-import { lowConfidenceQuestionIds } from "@/lib/coach/operating-model";
 import { allRequiredVisibleQuestionIds, summarizeCoachOperatingModelChanges } from "@/lib/coach/coach-onboarding-engine";
-import { findQuestion, type CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
-
-/** Fallback for free-text/no-option values only — never mutates a stored
- * enum value. Prefer labelFor()/labelForList() below for anything backed by
- * a question's real options: a bare regex can't recover structure a raw
- * value threw away (e.g. "0_1_reps_in_reserve" -> "0 1 reps in reserve"
- * reads as nonsense, not "0-1 reps in reserve"). */
-function humanize(value: string): string {
-  return value.replace(/_/g, " ");
-}
-
-/** The real coach-facing label for a stored option value, looked up from
- * the same question bank the coach answered from — never a guess at what
- * the underscores meant. Falls back to humanize() only if the value can't
- * be matched to a real option (e.g. it's since been removed from the bank). */
-function labelFor(questionId: string, value: string): string {
-  const option = findQuestion(questionId)?.options?.find((o) => o.value === value);
-  return option?.label ?? humanize(value);
-}
-function labelForList(questionId: string, values: string[]): string {
-  return values.map((v) => labelFor(questionId, v)).join(", ");
-}
+import { COACH_ONBOARDING_CHAPTERS, findQuestion, type CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
+import { calibrationReadiness } from "@/lib/coach/coach-brain";
 
 const HYPOTHETICALS: { title: string; snapshot: ClientOnboardingSnapshot }[] = [
   {
@@ -70,8 +50,8 @@ const HYPOTHETICALS: { title: string; snapshot: ClientOnboardingSnapshot }[] = [
 
 export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: CoachOnboardingChapterId) => void }) {
   const router = useRouter();
-  const com = useCoachOperatingModel();
-  const model = com.buildDraftModel();
+  const cal = useCalibration();
+  const model = cal.buildDraftModel();
   // Gate 5A fix — this must track only "confirmed during THIS visit," never
   // "an active model already existed from some earlier visit." Seeding it
   // from com.activeModel meant a coach returning to revise anything (the
@@ -82,16 +62,21 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
   // confirmed version. A brand-new coach is unaffected: activeModel is null
   // for them either way.
   const [activated, setActivated] = useState(false);
-  const lowConfidence = lowConfidenceQuestionIds(model);
-  const requiredIds = allRequiredVisibleQuestionIds(com.answers);
-  const unansweredRequired = requiredIds.filter((id) => !com.answers[id] && com.answers[id] !== false);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const requiredIds = allRequiredVisibleQuestionIds(cal.answers);
+  // Gate 3 (live) — the same readiness rule the server enforces, so the
+  // button and the server never disagree about what "complete" means.
+  const readiness = calibrationReadiness({ answers: cal.answers, aiAuthorityConfirmed: cal.authority ? cal.authority.confirmed : true });
+  const unansweredRequired = cal.requireExplicitCompletion ? readiness.unansweredQuestionIds : requiredIds.filter((id) => !cal.answers[id] && cal.answers[id] !== false);
+  const confirmBlocked = cal.requireExplicitCompletion && !readiness.ready;
 
   // Phase 5.4A corrective pass — a coach re-entering Review after already
   // having an active, confirmed model gets an honest "what's changing"
   // summary before they overwrite it with a new version, plus an explicit
   // statement of what confirming will (and will not) touch.
-  const previousActive = com.versions.find((v) => v.status === "active") ?? null;
-  const isRevision = !!previousActive;
+  const previousActive = cal.previousActiveModel;
+  const isRevision = cal.isRevision && !!previousActive;
   const changedAreas = useMemo(() => summarizeCoachOperatingModelChanges(previousActive, model), [previousActive, model]);
 
   const previews = useMemo(
@@ -104,9 +89,15 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
     [model]
   );
 
-  function handleActivate() {
-    com.confirmAndActivate(model);
-    setActivated(true);
+  async function handleActivate() {
+    if (confirmBlocked || confirming) return;
+    setConfirming(true);
+    setConfirmError(null);
+    const result = await cal.confirm(model);
+    setConfirming(false);
+    // Only a real, server-confirmed method counts as activated.
+    if (result.ok) setActivated(true);
+    else setConfirmError(result.message);
   }
 
   return (
@@ -118,7 +109,7 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
               <Check size={22} aria-hidden="true" />
             </span>
             <div>
-              <p className="text-heading text-off-white">{unansweredRequired.length > 0 ? "Onboarding complete — playbook review pending" : "Calibration complete"}</p>
+              <p className="text-heading text-off-white">{unansweredRequired.length > 0 ? "Onboarding complete — playbook review pending" : isRevision ? "Your updated method is active" : "Calibration complete"}</p>
               <p className="mt-1.5 max-w-xl text-body text-neutral">
                 {unansweredRequired.length > 0
                   ? `Your coaching model is active with ${unansweredRequired.length} honest OPTIM default${unansweredRequired.length === 1 ? "" : "s"} standing in for unanswered required questions — worth reviewing when you have a moment, from ${isRevision ? "the Playbook" : "Settings → Coach Playbook"}.`
@@ -128,8 +119,8 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
               </p>
             </div>
           </div>
-          <Button size="lg" onClick={() => router.push("/coach")}>
-            Return to dashboard <ArrowRight size={16} aria-hidden="true" />
+          <Button size="lg" onClick={() => router.push(cal.afterConfirmHref)}>
+            {cal.afterConfirmHref === "/coach" ? "Go to your dashboard" : "Back to settings"} <ArrowRight size={16} aria-hidden="true" />
           </Button>
         </div>
       ) : (
@@ -139,7 +130,38 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
         </>
       )}
 
-      {!activated && unansweredRequired.length > 0 ? (
+      {!activated && cal.requireExplicitCompletion && confirmBlocked ? (
+        <div className="mt-5 rounded-[var(--radius-sm)] bg-warning-soft px-3.5 py-3 text-sm text-warning-strong">
+          <p className="flex items-start gap-2">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span>
+              {[
+                unansweredRequired.length > 0 ? `${unansweredRequired.length} required question${unansweredRequired.length === 1 ? " still needs" : "s still need"} an answer` : null,
+                readiness.authorityUnconfirmed ? "OPTIM’s authority still needs your confirmation" : null,
+              ]
+                .filter(Boolean)
+                .join(", and ")}
+              . You can confirm once that&apos;s done.
+            </span>
+          </p>
+          <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 pl-6">
+            {[...new Set(unansweredRequired.map((id) => findQuestion(id)?.chapter).filter(Boolean))].map((chapter) => (
+              <li key={chapter}>
+                <button type="button" onClick={() => onEditChapter(chapter as CoachOnboardingChapterId)} className="min-h-11 font-semibold underline-offset-2 hover:underline sm:min-h-0">
+                  Go to {chapterTitle(chapter as CoachOnboardingChapterId)}
+                </button>
+              </li>
+            ))}
+            {readiness.authorityUnconfirmed ? (
+              <li>
+                <button type="button" onClick={() => onEditChapter("ai_authority")} className="min-h-11 font-semibold underline-offset-2 hover:underline sm:min-h-0">
+                  Go to AI authority
+                </button>
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      ) : !activated && unansweredRequired.length > 0 ? (
         <div className="mt-5 flex items-start gap-2 rounded-[var(--radius-sm)] bg-warning-soft px-3.5 py-3 text-sm text-warning-strong">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
           <span>{unansweredRequired.length} required question{unansweredRequired.length === 1 ? "" : "s"} still need an answer — OPTIM is using an honest default for now.</span>
@@ -147,74 +169,11 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
       ) : null}
 
       {activated ? <p className="mb-3 mt-8 text-label text-neutral">Your coaching model, at a glance</p> : null}
-      <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${activated ? "" : "mt-6"}`}>
-        <SummarySection icon={Users2} title="Who you coach" onEdit={() => onEditChapter("practice")}>
-          <p>{labelForList("practice_common_goals", model.practice.commonGoals) || "No goals specified"} · {labelForList("practice_experience_levels", model.practice.experienceLevelsServed) || "any experience level"}</p>
-          <p className="mt-1.5 text-neutral">{model.practice.successDefinition || "No success definition provided yet."}</p>
-        </SummarySection>
-
-        <SummarySection icon={Dumbbell} title="How you program" onEdit={() => onEditChapter("program_architecture")}>
-          <p>
-            {labelForList("program_splits", model.programArchitecture.preferredSplits) || "no split preference set"} · {model.programArchitecture.setsPerExerciseMin}–{model.programArchitecture.setsPerExerciseMax} sets ·{" "}
-            {labelFor("program_rep_philosophy", model.programArchitecture.repRangePhilosophy)}
-          </p>
-        </SummarySection>
-
-        <SummarySection icon={TrendingUp} title="How you progress clients & handle fatigue" onEdit={() => onEditChapter("program_architecture")}>
-          <p>
-            {labelFor("program_progression", model.programArchitecture.progressionMethod)} · deload every {model.programArchitecture.deloadFrequencyWeeks ?? "as-needed"} weeks · proximity to failure:{" "}
-            {labelFor("program_proximity_to_failure", model.programArchitecture.proximityToFailure)}
-          </p>
-          <p className="mt-1.5 text-neutral">{model.trainingAdjustmentPolicies.length} real adjustment scenarios configured.</p>
-        </SummarySection>
-
-        <SummarySection icon={Utensils} title="How you coach nutrition" onEdit={() => onEditChapter("nutrition_philosophy")}>
-          {model.nutritionPhilosophy.providesNutritionCoaching ? (
-            <>
-              <p>
-                {model.nutritionPhilosophy.proteinTargetApproach === "goal_dependent" && model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight ? (
-                  <>
-                    Protein by goal: {model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight.fatLoss}g/lb (fat loss) · {model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight.maintenanceOrRecomposition}g/lb (maintenance/recomp) ·{" "}
-                    {model.nutritionPhilosophy.proteinTargetsByGoalGramsPerLbBodyweight.muscleGain}g/lb (muscle gain)
-                  </>
-                ) : (
-                  <>{model.nutritionPhilosophy.proteinTargetGramsPerLbBodyweight}g/lb protein for every client</>
-                )}{" "}
-                · {labelFor("nutrition_plan_vs_framework", model.nutritionPhilosophy.planVsFrameworkPreference)} · {model.nutritionPhilosophy.rateOfLossPercentPerWeek}%/week loss rate
-              </p>
-              <p className="mt-1.5 text-neutral">{model.nutritionAdjustmentPolicies.length} real adjustment scenarios configured.</p>
-            </>
-          ) : (
-            <p className="text-neutral">Not part of your service — OPTIM won&apos;t generate nutrition strategies for your clients.</p>
-          )}
-        </SummarySection>
-
-        <SummarySection icon={MessageCircle} title="How you communicate" onEdit={() => onEditChapter("communication")}>
-          <p>
-            {humanize(model.communication.tone)} · directness {model.communication.directness}/5 · warmth {model.communication.warmth}/5 · {model.communication.messageLength} messages
-          </p>
-        </SummarySection>
-
-        <SummarySection icon={ShieldCheck} title="Safety boundaries" onEdit={() => onEditChapter("safety")}>
-          <p>Pain: {labelFor("scn_pain", model.safety.painResponsePolicy)}</p>
-          <p>Possible injury: {labelFor("scn_possible_injury", model.safety.injuryResponsePolicy)}</p>
-          {model.safety.absoluteOverrideRules.length > 0 ? <p className="mt-1.5 text-neutral">Your rules: {model.safety.absoluteOverrideRules.join("; ")}</p> : null}
-        </SummarySection>
-
-        <SummarySection icon={ShieldAlert} title="What always requires you" onEdit={() => onEditChapter("safety")} span2>
-          <p className="text-neutral">Pain or injury reports, medical concerns, disordered-eating signals, and any major goal change always reach you — regardless of your AI Authority level.</p>
-        </SummarySection>
-
-        {lowConfidence.length > 0 ? (
-          <SummarySection title="Unknown or low-confidence areas" tone="warning" span2>
-            <p className="text-neutral">{lowConfidence.length} area{lowConfidence.length === 1 ? "" : "s"} are still using an OPTIM default because you haven&apos;t reviewed them yet — you can always refine these later.</p>
-          </SummarySection>
-        ) : null}
-      </div>
+      <MethodSummaryGrid model={model} onEditChapter={onEditChapter} className={activated ? "" : "mt-6"} />
 
       <div className="mt-10">
         <h3 className="text-heading text-off-white">Calibration preview</h3>
-        <p className="mt-1 text-body text-neutral">A real run of the generation engine using your current model, against two hypothetical clients.</p>
+        <p className="mt-1 text-body text-neutral">How OPTIM would set up two example clients using the method above.</p>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           {previews.map((p) => (
             <div key={p.title} className="rounded-[var(--radius-lg)] border border-border-strong bg-surface-raised p-5">
@@ -256,53 +215,47 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Coac
                 <p className="mt-2 text-sm text-neutral">No changes since your last confirmed model.</p>
               )}
               <p className="mt-3 text-meta text-neutral">
-                Confirming creates a new model version. Future client generations use it — clients you&apos;ve already activated keep their current program and nutrition targets until you explicitly
+                Confirming creates a new version of your method. OPTIM uses it for new client plans — clients you&apos;ve already activated keep their current program and nutrition targets until you explicitly
                 regenerate or approve a change for them.
               </p>
             </div>
           ) : null}
-          <Button size="lg" onClick={handleActivate}>
-            {isRevision ? "Save updated coaching model" : "Confirm and activate my coaching model"} <ArrowRight size={16} aria-hidden="true" />
-          </Button>
+          {cal.mode === "live" ? (
+            <p className="mb-3 max-w-2xl text-meta text-neutral">
+              {isRevision
+                ? "Confirming creates a new version of your coaching method. Your current method stays active until you do."
+                : "Confirming makes this your coaching method in OPTIM. Everything OPTIM prepares for your clients will follow it — you can review or update it any time from Settings."}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="lg" onClick={handleActivate} disabled={confirmBlocked || confirming}>
+              {confirming ? "Confirming…" : isRevision ? "Save updated coaching model" : "Confirm and activate my coaching model"} <ArrowRight size={16} aria-hidden="true" />
+            </Button>
+            {cal.discardReview ? (
+              <Button
+                size="lg"
+                variant="ghost"
+                onClick={async () => {
+                  const result = await cal.discardReview!();
+                  if (!result.ok) setConfirmError(result.message);
+                }}
+              >
+                Discard changes
+              </Button>
+            ) : null}
+          </div>
+          {confirmError ? (
+            <p role="alert" className="mt-3 text-meta text-error-strong">
+              {confirmError}
+            </p>
+          ) : null}
         </div>
       )}
     </div>
   );
 }
 
-function SummarySection({
-  icon: Icon,
-  title,
-  children,
-  onEdit,
-  tone,
-  span2,
-}: {
-  icon?: LucideIcon;
-  title: string;
-  children: React.ReactNode;
-  onEdit?: () => void;
-  tone?: "warning";
-  span2?: boolean;
-}) {
-  return (
-    <div className={`rounded-[var(--radius-lg)] border p-5 ${tone === "warning" ? "border-warning/30 bg-warning-soft" : "border-border-strong bg-surface-raised"} ${span2 ? "md:col-span-2" : ""}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          {Icon ? (
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-fg">
-              <Icon size={15} aria-hidden="true" />
-            </span>
-          ) : null}
-          <p className="text-subheading text-off-white">{title}</p>
-        </div>
-        {onEdit ? (
-          <button type="button" onClick={onEdit} className="flex shrink-0 items-center gap-1 text-meta text-accent-fg hover:underline">
-            <Pencil size={12} aria-hidden="true" /> Edit
-          </button>
-        ) : null}
-      </div>
-      <div className="mt-3 text-body leading-relaxed text-off-white">{children}</div>
-    </div>
-  );
+
+function chapterTitle(id: CoachOnboardingChapterId): string {
+  return COACH_ONBOARDING_CHAPTERS.find((c) => c.id === id)?.title ?? id;
 }

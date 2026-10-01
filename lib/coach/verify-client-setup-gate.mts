@@ -107,7 +107,7 @@ check("confirmed method + completed intake + no review -> ready", () => assert.e
 check("bootstrapped default method blocks, linking to Settings", () => {
   const r = evaluate({ model: defaultModel() });
   assert.deepEqual(ids(r), ["coach_method"]);
-  assert.equal(!r.ready && r.missing[0].href, "/coach/settings#coaching-method");
+  assert.equal(!r.ready && r.missing[0].href, null);
 });
 check("no playbook at all blocks", () => assert.deepEqual(ids(evaluate({ model: null })), ["coach_method"]));
 check("Invited client (no intake) blocks — no placeholder client", () => {

@@ -16,7 +16,7 @@ export function AiAuthorityChapter({ onContinue }: { onContinue: () => void }) {
     <div className="max-w-2xl">
       <h2 className="text-display text-off-white">How much should OPTIM do on its own?</h2>
       <p className="mt-2 text-body text-neutral">
-        This sets your workspace-wide default — you can still override it for any individual client later, and change it any time in Settings.
+        This sets your own default — you can still override it for any individual client later, and change it any time in Settings.
       </p>
       <div className="mt-6">
         <AiAuthorityPanel />

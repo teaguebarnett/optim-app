@@ -12,6 +12,7 @@ import {
   AI_AUTHORITY_DOMAIN_LABELS,
   AI_AUTHORITY_LEVELS,
   AI_AUTHORITY_LEVEL_DESCRIPTIONS,
+  AI_AUTHORITY_LEVEL_LIVE_DESCRIPTIONS,
   AI_AUTHORITY_LEVEL_LABELS,
   type AiAuthorityConfig,
   type AiAuthorityLevel,
@@ -23,13 +24,13 @@ const LEVEL_POSITIONS = AI_AUTHORITY_LEVELS.map((level) => ({ value: level, labe
 
 /**
  * The Playbook's AI Coaching Authority section — a real tactile four-
- * position slider for the workspace-wide default, plus a compact per-
+ * position slider for the coach's own default (per-coach since Gate 3), plus a compact per-
  * domain override control that reveals the detailed explanation only for
  * the currently-selected value (never four repeated paragraphs at once).
  * No generative AI service exists in this repository; this only controls
  * what a future automation layer would be ALLOWED to do.
  *
- * Gate 5B — `confirmChanges` gates the workspace-wide DEFAULT behind an
+ * Gate 5B — `confirmChanges` gates the coach's DEFAULT behind an
  * explicit confirm step (current -> proposed -> confirm/cancel, the same
  * inline pattern Gate 4D's program-replacement guard uses), since this is
  * the one control here with the broadest blast radius: it changes the
@@ -44,7 +45,7 @@ const LEVEL_POSITIONS = AI_AUTHORITY_LEVELS.map((level) => ({ value: level, labe
  *
  * Gate 6C — `override` lets a Supabase-mode caller (see
  * components/coach/live-ai-authority-panel.tsx) supply the real,
- * workspace-scoped settings/setGlobal instead of this component's own
+ * coach-scoped settings/setGlobal instead of this component's own
  * demo-only useAiAuthority() hook, without duplicating the slider/advanced-
  * overrides UI. useAiAuthority() is still called unconditionally (React's
  * rules of hooks forbid a conditional call); its result is simply unused
@@ -53,10 +54,16 @@ const LEVEL_POSITIONS = AI_AUTHORITY_LEVELS.map((level) => ({ value: level, labe
 export function AiAuthorityPanel({
   confirmChanges = false,
   override,
+  live = false,
 }: {
   confirmChanges?: boolean;
   override?: { settings: CoachAiAuthoritySettings; setGlobal: (config: AiAuthorityConfig) => void };
+  /** Gate 3 — live (Supabase) mode: describe only what production does
+   * today. Domain-specific and per-client overrides aren't consumed by live
+   * behavior yet, so the advanced section is hidden (saved data untouched). */
+  live?: boolean;
 } = {}) {
+  const levelDescriptions = live ? AI_AUTHORITY_LEVEL_LIVE_DESCRIPTIONS : AI_AUTHORITY_LEVEL_DESCRIPTIONS;
   const demo = useAiAuthority();
   const settings = override?.settings ?? demo.settings;
   const setGlobal = override?.setGlobal ?? demo.setGlobal;
@@ -88,13 +95,14 @@ export function AiAuthorityPanel({
       <div>
         <p className="text-subheading text-off-white">AI Coaching Authority</p>
         <p className="mt-1 text-meta text-neutral">
-          How much OPTIM handles on its own by default, workspace-wide. Changing this never touches an existing per-client override — override an
-          individual client from their own page.
+          {live
+            ? "How much you want OPTIM to take on for your clients. These are your settings — other coaches in your workspace set their own. Safety issues always come to you at every level."
+            : "Your default for how much OPTIM handles on its own for your clients. These are your settings — other coaches in your workspace set their own. Changing this never touches an existing per-client override — override an individual client from their own page."}
         </p>
       </div>
 
       <DiscreteSlider
-        ariaLabel="AI Coaching Authority — workspace default"
+        ariaLabel="AI Coaching Authority — your default"
         positions={LEVEL_POSITIONS}
         value={displayedLevel}
         onChange={(v) => {
@@ -108,16 +116,17 @@ export function AiAuthorityPanel({
         }}
         onPreviewChange={(v) => setPreviewLevel(v as AiAuthorityLevel)}
       />
-      <p className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2.5 text-sm text-accent-fg">{AI_AUTHORITY_LEVEL_DESCRIPTIONS[previewLevel ?? displayedLevel]}</p>
+      <p className="rounded-[var(--radius-sm)] bg-accent-soft px-3.5 py-2.5 text-sm text-accent-fg">{levelDescriptions[previewLevel ?? displayedLevel]}</p>
 
       {pendingLevel ? (
         <div className="rounded-[var(--radius-sm)] border border-warning/40 bg-warning-soft/40 p-3.5 text-sm">
           <p className="text-off-white">
-            Change the workspace default from &ldquo;{AI_AUTHORITY_LEVEL_LABELS[settings.global.level]}&rdquo; to &ldquo;{AI_AUTHORITY_LEVEL_LABELS[pendingLevel]}&rdquo;?
+            Change your default from &ldquo;{AI_AUTHORITY_LEVEL_LABELS[settings.global.level]}&rdquo; to &ldquo;{AI_AUTHORITY_LEVEL_LABELS[pendingLevel]}&rdquo;?
           </p>
           <p className="mt-1.5 text-meta text-neutral">
-            This changes what OPTIM may do on its own for every client using the workspace default. Clients with their own explicit override are not
-            affected.
+            {live
+              ? "This updates your preference and saves a new version of your method. Plan changes still come to you for approval."
+              : "This changes what OPTIM may do on its own for every client of yours using your default. Clients with their own explicit override are not affected."}
           </p>
           <div className="mt-3 flex gap-2">
             <Button
@@ -136,6 +145,7 @@ export function AiAuthorityPanel({
         </div>
       ) : null}
 
+      {live ? null : (
       <div className="border-t border-border pt-4">
         <button type="button" onClick={() => setAdvancedOpen((v) => !v)} aria-expanded={advancedOpen} className="flex w-full items-center justify-between gap-2 text-left">
           <span className="flex items-center gap-2 text-sm font-medium text-off-white">
@@ -191,6 +201,7 @@ export function AiAuthorityPanel({
           </div>
         </Collapse>
       </div>
+      )}
     </Card>
   );
 }

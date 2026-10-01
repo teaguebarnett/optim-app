@@ -215,8 +215,16 @@ export async function proposePlaybookExampleFromEscalation(params: {
   situation: string;
   resolution: string;
 }): Promise<CoachPlaybook> {
-  const current = await getApprovedPlaybook(params.workspaceId);
-  if (!current) throw new Error("proposePlaybookExampleFromEscalation: no approved Playbook exists to base a draft on");
+  // Gate 3 — this legacy workspace playbook is scaffolding only: Teach-OPTIM
+  // examples land here as DRAFTS and are never read as a coach's method
+  // (the Coach Brain — lib/production/coach-brain.ts — is canonical). The
+  // legacy row is created on demand so Teach keeps working for coaches who
+  // never visited the old Settings form; it confers nothing. Moving
+  // coach-authored examples into the Coach Brain as explicit, confirmable
+  // proposals is Gate 6 work.
+  const supabase = await getSupabaseServerClient();
+  const { data: workspaceRow } = await supabase.from("workspaces").select("business_name").eq("id", params.workspaceId).maybeSingle();
+  const current = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: (workspaceRow?.business_name as string | undefined) ?? "OPTIM" });
 
   const example: PlaybookExample = {
     id: `example-${params.escalationId}`,

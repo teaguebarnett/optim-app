@@ -3,10 +3,15 @@
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { AiAuthorityPanel } from "@/components/coach/ai-authority-panel";
-import { updateMyWorkspaceAiAuthorityGlobalAction } from "@/app/actions/coach-settings";
+import { updateMyCoachAuthorityAction } from "@/app/actions/coach-calibration";
 import type { AiAuthorityConfig, CoachAiAuthoritySettings } from "@/lib/coach/ai-authority";
 
 /**
+ * Gate 3 — saves to the coach's OWN Coach Brain (a new confirmed method
+ * version with the new authority) via updateMyCoachAuthorityAction — never
+ * the shared workspace playbook, so one coach's authority can't change
+ * another's.
+ *
  * Gate 6C — the real Supabase-mode AI Coaching Authority control: renders
  * the exact same AiAuthorityPanel demo mode uses (see that component's own
  * "override" doc), but backed by the real, workspace-scoped
@@ -25,7 +30,7 @@ export function LiveAiAuthorityPanel({ initialSettings }: { initialSettings: Coa
     setSettings((s) => ({ ...s, global: config }));
     setError(null);
     setSaving(true);
-    updateMyWorkspaceAiAuthorityGlobalAction(config)
+    updateMyCoachAuthorityAction(config)
       .then((next) => setSettings(next))
       .catch((err) => {
         setSettings(previous);
@@ -36,7 +41,7 @@ export function LiveAiAuthorityPanel({ initialSettings }: { initialSettings: Coa
 
   return (
     <div className="space-y-2">
-      <AiAuthorityPanel confirmChanges override={{ settings, setGlobal }} />
+      <AiAuthorityPanel live confirmChanges override={{ settings, setGlobal }} />
       {saving ? <p className="text-meta text-neutral">Saving…</p> : null}
       {error ? (
         <p className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-error/40 bg-error-soft/40 px-3 py-2 text-sm text-off-white">

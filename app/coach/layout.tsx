@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ShieldAlert } from "lucide-react";
 import { CoachShell } from "@/components/coach/coach-shell";
 import { resolveAppMode } from "@/lib/production/mode";
 import { getAttentionInboxForRequest } from "@/lib/production/coach-operations";
+import { isOwnCoachCalibrated } from "@/lib/production/coach-brain";
 import { UnauthenticatedError, UnauthorizedError } from "@/lib/production/errors";
 
 // Phase 6.0C: appMode is resolved server-side here (this layout is a
@@ -45,15 +47,23 @@ export default async function CoachLayout({ children }: { children: ReactNode })
   // construction anyway (see the react-hooks/error-boundaries rule this
   // avoids). Only the real awaited async call below needs catching.
   let identity: { coachDisplayName: string; openAttentionCount: number; coachUserId: string } | null = null;
+  let calibrated = false;
   let accessError: unknown = null;
   try {
     const inbox = await getAttentionInboxForRequest();
     identity = { coachDisplayName: inbox.coachDisplayName, openAttentionCount: inbox.open.length, coachUserId: inbox.coachUserId };
+    // Gate 3 — the coach's own Coach Brain must be confirmed before the
+    // workspace opens. Fails closed: if the Brain can't be read, this throws
+    // and the coach sees an error, never an unlocked workspace.
+    calibrated = await isOwnCoachCalibrated();
   } catch (err) {
     accessError = err;
   }
 
   if (accessError) return <CoachAccessDenied error={accessError} />;
+  // Outside the try: redirect() works by throwing, and must not be caught.
+  // /coach-onboarding lives outside /coach/*, so this can never loop.
+  if (!calibrated) redirect("/coach-onboarding");
   return (
     <CoachShell appMode={appMode} supabaseIdentity={identity ?? undefined}>
       {children}

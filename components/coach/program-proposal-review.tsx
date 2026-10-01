@@ -639,6 +639,21 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
   // offer the one sensible action. Its stored explanation ("Best fit…",
   // "your preferred…") is not shown anywhere — it was built from defaults
   // and placeholders, so it isn't evidence of anything.
+  // Gate 3 — prepared under a different (or no) confirmed method version:
+  // approving it would apply an old method as though it were current.
+  if (proposal.inputsVerified && proposal.methodStaleMessage) {
+    return (
+      <Card id="proposal-review" className="border-l-2 border-l-warning">
+        <p className="text-sm font-medium text-off-white">{title}</p>
+        <p className="mt-0.5 text-xs text-neutral">{describeSchedule(proposal.content)}</p>
+        <div className="mt-3 space-y-3 rounded border border-warning bg-warning-soft/40 px-3 py-3">
+          <p className="text-sm font-medium text-warning-strong">{proposal.methodStaleMessage}</p>
+          <ProposalRejectForm action={rejectAction} defaultReason="method_changed" />
+        </div>
+      </Card>
+    );
+  }
+
   if (!proposal.inputsVerified) {
     return (
       <Card id="proposal-review" className="border-l-2 border-l-warning">

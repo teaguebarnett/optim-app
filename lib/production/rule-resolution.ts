@@ -7,7 +7,14 @@
 // Security (spec section 20): rules are read through the CALLING coach's
 // own real session — coach_learned_rules_select's RLS (coach_user_id =
 // auth.uid()) is what actually enforces "only this coach's own rules,"
-// exactly like every other Phase 8B/9B read in this codebase. This
+// exactly like every other Phase 8B/9B read in this codebase.
+//
+// Gate 3 — methodology belongs to the client's PRIMARY coach (their Coach
+// Brain). When the caller passes that owner (ownerCoachUserId), the rules
+// are that coach's own, read through the service role with an explicit
+// coach_user_id + workspace filter — so a different staff member acting on
+// the client never applies THEIR learned rules to someone else's client.
+// The caller must already have authorized access to the client. This
 // function additionally filters to (coach_general) OR (client_specific
 // for exactly this client) at the query level, so a client-specific rule
 // for Client A can never even be fetched while generating for Client B
@@ -20,6 +27,7 @@
 // would block a coach from generating a proposal at all.
 
 import "server-only";
+import { getSupabaseAdminClient } from "../supabase/admin.ts";
 import { getSupabaseServerClient } from "../supabase/server";
 import type { ApplicableRule } from "../coach/rule-application";
 
@@ -29,12 +37,12 @@ import type { ApplicableRule } from "../coach/rule-application";
  * Superseded/deactivated rules are excluded by the status='active' filter
  * itself (spec section 4) — there is no separate "is this rule current"
  * check needed downstream. */
-export async function resolveApplicableCoachRules(params: { clientProfileId: string }): Promise<ApplicableRule[]> {
+export async function resolveApplicableCoachRules(params: { clientProfileId: string; owner?: { coachUserId: string; workspaceId: string } }): Promise<ApplicableRule[]> {
   try {
-    const supabase = await getSupabaseServerClient();
-    const { data, error } = await supabase
-      .from("coach_learned_rules")
-      .select("id, scope, client_profile_id, decision_domain, field, item_family, direction")
+    const base = params.owner
+      ? getSupabaseAdminClient().from("coach_learned_rules").select("id, scope, client_profile_id, decision_domain, field, item_family, direction").eq("coach_user_id", params.owner.coachUserId).eq("workspace_id", params.owner.workspaceId)
+      : (await getSupabaseServerClient()).from("coach_learned_rules").select("id, scope, client_profile_id, decision_domain, field, item_family, direction");
+    const { data, error } = await base
       .eq("status", "active")
       .or(`scope.eq.coach_general,and(scope.eq.client_specific,client_profile_id.eq.${params.clientProfileId})`);
     if (error) {

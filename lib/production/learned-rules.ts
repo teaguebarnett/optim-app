@@ -21,7 +21,7 @@ import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } f
 import { UnauthorizedError } from "./errors";
 import { getSupabaseServerClient } from "../supabase/server";
 import { getMyDecisionEvidence } from "./decision-evidence";
-import { getApprovedPlaybook } from "./playbooks";
+import { getOwnCoachIntelligence } from "./coach-brain";
 import { analyzeCoachDecisionPatterns } from "../patterns/analyze-coach-decision-patterns";
 import { isCandidateEligibleForConfirmation, buildRuleBehavior } from "../patterns/eligibility";
 import { computeCandidateSignature } from "../patterns/candidate-signature";
@@ -37,8 +37,10 @@ async function requireCoachAuthority(workspaceId: string) {
 
 async function runFreshAnalysis(workspaceId: string, coachUserId: string) {
   const evidence = await getMyDecisionEvidence();
-  const playbook = await getApprovedPlaybook(workspaceId);
-  return analyzeCoachDecisionPatterns({ coachUserId, evidence, operatingModel: playbook?.content.operatingModel ?? null });
+  // Gate 3 — the coach's OWN confirmed method decides methodology conflicts.
+  void workspaceId;
+  const intelligence = await getOwnCoachIntelligence();
+  return analyzeCoachDecisionPatterns({ coachUserId, evidence, operatingModel: intelligence.method?.operatingModel ?? null });
 }
 
 export interface EvidenceExample {

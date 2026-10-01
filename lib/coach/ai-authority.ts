@@ -48,6 +48,20 @@ export const AI_AUTHORITY_LEVEL_DESCRIPTIONS: Record<AiAuthorityLevel, string> =
   review_only: "OPTIM operates within your policies. You review outcomes and exceptions.",
 };
 
+/** Live (Supabase) wording for the same levels. In production today the
+ * level is a real, per-coach, versioned preference that shapes how OPTIM's
+ * client chat frames its role — but no level executes plan or nutrition
+ * changes on its own (chat never writes to a plan; every program and
+ * adjustment is a draft the coach approves). So the live UI describes the
+ * coach's preference without claiming autonomy that isn't built. The
+ * descriptions above stay as-is: demo mode and the chat prompt use them. */
+export const AI_AUTHORITY_LEVEL_LIVE_DESCRIPTIONS: Record<AiAuthorityLevel, string> = {
+  advisor: "OPTIM suggests, and you decide everything.",
+  copilot: "OPTIM prepares drafts for you to review. Nothing reaches a client until you approve it.",
+  ai_led: "Your preference for OPTIM to take on more routine work. For now, every plan change still comes to you for approval.",
+  review_only: "Your preference for OPTIM to work within your policies with fewer check-ins. For now, every plan change still comes to you for approval.",
+};
+
 /** Phase 5.3B's original four coarse domains, kept exactly as-is (still
  * valid AiAuthorityDomain values, still what any already-persisted
  * settings/tests reference) — see this phase's audit: extend, never

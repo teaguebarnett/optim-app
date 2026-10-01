@@ -39,7 +39,16 @@ export function QuestionField({
   if (question.type === "slider") {
     const min = question.min ?? 1;
     const max = question.max ?? 5;
-    const current = typeof value === "number" ? value : Math.round((min + max) / 2);
+    const answered = typeof value === "number";
+    const current = answered ? value : Math.round((min + max) / 2);
+    // Gate 3 fix — a range input only fires onChange when its value MOVES, so
+    // a coach who agreed with the displayed midpoint could never answer (the
+    // midpoint is shown, but nothing is stored until it's touched). Clicking,
+    // tapping, or releasing a key on the slider now commits the value it
+    // shows — an explicit coach action, never a filled-in default.
+    const commitShown = (el: HTMLInputElement) => {
+      if (!answered || Number(el.value) !== value) onChange(question.id, Number(el.value));
+    };
     return (
       <div className="max-w-xl">
         <input
@@ -49,14 +58,17 @@ export function QuestionField({
           step={question.step ?? 1}
           value={current}
           onChange={(e) => onChange(question.id, Number(e.target.value))}
-          className="w-full accent-[var(--pc-accent)]"
+          onPointerUp={(e) => commitShown(e.currentTarget)}
+          onKeyUp={(e) => commitShown(e.currentTarget)}
+          className="h-11 w-full accent-[var(--pc-accent)]"
           aria-label={question.prompt}
         />
         <div className="mt-2 flex justify-between text-meta text-neutral">
           <span>Less</span>
-          <span className="text-heading text-accent-fg">{current}</span>
+          <span className={answered ? "text-heading text-accent-fg" : "text-heading text-neutral"}>{current}</span>
           <span>More</span>
         </div>
+        {!answered ? <p className="mt-1 text-meta text-neutral">Tap or drag to set your answer.</p> : null}
       </div>
     );
   }

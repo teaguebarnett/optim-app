@@ -8,6 +8,7 @@ export const REJECTION_REASONS: ReadonlyArray<{ value: string; label: string }> 
   { value: "too_aggressive", label: "Too aggressive" },
   { value: "does_not_fit_schedule", label: "Doesn't fit schedule" },
   { value: "inputs_unverified", label: "Inputs unverified" },
+  { value: "method_changed", label: "Prepared under a previous method" },
   { value: "other", label: "Other" },
 ];
 

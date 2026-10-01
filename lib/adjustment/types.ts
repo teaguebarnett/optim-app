@@ -39,7 +39,9 @@ export type NoProposalReason =
   | "explicit_methodology_conflict"
   | "invalid_adjusted_draft"
   | "existing_pending_proposal"
-  | "duplicate_or_recently_rejected";
+  | "duplicate_or_recently_rejected"
+  /** Gate 3 — the client's primary coach has no confirmed Coach Brain. */
+  | "coach_method_unconfirmed";
 
 /** How far into the program the proposed change applies (spec section 6).
  * V1 only ever produces "current_block" (from the client's current

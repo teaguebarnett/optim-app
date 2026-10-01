@@ -24,9 +24,8 @@ import "server-only";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import { getAttentionInboxForRequest, type CoachAttentionInbox } from "./coach-operations.ts";
 import { listRosterForOwnWorkspace } from "./roster.ts";
-import { getApprovedPlaybook } from "./playbooks.ts";
+import { getOwnCoachIntelligence } from "./coach-brain.ts";
 import { getEligibleCandidatesForReview, getMyLearnedRules, type EligibleCandidateSummary, type LearnedRuleRecord } from "./learned-rules.ts";
-import { getMethodologyConfirmation } from "../coach/methodology.ts";
 import { hasVerifiedGenerationInputs } from "../coach/generation-prerequisites.ts";
 import {
   HANDLED_WINDOW_DAYS,
@@ -217,10 +216,9 @@ export async function getCoachDashboardData(nowIso: string = new Date().toISOStr
     supporting("recently resolved items", () => readResolvedEscalations(supabase, workspaceId, sinceIso), [] as DashboardResolvedEscalation[]),
     supporting(
       "your coaching method status",
-      async () => {
-        const playbook = await getApprovedPlaybook(workspaceId);
-        return getMethodologyConfirmation(playbook?.content.operatingModel ?? null).confirmed;
-      },
+      // Gate 3 — the coach's own confirmed Coach Brain, never the legacy
+      // workspace playbook (whose auto-created "approved" row proves nothing).
+      async () => (await getOwnCoachIntelligence()).method !== null,
       null as boolean | null
     ),
     supporting("pattern suggestions", () => getEligibleCandidatesForReview(workspaceId), [] as EligibleCandidateSummary[]),

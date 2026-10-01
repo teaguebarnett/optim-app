@@ -9,10 +9,12 @@ import { Button } from "@/components/ui/button";
  * and explicit about what stays the coach's own call.
  */
 export function CoachOnboardingWelcome({ businessName, onContinue }: { businessName: string; onContinue: () => void }) {
+  // A workspace without its own business name falls back to "OPTIM" — never show it twice.
+  const showBusinessName = businessName.trim() !== "" && businessName.trim().toLowerCase() !== "optim";
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
       <div className="max-w-2xl">
-        <p className="text-label text-accent-fg">OPTIM · {businessName}</p>
+        <p className="text-label text-accent-fg">{showBusinessName ? `OPTIM · ${businessName}` : "OPTIM"}</p>
         <h1 className="mt-2 text-display text-off-white">Let&apos;s teach OPTIM how you coach.</h1>
         <p className="mt-4 text-body text-neutral">
           Answer a focused set of questions about how you actually program, adjust, and communicate — most of it multiple choice, built from real

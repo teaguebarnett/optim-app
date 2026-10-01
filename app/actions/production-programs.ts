@@ -42,7 +42,8 @@ import { generateProgramDirectionSummaries, avoidedTermsForProfile } from "../..
 import { buildUniversalProgramForDirection } from "../../lib/coach/universal-program-generation";
 import { getOnboardingProgressForClient } from "../../lib/production/onboarding";
 import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
-import { getOrBootstrapApprovedPlaybook, getApprovedPlaybook } from "../../lib/production/playbooks";
+import { resolveCoachIntelligenceForClient } from "../../lib/production/coach-brain";
+import { draftMethodVersionIdOf, methodDraftStaleness } from "../../lib/coach/coach-brain";
 import { evaluateGenerationPrerequisites, buildGenerationInputs, hasVerifiedGenerationInputs, checkProposalApproval, isUnverifiedFreshProposal, GenerationPrerequisitesError, type MissingPrerequisite } from "../../lib/coach/generation-prerequisites";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { resolveApplicableCoachRules, getLearnedRuleProvenance, type LearnedRuleProvenance } from "../../lib/production/rule-resolution";
@@ -313,22 +314,27 @@ async function requireAssignedCoachAuthority(workspaceId: string, clientProfileI
 /** Resolves everything a NEW proposal may be generated from, and whether
  * it is allowed at all (lib/coach/generation-prerequisites.ts): a
  * coach-confirmed method, completed intake, and no open health review.
- * Reads the approved playbook WITHOUT bootstrapping one — a bootstrapped
- * default is never a confirmed method anyway. */
+ *
+ * Gate 3 — the method is the client's PRIMARY coach's confirmed Coach Brain
+ * (lib/production/coach-brain.ts's canonical read path), never the legacy
+ * workspace playbook and never the acting coach's own method. No confirmed
+ * Brain → no method → generation is refused. Callers authorize the client
+ * first (requireAssignedCoachAuthority). */
 async function resolveGenerationContext(workspaceId: string, clientProfileId: string) {
-  const [playbook, onboarding, healthReview] = await Promise.all([
-    getApprovedPlaybook(workspaceId),
+  const [intelligence, onboarding, healthReview] = await Promise.all([
+    resolveCoachIntelligenceForClient({ workspaceId, clientProfileId }),
     getOnboardingProgressForClient(clientProfileId),
     resolveHealthReviewRecordForClient(clientProfileId, workspaceId),
   ]);
+  const method = intelligence.method;
   const intake = extractClientProgrammingProfile(onboarding, healthReview);
   const prerequisites = evaluateGenerationPrerequisites({
-    playbook: playbook ? { version: playbook.version, operatingModel: playbook.content.operatingModel } : null,
+    playbook: method ? { version: method.version, operatingModel: method.operatingModel } : null,
     onboarding,
     intake,
     clientProfileId,
   });
-  return { playbook, onboarding, prerequisites };
+  return { intelligence, method, onboarding, prerequisites };
 }
 
 /**
@@ -340,10 +346,10 @@ async function resolveGenerationContext(workspaceId: string, clientProfileId: st
  * exactly what it used as content.generationInputs.
  */
 async function generateUniversalProgramProposalContent(params: { workspaceId: string; clientProfileId: string; coachId: string; title: string; durationWeeks: number }) {
-  const { playbook, onboarding, prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
+  const { intelligence, method, onboarding, prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
   if (!prerequisites.ready) throw new GenerationPrerequisitesError(prerequisites.missing);
   // evaluateGenerationPrerequisites only returns ready with both present.
-  const com = playbook!.content.operatingModel;
+  const com = method!.operatingModel;
   const profile = prerequisites.profile;
 
   const directions = generateProgramDirectionSummaries({ profile, com, durationWeeks: params.durationWeeks });
@@ -356,7 +362,9 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
   // generation (lib/production/rule-resolution.ts's own failure-semantics
   // doc) — a coach with no learned rules yet generates exactly as before
   // Phase 9C (spec section 36).
-  const applicableRules = await resolveApplicableCoachRules({ clientProfileId: params.clientProfileId });
+  // Gate 3 — the method owner's (primary coach's) learned rules, not the
+  // acting coach's.
+  const applicableRules = await resolveApplicableCoachRules({ clientProfileId: params.clientProfileId, owner: intelligence.owner ?? undefined });
   const { content, ruleApplication } = buildUniversalProgramForDirection(direction, {
     clientId: params.clientProfileId,
     workspaceId: params.workspaceId,
@@ -378,7 +386,8 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
   // field reads as "no provenance," identical to legacy content.
   const methodologyConflictedLearnedRuleIds = ruleApplication.skippedRules.filter((s) => s.reason === "explicit_methodology_conflict").map((s) => s.ruleId);
   const generationInputs = buildGenerationInputs({
-    playbookVersion: playbook!.version,
+    playbookVersion: method!.version,
+    methodVersionId: method!.versionId,
     operatingModel: com,
     onboarding: onboarding!,
     profile,
@@ -510,6 +519,10 @@ export interface ProgramProposalReviewView {
    * that's materially coach-meaningful ("this would have applied but your
    * explicit setup took priority"). */
   methodologyConflictedRuleProvenance: LearnedRuleProvenance[];
+  /** Gate 3 — set when this draft was prepared under a method version that
+   * isn't the client's primary coach's active one (or before Gate 3). Such
+   * a draft can't be approved; it must be rejected and regenerated. */
+  methodStaleMessage: string | null;
 }
 
 /** Step 2: the coach's review surface reads this. Returns null when there
@@ -520,10 +533,12 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
   if (!pending) return null;
 
   const profile = await resolveClientProgrammingProfile(params.workspaceId, params.clientProfileId);
-  const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: "" });
-  // Without intake there are no client restrictions to add — only the
-  // coach's own avoided exercises (exactly what the placeholder produced).
-  const avoidedTerms = profile ? avoidedTermsForProfile(profile, playbook.content.operatingModel) : [...playbook.content.operatingModel.programArchitecture.exercisesAvoided];
+  // Gate 3 — the client's primary coach's confirmed method (no Brain → no
+  // coach-avoided exercises to add; nothing is filled in from defaults).
+  const intelligence = await resolveCoachIntelligenceForClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId });
+  const methodModel = intelligence.method?.operatingModel ?? null;
+  const avoidedTerms = profile && methodModel ? avoidedTermsForProfile(profile, methodModel) : methodModel ? [...methodModel.programArchitecture.exercisesAvoided] : [];
+  const staleness = methodDraftStaleness(draftMethodVersionIdOf(pending.content), intelligence.method?.versionId ?? null);
 
   const original = pending.versionNumber > 1 ? await getOriginalProposalVersion(params.workspaceId, pending.programId) : pending;
   const changesSummary = original ? diffProgramProposal(original.content, pending.content).map(describeProgramDiffEntry) : [];
@@ -547,6 +562,7 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     changesSummary,
     appliedRuleProvenance,
     inputsVerified: !!pending.content.adjustmentProvenance || hasVerifiedGenerationInputs(pending.content),
+    methodStaleMessage: staleness.stale ? staleness.message : null,
     methodologyConflictedRuleProvenance,
   };
 }
@@ -791,11 +807,16 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   // prerequisites must still hold right now (the method could have been
   // unconfirmed or a health review opened since generation). Adjustment
   // proposals are bounded by the active-plan staleness check above.
+  const { method, prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
   if (!approved.content.adjustmentProvenance) {
-    const { prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
     const gate = checkProposalApproval(approved.content, prerequisites);
     if (!gate.ok) throw new Error(gate.message);
   }
+  // Gate 3 — never approve a draft as though it reflects the coach's
+  // current method when it was prepared under a different (or no) method
+  // version. Nothing is silently changed; the coach regenerates.
+  const staleness = methodDraftStaleness(draftMethodVersionIdOf(approved.content), method?.versionId ?? null);
+  if (staleness.stale) throw new Error(staleness.message);
 
   await publishProgramVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
   const assignmentId = await assignProgramVersionToClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, versionId: params.versionId });

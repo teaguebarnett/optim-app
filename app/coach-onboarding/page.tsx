@@ -1,49 +1,58 @@
-"use client";
-
-import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { usePrototypeState } from "@/hooks/use-prototype-state";
-import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
-import { RequireDesktopViewport } from "@/components/coach-onboarding/require-desktop-viewport";
-import { CoachOnboardingWizard } from "@/components/coach-onboarding/coach-onboarding-wizard";
+import { DemoCoachOnboardingPage } from "@/components/coach-onboarding/demo-coach-onboarding-page";
+import { LiveCoachOnboarding } from "@/components/coach-onboarding/live-coach-onboarding";
+import { resolveAppMode } from "@/lib/production/mode";
+import { getOwnCoachBrainState } from "@/lib/production/coach-brain";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { ALL_CHAPTER_IDS_IN_ORDER, type CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
 
 /**
- * Phase 5.4A — the dedicated coach onboarding route. Deliberately sits
- * OUTSIDE /coach/* so it never renders inside CoachShell's horizontal-nav
- * chrome (see lib/coach/routing.ts's explicit /coach-onboarding carve-out)
- * — a full-bleed, computer-only calibration experience, exactly like
- * /onboarding/[clientId] sits outside the client-app shell for the same
- * reason.
+ * The Coach Calibration survey. Sits outside /coach/* so it never renders
+ * inside CoachShell (see lib/coach/routing.ts's carve-out).
  *
- * Gate 5A — accepts an optional ?chapter= so the Playbook page's per-
- * section "Edit" links (components/coach/coach-playbook-detail.tsx) land
- * the coach directly on the relevant chapter instead of always chapter 1.
- * An unrecognized or missing value is simply ignored — the wizard already
- * falls back to its own default start (see CoachOnboardingWizard's own
- * initialChapterId handling), never a broken or blank route.
+ * Gate 3 — in live (Supabase) mode this is the canonical first-run step of
+ * every coach's account: app/coach/layout.tsx sends any coach without a
+ * confirmed Coach Brain here, and the survey seeds their Brain. Progress is
+ * loaded server-side for the signed-in coach only (lib/production/
+ * coach-brain.ts), so they resume where they left off on any device. A
+ * calibrated coach reaches the same survey only through an explicit "Review
+ * or update your method" draft. Demo mode keeps the browser-local prototype.
+ *
+ * ?chapter= deep-links to one chapter (e.g. from a method summary's Edit).
  */
-export default function CoachOnboardingPage() {
-  return (
-    <Suspense>
-      <CoachOnboardingPageInner />
-    </Suspense>
-  );
-}
+export default async function CoachOnboardingPage({ searchParams }: { searchParams: Promise<{ chapter?: string }> }) {
+  if (resolveAppMode() !== "supabase") return <DemoCoachOnboardingPage />;
 
-function CoachOnboardingPageInner() {
-  const { activeContext } = usePrototypeState();
-  const searchParams = useSearchParams();
-  const businessName = activeContext.branding.businessName;
-  const coachAccountId = activeContext.coachProfile?.userId ?? activeContext.coachProfile?.id ?? "";
-  const chapterParam = searchParams.get("chapter");
-  const initialChapterId = ALL_CHAPTER_IDS_IN_ORDER.find((id) => id === chapterParam) as CoachOnboardingChapterId | undefined;
+  const { chapter } = await searchParams;
+  const initialChapterId = ALL_CHAPTER_IDS_IN_ORDER.find((id) => id === chapter) as CoachOnboardingChapterId | undefined;
+  const state = await getOwnCoachBrainState();
+  const progress = state.progress;
+  const openProgress = progress && !progress.completedAtIso ? progress : null;
+
+  // A calibrated coach with no open review sees the explicit review entry.
+  // Passed to the same client component (not returned as a different one) so
+  // the post-confirmation refresh can't unmount the wizard's completion screen.
+  const reviewEntry =
+    state.calibration.state === "calibrated" && !(openProgress && openProgress.mode === "review") ? { versionLabel: `version ${state.activeMethod?.version ?? 1}` } : null;
+
+  const supabase = await getSupabaseServerClient();
+  const { data: workspace } = await supabase.from("workspaces").select("business_name").eq("id", state.workspaceId).maybeSingle();
 
   return (
-    <RequireThemeChoice accountKind="coach" accountId={coachAccountId}>
-      <RequireDesktopViewport>
-        <CoachOnboardingWizard businessName={businessName} initialChapterId={initialChapterId} />
-      </RequireDesktopViewport>
-    </RequireThemeChoice>
+    <LiveCoachOnboarding
+      reviewEntry={reviewEntry}
+      initialChapterId={initialChapterId}
+      initial={{
+        coachUserId: state.coachUserId,
+        workspaceId: state.workspaceId,
+        businessName: (workspace?.business_name as string | undefined) ?? "OPTIM",
+        mode: openProgress?.mode ?? "initial",
+        answers: openProgress?.answers ?? {},
+        aiAuthority: openProgress?.aiAuthority ?? null,
+        aiAuthorityConfirmed: !!openProgress?.aiAuthorityConfirmedAtIso,
+        position: openProgress?.currentChapterId ? { chapterId: openProgress.currentChapterId, questionIndex: openProgress.currentQuestionIndex } : null,
+        hasProgress: !!openProgress && (Object.keys(openProgress.answers).length > 0 || !!openProgress.currentChapterId),
+        activeModel: state.activeMethod?.operatingModel ?? null,
+      }}
+    />
   );
 }

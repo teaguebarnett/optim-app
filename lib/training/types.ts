@@ -550,6 +550,9 @@ export interface AdjustmentProvenance {
   learnedRuleIdsUsed: string[];
   changeDescriptions: AdjustmentProvenanceChange[];
   proposalSignature: string;
+  /** Gate 3 — the confirmed Coach Brain method version this adjustment was
+   * computed under (see GenerationInputs.coachMethod.methodVersionId). */
+  methodVersionId?: string;
 }
 
 export interface GenerationInputs {
@@ -561,6 +564,12 @@ export interface GenerationInputs {
   /** Supporting points shown under "Why this plan". */
   whyThisPlan?: string[];
   coachMethod: {
+    /** Gate 3 — the coach_method_versions row (the client's primary coach's
+     * confirmed Coach Brain method) this proposal was generated under.
+     * Approval requires it to still be that coach's active version. Absent
+     * on proposals made before Gate 3 (built from legacy workspace
+     * scaffolding) — those can't be approved. */
+    methodVersionId?: string;
     playbookVersion: number;
     operatingModelVersion: number;
     confirmedAtIso: string;

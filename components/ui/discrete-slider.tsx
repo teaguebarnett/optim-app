@@ -163,7 +163,8 @@ export function DiscreteSlider({
         <div className={cn("pc-authority-thumb", !isDragging && "pc-snap")} style={snapStyle} />
       </div>
 
-      <div className="relative mt-2 h-4 text-meta text-neutral">
+      {/* Labels sit under their ticks; one size down on phones so "AI-led" and "Autonomous" never touch in narrow cards. */}
+      <div className="relative mt-2 h-4 text-xs text-neutral sm:text-meta">
         {positions.map((p, i) => (
           <button
             key={p.value}

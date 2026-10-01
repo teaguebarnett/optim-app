@@ -24,7 +24,7 @@ import { getActiveProgramAssignment, getPendingProgramProposal, createDraftProgr
 import { resolveUniversalProgramContent } from "../training/legacy-adapter.ts";
 import { getOnboardingProgressForClient } from "./onboarding.ts";
 import { resolveHealthReviewRecordForClient } from "./pain-safety.ts";
-import { getOrBootstrapApprovedPlaybook } from "./playbooks.ts";
+import { resolveCoachIntelligenceForClient } from "./coach-brain.ts";
 import { resolveApplicableCoachRules } from "./rule-resolution.ts";
 import { resolveClientStateEvidence } from "./client-state-evidence.ts";
 import { extractClientProgrammingProfile } from "../coach/programming-profile.ts";
@@ -62,16 +62,21 @@ export async function resolveAdjustmentProposal(params: { workspaceId: string; c
     const activeContent = activeAssignment ? resolveUniversalProgramContent(activeAssignment.content) : null;
     if (!activeAssignment || !activeContent) return { kind: "no_proposal", reason: "no_active_program", detail: "No active universal-grammar program exists for this client." };
 
-    const [onboarding, healthReview, playbookRow, programContext, evidenceBundle] = await Promise.all([
+    // Gate 3 — adjustments are computed only from the client's PRIMARY
+    // coach's confirmed Coach Brain method. No confirmed Brain → no
+    // proposal (never OPTIM defaults standing in for the coach's method).
+    const intelligence = await resolveCoachIntelligenceForClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId });
+    if (!intelligence.method) {
+      return { kind: "no_proposal", reason: "coach_method_unconfirmed", detail: "This client's coach hasn't confirmed their coaching method in OPTIM yet." };
+    }
+    const method = intelligence.method;
+    const [onboarding, healthReview, programContext, evidenceBundle] = await Promise.all([
       getOnboardingProgressForClient(params.clientProfileId),
       resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId),
-      getSupabaseServerClient().then((supabase) => supabase.from("workspaces").select("business_name").eq("id", params.workspaceId).single()),
       getClientProgramContext({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId }),
       resolveClientStateEvidence({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId }),
     ]);
-    if (playbookRow.error) throw new Error(`resolveAdjustmentProposal (workspace lookup) failed: ${playbookRow.error.message}`);
-    const playbook = await getOrBootstrapApprovedPlaybook({ workspaceId: params.workspaceId, businessName: playbookRow.data.business_name as string });
-    const com = playbook.content.operatingModel;
+    const com = method.operatingModel;
 
     const profileResult = extractClientProgrammingProfile(onboarding, healthReview);
     // Adjustments modify the already-approved active plan (and are re-checked
@@ -81,7 +86,7 @@ export async function resolveAdjustmentProposal(params: { workspaceId: string; c
     const avoidedTerms = "profile" in profileResult ? avoidedTermsForProfile(profileResult.profile, com) : [...com.programArchitecture.exercisesAvoided];
 
     const currentProgramWeek = programContext.enrollment ? deriveProgramWeek(programContext.enrollment, new Date().toISOString().slice(0, 10)) : null;
-    const applicableRules = await resolveApplicableCoachRules({ clientProfileId: params.clientProfileId });
+    const applicableRules = await resolveApplicableCoachRules({ clientProfileId: params.clientProfileId, owner: intelligence.owner ?? undefined });
 
     const analysis = analyzeClientState(evidenceBundle);
     const presented = selectFindingsForCoachUI(analysis);
@@ -123,6 +128,7 @@ export async function resolveAdjustmentProposal(params: { workspaceId: string; c
         learnedRuleIdsUsed: proposal.learnedRuleIdsUsed,
         changeDescriptions: proposal.changeDescriptions,
         proposalSignature: proposal.proposalSignature,
+        methodVersionId: method.versionId,
       };
       const content = {
         ...proposal.content,
