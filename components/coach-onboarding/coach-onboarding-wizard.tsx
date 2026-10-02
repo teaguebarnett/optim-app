@@ -13,6 +13,8 @@ import {
   MessageCircle,
   ShieldCheck,
   ClipboardCheck,
+  CircleAlert,
+  CircleDashed,
   Compass,
   Trophy,
   Zap,
@@ -27,8 +29,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { useCalibration } from "@/components/coach-onboarding/calibration-context";
 import { AiAuthorityPanel } from "@/components/coach/ai-authority-panel";
-import { CALIBRATION_CHAPTERS, CHAPTER_ORDER, answerKeyOf } from "@/lib/coach/calibration/questions";
-import { buildCalibrationContext, computeCalibrationProgress, isQuestionAnswered, visibleCalibrationQuestions, visibleParts } from "@/lib/coach/calibration/engine";
+import { ALL_CALIBRATION_ITEMS, CALIBRATION_CHAPTERS, CHAPTER_ORDER, answerKeyOf } from "@/lib/coach/calibration/questions";
+import { buildCalibrationContext, chapterStatus, computeCalibrationProgress, isQuestionAnswered, unresolvedKeysInOrder, visibleCalibrationQuestions, visibleParts, type ChapterStatus } from "@/lib/coach/calibration/engine";
 import { NEEDS_CONFIRMATION_KEY, type CalibrationAnswers, type CalibrationAnswerValue, type CalibrationChapterId as CoachOnboardingChapterId, type CalibrationQuestion } from "@/lib/coach/calibration/types";
 import { CalibrationField } from "@/components/coach-onboarding/v2/calibration-field";
 import { Step0Description } from "@/components/coach-onboarding/v2/step0-description";
@@ -36,6 +38,7 @@ import { ReviewChapter } from "@/components/coach-onboarding/review-chapter";
 import { CoachOnboardingWelcome } from "@/components/coach-onboarding/coach-onboarding-welcome";
 
 const ALL_CHAPTER_IDS_IN_ORDER = CHAPTER_ORDER;
+const CHAPTER_OF_KEY = new Map(ALL_CALIBRATION_ITEMS.filter((q) => q.kind !== "group").map((q) => [answerKeyOf(q), q.chapter]));
 const CHAPTER_META = new Map(CALIBRATION_CHAPTERS.map((c) => [c.id, c]));
 
 /** One consistent, recognizable icon per chapter. */
@@ -115,6 +118,9 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
   // chapter 1, and never left pointing at a chapter that no longer exists.
   const [chapterId, setChapterId] = useState<CoachOnboardingChapterId>(resumeChapter && chapters.includes(resumeChapter) ? resumeChapter : chapters[0]);
   const [questionIndex, setQuestionIndex] = useState(!initialChapterId && cal.initialPosition && resumeChapter === cal.initialPosition.chapterId ? cal.initialPosition.questionIndex : 0);
+  // Unresolved-only navigation from Review: the coach walks just the
+  // questions that still need an answer (or a look), in interview order.
+  const [queue, setQueue] = useState<{ kind: "required" | "needs_review"; keys: string[] } | null>(null);
   const [syncedChaptersKey, setSyncedChaptersKey] = useState(chapters.join("|"));
   const chaptersKey = chapters.join("|");
   if (chaptersKey !== syncedChaptersKey) {
@@ -152,7 +158,30 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
   // just Review), so a coach fixing one thing can jump straight there and
   // straight back to Review to confirm — never forced through every
   // chapter in between just to reach the one they actually want.
+  function locateKey(key: string): { chapter: CoachOnboardingChapterId; index: number } | null {
+    for (const id of chapters) {
+      const index = visibleCalibrationQuestions(id, cal.answers).findIndex((q) => questionKeys(q, cal.answers).includes(key));
+      if (index >= 0) return { chapter: id, index };
+    }
+    return null;
+  }
+  function startQueue(kind: "required" | "needs_review") {
+    const keys = unresolvedKeysInOrder(cal.answers, kind);
+    const first = keys.map(locateKey).find(Boolean);
+    if (!first) return;
+    setQueue({ kind, keys });
+    setChapterId(first.chapter);
+    setQuestionIndex(first.index);
+  }
+  function exitQueueToReview() {
+    setQueue(null);
+    if (chapters.includes("review")) {
+      setChapterId("review");
+      setQuestionIndex(0);
+    }
+  }
   function jumpToChapter(id: CoachOnboardingChapterId) {
+    setQueue(null);
     if (!chapters.includes(id) || id === chapterId) return;
     setChapterId(id);
     setQuestionIndex(0);
@@ -182,6 +211,8 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
     return (
       <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
         <ReviewChapter
+          onReviewRequired={() => startQueue("required")}
+          onReviewCarriedOver={() => startQueue("needs_review")}
           onEditChapter={(id, key) => {
             if (!chapters.includes(id)) return;
             const list = visibleCalibrationQuestions(id, cal.answers);
@@ -232,6 +263,20 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
         return next;
       });
     }
+    if (queue) {
+      // Next still-unresolved item in the queue (this question counts as
+      // handled); when none are left, back to Review.
+      // Recomputed from the latest answers, so a question an answer just
+      // revealed (e.g. taper length after "Yes, I peak") joins the queue.
+      const fresh = unresolvedKeysInOrder(cal.answers, queue.kind).filter((k) => !keysHere.includes(k) && locateKey(k));
+      const target = fresh.length ? locateKey(fresh[0]) : null;
+      if (target) {
+        setQueue({ kind: queue.kind, keys: [...queue.keys, ...fresh.filter((k) => !queue.keys.includes(k))] });
+        setChapterId(target.chapter);
+        setQuestionIndex(target.index);
+      } else exitQueueToReview();
+      return;
+    }
     if (!isLastQuestionInChapter) {
       setQuestionIndex((i) => i + 1);
       return;
@@ -240,6 +285,7 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
   }
 
   function handleBack() {
+    setQueue(null);
     if (questionIndex > 0) {
       setQuestionIndex((i) => i - 1);
       return;
@@ -254,6 +300,19 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
     <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0} onSelectChapter={jumpToChapter}>
       {question ? (
         <div>
+          {queue ? (
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] bg-surface px-4 py-3">
+              <p className="text-meta text-off-white">
+                {queue.kind === "required" ? "Answering what's needed" : "Reviewing carried-over answers"} ·{" "}
+                <span className="text-neutral">
+                  {Math.max(1, Math.min(...keysHere.map((k) => queue.keys.indexOf(k)).filter((i) => i >= 0)) + 1)} of {queue.keys.length}
+                </span>
+              </p>
+              <button type="button" onClick={exitQueueToReview} className="min-h-9 text-meta font-semibold text-accent-fg underline-offset-2 hover:underline">
+                Back to review
+              </button>
+            </div>
+          ) : null}
           <div className="mb-2 flex flex-wrap items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-fg">
             <span>Question {questionIndex + 1}</span>
             <span className="text-neutral">of {questions.length}</span>
@@ -365,6 +424,7 @@ function ChapterRail({
   const cal = useCalibration();
   const summary = computeCalibrationProgress(cal.answers);
   const currentIndex = chapters.indexOf(chapterId);
+  const authorityConfirmed = cal.authority ? cal.authority.confirmed : true;
 
   return (
     <aside className="sticky top-12 h-fit space-y-5">
@@ -385,38 +445,72 @@ function ChapterRail({
           const chapterMeta = CHAPTER_META.get(id)!;
           const Icon = CHAPTER_ICONS[id];
           const isCurrent = index === currentIndex;
-          const isDone = index < currentIndex;
+          const status: ChapterStatus = chapterStatus(id, cal.answers, { aiAuthorityConfirmed: authorityConfirmed });
+          const note = railNote(id, status, cal.answers);
           return (
-            // Gate 5A — every chapter here is already reachable in some
-            // order by the coach's own answers (`chapters` is pre-filtered
-            // by applicableChapters), so jumping directly to any of them —
-            // forward, backward, or straight to Review — never skips a
-            // real gate; it's the same jump ReviewChapter's own
-            // onEditChapter already performs, just reachable from anywhere.
             <button
               key={id}
               type="button"
               onClick={() => onSelectChapter(id)}
               aria-current={isCurrent ? "step" : undefined}
-              className={`flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-colors hover:bg-accent-soft/60 ${
-                isCurrent ? "bg-accent-soft" : ""
-              }`}
+              aria-label={`${chapterMeta.title}${note ? ` — ${note}` : status === "complete" ? " — complete" : ""}`}
+              className={`flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-colors hover:bg-accent-soft/60 ${isCurrent ? "bg-accent-soft" : ""}`}
             >
-              <span
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
-                  isDone ? "bg-accent text-on-accent" : isCurrent ? "bg-accent text-on-accent" : "bg-surface-raised text-neutral"
-                }`}
-              >
-                {isDone ? <Check size={14} aria-hidden="true" /> : <Icon size={14} aria-hidden="true" />}
-              </span>
-              <span className={`text-meta font-medium leading-tight ${isCurrent ? "text-off-white" : isDone ? "text-neutral" : "text-neutral/70"}`}>
-                {chapterMeta.title}
+              <StatusIcon status={id === "review" ? "optional" : status} icon={Icon} />
+              <span className="min-w-0">
+                <span className={`block text-meta font-medium leading-tight ${isCurrent || status === "incomplete" || status === "needs_review" ? "text-off-white" : "text-neutral"}`}>{chapterMeta.title}</span>
+                {note ? <span className={`mt-0.5 block text-[0.75rem] leading-tight ${status === "needs_review" ? "text-warning-strong" : "text-neutral"}`}>{note}</span> : null}
               </span>
             </button>
           );
         })}
       </nav>
     </aside>
+  );
+}
+
+/** The chapter's state as a short, plain note (null when complete). */
+function railNote(id: CoachOnboardingChapterId, status: ChapterStatus, answers: CalibrationAnswers): string | null {
+  if (id === "review") return null;
+  if (status === "incomplete") {
+    if (id === "ai_authority") return "Needs your confirmation";
+    const n = unresolvedKeysInOrder(answers, "required").filter((k) => CHAPTER_OF_KEY.get(k) === id).length;
+    return `${n} answer${n === 1 ? "" : "s"} needed`;
+  }
+  if (status === "needs_review") {
+    const n = unresolvedKeysInOrder(answers, "needs_review").filter((k) => CHAPTER_OF_KEY.get(k) === id).length;
+    return `${n} to review`;
+  }
+  if (status === "optional") return "Optional";
+  return null;
+}
+
+function StatusIcon({ status, icon: Icon }: { status: ChapterStatus; icon: LucideIcon }) {
+  if (status === "complete") {
+    return (
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent">
+        <Check size={14} aria-hidden="true" />
+      </span>
+    );
+  }
+  if (status === "needs_review") {
+    return (
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-warning-soft text-warning-strong">
+        <CircleAlert size={14} aria-hidden="true" />
+      </span>
+    );
+  }
+  if (status === "incomplete") {
+    return (
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-dashed border-accent/60 text-accent-fg">
+        <CircleDashed size={14} aria-hidden="true" />
+      </span>
+    );
+  }
+  return (
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-raised text-neutral">
+      <Icon size={14} aria-hidden="true" />
+    </span>
   );
 }
 
@@ -472,11 +566,16 @@ function CompactProgress({
           onChange={(e) => onSelectChapter(e.target.value as CoachOnboardingChapterId)}
           className="min-h-11 max-w-[55%] rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 text-meta text-off-white"
         >
-          {chapters.map((id) => (
-            <option key={id} value={id}>
-              {CHAPTER_META.get(id)!.title}
-            </option>
-          ))}
+          {chapters.map((id) => {
+            const status = chapterStatus(id, cal.answers, { aiAuthorityConfirmed: cal.authority ? cal.authority.confirmed : true });
+            const note = railNote(id, status, cal.answers);
+            return (
+              <option key={id} value={id}>
+                {CHAPTER_META.get(id)!.title}
+                {status === "complete" && id !== "review" ? " ✓" : note ? ` — ${note}` : ""}
+              </option>
+            );
+          })}
         </select>
       </div>
       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">

@@ -7,7 +7,7 @@ import { COACH_ONBOARDING_QUESTIONS } from "./coach-onboarding-questions.ts";
 import { applyCoachAnswersToModel } from "./coach-onboarding-engine.ts";
 import { createDefaultCoachOperatingModel, type CoachOperatingModel } from "./operating-model.ts";
 import { ALL_CALIBRATION_ITEMS, CALIBRATION_QUESTIONS, answerKeyOf } from "./calibration/questions.ts";
-import { applicableCalibrationChapters, applicableItemKeys, buildCalibrationContext, calibrationV2Readiness, pruneCalibrationAnswers } from "./calibration/engine.ts";
+import { applicableCalibrationChapters, applicableItemKeys, buildCalibrationContext, calibrationV2Readiness, chapterStatus, pruneCalibrationAnswers, unresolvedKeysInOrder } from "./calibration/engine.ts";
 import { interpretCoachDescription, suggestedAreas } from "./calibration/step0-interpreter.ts";
 import { validateCalibrationAnswers, checkControl } from "./calibration/validate.ts";
 import { applyCalibrationAnswersToModel } from "./calibration/model.ts";
@@ -594,6 +594,44 @@ check("pruning: removing an area drops its module's answers", () => {
   assert.equal(pruned.e_weekly_volume, undefined);
   assert.equal(pruned.x_priority, undefined);
   assert.ok(pruned.t_days !== undefined);
+});
+
+console.log("\n9. Refinement state: chapter status + unresolved-only navigation\n");
+
+check("a refinement draft's chapters show real state — never 'complete' just because they exist", () => {
+  const draft = mapV1AnswersToV2(V1_FULL as never).answers;
+  const ctx = buildCalibrationContext(draft);
+  assert.ok(ctx.areasConfirmed);
+  const training = chapterStatus("training", draft);
+  assert.equal(training, "incomplete", "new required questions (e.g. the swap rule) are missing");
+  assert.equal(chapterStatus("ai_authority", draft, { aiAuthorityConfirmed: false }), "incomplete");
+  assert.equal(chapterStatus("ai_authority", draft, { aiAuthorityConfirmed: true }), "complete");
+});
+
+check("a chapter with every required answer but a carried-over answer to check is 'needs review'", () => {
+  const draft = answerAllRequired({ ...mapV1AnswersToV2(V1_FULL as never).answers });
+  assert.ok((draft.__needsConfirmation as string[]).includes("t_session_length"));
+  assert.equal(chapterStatus("training", draft), "needs_review");
+  const looked = { ...draft, __needsConfirmation: (draft.__needsConfirmation as string[]).filter((k) => !k.startsWith("t_")) };
+  assert.equal(chapterStatus("training", looked), "complete");
+});
+
+check("an optional-only chapter with nothing answered is 'optional', not complete", () => {
+  const a = answerAllRequired(PERSONAS[0].scope);
+  assert.equal(chapterStatus("situations", a), "optional");
+});
+
+check("unresolved-only navigation lists just the unresolved keys, in interview order", () => {
+  const draft = mapV1AnswersToV2(V1_FULL as never).answers;
+  const required = unresolvedKeysInOrder(draft, "required");
+  const r = calibrationV2Readiness({ answers: draft, aiAuthorityConfirmed: true });
+  assert.deepEqual([...required].sort(), [...r.unansweredKeys].sort());
+  const review = unresolvedKeysInOrder(draft, "needs_review");
+  assert.deepEqual([...review].sort(), [...r.needsConfirmation].sort());
+  assert.ok(required.indexOf("t_swap_rule") > -1);
+  const order = ["your_coaching", "philosophy", "training"];
+  const firstTraining = required.findIndex((k) => k.startsWith("t_"));
+  assert.ok(required.slice(0, firstTraining).every((k) => !k.startsWith("t_")), order.join(">"));
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

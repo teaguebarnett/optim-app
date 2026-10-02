@@ -226,3 +226,46 @@ export function computeCalibrationProgress(answers: CalibrationAnswers): Calibra
   const total = visible.length;
   return { totalApplicable: total, answered, percentComplete: total === 0 ? 0 : Math.round((answered / total) * 100) };
 }
+
+// ---------------------------------------------------------------------------
+// Chapter status + unresolved-only navigation (UX helpers, read-only)
+// ---------------------------------------------------------------------------
+
+export type ChapterStatus = "complete" | "needs_review" | "incomplete" | "optional";
+
+/**
+ * A chapter's real state — never inferred from where the coach is:
+ *   incomplete   — a required question that applies is unanswered;
+ *   needs_review — everything required is answered, but a carried-over
+ *                  answer still needs the coach's look;
+ *   complete     — everything required is answered and looked at;
+ *   optional     — nothing required here and nothing answered yet.
+ */
+export function chapterStatus(chapter: CalibrationChapterId, answers: CalibrationAnswers, opts: { aiAuthorityConfirmed?: boolean } = {}): ChapterStatus {
+  if (chapter === "review") return "optional";
+  if (chapter === "ai_authority") return opts.aiAuthorityConfirmed ? "complete" : "incomplete";
+  const ctx = buildCalibrationContext(answers);
+  const items = ALL_CALIBRATION_ITEMS.filter((q) => q.kind !== "group" && q.chapter === chapter && isApplicableItem(q, ctx));
+  const needs = new Set(needsConfirmationIds(answers));
+  if (items.some((q) => q.required && !isItemAnswered(q, answers))) return "incomplete";
+  if (items.some((q) => needs.has(answerKeyOf(q)))) return "needs_review";
+  if (items.some((q) => q.required) || items.some((q) => isItemAnswered(q, answers))) return "complete";
+  return "optional";
+}
+
+/** Unresolved answer keys in interview order: required-but-unanswered, or
+ * carried-over-and-not-yet-looked-at. */
+export function unresolvedKeysInOrder(answers: CalibrationAnswers, kind: "required" | "needs_review"): string[] {
+  const ctx = buildCalibrationContext(answers);
+  const needs = new Set(needsConfirmationIds(answers));
+  const out: string[] = [];
+  for (const chapter of CHAPTER_ORDER) {
+    for (const q of ALL_CALIBRATION_ITEMS) {
+      if (q.kind === "group" || q.chapter !== chapter || !isApplicableItem(q, ctx)) continue;
+      const key = answerKeyOf(q);
+      const unresolved = kind === "required" ? q.required && !isItemAnswered(q, answers) : needs.has(key);
+      if (unresolved && !out.includes(key)) out.push(key);
+    }
+  }
+  return out;
+}

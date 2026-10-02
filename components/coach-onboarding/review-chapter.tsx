@@ -7,7 +7,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, ArrowRight, Check } from "lucide-react";
+import { ArrowRight, Check, CircleAlert, CircleDashed } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCalibration } from "@/components/coach-onboarding/calibration-context";
 import { CalibrationSummary } from "@/components/coach-onboarding/v2/calibration-summary";
@@ -34,11 +34,18 @@ function chapterOfKey(key: string): CalibrationChapterId | undefined {
 function chapterTitle(id: CalibrationChapterId): string {
   return CALIBRATION_CHAPTERS.find((c) => c.id === id)?.title ?? id;
 }
-function labelOfKey(key: string): string {
-  return ALL_CALIBRATION_ITEMS.find((q) => answerKeyOf(q) === key)?.summaryLabel ?? key;
-}
 
-export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: CalibrationChapterId, key?: string) => void }) {
+export function ReviewChapter({
+  onEditChapter,
+  onReviewRequired = () => {},
+  onReviewCarriedOver = () => {},
+}: {
+  onEditChapter: (chapter: CalibrationChapterId, key?: string) => void;
+  /** Walk only the required questions that still need an answer. */
+  onReviewRequired?: () => void;
+  /** Walk only the carried-over answers that still need a look. */
+  onReviewCarriedOver?: () => void;
+}) {
   const router = useRouter();
   const cal = useCalibration();
   const model = cal.buildDraftModel();
@@ -84,11 +91,7 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Cali
     else setConfirmError(result.message);
   }
 
-  const missingByChapter = new Map<CalibrationChapterId, string[]>();
-  for (const key of readiness.unansweredQuestionIds) {
-    const c = chapterOfKey(key);
-    if (c) missingByChapter.set(c, [...(missingByChapter.get(c) ?? []), key]);
-  }
+
 
   return (
     <div>
@@ -115,43 +118,40 @@ export function ReviewChapter({ onEditChapter }: { onEditChapter: (chapter: Cali
       )}
 
       {!activated && cal.requireExplicitCompletion && confirmBlocked ? (
-        <div className="mt-5 rounded-[var(--radius-sm)] bg-warning-soft px-3.5 py-3 text-sm text-warning-strong">
-          <p className="flex items-start gap-2">
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-            <span>
-              {[
-                readiness.unansweredQuestionIds.length > 0 ? `${readiness.unansweredQuestionIds.length} required question${readiness.unansweredQuestionIds.length === 1 ? " still needs" : "s still need"} an answer` : null,
-                readiness.needsConfirmation.length > 0 ? `${readiness.needsConfirmation.length} carried-over answer${readiness.needsConfirmation.length === 1 ? " needs" : "s need"} a look` : null,
-                readiness.authorityUnconfirmed ? "OPTIM’s authority still needs your confirmation" : null,
-              ]
-                .filter(Boolean)
-                .join(", and ")}
-              . You can confirm once that&apos;s done.
-            </span>
-          </p>
-          <ul className="mt-2 flex flex-col gap-y-1 pl-6">
-            {[...missingByChapter.entries()].map(([chapter, keys]) => (
-              <li key={chapter}>
-                <button type="button" onClick={() => onEditChapter(chapter, keys[0])} className="min-h-11 text-left font-semibold underline-offset-2 hover:underline sm:min-h-0">
-                  {chapterTitle(chapter)}: {keys.map(labelOfKey).join(", ")}
-                </button>
-              </li>
-            ))}
-            {readiness.needsConfirmation.map((key) => (
-              <li key={`nc-${key}`}>
-                <button type="button" onClick={() => onEditChapter(chapterOfKey(key) ?? "review", key)} className="min-h-11 text-left font-semibold underline-offset-2 hover:underline sm:min-h-0">
-                  Check: {labelOfKey(key)}
-                </button>
-              </li>
-            ))}
-            {readiness.authorityUnconfirmed ? (
-              <li>
-                <button type="button" onClick={() => onEditChapter("ai_authority")} className="min-h-11 text-left font-semibold underline-offset-2 hover:underline sm:min-h-0">
-                  Go to AI authority
-                </button>
-              </li>
-            ) : null}
-          </ul>
+        <div className="mt-5 grid gap-3 lg:grid-cols-2">
+          {readiness.unansweredQuestionIds.length > 0 ? (
+            <div className="rounded-[var(--radius-lg)] border border-border-strong bg-surface-raised p-5">
+              <p className="flex items-center gap-2 text-subheading text-off-white">
+                <CircleDashed size={16} className="text-accent-fg" aria-hidden="true" />
+                {readiness.unansweredQuestionIds.length} answer{readiness.unansweredQuestionIds.length === 1 ? "" : "s"} needed
+              </p>
+              <p className="mt-1.5 text-meta text-neutral">{isRevision ? "These are new or changed questions OPTIM needs before you can confirm your updated method." : "OPTIM needs these before you can confirm your method."}</p>
+              <Button className="mt-4" onClick={onReviewRequired}>
+                Review required answers <ArrowRight size={15} aria-hidden="true" />
+              </Button>
+            </div>
+          ) : null}
+          {readiness.needsConfirmation.length > 0 ? (
+            <div className="rounded-[var(--radius-lg)] border border-warning/30 bg-warning-soft/50 p-5">
+              <p className="flex items-center gap-2 text-subheading text-off-white">
+                <CircleAlert size={16} className="text-warning-strong" aria-hidden="true" />
+                {readiness.needsConfirmation.length} carried-over answer{readiness.needsConfirmation.length === 1 ? "" : "s"} to review
+              </p>
+              <p className="mt-1.5 text-meta text-neutral">These came from your current method, but their meaning or format changed in the new calibration.</p>
+              <Button className="mt-4" variant="secondary" onClick={onReviewCarriedOver}>
+                Review carried-over answers <ArrowRight size={15} aria-hidden="true" />
+              </Button>
+            </div>
+          ) : null}
+          {readiness.authorityUnconfirmed ? (
+            <div className="rounded-[var(--radius-lg)] border border-border-strong bg-surface-raised p-5">
+              <p className="text-subheading text-off-white">Confirm OPTIM&apos;s authority</p>
+              <p className="mt-1.5 text-meta text-neutral">Choose how much you want OPTIM to take on before you confirm.</p>
+              <Button className="mt-4" variant="secondary" onClick={() => onEditChapter("ai_authority")}>
+                Go to AI authority <ArrowRight size={15} aria-hidden="true" />
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
