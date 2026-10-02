@@ -196,7 +196,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     id: "about_you",
     section: "About you",
     title: "A little about you",
-    description: "The essentials — nothing you already told us at invite.",
+    description: "Your basics set the numbers behind your plan.",
     // Phase 5.3C — one real decision per moment. Each wheel/choice is its
     // own screen; timeZone+sex are the one allowed exception (a confirm-
     // and-an-optional-afterthought pairing, not two independent decisions).
@@ -242,7 +242,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     id: "what_you_want",
     section: "What you want",
     title: "What you want",
-    description: "One clear picture of what you're working toward.",
+    description: "Your goal sets the direction for everything your coach builds.",
     // primaryGoalOther only ever renders alongside secondaryGoals for the
     // rare "something else" answer (visibleFieldsForStep already hides it
     // otherwise) — every other independent fact gets its own screen.
@@ -270,7 +270,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
       },
       {
         key: "secondaryGoals",
-        label: "Any secondary priorities? (choose up to two, optional)",
+        label: "Any secondary priorities? (choose up to two)",
         type: "multi_select",
         required: false,
         maxSelections: 2,
@@ -306,7 +306,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     id: "your_week",
     section: "Your real week",
     title: "Your real week",
-    description: "So your plan fits your real life, not an ideal one.",
+    description: "Your schedule decides how training fits into your week.",
     // Phase 5.3C — none of these six are conditional on each other, so each
     // gets its own real decision screen.
     moments: [["availableDays"], ["maxSessionLength"], ["preferredTrainingTime"], ["schedulePredictability"], ["trainingEnvironment"], ["dailyActivityLevel"], ["scheduleContext"]],
@@ -403,7 +403,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     id: "starting_point",
     section: "Starting point",
     title: "Your starting point",
-    description: "Meeting you exactly where you are.",
+    description: "Your current routine gives your coach a clear starting point for what comes next.",
     moments: [["trainingExperience"], ["recentConsistency"], ["weeklyFrequency"], ["trainingNotes"]],
     fields: [
       {
@@ -459,7 +459,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     id: "fuel_recovery",
     section: "Fuel & recovery",
     title: "Fuel, recovery, and consistency",
-    description: "The real things that make a plan work or fall apart.",
+    description: "Food, sleep, and stress shape how well a plan works.",
     // hasDietaryRestrictions + its conditional detail field stay paired
     // (parent question + its own immediate follow-up, not two independent
     // decisions) — everything else here is unconditional and independent.
@@ -576,7 +576,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     id: "health_finish",
     section: "Health",
     title: "Health and readiness",
-    description: "Quick, respectful, and it goes straight to your coach.",
+    description: "This goes straight to your coach so your plan starts safely.",
     // Phase 5.3C — each real decision in the injury cascade gets its own
     // unhurried screen (matching the spec's own "interactive body-area
     // selection" example); injuryBodyAreaOther stays paired with
@@ -676,7 +676,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     id: "review",
     section: "Review",
     title: "Review",
-    description: "One quick look before this goes to your coach.",
+    description: "Check your answers before they go to your coach.",
     fields: [],
   },
 ];
@@ -1192,3 +1192,21 @@ export const ONBOARDING_CHAPTER_ICONS: Record<OnboardingStepId, LucideIcon> = {
   schedule_lifestyle: CalendarRange,
   health_readiness: HeartPulse,
 };
+
+/** Gate 4.0B — where a returning client picks up inside a chapter: the
+ * first visible moment with any question (required or optional) that has
+ * no saved answer — so a screen the client never reached is never skipped;
+ * at worst an optional screen they passed is shown again, with every saved
+ * answer intact. If everything in the chapter is answered, its last visible
+ * moment (so they confirm and move on). */
+export function resumeMomentIndex(step: OnboardingStepDef, answers: OnboardingStepAnswers): number {
+  const moments = momentsForStep(step);
+  const visible = visibleFieldsForStep(step, answers);
+  for (let i = 0; i < moments.length; i++) {
+    const keys = new Set(moments[i]);
+    const fields = visible.filter((f) => keys.has(f.key));
+    if (fields.some((f) => !isFieldAnswered(f, answers))) return i;
+  }
+  const last = findVisibleMomentIndex(step, answers, moments.length - 1, -1);
+  return last === -1 ? 0 : last;
+}

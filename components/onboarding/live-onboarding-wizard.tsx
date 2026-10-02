@@ -71,9 +71,12 @@ export function LiveOnboardingWizard({ clientId }: { clientId: string }) {
         clientDisplayName: bootstrap?.clientDisplayName ?? "",
         coachDisplayName: bootstrap?.coachDisplayName ?? "your coach",
         coachAvatarInitials: bootstrap?.coachAvatarInitials ?? null,
-        existingProgress: bootstrap
-          ? { currentStepIndex: bootstrap.currentStepIndex, answers: bootstrap.answers, completedAtIso: bootstrap.completedAtIso ?? undefined }
-          : null,
+        // Only a real saved row counts as progress to resume — a client who
+        // hasn't started gets the welcome screen.
+        existingProgress:
+          bootstrap && bootstrap.hasProgress
+            ? { currentStepIndex: bootstrap.currentStepIndex, answers: bootstrap.answers, completedAtIso: bootstrap.completedAtIso ?? undefined }
+            : null,
         onSaveStep: (params) => saveOnboardingStepAction(params),
         onComplete: (finalAnswers) => completeOnboardingAction(finalAnswers),
         onCompleteNavigate: () => router.push(`/setup-status/${clientId}`),

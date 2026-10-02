@@ -72,10 +72,15 @@ export function useTheme(): ThemeContextValue {
 export function RequireThemeChoice({
   accountKind,
   accountId,
+  defaultMode,
   children,
 }: {
   accountKind: ThemeAccountKind;
   accountId: string;
+  /** Gate 4.0B — when set, an account that hasn't chosen yet gets this mode
+   * instead of the full-screen chooser (it can still pick one later in
+   * Settings → Appearance). Omitted: the chooser blocks, as before. */
+  defaultMode?: ThemeMode;
   children: ReactNode;
 }) {
   const [resolved, setResolved] = useState<ThemeMode | "unset" | null>(null);
@@ -88,6 +93,14 @@ export function RequireThemeChoice({
   }, [accountKind, accountId]);
 
   if (resolved === null) return null;
+
+  if (resolved === "unset" && defaultMode) {
+    return (
+      <ThemeProvider accountKind={accountKind} accountId={accountId} initialMode={defaultMode}>
+        {children}
+      </ThemeProvider>
+    );
+  }
 
   if (resolved === "unset") {
     return (

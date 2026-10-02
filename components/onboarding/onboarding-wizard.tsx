@@ -11,6 +11,7 @@ import { HeightInput } from "@/components/onboarding/height-input";
 import { TimezoneInput } from "@/components/onboarding/timezone-input";
 import { OnboardingStage } from "@/components/onboarding/onboarding-stage";
 import { OptimIntro } from "@/components/onboarding/optim-intro";
+import { OnboardingWelcome } from "@/components/onboarding/onboarding-welcome";
 import { ChapterTransition } from "@/components/onboarding/chapter-transition";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
 import { usePlatformState } from "@/hooks/use-platform-state";
@@ -23,6 +24,7 @@ import {
   isFieldAnswered,
   momentIndexForField,
   momentsForStep,
+  resumeMomentIndex,
   visibleFieldsForStep,
   type OnboardingFieldDef,
   type OnboardingStepDef,
@@ -86,6 +88,9 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
   const [momentIndex, setMomentIndex] = useState(0);
   const [direction, setDirection] = useState<"forward" | "back">("forward");
   const [draftAnswers, setDraftAnswers] = useState<Partial<Record<string, OnboardingStepAnswers>>>({});
+  // Live mode: the last save failed. Every save sends the chapter's full
+  // answers, so the next successful one also carries what this one missed.
+  const [saveFailed, setSaveFailed] = useState(false);
   const step = ONBOARDING_STEPS[stepIndex];
 
   const isHydrated = live ? live.isReady : isPlatformHydrated;
@@ -105,8 +110,12 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
         return;
       }
       if (existingProgress) {
-        setStepIndex(Math.min(existingProgress.currentStepIndex, ONBOARDING_STEPS.length - 1));
+        const resumeStep = Math.min(existingProgress.currentStepIndex, ONBOARDING_STEPS.length - 1);
+        setStepIndex(resumeStep);
         setDraftAnswers(existingProgress.answers);
+        // Gate 4.0B — resume at the first screen in this chapter that still
+        // needs an answer, not the chapter's start.
+        setMomentIndex(resumeMomentIndex(ONBOARDING_STEPS[resumeStep], existingProgress.answers[ONBOARDING_STEPS[resumeStep].id] ?? {}));
         setPhase("chapters");
       }
     }, 0);
@@ -128,6 +137,20 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
   const coach = live ? undefined : ALL_COACH_PROFILES.find((c) => c.id === client.primaryCoachId);
   const coachName = live ? live.coachDisplayName : (coach?.displayName ?? "your coach");
   const coachInitials = live ? (live.coachAvatarInitials ?? undefined) : coach?.avatarInitials;
+
+  // Live (a real client): appearance is a later choice in Settings — never a
+  // gate in front of onboarding. Demo keeps its chooser.
+  const themeDefault = live ? ("light" as const) : undefined;
+
+  if (phase === "intro" && live) {
+    return (
+      <RequireThemeChoice accountKind="client" accountId={client.id} defaultMode={themeDefault}>
+        <OnboardingStage>
+          <OnboardingWelcome coachName={coachName} onStart={() => setPhase("chapters")} />
+        </OnboardingStage>
+      </RequireThemeChoice>
+    );
+  }
 
   if (phase === "intro") {
     return (
@@ -179,6 +202,21 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
     });
   }
 
+  function saveLive(params: { stepId: OnboardingStepId; answers: OnboardingStepAnswers; nextStepIndex: number }) {
+    if (!live) return;
+    // Fire-and-forget, matching hooks/use-prototype-state.tsx's own Supabase
+    // autosave discipline: moving forward is never blocked on network
+    // latency. A failure is shown to the client (and logged), never treated
+    // as saved; the next save resends the chapter's full answers.
+    live
+      .onSaveStep(params)
+      .then(() => setSaveFailed(false))
+      .catch((err) => {
+        console.error("Onboarding step save failed:", err);
+        setSaveFailed(true);
+      });
+  }
+
   async function handleNext() {
     // Skip straight past any run of moments that have nothing applicable to
     // answer (e.g. health_finish's injury-detail moments once
@@ -187,6 +225,10 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
     // not just a cosmetic one.
     const next = findVisibleMomentIndex(step, effectiveAnswers, safeMomentIndex + 1, 1);
     if (next !== -1) {
+      // Gate 4.0B — live: save within a chapter too, so leaving mid-chapter
+      // never loses the screens already answered.
+      setDraftAnswers((prev) => ({ ...prev, [step.id]: effectiveAnswers }));
+      saveLive({ stepId: step.id, answers: effectiveAnswers, nextStepIndex: stepIndex });
       setDirection("forward");
       setMomentIndex(next);
       return;
@@ -210,14 +252,7 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
     const nextIndex = Math.min(stepIndex + 1, ONBOARDING_STEPS.length - 1);
     setDraftAnswers((prev) => ({ ...prev, [step.id]: effectiveAnswers }));
     if (live) {
-      // Fire-and-forget, matching hooks/use-prototype-state.tsx's own
-      // Supabase autosave discipline: the chapter transition is never
-      // blocked on network latency, and a failure is surfaced to the
-      // console rather than silently swallowed — never treated as "saved"
-      // when it wasn't.
-      live.onSaveStep({ stepId: step.id, answers: effectiveAnswers, nextStepIndex: nextIndex }).catch((err) => {
-        console.error("Onboarding step save failed:", err);
-      });
+      saveLive({ stepId: step.id, answers: effectiveAnswers, nextStepIndex: nextIndex });
     } else {
       dispatch({
         type: "SAVE_ONBOARDING_STEP",
@@ -269,13 +304,20 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
   const isVeryFirstScreen = stepIndex === 0 && momentIndex === 0;
 
   const actions = (
-    <Button className="w-full" size="lg" onClick={handleNext} disabled={!canContinue}>
-      {isReviewStep ? `Send to ${coachName}` : "Continue"}
-    </Button>
+    <div className="space-y-2">
+      {saveFailed ? (
+        <p role="alert" className="text-center text-meta text-warning-strong">
+          Your last answers didn’t save. Check your connection — they’ll save when you continue.
+        </p>
+      ) : null}
+      <Button className="w-full" size="lg" onClick={handleNext} disabled={!canContinue}>
+        {isReviewStep ? `Send to ${coachName}` : "Continue"}
+      </Button>
+    </div>
   );
 
   return (
-    <RequireThemeChoice accountKind="client" accountId={client.id}>
+    <RequireThemeChoice accountKind="client" accountId={client.id} defaultMode={themeDefault}>
     <OnboardingStage
       coachName={live ? coachName : coach?.displayName}
       coachInitials={live ? coachInitials : coach?.avatarInitials}

@@ -57,6 +57,19 @@ export function resolveHomeRoute(role: Role, lifecycle: ClientLifecycleStatus | 
 }
 
 /**
+ * Gate 4.0B — an authenticated client who hasn't finished onboarding must
+ * be in onboarding, not the daily app or a "setup in progress" screen:
+ * "invited" (accepted, nothing started — no onboarding row) and
+ * "onboarding" (started, not completed). Never inferred from missing data
+ * meaning "done": completion is only ever an explicit completed_at. Returns
+ * the onboarding route, or null when the client may stay where they are.
+ */
+export function clientOnboardingRedirect(lifecycle: ClientLifecycleStatus | null, clientId: string): string | null {
+  if (lifecycle === "invited" || lifecycle === "onboarding") return resolveHomeRoute("client", lifecycle, clientId);
+  return null;
+}
+
+/**
  * Whether the current session may stay on `pathname` as-is. False means the
  * caller should redirect to resolveHomeRoute's destination instead — never
  * silently render a cross-role page.

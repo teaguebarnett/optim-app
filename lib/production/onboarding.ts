@@ -105,7 +105,10 @@ export async function saveOnboardingStep(params: {
       {
         workspace_id: identity.workspaceId,
         client_profile_id: identity.clientProfileId,
-        current_step_index: params.nextStepIndex,
+        // Gate 4.0B — the furthest chapter reached: going back to edit an
+        // earlier chapter (and saving it) never moves the resume point
+        // backwards past chapters already answered.
+        current_step_index: Math.max(existing?.currentStepIndex ?? 0, params.nextStepIndex),
         answers: mergedAnswers,
       },
       { onConflict: "client_profile_id" }

@@ -10,7 +10,7 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 // WorkspaceTheme is mounted once in the root layout (app/layout.tsx) so its
 // runtime branding override applies globally, not just to the client shell
 // — see that file and components/app-shell/workspace-theme.tsx.
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, themeDefault }: { children: ReactNode; themeDefault?: "light" | "dark" }) {
   const { activeContext, isHydrated } = usePrototypeState();
   const clientId = activeContext.clientProfile?.id;
 
@@ -21,7 +21,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   if (!isHydrated || !clientId) return null;
 
   return (
-    <RequireThemeChoice accountKind="client" accountId={clientId}>
+    <RequireThemeChoice accountKind="client" accountId={clientId} defaultMode={themeDefault}>
       <PhoneCanvas>
         <div className="flex min-h-screen flex-1 flex-col lg:min-h-0 lg:overflow-y-auto">
           <Header />

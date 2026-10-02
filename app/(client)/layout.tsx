@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ShieldAlert } from "lucide-react";
 import { AppShell } from "@/components/app-shell/shell";
 import { resolveAppMode } from "@/lib/production/mode";
-import { resolveOwnClientIdentity } from "@/lib/production/identity";
+import { getOwnLifecycleStatus } from "@/lib/production/roster";
+import { clientOnboardingRedirect } from "@/lib/coach/routing";
 import { UnauthenticatedError } from "@/lib/production/errors";
 
 // Route group only — excluded from the URL (still /today, /training, etc.).
@@ -34,13 +36,24 @@ export default async function ClientRouteGroupLayout({ children }: { children: R
     return <AppShell>{children}</AppShell>;
   }
 
+  // Gate 4.0B — the same identity check, plus the client's real lifecycle
+  // (from client_onboarding_progress / client_enrollments): a client who
+  // hasn't finished onboarding is sent to it, never into the daily app's
+  // "setup in progress" state. Re-evaluated on every request, so a refresh
+  // or a reopened app always lands on the client's actual current state.
+  let onboardingRoute: string | null = null;
   try {
-    await resolveOwnClientIdentity();
+    const status = await getOwnLifecycleStatus();
+    onboardingRoute = clientOnboardingRedirect(status.lifecycle, status.clientId);
   } catch (err) {
     return <ClientAccessDenied error={err} />;
   }
+  // Outside the try: redirect() works by throwing.
+  if (onboardingRoute) redirect(onboardingRoute);
 
-  return <AppShell>{children}</AppShell>;
+  // Appearance is chosen later in Settings — never a gate in front of a
+  // real client's app.
+  return <AppShell themeDefault="light">{children}</AppShell>;
 }
 
 function ClientAccessDenied({ error }: { error: unknown }) {

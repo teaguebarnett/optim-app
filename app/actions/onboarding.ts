@@ -24,6 +24,9 @@ export interface LiveOnboardingBootstrap {
   currentStepIndex: number;
   answers: Partial<Record<OnboardingStepId, OnboardingStepAnswers>>;
   completedAtIso: string | null;
+  /** Gate 4.0B — whether a progress row exists at all. False = nothing
+   * started yet: the client sees the welcome, never a "resumed" chapter. */
+  hasProgress: boolean;
 }
 
 export async function getMyOnboardingBootstrapAction(): Promise<LiveOnboardingBootstrap> {
@@ -37,6 +40,7 @@ export async function getMyOnboardingBootstrapAction(): Promise<LiveOnboardingBo
     currentStepIndex: progress?.currentStepIndex ?? 0,
     answers: progress?.answers ?? {},
     completedAtIso: progress?.completedAtIso ?? null,
+    hasProgress: progress !== null,
   };
 }
 
