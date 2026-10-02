@@ -50,6 +50,22 @@ export interface Constraint {
   review: { status: "not_required" | "open" | "resolved"; expiresAtIso?: string };
   /** Set when a higher-authority constraint covers the same concern. */
   supersededBy?: string;
+  /** Set when a coach-confirmed STRUCTURED restriction expresses this
+   * constraint's free text / literal terms. The record stays; planners use
+   * the structured version. */
+  interpretedBy?: string;
+}
+
+/** A coach's structured translation of one or more free-text constraints
+ * (e.g. "no squats or ab work" → avoid squat pattern, avoid trunk patterns).
+ * Supplied by the coach; never inferred by OPTIM. */
+export interface CoachStructuredRestriction {
+  id: string;
+  /** Constraint ids whose wording this restriction expresses. */
+  interprets: string[];
+  description: string;
+  tags: ConstraintTag[];
+  ref: string;
 }
 
 export interface ConstraintSet {
@@ -193,6 +209,46 @@ function applySupersession(constraints: Constraint[]): Constraint[] {
   const coach = constraints.find((c) => c.category === "movement_restriction" && c.confirmation === "coach_confirmed");
   if (!coach) return constraints;
   return constraints.map((c) => (c.category === "movement_restriction" && c.confirmation === "unconfirmed_interpretation" ? { ...c, supersededBy: coach.id } : c));
+}
+
+export function applyCoachStructuredRestrictions(set: ConstraintSet, restrictions: CoachStructuredRestriction[]): ConstraintSet {
+  if (restrictions.length === 0) return set;
+  const structured: Constraint[] = restrictions.map((r) => ({
+    id: `${set.clientProfileId}:coach_structured:${r.id}`,
+    clientProfileId: set.clientProfileId,
+    category: "movement_restriction",
+    source: { kind: "coach_documented", ref: r.ref },
+    description: r.description,
+    tags: r.tags,
+    enforcement: "hard",
+    confirmation: "coach_confirmed",
+    review: { status: "resolved" },
+  }));
+  const interpreter = new Map<string, string>();
+  restrictions.forEach((r, i) => r.interprets.forEach((cid) => interpreter.set(cid, structured[i].id)));
+  return {
+    clientProfileId: set.clientProfileId,
+    constraints: [...set.constraints.map((c) => (interpreter.has(c.id) ? { ...c, interpretedBy: interpreter.get(c.id) } : c)), ...structured],
+  };
+}
+
+const NAME_OR_TEXT_TAGS = new Set<ConstraintTag["kind"]>(["avoid_exercise_term", "free_text"]);
+
+/**
+ * Effective hard constraints that still need a coach's structured
+ * translation before exercises can be chosen against them: they carry free
+ * text or literal exercise words and nothing structured expresses them. A
+ * client-reported limitation whose health review the coach has resolved is
+ * considered reviewed (the coach's own documentation, if any, governs).
+ */
+export function constraintsNeedingStructure(set: ConstraintSet): Constraint[] {
+  return effectiveConstraints(set).filter(
+    (c) =>
+      c.enforcement === "hard" &&
+      !c.interpretedBy &&
+      c.tags.some((t) => NAME_OR_TEXT_TAGS.has(t.kind)) &&
+      !(c.confirmation === "client_reported" && c.review.status === "resolved")
+  );
 }
 
 /** The constraints a planner must respect, highest authority first. */

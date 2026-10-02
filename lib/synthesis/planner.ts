@@ -1,6 +1,6 @@
 // Gate 4.0C-1 — DomainPlanner: one small planner per domain, all consuming
 // the same SynthesisInput. No universal planner. This gate defines the
-// interface and the run harness only — no domain planner exists yet.
+// interface and the run harness; domain planners live in planners/ (Gate 4.0C-2: resistance).
 //
 // runPlanner: readiness → plan → validate. A planner is only invoked when
 // readiness passes, and its spec only leaves when validation passes.
@@ -8,7 +8,7 @@
 
 import type { GoalClass } from "./goal-contract.ts";
 import type { PlanDomain, PlanSpecification } from "./plan-spec.ts";
-import { validatePlanSpecification } from "./plan-spec.ts";
+import { validatePlanSpecification, type PlanValidation } from "./plan-spec.ts";
 import { evaluatePlanningReadiness, type MissingInput, type PlanningRequirement } from "./readiness.ts";
 import type { SynthesisInput } from "./synthesis-input.ts";
 
@@ -19,8 +19,12 @@ export interface DomainPlanner {
   domain: PlanDomain;
   /** Domain-specific facts needed beyond the shared requirements. */
   requirements: PlanningRequirement[];
-  /** Called only when readiness passed. Pure: same input → same spec. */
-  plan(input: SynthesisInput, ctx: { nowIso: string }): PlanSpecification;
+  /** Called only when readiness passed. Pure: same input → same result. A
+   * planner may still find, while planning, that it can't proceed honestly
+   * (e.g. constraints leave nothing eligible) — it returns NEEDS_INPUT then. */
+  plan(input: SynthesisInput, ctx: { nowIso: string }): PlanSpecification | { status: "NEEDS_INPUT"; missing: MissingInput[] };
+  /** Domain-specific hard validation, on top of the shared checks. */
+  validate?(spec: PlanSpecification, input: SynthesisInput): PlanValidation;
 }
 
 export type PlannerRun =
@@ -31,9 +35,11 @@ export type PlannerRun =
 export function runPlanner(planner: DomainPlanner, input: SynthesisInput, ctx: { nowIso: string }): PlannerRun {
   const readiness = evaluatePlanningReadiness(input, planner.requirements);
   if (readiness.status === "NEEDS_INPUT") return { status: "NEEDS_INPUT", planner: planner.id, missing: readiness.missing };
-  const spec = planner.plan(input, ctx);
-  const validation = validatePlanSpecification(spec, input);
-  if (!validation.ok) return { status: "INVALID", planner: planner.id, errors: validation.errors };
+  const result = planner.plan(input, ctx);
+  if ("status" in result) return { status: "NEEDS_INPUT", planner: planner.id, missing: result.missing };
+  const spec = result;
+  const errors = [validatePlanSpecification(spec, input), planner.validate?.(spec, input) ?? { ok: true as const }].flatMap((v) => (v.ok ? [] : v.errors));
+  if (errors.length) return { status: "INVALID", planner: planner.id, errors };
   if (spec.domain !== planner.domain) return { status: "INVALID", planner: planner.id, errors: [`Planner ${planner.id} returned a ${spec.domain} spec.`] };
   return { status: "PLANNED", planner: planner.id, spec };
 }

@@ -14,7 +14,7 @@ import type { ConfirmedCoachMethod } from "../coach/coach-brain.ts";
 import { asRange, baseOf } from "../coach/calibration/model.ts";
 import { isKnown } from "./facts.ts";
 import type { ClientState } from "./client-state.ts";
-import { deriveConstraintSet, type ConstraintSet } from "./constraints.ts";
+import { applyCoachStructuredRestrictions, deriveConstraintSet, type CoachStructuredRestriction, type ConstraintSet } from "./constraints.ts";
 import { deriveGoalContract, type GoalContract } from "./goal-contract.ts";
 import type { FitnessKnowledgeRegistry } from "./knowledge/types.ts";
 
@@ -43,14 +43,20 @@ export interface SynthesisInput {
   bounds: { frequency: FrequencyBounds };
 }
 
-export function buildSynthesisInput(params: { knowledge: FitnessKnowledgeRegistry; coachMethod: ConfirmedCoachMethod | null; client: ClientState }): SynthesisInput {
+export function buildSynthesisInput(params: {
+  knowledge: FitnessKnowledgeRegistry;
+  coachMethod: ConfirmedCoachMethod | null;
+  client: ClientState;
+  /** Coach-confirmed structured translations of free-text constraints. No store exists yet. */
+  coachStructuredRestrictions?: CoachStructuredRestriction[];
+}): SynthesisInput {
   const coach = params.coachMethod ? { versionId: params.coachMethod.versionId, version: params.coachMethod.version, method: deepFreezeCopy(params.coachMethod) } : null;
   return {
     knowledge: params.knowledge,
     coach,
     client: params.client,
     goal: deriveGoalContract(params.client),
-    constraints: deriveConstraintSet(params.client),
+    constraints: applyCoachStructuredRestrictions(deriveConstraintSet(params.client), params.coachStructuredRestrictions ?? []),
     bounds: { frequency: frequencyBounds(params.client, params.coachMethod) },
   };
 }

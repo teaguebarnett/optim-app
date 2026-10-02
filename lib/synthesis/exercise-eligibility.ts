@@ -49,6 +49,7 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
           if (!t.equipment.includes(exercise.equipment)) v("metadata", `needs ${exercise.equipment}`);
           break;
         case "avoid_exercise_term": {
+          if (c.interpretedBy) break; // a coach-structured restriction speaks for it
           const term = words(t.term);
           if ([exercise.name, ...exercise.aliases].some((n) => words(n).includes(term))) v("name_search", `matches "${t.term}" from the client's own words (unconfirmed reading)`);
           break;

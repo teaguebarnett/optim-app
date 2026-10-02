@@ -57,6 +57,54 @@ export interface SessionPurpose {
   domain: PlanDomain;
 }
 
+/** A non-blocking concern surfaced to the coach (never hidden). */
+export interface QualityFinding {
+  code: string;
+  severity: "warning" | "info";
+  message: string;
+}
+
+export interface ResistanceExercisePlan {
+  exerciseId: string;
+  role: "main" | "accessory";
+  /** The session target this exercise was selected to cover. */
+  target: string;
+  selection: { score: number; factors: Array<{ factor: string; points: number }>; alternatives: string[]; repeatedReason?: string };
+}
+
+export interface ResistanceSessionPlan {
+  day: DayOfWeek;
+  purpose: string;
+  targets: string[];
+  exercises: ResistanceExercisePlan[];
+  estimatedMinutes: number;
+}
+
+export interface ExercisePrescription {
+  sets: number;
+  reps: NumberRange;
+  effort: { metric: "rpe" | "rir" | "plain"; target: number | string; rirRange: NumberRange | null };
+  restMinutes: NumberRange | null;
+}
+
+export interface ResistanceWeekPlan {
+  week: number;
+  kind: "build" | "deload";
+  /** Why this week's targets differ from (or match) the previous week. */
+  note: string;
+  /** One entry per session, one prescription per exercise (same order as sessions). */
+  sessions: ExercisePrescription[][];
+}
+
+export interface ResistanceDetail {
+  emphasis: { primary: "strength" | "hypertrophy" | "general"; secondary: "strength" | "hypertrophy" | null };
+  sessions: ResistanceSessionPlan[];
+  weeks: ResistanceWeekPlan[];
+  /** Direct (primary-muscle) and indirect (secondary) weekly sets per muscle, from week 1. */
+  weeklyMuscleSets: Record<string, { direct: number; indirect: number }>;
+  progressionRules: Array<{ role: "main" | "accessory"; methods: string[]; rule: string }>;
+}
+
 export interface PlanSpecification {
   clientProfileId: string;
   domain: PlanDomain;
@@ -74,6 +122,8 @@ export interface PlanSpecification {
   conditioning?: Decided<{ sessionsPerWeek: number; modalities: string[] }>;
   nutrition?: Decided<{ energyDirection: "deficit" | "maintenance" | "surplus"; proteinGramsPerKg?: NumberRange }>;
   monitoring?: Decided<{ metrics: string[]; cadence: string }>;
+  resistance?: Decided<ResistanceDetail>;
+  quality?: QualityFinding[];
   /** Every effective hard constraint must appear here, with how it shaped the plan. */
   constraintsApplied: Array<{ constraintId: string; how: string }>;
   /** Anything the planner assumed rather than knew — stated, never hidden. */
