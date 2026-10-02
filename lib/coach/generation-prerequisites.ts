@@ -22,6 +22,8 @@ import { formatFieldValue, NOT_PROVIDED } from "./onboarding-format.ts";
 import { resolveProgrammingProfileReadiness, type ClientProgrammingProfile, type ExtractProfileResult } from "./programming-profile.ts";
 import { describeMethodField, fieldLabel, getMethodologyConfirmation, requiredMethodQuestionIds, type MethodQuestionId } from "./methodology.ts";
 import type { CoachOperatingModel } from "./operating-model.ts";
+import { findCalibrationQuestion } from "./calibration/questions.ts";
+import { formatByKey } from "./calibration/format.ts";
 import type { OnboardingProgress } from "./types";
 import type { GenerationInputs } from "../training/types.ts";
 
@@ -62,7 +64,16 @@ export function evaluateGenerationPrerequisites(input: GenerationPrerequisiteInp
   const missing: MissingPrerequisite[] = [];
 
   const method = getMethodologyConfirmation(input.playbook?.operatingModel ?? null);
-  if (!method.confirmed) {
+  if (!method.confirmed && method.confirmedAtIso && !method.coversResistance) {
+    missing.push({
+      id: "coach_method",
+      // Gate 3.1 — a confirmed method without resistance-training rules
+      // (e.g. endurance-only). OPTIM never fills them in from defaults.
+      message: "This client's coach hasn't confirmed a resistance-training method in OPTIM. OPTIM only builds resistance programs from a coach's own confirmed training rules.",
+      href: null,
+      linkLabel: null,
+    });
+  } else if (!method.confirmed) {
     missing.push({
       id: "coach_method",
       // Gate 3 — the method is the client's PRIMARY coach's confirmed Coach
@@ -135,6 +146,15 @@ export function describeClientIntakeFacts(onboarding: OnboardingProgress): Array
   return facts;
 }
 
+const V2_SUMMARY_KEYS = ["t_days", "t_session_length", "t_splits", "t_sets", "t_reps", "t_effort_rir", "t_effort_plain", "t_progression_method", "t_deload_approach", "t_deload_every"];
+
+/** Gate 3.1 — the v2 method values generation reads, in the coach's terms
+ * (ranges as ranges). */
+function v2MethodSummary(model: CoachOperatingModel): Array<{ label: string; value: string }> {
+  const answers = model.calibration?.answers ?? {};
+  return V2_SUMMARY_KEYS.filter((k) => answers[k] !== undefined).map((k) => ({ label: findCalibrationQuestion(k)?.summaryLabel ?? k, value: formatByKey(k, answers) }));
+}
+
 const METHOD_SUMMARY_FIELDS: MethodQuestionId[] = ["program_splits", "program_rep_philosophy", "program_rpe_rir", "program_proximity_to_failure", "program_progression", "program_deload"];
 
 export function buildGenerationInputs(params: {
@@ -163,7 +183,7 @@ export function buildGenerationInputs(params: {
       playbookVersion: params.playbookVersion,
       operatingModelVersion: method.operatingModelVersion,
       confirmedAtIso: method.confirmedAtIso,
-      summary: METHOD_SUMMARY_FIELDS.filter((id) => applicable.has(id)).map((id) => ({ label: fieldLabel(id), value: describeMethodField(params.operatingModel, id) })),
+      summary: params.operatingModel.calibration?.schema === 2 ? v2MethodSummary(params.operatingModel) : METHOD_SUMMARY_FIELDS.filter((id) => applicable.has(id)).map((id) => ({ label: fieldLabel(id), value: describeMethodField(params.operatingModel, id) })),
     },
     clientIntake: {
       source: "client_onboarding",

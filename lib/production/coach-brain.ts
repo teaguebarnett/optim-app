@@ -30,8 +30,11 @@ import {
   type CoachIntelligence,
   type ConfirmedCoachMethod,
 } from "../coach/coach-brain.ts";
-import { COACH_ONBOARDING_QUESTIONS, ALL_CHAPTER_IDS_IN_ORDER, type CoachOnboardingAnswers, type CoachOnboardingChapterId } from "../coach/coach-onboarding-questions.ts";
-import { pruneAnswersToVisibleQuestions } from "../coach/coach-onboarding-engine.ts";
+import type { CoachOnboardingAnswers } from "../coach/coach-onboarding-questions.ts";
+import { CHAPTER_ORDER } from "../coach/calibration/questions.ts";
+import { validateCalibrationAnswers } from "../coach/calibration/validate.ts";
+import { isV2Answers, mapV1AnswersToV2 } from "../coach/calibration/v1-migration.ts";
+import type { CalibrationAnswers, CalibrationChapterId } from "../coach/calibration/types.ts";
 import type { AiAuthorityConfig, AiAuthorityLevel, CoachAiAuthoritySettings } from "../coach/ai-authority.ts";
 import { AI_AUTHORITY_LEVELS } from "../coach/ai-authority.ts";
 import type { CoachOperatingModel } from "../coach/operating-model.ts";
@@ -57,17 +60,18 @@ interface MethodVersionRow {
   source: ConfirmedCoachMethod["source"];
   operating_model: CoachOperatingModel;
   ai_authority: CoachAiAuthoritySettings;
-  calibration_answers: CoachOnboardingAnswers;
+  /** v2 answers for methods confirmed since Gate 3.1; v1 answers before. */
+  calibration_answers: CalibrationAnswers | CoachOnboardingAnswers;
   confirmed_at: string;
 }
 
 export interface CalibrationProgress {
   mode: "initial" | "review";
   baseMethodVersionId: string | null;
-  answers: CoachOnboardingAnswers;
+  answers: CalibrationAnswers;
   aiAuthority: AiAuthorityConfig | null;
   aiAuthorityConfirmedAtIso: string | null;
-  currentChapterId: CoachOnboardingChapterId | null;
+  currentChapterId: CalibrationChapterId | null;
   currentQuestionIndex: number;
   startedAtIso: string;
   updatedAtIso: string;
@@ -84,15 +88,23 @@ function toMethod(row: MethodVersionRow): ConfirmedCoachMethod {
   return { versionId: row.id, version: row.version, source: row.source, confirmedAtIso: row.confirmed_at, operatingModel: row.operating_model, aiAuthority: row.ai_authority };
 }
 
+/** In-progress answers saved before Gate 3.1 (v1) are carried forward into
+ * v2 with the same mapping a method refinement uses — changed meanings are
+ * flagged for the coach to confirm; nothing is defaulted. */
+function normalizeProgressAnswers(raw: Record<string, unknown>): CalibrationAnswers {
+  if (Object.keys(raw).length === 0 || isV2Answers(raw)) return raw as CalibrationAnswers;
+  return mapV1AnswersToV2(raw as CoachOnboardingAnswers).answers;
+}
+
 function toProgress(row: Record<string, unknown>): CalibrationProgress {
   const chapter = row.current_chapter_id as string | null;
   return {
     mode: row.mode as CalibrationProgress["mode"],
     baseMethodVersionId: (row.base_method_version_id as string | null) ?? null,
-    answers: (row.answers as CoachOnboardingAnswers) ?? {},
+    answers: normalizeProgressAnswers((row.answers as Record<string, unknown>) ?? {}),
     aiAuthority: (row.ai_authority as AiAuthorityConfig | null) ?? null,
     aiAuthorityConfirmedAtIso: (row.ai_authority_confirmed_at as string | null) ?? null,
-    currentChapterId: chapter && (ALL_CHAPTER_IDS_IN_ORDER as readonly string[]).includes(chapter) ? (chapter as CoachOnboardingChapterId) : null,
+    currentChapterId: chapter && (CHAPTER_ORDER as readonly string[]).includes(chapter) ? (chapter as CalibrationChapterId) : null,
     currentQuestionIndex: (row.current_question_index as number) ?? 0,
     startedAtIso: row.started_at as string,
     updatedAtIso: row.updated_at as string,
@@ -130,8 +142,8 @@ export interface OwnCoachBrainState {
   coachDisplayName: string;
   calibration: { state: CoachCalibrationState; calibratedAtIso: string | null };
   activeMethod: ConfirmedCoachMethod | null;
-  /** The explicit answers the active method was confirmed from. */
-  activeCalibrationAnswers: CoachOnboardingAnswers | null;
+  /** The explicit answers the active method was confirmed from (v1 or v2). */
+  activeCalibrationAnswers: CalibrationAnswers | CoachOnboardingAnswers | null;
   progress: CalibrationProgress | null;
 }
 
@@ -178,24 +190,13 @@ async function ensureOwnBrain(workspaceId: string, coachUserId: string): Promise
 // Calibration progress — save after every answer
 // ---------------------------------------------------------------------------
 
-const QUESTION_IDS = new Set(COACH_ONBOARDING_QUESTIONS.map((q) => q.id));
-// The survey's one derived answer key: the free-text "What does it depend
-// on?" detail under a scenario question (components/coach-onboarding/
-// question-field.tsx), read by the mapper (coach-onboarding-engine.ts).
-const DEPENDS_DETAIL_KEYS = new Set(COACH_ONBOARDING_QUESTIONS.filter((q) => q.type === "scenario").map((q) => `${q.id}_depends_detail`));
-
-function sanitizeAnswers(raw: CoachOnboardingAnswers): CoachOnboardingAnswers {
-  const out: CoachOnboardingAnswers = {};
-  for (const [id, value] of Object.entries(raw ?? {})) {
-    if (DEPENDS_DETAIL_KEYS.has(id)) {
-      if (typeof value === "string") out[id] = value;
-      continue;
-    }
-    if (!QUESTION_IDS.has(id)) continue; // never persist keys that aren't real questions
-    const ok = typeof value === "string" || typeof value === "number" || typeof value === "boolean" || (Array.isArray(value) && value.every((v) => typeof v === "string"));
-    if (ok) out[id] = value;
-  }
-  return pruneAnswersToVisibleQuestions(out);
+/** Re-validates every answer against its own question (shape, options,
+ * units, ranges, decision structure). A malformed answer is refused — the UI
+ * must not treat it as saved. */
+function sanitizeAnswers(raw: CalibrationAnswers): CalibrationAnswers {
+  const result = validateCalibrationAnswers(raw);
+  if (!result.ok) throw new Error(result.message);
+  return result.answers;
 }
 
 function sanitizeAuthority(config: AiAuthorityConfig | null | undefined): AiAuthorityConfig | null {
@@ -208,8 +209,8 @@ function sanitizeAuthority(config: AiAuthorityConfig | null | undefined): AiAuth
 }
 
 export interface SaveCalibrationInput {
-  answers?: CoachOnboardingAnswers;
-  position?: { chapterId: CoachOnboardingChapterId; questionIndex: number };
+  answers?: CalibrationAnswers;
+  position?: { chapterId: CalibrationChapterId; questionIndex: number };
   aiAuthority?: AiAuthorityConfig;
   aiAuthorityConfirmed?: boolean;
   reviewReached?: boolean;
@@ -233,7 +234,7 @@ export async function saveOwnCalibrationProgress(input: SaveCalibrationInput): P
 
   const patch: Record<string, unknown> = { updated_at: nowIso };
   if (input.answers) patch.answers = sanitizeAnswers(input.answers);
-  if (input.position && (ALL_CHAPTER_IDS_IN_ORDER as readonly string[]).includes(input.position.chapterId) && Number.isInteger(input.position.questionIndex) && input.position.questionIndex >= 0) {
+  if (input.position && (CHAPTER_ORDER as readonly string[]).includes(input.position.chapterId) && Number.isInteger(input.position.questionIndex) && input.position.questionIndex >= 0) {
     patch.current_chapter_id = input.position.chapterId;
     patch.current_question_index = input.position.questionIndex;
   }
@@ -270,10 +271,15 @@ export async function startOwnMethodReview(): Promise<void> {
   if (open) return;
   const supabase = await getSupabaseServerClient();
   const nowIso = new Date().toISOString();
+  // Gate 3.1 — a v1 method is refined into v2: answers with the same
+  // meaning carry over, changed meanings are flagged for confirmation, and
+  // questions v2 adds stay unanswered. The active method is untouched.
+  const activeAnswers = (state.activeCalibrationAnswers ?? {}) as Record<string, unknown>;
+  const draftAnswers = isV2Answers(activeAnswers) ? (activeAnswers as CalibrationAnswers) : mapV1AnswersToV2(activeAnswers as CoachOnboardingAnswers).answers;
   const draft = {
     mode: "review",
     base_method_version_id: state.activeMethod.versionId,
-    answers: state.activeCalibrationAnswers ?? {},
+    answers: draftAnswers,
     ai_authority: state.activeMethod.aiAuthority.global,
     // Prefilled from the coach's own confirmed authority — already explicit.
     ai_authority_confirmed_at: nowIso,

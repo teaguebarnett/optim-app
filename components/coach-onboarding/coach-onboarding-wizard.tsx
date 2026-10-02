@@ -10,47 +10,79 @@ import {
   Dumbbell,
   Activity,
   Utensils,
-  UtensilsCrossed,
   MessageCircle,
   ShieldCheck,
-  History,
   ClipboardCheck,
+  Compass,
+  Trophy,
+  Zap,
+  Timer,
+  Combine,
+  HeartPulse,
+  Scale,
+  UserCog,
+  MessagesSquare,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCalibration } from "@/components/coach-onboarding/calibration-context";
 import { AiAuthorityPanel } from "@/components/coach/ai-authority-panel";
-import {
-  ALL_CHAPTER_IDS_IN_ORDER,
-  COACH_ONBOARDING_CHAPTERS,
-  visibleQuestionsForChapter,
-  type CoachOnboardingAnswerValue,
-  type CoachOnboardingChapterId,
-} from "@/lib/coach/coach-onboarding-questions";
-import { computeProgressSummary } from "@/lib/coach/coach-onboarding-engine";
-import { QuestionField } from "@/components/coach-onboarding/question-field";
-import { AiAuthorityChapter } from "@/components/coach-onboarding/ai-authority-chapter";
-import { ExistingWorkChapter } from "@/components/coach-onboarding/existing-work-chapter";
+import { CALIBRATION_CHAPTERS, CHAPTER_ORDER, answerKeyOf } from "@/lib/coach/calibration/questions";
+import { buildCalibrationContext, computeCalibrationProgress, isQuestionAnswered, visibleCalibrationQuestions, visibleParts } from "@/lib/coach/calibration/engine";
+import { NEEDS_CONFIRMATION_KEY, type CalibrationAnswers, type CalibrationAnswerValue, type CalibrationChapterId as CoachOnboardingChapterId, type CalibrationQuestion } from "@/lib/coach/calibration/types";
+import { CalibrationField } from "@/components/coach-onboarding/v2/calibration-field";
+import { Step0Description } from "@/components/coach-onboarding/v2/step0-description";
 import { ReviewChapter } from "@/components/coach-onboarding/review-chapter";
 import { CoachOnboardingWelcome } from "@/components/coach-onboarding/coach-onboarding-welcome";
 
-const CHAPTER_META = new Map(COACH_ONBOARDING_CHAPTERS.map((c) => [c.id, c]));
+const ALL_CHAPTER_IDS_IN_ORDER = CHAPTER_ORDER;
+const CHAPTER_META = new Map(CALIBRATION_CHAPTERS.map((c) => [c.id, c]));
 
-/** One consistent, recognizable icon per chapter — used in the chapter
- * rail below so the whole shape of the calibration is scannable at a
- * glance, not just the current question's own icon-less text block. */
+/** One consistent, recognizable icon per chapter. */
 const CHAPTER_ICONS: Record<CoachOnboardingChapterId, LucideIcon> = {
-  practice: Users2,
-  program_architecture: Dumbbell,
-  training_adjustment: Activity,
-  nutrition_philosophy: Utensils,
-  nutrition_adjustment: UtensilsCrossed,
-  communication: MessageCircle,
+  your_coaching: Users2,
+  philosophy: Compass,
+  training: Dumbbell,
+  strength: Trophy,
+  physique: Activity,
+  sport_performance: Zap,
+  endurance: Timer,
+  integration: Combine,
+  general_fitness: HeartPulse,
+  weight_management: Scale,
+  client_groups: UserCog,
+  nutrition: Utensils,
+  voice: MessageCircle,
+  messages: MessagesSquare,
   safety: ShieldCheck,
+  situations: Activity,
   ai_authority: Sparkles,
-  existing_work: History,
   review: ClipboardCheck,
 };
+
+/** Values shown pre-selected on a question (suggestions, the safety-policy
+ * acknowledgment). Displayed only; saved when the coach continues past
+ * them. */
+function displayDefaults(question: CalibrationQuestion, answers: CalibrationAnswers): Record<string, CalibrationAnswerValue> {
+  const ctx = buildCalibrationContext(answers);
+  const items = question.kind === "group" ? visibleParts(question, ctx) : [question];
+  const out: Record<string, CalibrationAnswerValue> = {};
+  for (const item of items) {
+    const key = answerKeyOf(item);
+    if (answers[key] !== undefined) continue;
+    if (item.kind === "policy") out[key] = { stricter: [] };
+    else if (item.suggest) {
+      const v = item.suggest(ctx);
+      if (v !== undefined && !(Array.isArray(v) && v.length === 0)) out[key] = v;
+    }
+  }
+  return out;
+}
+
+function questionKeys(question: CalibrationQuestion, answers: CalibrationAnswers): string[] {
+  const ctx = buildCalibrationContext(answers);
+  return question.kind === "group" ? visibleParts(question, ctx).map(answerKeyOf) : [answerKeyOf(question)];
+}
 
 export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?: CoachOnboardingChapterId }) {
   const cal = useCalibration();
@@ -133,7 +165,7 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
     // reviewing/correcting earlier answers via Back expects to land on the
     // last thing before where they are now, not be thrown back to that
     // chapter's start.
-    const prevQuestionCount = visibleQuestionsForChapter(prevId, cal.answers).length;
+    const prevQuestionCount = visibleCalibrationQuestions(prevId, cal.answers).length;
     setChapterId(prevId);
     setQuestionIndex(Math.max(0, prevQuestionCount - 1));
   }
@@ -141,15 +173,7 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
   if (chapterId === "ai_authority") {
     return (
       <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
-        {cal.authority ? <LiveAuthorityStep onContinue={goToNextChapter} /> : <AiAuthorityChapter onContinue={goToNextChapter} />}
-      </ChapterFrame>
-    );
-  }
-
-  if (chapterId === "existing_work") {
-    return (
-      <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
-        <ExistingWorkChapter onContinue={goToNextChapter} />
+        {cal.authority ? <LiveAuthorityStep onContinue={goToNextChapter} /> : <DemoAuthorityStep onContinue={goToNextChapter} />}
       </ChapterFrame>
     );
   }
@@ -158,28 +182,56 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
     return (
       <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={goToPreviousChapter} canGoBack={chapterIndex > 0} onSelectChapter={jumpToChapter}>
         <ReviewChapter
-          onEditChapter={(id) => {
-            if (chapters.includes(id)) {
-              setChapterId(id);
-              setQuestionIndex(0);
-            }
+          onEditChapter={(id, key) => {
+            if (!chapters.includes(id)) return;
+            const list = visibleCalibrationQuestions(id, cal.answers);
+            const index = key ? list.findIndex((q) => questionKeys(q, cal.answers).includes(key)) : 0;
+            setChapterId(id);
+            setQuestionIndex(Math.max(0, index));
           }}
         />
       </ChapterFrame>
     );
   }
 
-  const questions = visibleQuestionsForChapter(chapterId, cal.answers);
+  const questions = visibleCalibrationQuestions(chapterId, cal.answers);
   const question = questions[Math.min(questionIndex, questions.length - 1)];
   const isLastQuestionInChapter = questionIndex >= questions.length - 1;
+  const defaults = question ? displayDefaults(question, cal.answers) : {};
+  const shown: CalibrationAnswers = { ...cal.answers, ...defaults };
+  const needs = Array.isArray(cal.answers[NEEDS_CONFIRMATION_KEY]) ? (cal.answers[NEEDS_CONFIRMATION_KEY] as string[]) : [];
+  const keysHere = question ? questionKeys(question, cal.answers) : [];
+  const needsHere = keysHere.filter((k) => needs.includes(k));
 
-  function handleChange(id: string, value: CoachOnboardingAnswerValue) {
-    // Free text is saved shortly after typing stops; choices save at once.
-    const isText = id.endsWith("_depends_detail") || question?.type === "text";
-    cal.saveAnswers({ ...cal.answers, [id]: value }, { debounce: isText });
+  function save(patch: Record<string, CalibrationAnswerValue>, options?: { debounce?: boolean }) {
+    cal.updateAnswers((prev) => {
+      const next: CalibrationAnswers = { ...prev };
+      // Suggestions only fill what's still unanswered in the latest answers.
+      for (const [k, v] of Object.entries(patch)) if (!(k in defaults) || prev[k] === undefined || patch[k] !== defaults[k]) next[k] = v;
+      // Looking at (or changing) a carried-over answer counts as confirming it.
+      const pendingNeeds = Array.isArray(prev[NEEDS_CONFIRMATION_KEY]) ? (prev[NEEDS_CONFIRMATION_KEY] as string[]) : [];
+      const touched = Object.keys(patch).filter((k) => pendingNeeds.includes(k));
+      if (touched.length) next[NEEDS_CONFIRMATION_KEY] = pendingNeeds.filter((k) => !touched.includes(k));
+      for (const [k, v] of Object.entries(patch)) if (v === undefined) delete next[k];
+      return next;
+    }, options);
+  }
+
+  function handleChange(key: string, value: CalibrationAnswerValue) {
+    const isText = question?.kind === "control" && question.control?.kind === "text";
+    save({ ...defaults, [key]: value }, { debounce: isText });
   }
 
   function handleContinue() {
+    if (Object.keys(defaults).length || needsHere.length) {
+      cal.updateAnswers((prev) => {
+        const next: CalibrationAnswers = { ...prev };
+        for (const [k, v] of Object.entries(defaults)) if (prev[k] === undefined) next[k] = v;
+        const pendingNeeds = Array.isArray(prev[NEEDS_CONFIRMATION_KEY]) ? (prev[NEEDS_CONFIRMATION_KEY] as string[]) : [];
+        if (needsHere.length) next[NEEDS_CONFIRMATION_KEY] = pendingNeeds.filter((k) => !needsHere.includes(k));
+        return next;
+      });
+    }
     if (!isLastQuestionInChapter) {
       setQuestionIndex((i) => i + 1);
       return;
@@ -195,49 +247,49 @@ export function CoachOnboardingWizard({ initialChapterId }: { initialChapterId?:
     goToPreviousChapter();
   }
 
-  const currentValue = question ? cal.answers[question.id] : undefined;
   const saveBlocked = cal.saveStatus === "saving" || cal.saveStatus === "error";
-  const canContinue =
-    !saveBlocked &&
-    (!question ||
-    !question.required ||
-    (question.type === "multi_select" || question.type === "scenario" ? Array.isArray(currentValue) && currentValue.length > 0 : question.type === "boolean" ? typeof currentValue === "boolean" : currentValue !== undefined && currentValue !== ""));
+  const canContinue = !saveBlocked && (!question || !question.required || isQuestionAnswered(question, shown));
 
   return (
     <ChapterFrame meta={meta} chapterId={chapterId} chapters={chapters} chapterNumber={chapterIndex + 1} onBack={handleBack} canGoBack={chapterIndex > 0 || questionIndex > 0} onSelectChapter={jumpToChapter}>
       {question ? (
         <div>
-          <div className="mb-2 flex items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-fg">
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-meta font-semibold uppercase tracking-wide text-accent-fg">
             <span>Question {questionIndex + 1}</span>
             <span className="text-neutral">of {questions.length}</span>
+            {!question.required ? <span className="rounded-[var(--radius-sm)] bg-surface px-2 py-0.5 normal-case tracking-normal text-neutral">Optional</span> : null}
           </div>
           <h2 className="max-w-2xl text-heading text-off-white">{question.prompt}</h2>
           {question.explanation ? <p className="mt-2 max-w-xl text-body text-neutral">{question.explanation}</p> : null}
+          {question.status === "C" ? <p className="mt-2 max-w-xl text-meta text-neutral">Recorded for future use — OPTIM doesn&apos;t act on this yet.</p> : null}
+          {needsHere.length ? (
+            <p className="mt-3 max-w-xl rounded-[var(--radius-sm)] bg-warning-soft px-3 py-2 text-meta text-warning-strong">Carried over from your earlier method — check it&apos;s still right, then continue.</p>
+          ) : null}
+          {Object.keys(defaults).length && question.kind !== "policy" ? <p className="mt-3 max-w-xl text-meta text-accent-fg">Suggested from your earlier answers — adjust anything that isn&apos;t right.</p> : null}
           <div className="mt-7">
-            <QuestionField question={question} answers={cal.answers} onChange={handleChange} />
+            {question.kind === "description" ? (
+              <Step0Description answers={cal.answers} onSave={(patch, options) => save(patch, options)} />
+            ) : (
+              // Keyed per question: controls (number wheels especially) must never
+              // carry state or scroll position from one question to the next.
+              <CalibrationField key={question.id} question={question} answers={shown} onChange={handleChange} />
+            )}
           </div>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <Button size="lg" onClick={handleContinue} disabled={!canContinue}>
-              Continue <ArrowRight size={16} aria-hidden="true" />
+              {question.required || isQuestionAnswered(question, shown) ? "Continue" : "Skip for now"} <ArrowRight size={16} aria-hidden="true" />
             </Button>
+            {chapterId === "situations" && !isLastChapter ? (
+              <Button size="lg" variant="ghost" onClick={goToNextChapter}>
+                Skip common situations
+              </Button>
+            ) : null}
             <SaveIndicator />
           </div>
         </div>
       ) : (
-        // Reachable only if a chapter genuinely has zero visible questions
-        // for the coach's current answers — every real chapter in the bank
-        // is designed not to, but this is the honest, non-fabricated
-        // fallback rather than a silently blank screen: it still always
-        // offers a real way forward. In development, it also shows exactly
-        // which chapter/answers produced the empty state so a future
-        // regression is diagnosable instead of just "the page went blank."
         <div>
-          <p className="text-body text-neutral">Nothing to ask here yet.</p>
-          {process.env.NODE_ENV !== "production" ? (
-            <pre className="mt-3 max-w-2xl overflow-x-auto rounded-[var(--radius-sm)] border border-dashed border-warning/40 bg-warning-soft p-3 text-xs text-warning-strong">
-              {JSON.stringify({ chapterId, questionIndex, visibleQuestionCount: questions.length, answers: cal.answers }, null, 2)}
-            </pre>
-          ) : null}
+          <p className="text-body text-neutral">Nothing to ask here.</p>
           <div className="mt-6">
             <Button size="lg" onClick={goToNextChapter} disabled={isLastChapter}>
               Continue <ArrowRight size={16} aria-hidden="true" />
@@ -311,7 +363,7 @@ function ChapterRail({
   onSelectChapter: (id: CoachOnboardingChapterId) => void;
 }) {
   const cal = useCalibration();
-  const summary = computeProgressSummary(cal.answers);
+  const summary = computeCalibrationProgress(cal.answers);
   const currentIndex = chapters.indexOf(chapterId);
 
   return (
@@ -325,7 +377,7 @@ function ChapterRail({
         <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">
           <div className="pc-segment h-full rounded-full bg-accent" style={{ width: `${summary.percentComplete}%` }} />
         </div>
-        <p className="mt-2.5 text-meta text-neutral">{summary.answeredQuestions} of {summary.totalApplicableQuestions} applicable questions answered.</p>
+        <p className="mt-2.5 text-meta text-neutral">{summary.answered} of {summary.totalApplicable} questions that apply to you.</p>
       </div>
 
       <nav aria-label="Calibration chapters" className="space-y-1">
@@ -404,7 +456,7 @@ function CompactProgress({
   onSelectChapter: (id: CoachOnboardingChapterId) => void;
 }) {
   const cal = useCalibration();
-  const summary = computeProgressSummary(cal.answers);
+  const summary = computeCalibrationProgress(cal.answers);
   return (
     <div className="lg:hidden">
       <div className="flex items-center justify-between gap-3 text-meta text-neutral">
@@ -463,6 +515,21 @@ function LiveAuthorityStep({ onContinue }: { onContinue: () => void }) {
         </Button>
         <SaveIndicator />
       </div>
+    </div>
+  );
+}
+
+/** Demo mode keeps the browser-local authority panel. */
+function DemoAuthorityStep({ onContinue }: { onContinue: () => void }) {
+  return (
+    <div className="max-w-2xl">
+      <h2 className="text-heading text-off-white sm:text-display">How much should OPTIM do on its own?</h2>
+      <div className="mt-6">
+        <AiAuthorityPanel />
+      </div>
+      <Button size="lg" className="mt-8" onClick={onContinue}>
+        Continue <ArrowRight size={16} aria-hidden="true" />
+      </Button>
     </div>
   );
 }

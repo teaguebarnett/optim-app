@@ -19,7 +19,6 @@ import {
   equipmentForClient,
   equipmentTagForExerciseName,
   pickExercise,
-  repRangeForPhilosophy,
   scoreTrainingOption,
   SPLIT_LIBRARY,
   MINUTES_PER_EXERCISE_BUDGET,
@@ -33,7 +32,8 @@ import {
 } from "./activation-generation.ts";
 import { buildPrescribedSets, DAYS_OF_WEEK_ORDER } from "./training.ts";
 import type { EquipmentTag, LibraryExercise, MovementPattern } from "./exercise-library.ts";
-import { computeProgramPhases, computeWeekParameters, shiftRepRange, applyRpeOffset, type ProgramPhase, type WeekParameters } from "./program-periodization.ts";
+import { computeProgramPhases, computeWeekParameters, type ProgramPhase, type WeekParameters } from "./program-periodization.ts";
+import { constrainRpe, constrainSets, resolveBaseRpe, resolveBaseSets, resolvePhaseRepRange, resolveRepRange, resolveSessionCap } from "./method-resolution.ts";
 import { resolveProgrammingProfileReadiness, type ClientProgrammingProfile } from "./programming-profile.ts";
 import type { CoachOperatingModel } from "./operating-model.ts";
 import type { ClientAssignedProgram, DayOfWeek, Exercise, ProgramDay, ProgramWeek, RpeValue, Workout } from "../types";
@@ -170,9 +170,9 @@ export interface GenerateDirectionsInput {
   durationWeeks: number;
 }
 
-function estimateSessionLength(exerciseCount: number, profile: ClientProgrammingProfile): number {
+function estimateSessionLength(exerciseCount: number, sessionCapMinutes: number): number {
   const estimate = exerciseCount * MINUTES_PER_EXERCISE_BUDGET;
-  return Math.min(profile.maxSessionLengthMinutes, estimate);
+  return Math.min(sessionCapMinutes, estimate);
 }
 
 function constraintsHonoredFor(profile: ClientProgrammingProfile, com: CoachOperatingModel): string[] {
@@ -231,9 +231,10 @@ function rankingRationaleFor(kind: OptionKind, summary: Pick<ProgramDirectionSum
 function buildDirectionSummary(kind: OptionKind, splitKey: string, plan: { splitName: string }, input: GenerateDirectionsInput, foundationParams: WeekParameters, peakParams: WeekParameters): ProgramDirectionSummary {
   const { profile, com } = input;
   const days = profile.availableDays.length;
-  const exercisesPerDay = Math.max(1, Math.floor(profile.maxSessionLengthMinutes / MINUTES_PER_EXERCISE_BUDGET));
-  const estimatedSessionLengthMin = estimateSessionLength(exercisesPerDay, profile);
-  const [repLow, repHigh] = repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
+  const sessionCap = resolveSessionCap(com, profile.maxSessionLengthMinutes).cap;
+  const exercisesPerDay = Math.max(1, Math.floor(sessionCap / MINUTES_PER_EXERCISE_BUDGET));
+  const estimatedSessionLengthMin = estimateSessionLength(exercisesPerDay, sessionCap);
+  const [repLow, repHigh] = resolveRepRange(com, true);
 
   const approxVolumeDescription = `${com.programArchitecture.setsPerExerciseMin}-${com.programArchitecture.setsPerExerciseMax} working sets/exercise, scaling ${Math.round(foundationParams.volumeMultiplier * 100)}% → ${Math.round(peakParams.volumeMultiplier * 100)}% across the program.`;
   const approxIntensityDescription = `Rep range ${repLow}-${repHigh}, RPE easing in around the foundation and building toward the peak phase.`;
@@ -357,10 +358,7 @@ function buildPeriodizedWorkoutForDay(
   params: WeekParameters,
   maxSessionLengthMinutes: number
 ): Workout {
-  const baseRange = repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
-  const [repLow, repHigh] = shiftRepRange(baseRange, params.repRangeShift);
-  const baseRpe: RpeValue = com.programArchitecture.proximityToFailure === "0_1_reps_in_reserve" ? 9 : com.programArchitecture.proximityToFailure === "2_4_reps_in_reserve" ? 7 : 8;
-  const targetRpe = applyRpeOffset(baseRpe, params.intensityRpeOffset);
+  const client = { trainingExperience: profile.trainingExperience };
   const avoidedTerms = avoidedTermsForProfile(profile, com);
 
   const usedNames = new Set<string>();
@@ -374,8 +372,10 @@ function buildPeriodizedWorkoutForDay(
     if (!picked) continue;
     usedNames.add(picked.name);
     const isFirstCompound = picked.isCompound && order === 1;
-    const baseWorkingSets = picked.isCompound ? com.programArchitecture.setsPerExerciseMax : com.programArchitecture.setsPerExerciseMin;
-    const workingSets = Math.max(1, Math.round(baseWorkingSets * params.volumeMultiplier));
+    const [repLow, repHigh] = resolvePhaseRepRange(com, picked.isCompound, params.repRangeShift);
+    const targetRpe: RpeValue = constrainRpe(com, picked.isCompound, resolveBaseRpe(com, picked.isCompound) + params.intensityRpeOffset, params.isDeload);
+    const baseWorkingSets = resolveBaseSets(com, picked.isCompound, client);
+    const workingSets = constrainSets(com, picked.isCompound, Math.round(baseWorkingSets * params.volumeMultiplier), params.isDeload, client);
     const warmupSets = isFirstCompound ? 2 : picked.isCompound ? 1 : 0;
 
     exercises.push({
@@ -443,7 +443,7 @@ export function buildFullProgramForDirection(direction: ProgramDirectionSummary,
       days7[idx] = {
         dayOfWeek,
         type: "training",
-        workout: buildPeriodizedWorkoutForDay(input.workspaceId, dayOfWeek, plan.dayPatterns[i], equipment, com, profile, params, profile.maxSessionLengthMinutes),
+        workout: buildPeriodizedWorkoutForDay(input.workspaceId, dayOfWeek, plan.dayPatterns[i], equipment, com, profile, params, resolveSessionCap(com, profile.maxSessionLengthMinutes).cap),
       };
     });
     weeks.push({ weekNumber, days: days7 });

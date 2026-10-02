@@ -36,6 +36,7 @@
 // entry back to exactly which fields it set.
 
 import type { CoachProfileId, WorkspaceId } from "../tenancy/types";
+import type { AreaId, CalibrationAnswers, ModifierId, NutritionScope } from "./calibration/types.ts";
 
 // ---------------------------------------------------------------------------
 // Provenance
@@ -428,6 +429,24 @@ export interface CoachOperatingModel {
   /** Keyed by onboarding question id — see Provenance's module doc above
    * for why this is per-question rather than per-leaf-field. */
   provenance: Record<string, Provenance>;
+
+  /** Gate 3.1 — present only on a method confirmed through calibration v2.
+   * Holds the coach's confirmed scope and every confirmed v2 answer exactly
+   * as given (ranges stay ranges). The legacy fields above are projections
+   * for existing consumers, set only where the coach's answer maps exactly. */
+  calibration?: CoachCalibrationRecord;
+}
+
+export interface CoachCalibrationRecord {
+  schema: 2;
+  description?: string;
+  areas: AreaId[];
+  modifiers: ModifierId[];
+  nutritionScope: NutritionScope | null;
+  goals: string[];
+  experience: string[];
+  specialties: { strength: string[]; sportPerformance: string[]; endurance: string[] };
+  answers: CalibrationAnswers;
 }
 
 /** A model is usable by the generation engine only once every domain the

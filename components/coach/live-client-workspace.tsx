@@ -245,7 +245,7 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
           {pendingProposal ? (
             <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
           ) : (
-            <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} />
+            <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
           )}
         </Card>
 

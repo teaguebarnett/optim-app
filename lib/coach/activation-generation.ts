@@ -25,6 +25,7 @@ import type { ClientAssignedProgram, DayOfWeek, Exercise, NutritionTargets, Prog
 import type { ClientProfileId, CoachProfileId, WorkspaceId } from "../tenancy/types";
 import type { OnboardingProgress, OnboardingStepAnswers } from "./types";
 import type { CoachOperatingModel } from "./operating-model.ts";
+import { constrainRpe, constrainSets, resolveBaseRpe, resolveBaseSets, resolveDeloadEvery, resolvePreferredSplits, resolveRepRange } from "./method-resolution.ts";
 
 // ---------------------------------------------------------------------------
 // Client snapshot — the exact, real intake fields generation may use
@@ -332,7 +333,9 @@ export function candidateSplits(days: number, preferred: string[]): { key: strin
  * as before.
  */
 export function chooseSplitForKind(days: number, com: CoachOperatingModel, kind: OptionKind, excludeKeys: string[] = []): { key: string; plan: SplitPlan } {
-  const candidates = candidateSplits(days, com.programArchitecture.preferredSplits).filter((c) => !excludeKeys.includes(c.key));
+  // Gate 3.1 — the coach's own day-count exception, if any (v1: unchanged).
+  const preferred = resolvePreferredSplits(com, days);
+  const candidates = candidateSplits(days, preferred).filter((c) => !excludeKeys.includes(c.key));
   if (candidates.length === 0) {
     // Honest, universally valid fallback — full body always accepts any day count 1+.
     return { key: "full_body", plan: { splitName: "Full body", dayPatterns: Array.from({ length: days }, () => ["squat", "hinge", "push_horizontal", "pull_horizontal", "core"]) } };
@@ -344,7 +347,7 @@ export function chooseSplitForKind(days: number, com: CoachOperatingModel, kind:
   // exists for this day count; otherwise the last preferred candidate
   // (still different from best_fit/excluded picks whenever more than one
   // exists).
-  const nonPreferred = candidateSplits(days, []).find((c) => !com.programArchitecture.preferredSplits.includes(c.key) && !excludeKeys.includes(c.key) && c.key !== candidates[0].key);
+  const nonPreferred = candidateSplits(days, []).find((c) => !preferred.includes(c.key) && !excludeKeys.includes(c.key) && c.key !== candidates[0].key);
   return nonPreferred ?? candidates[candidates.length - 1];
 }
 
@@ -387,8 +390,9 @@ export function buildWorkoutForDay(
   isDeload: boolean,
   maxSessionLengthMinutes: number
 ): Workout {
-  const [repLow, repHigh] = repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
-  const targetRpe = rpeForProximity(com.programArchitecture.proximityToFailure, isDeload ? 0 : weekProgress);
+  // Gate 3.1 — v2 methods resolve through method-resolution.ts; a v1
+  // method reads exactly as before (repRangeForPhilosophy/rpeForProximity).
+  const isV2 = com.calibration?.schema === 2;
   const usedNames = new Set<string>();
   const exercises: Exercise[] = [];
   let order = 1;
@@ -401,11 +405,15 @@ export function buildWorkoutForDay(
     if (!picked) continue;
     usedNames.add(picked.name);
     const isFirstCompound = picked.isCompound && order === 1;
-    const workingSets = isDeload
-      ? Math.max(2, com.programArchitecture.setsPerExerciseMin - 1)
-      : picked.isCompound
-        ? com.programArchitecture.setsPerExerciseMax
-        : com.programArchitecture.setsPerExerciseMin;
+    const [repLow, repHigh] = isV2 ? resolveRepRange(com, picked.isCompound) : repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
+    const targetRpe = isV2 ? constrainRpe(com, picked.isCompound, resolveBaseRpe(com, picked.isCompound) + (isDeload ? -2 : weekProgress > 0.6 ? 1 : 0), isDeload) : rpeForProximity(com.programArchitecture.proximityToFailure, isDeload ? 0 : weekProgress);
+    const workingSets = isV2
+      ? constrainSets(com, picked.isCompound, isDeload ? resolveBaseSets(com, picked.isCompound) - 1 : resolveBaseSets(com, picked.isCompound), isDeload)
+      : isDeload
+        ? Math.max(2, com.programArchitecture.setsPerExerciseMin - 1)
+        : picked.isCompound
+          ? com.programArchitecture.setsPerExerciseMax
+          : com.programArchitecture.setsPerExerciseMin;
     const warmupSets = isFirstCompound ? 2 : picked.isCompound ? 1 : 0;
     exercises.push({
       id: `ex-${dayOfWeek}-${order}-${picked.name.replace(/\s+/g, "-").toLowerCase()}`,
@@ -453,7 +461,7 @@ export function buildProgramForOption(input: {
   const days = input.snapshot.availableDays.length;
   const { plan } = chooseSplitForKind(days, input.com, input.kind);
   const equipment = equipmentForClient(input.snapshot);
-  const deloadEvery = input.com.programArchitecture.deloadFrequencyWeeks ?? 6;
+  const deloadEvery = resolveDeloadEvery(input.com, input.durationWeeks);
 
   const weeks: ProgramWeek[] = [];
   for (let weekNumber = 1; weekNumber <= input.durationWeeks; weekNumber++) {
@@ -510,7 +518,7 @@ export interface GeneratedTrainingOption {
 
 export function scoreTrainingOption(kind: OptionKind, snapshot: ClientOnboardingSnapshot, com: CoachOperatingModel, splitKey: string): ScoreBreakdown {
   const tier = experienceTier(snapshot);
-  const preferredIndex = com.programArchitecture.preferredSplits.indexOf(splitKey);
+  const preferredIndex = resolvePreferredSplits(com, snapshot.availableDays.length).indexOf(splitKey);
   const methodologyFit = preferredIndex === -1 ? 55 : clampScore(90 - preferredIndex * 12);
   const experienceFit = tier === "advanced" && splitKey === "body_part_split" ? 90 : tier === "novice" && splitKey === "full_body" ? 92 : 75;
   const scheduleFit = snapshot.availableDays.length >= 3 ? 88 : 70;

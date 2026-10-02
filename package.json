@@ -46,6 +46,7 @@
     "verify:command-center-v2": "node --experimental-strip-types lib/coach/verify-command-center-v2.mts",
     "verify:dashboard-zones": "node --experimental-strip-types lib/coach/verify-dashboard-zones.mts",
     "verify:coach-brain": "node --experimental-strip-types lib/coach/verify-coach-brain.mts",
+    "verify:calibration-v2": "node --experimental-strip-types lib/coach/verify-calibration-v2.mts",
     "verify:daily-briefing": "node --experimental-strip-types lib/coach/verify-daily-briefing.mts",
     "verify:daily-entrance": "node --experimental-strip-types lib/verify-daily-entrance.mts",
     "verify:briefing-escalation": "node --experimental-strip-types lib/coach/verify-briefing-escalation.mts",

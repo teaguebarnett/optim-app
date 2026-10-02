@@ -6,6 +6,7 @@
 // fabricated periodization model the coach never endorsed.
 
 import type { CoachOperatingModel } from "./operating-model.ts";
+import { resolveDeloadEvery, resolveRepsVaryByPhase, resolveUndulating, type ClientMethodContext } from "./method-resolution.ts";
 import type { RpeValue } from "../types";
 
 export type ProgramPhaseName = "foundation" | "build" | "peak";
@@ -75,13 +76,15 @@ export interface WeekParameters {
  * cadence (see activation-generation.ts, unchanged) — always respected
  * first; phase-based modulation layers on top of it, never replaces it.
  */
-export function computeWeekParameters(weekNumber: number, durationWeeks: number, phases: ProgramPhase[], com: CoachOperatingModel): WeekParameters {
+export function computeWeekParameters(weekNumber: number, durationWeeks: number, phases: ProgramPhase[], com: CoachOperatingModel, client?: ClientMethodContext): WeekParameters {
   const phase = phaseForWeek(phases, weekNumber);
-  const deloadEvery = com.programArchitecture.deloadFrequencyWeeks ?? 6;
+  // Gate 3.1 — resolved through method-resolution.ts: a v1 method reads
+  // exactly as before; a v2 "as needed"/"none" schedules no periodic deload.
+  const deloadEvery = resolveDeloadEvery(com, durationWeeks);
   const isFinalWeek = weekNumber === durationWeeks;
   const isDeload = isFinalWeek || (deloadEvery > 0 && weekNumber % deloadEvery === 0);
 
-  const progression = com.programArchitecture.progressionMethod;
+  const undulating = resolveUndulating(com, client);
   const withinPhaseProgress = phase.endWeek === phase.startWeek ? 1 : (weekNumber - phase.startWeek) / (phase.endWeek - phase.startWeek);
 
   let volumeMultiplier = 1;
@@ -102,7 +105,7 @@ export function computeWeekParameters(weekNumber: number, durationWeeks: number,
   // variation rather than a smooth ramp — alternate a lighter/higher-volume
   // week with a heavier/lower-volume one on top of the phase's own base,
   // real variation traceable to the coach's own stated method.
-  if (progression === "planned_undulation" && !isDeload) {
+  if (undulating && !isDeload) {
     const undulateHeavy = weekNumber % 2 === 0;
     volumeMultiplier += undulateHeavy ? -0.1 : 0.1;
     intensityRpeOffset += undulateHeavy ? 1 : -1;
@@ -117,7 +120,7 @@ export function computeWeekParameters(weekNumber: number, durationWeeks: number,
   // RPE/set-count level. Three real steps per phase (early/mid/late) is
   // enough to make every week distinguishable without pretending at a
   // precision this deterministic model doesn't have.
-  if (progression !== "planned_undulation" && !isDeload) {
+  if (!undulating && !isDeload) {
     const step = Math.min(2, Math.floor(withinPhaseProgress * 3));
     intensityRpeOffset += step;
     volumeMultiplier += step * 0.05;
@@ -128,8 +131,7 @@ export function computeWeekParameters(weekNumber: number, durationWeeks: number,
     intensityRpeOffset = Math.min(intensityRpeOffset, -2);
   }
 
-  const repRangeShift: WeekParameters["repRangeShift"] =
-    com.programArchitecture.repRangePhilosophy === "varied_by_block" ? (phase.name === "foundation" ? "higher" : phase.name === "peak" ? "lower" : "none") : "none";
+  const repRangeShift: WeekParameters["repRangeShift"] = resolveRepsVaryByPhase(com) ? (phase.name === "foundation" ? "higher" : phase.name === "peak" ? "lower" : "none") : "none";
 
   return {
     phase,

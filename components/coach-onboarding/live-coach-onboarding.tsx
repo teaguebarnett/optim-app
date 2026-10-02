@@ -11,7 +11,7 @@ import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
 import { CoachOnboardingWizard } from "@/components/coach-onboarding/coach-onboarding-wizard";
 import { LiveCalibrationProvider, type LiveCalibrationInitial } from "@/components/coach-onboarding/calibration-context";
 import { startMethodReviewAction } from "@/app/actions/coach-calibration";
-import type { CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
+import type { CalibrationChapterId as CoachOnboardingChapterId } from "@/lib/coach/calibration/types";
 
 export function LiveCoachOnboarding({
   initial,

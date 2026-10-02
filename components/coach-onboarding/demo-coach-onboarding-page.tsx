@@ -11,7 +11,8 @@ import { usePrototypeState } from "@/hooks/use-prototype-state";
 import { RequireThemeChoice } from "@/components/app-shell/theme-provider";
 import { CoachOnboardingWizard } from "@/components/coach-onboarding/coach-onboarding-wizard";
 import { DemoCalibrationProvider } from "@/components/coach-onboarding/calibration-context";
-import { ALL_CHAPTER_IDS_IN_ORDER, type CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
+import { CHAPTER_ORDER as ALL_CHAPTER_IDS_IN_ORDER } from "@/lib/coach/calibration/questions";
+import type { CalibrationChapterId as CoachOnboardingChapterId } from "@/lib/coach/calibration/types";
 
 export function DemoCoachOnboardingPage() {
   return (

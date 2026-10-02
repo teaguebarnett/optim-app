@@ -437,13 +437,16 @@ check('an empty aiMayRespondDirectly array (the only way the onboarding "None �
   assert.match(prompt, /wants to review everything before you respond independently/i);
   assert.doesNotMatch(prompt, /may answer directly, with no need to escalate/i);
 });
-check("an unset coachMustRespondPersonally (empty array) adds no personal-response instruction at all — never a stray empty sentence", () => {
+check("Gate 3.1 (D3) — with no coach-chosen topics, only OPTIM's locked minimum (pain/injury, emotional distress) is listed — never an empty sentence", () => {
   const none: CoachPlaybookContent = {
     ...PLAYBOOK,
     operatingModel: { ...PLAYBOOK.operatingModel, communication: { ...PLAYBOOK.operatingModel.communication, coachMustRespondPersonally: [] } },
   };
   const prompt = buildSystemPrompt(none, baseContext());
-  assert.doesNotMatch(prompt, /always wants to respond personally to/i);
+  const line = prompt.split("\n").find((l) => /always wants to respond personally to/i.test(l)) ?? "";
+  assert.match(line, /pain or injury/i);
+  assert.match(line, /emotional distress/i);
+  assert.doesNotMatch(line, /to: \./);
 });
 check("aiMayDraftOnly is never rendered into the prompt — no onboarding question sets it, so there is nothing coach-specific to enforce yet (see renderPlaybookForPrompt's own doc)", () => {
   const prompt = buildSystemPrompt(PLAYBOOK, baseContext());

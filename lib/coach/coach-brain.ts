@@ -24,65 +24,46 @@
 // carry "optim_default" provenance, never count toward calibration, and are
 // labelled as system defaults wherever they're surfaced.
 
-import {
-  applicableChapters,
-  allRequiredVisibleQuestionIds,
-  applyCoachAnswersToModel,
-  pruneAnswersToVisibleQuestions,
-} from "./coach-onboarding-engine.ts";
-import {
-  createDefaultCoachOperatingModel,
-  isCoachOperatingModelConfirmed,
-  type CoachOperatingModel,
-  type ProvenanceSource,
-} from "./operating-model.ts";
-import type { CoachOnboardingAnswers, CoachOnboardingChapterId } from "./coach-onboarding-questions.ts";
+import { createDefaultCoachOperatingModel, type CoachOperatingModel, type ProvenanceSource } from "./operating-model.ts";
 import type { AiAuthorityConfig, AiAuthorityLevel, CoachAiAuthoritySettings } from "./ai-authority.ts";
 import type { CoachPlaybookContent } from "./playbook.ts";
+import { applicableCalibrationChapters, calibrationV2Readiness, pruneCalibrationAnswers, requiredCalibrationKeys } from "./calibration/engine.ts";
+import { applyCalibrationAnswersToModel } from "./calibration/model.ts";
+import { validateCalibrationAnswers } from "./calibration/validate.ts";
+import { NEEDS_CONFIRMATION_KEY, type CalibrationAnswers, type CalibrationChapterId } from "./calibration/types.ts";
 
 // ---------------------------------------------------------------------------
-// Live calibration scope
+// Live calibration scope (Gate 3.1 — the adaptive v2 interview)
 // ---------------------------------------------------------------------------
 
-/** Survey chapters that depend on systems that don't exist in the live
- * product yet. "existing_work" infers rules from the coach's saved program
- * templates and meal recommendations — demo-only today (Gate 3 builds no
- * imports). Hidden in live calibration; never fabricated; never blocks
- * completion. */
-export const LIVE_UNSUPPORTED_CHAPTERS: readonly CoachOnboardingChapterId[] = ["existing_work"];
-
-export function liveCalibrationChapters(answers: CoachOnboardingAnswers): CoachOnboardingChapterId[] {
-  return applicableChapters(answers).filter((c) => !LIVE_UNSUPPORTED_CHAPTERS.includes(c));
+/** The chapters that apply to this coach right now, from their confirmed
+ * scope only. */
+export function liveCalibrationChapters(answers: CalibrationAnswers): CalibrationChapterId[] {
+  return applicableCalibrationChapters(answers);
 }
 
-/** Every required question that must have an explicit coach answer before
- * the coach can confirm (question-bank chapters only; conditional questions
- * count only while visible). */
-export function requiredCalibrationQuestionIds(answers: CoachOnboardingAnswers): string[] {
-  return allRequiredVisibleQuestionIds(answers);
-}
-
-function hasAnswer(value: unknown): boolean {
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === "boolean" || typeof value === "number") return true;
-  return typeof value === "string" && value.trim() !== "";
+/** Every required answer key that currently applies. */
+export function requiredCalibrationQuestionIds(answers: CalibrationAnswers): string[] {
+  return requiredCalibrationKeys(answers);
 }
 
 export interface CalibrationReadiness {
   ready: boolean;
   unansweredQuestionIds: string[];
+  /** Answers mapped from a v1 method whose meaning changed — the coach must
+   * look at each before confirming. */
+  needsConfirmation: string[];
   /** The explicit AI-authority step hasn't been confirmed. */
   authorityUnconfirmed: boolean;
 }
 
-/** Calibration may be confirmed only when every required, live-supported
- * question has an explicit answer AND the coach explicitly confirmed their
- * AI authority. Unsupported chapters (LIVE_UNSUPPORTED_CHAPTERS) contribute
- * no required questions. */
-export function calibrationReadiness(input: { answers: CoachOnboardingAnswers; aiAuthorityConfirmed: boolean }): CalibrationReadiness {
-  const answers = pruneAnswersToVisibleQuestions(input.answers);
-  const unansweredQuestionIds = requiredCalibrationQuestionIds(answers).filter((id) => !hasAnswer(answers[id]));
-  return { ready: unansweredQuestionIds.length === 0 && input.aiAuthorityConfirmed, unansweredQuestionIds, authorityUnconfirmed: !input.aiAuthorityConfirmed };
+/** Calibration may be confirmed only when the coach's areas are confirmed,
+ * every required question that applies has an explicit answer, every mapped
+ * answer flagged for confirmation has been looked at, and AI authority was
+ * explicitly confirmed. */
+export function calibrationReadiness(input: { answers: CalibrationAnswers; aiAuthorityConfirmed: boolean }): CalibrationReadiness {
+  const r = calibrationV2Readiness(input);
+  return { ready: r.ready, unansweredQuestionIds: r.unansweredKeys, needsConfirmation: r.needsConfirmation, authorityUnconfirmed: r.authorityUnconfirmed };
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +94,7 @@ export class CalibrationIncompleteError extends Error {
     super(
       [
         readiness.unansweredQuestionIds.length > 0 ? `${readiness.unansweredQuestionIds.length} required question${readiness.unansweredQuestionIds.length === 1 ? " is" : "s are"} still unanswered.` : null,
+        readiness.needsConfirmation.length > 0 ? `${readiness.needsConfirmation.length} answer${readiness.needsConfirmation.length === 1 ? " needs" : "s need"} your confirmation.` : null,
         readiness.authorityUnconfirmed ? "Confirm how much OPTIM may do on its own." : null,
       ]
         .filter(Boolean)
@@ -124,15 +106,14 @@ export class CalibrationIncompleteError extends Error {
 }
 
 /**
- * Maps explicit calibration answers into the structured method the coach is
- * about to confirm. Starts from OPTIM's default model so every leaf has a
- * value, then applies the coach's answers through the existing mapper — which
- * marks each answered question coach_selected. Anything the coach didn't
- * answer stays optim_default (and is shown that way); nothing is inferred.
- * Throws if any required answer is missing or didn't map to coach provenance.
+ * Maps explicit v2 calibration answers into the method the coach is about to
+ * confirm. Answers are re-validated server-side; the coach's v2 answers are
+ * kept verbatim in the model (ranges stay ranges) and every answered question
+ * gets coach provenance. Unanswered questions get none — unknown stays
+ * unknown. Throws if anything required is missing.
  */
 export function buildMethodFromCalibration(params: {
-  answers: CoachOnboardingAnswers;
+  answers: CalibrationAnswers;
   aiAuthority: AiAuthorityConfig;
   aiAuthorityConfirmed: boolean;
   coachUserId: string;
@@ -140,13 +121,15 @@ export function buildMethodFromCalibration(params: {
   businessName: string;
   methodVersion: number;
   nowIso: string;
-}): { operatingModel: CoachOperatingModel; aiAuthority: CoachAiAuthoritySettings; answers: CoachOnboardingAnswers } {
-  const answers = pruneAnswersToVisibleQuestions(params.answers);
+}): { operatingModel: CoachOperatingModel; aiAuthority: CoachAiAuthoritySettings; answers: CalibrationAnswers } {
+  const validated = validateCalibrationAnswers(params.answers);
+  if (!validated.ok) throw new Error(`Calibration answer isn't valid (${validated.key}): ${validated.message}`);
+  const answers = pruneCalibrationAnswers(validated.answers);
   const readiness = calibrationReadiness({ answers, aiAuthorityConfirmed: params.aiAuthorityConfirmed });
   if (!readiness.ready) throw new CalibrationIncompleteError(readiness);
 
   const base = createDefaultCoachOperatingModel({ coachId: params.coachUserId, workspaceId: params.workspaceId, nowIso: params.nowIso, businessName: params.businessName });
-  const applied = applyCoachAnswersToModel(base, answers, params.nowIso);
+  const applied = applyCalibrationAnswersToModel(base, answers, params.nowIso);
   const operatingModel: CoachOperatingModel = {
     ...applied,
     coachId: params.coachUserId,
@@ -157,14 +140,12 @@ export function buildMethodFromCalibration(params: {
     activatedAtIso: params.nowIso,
     supersededByVersion: undefined,
   };
-  const required = requiredCalibrationQuestionIds(answers);
-  if (!isCoachOperatingModelConfirmed(operatingModel, required)) {
-    throw new Error("buildMethodFromCalibration: a required answer did not map to coach provenance");
-  }
+  const stored: CalibrationAnswers = { ...answers };
+  delete stored[NEEDS_CONFIRMATION_KEY];
   return {
     operatingModel,
     aiAuthority: authoritySettings({ coachUserId: params.coachUserId, workspaceId: params.workspaceId, global: params.aiAuthority, nowIso: params.nowIso }),
-    answers,
+    answers: stored,
   };
 }
 

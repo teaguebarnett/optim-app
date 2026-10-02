@@ -44,6 +44,7 @@ import { getOnboardingProgressForClient } from "../../lib/production/onboarding"
 import { extractClientProgrammingProfile } from "../../lib/coach/programming-profile";
 import { resolveCoachIntelligenceForClient } from "../../lib/production/coach-brain";
 import { draftMethodVersionIdOf, methodDraftStaleness } from "../../lib/coach/coach-brain";
+import { resolveProgramLengthHint } from "../../lib/coach/method-resolution";
 import { evaluateGenerationPrerequisites, buildGenerationInputs, hasVerifiedGenerationInputs, checkProposalApproval, isUnverifiedFreshProposal, GenerationPrerequisitesError, type MissingPrerequisite } from "../../lib/coach/generation-prerequisites";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { resolveApplicableCoachRules, getLearnedRuleProvenance, type LearnedRuleProvenance } from "../../lib/production/rule-resolution";
@@ -410,14 +411,18 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
 export interface GenerationPrerequisitesView {
   ready: boolean;
   missing: MissingPrerequisite[];
+  /** Gate 3.1 — the client's primary coach's usual program length, when
+   * their confirmed method states one (a hint, never a silent default). */
+  programLengthHint: { min: number; max: number | null; preferred: number | null } | null;
 }
 
 /** The client-setup page's view of whether a new proposal can be generated,
  * and what's missing (with links to the screens that resolve it). */
 export async function getGenerationPrerequisitesAction(params: { workspaceId: string; clientProfileId: string }): Promise<GenerationPrerequisitesView> {
   await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
-  const { prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
-  return prerequisites.ready ? { ready: true, missing: [] } : { ready: false, missing: prerequisites.missing };
+  const { prerequisites, method } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
+  const programLengthHint = resolveProgramLengthHint(method?.operatingModel ?? null);
+  return prerequisites.ready ? { ready: true, missing: [], programLengthHint } : { ready: false, missing: prerequisites.missing, programLengthHint };
 }
 
 function proposalSummaryFrom(content: { durationWeeks: number; directionLabel?: string; generationRationale?: string }): ProgramProposalSummary {

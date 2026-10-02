@@ -21,6 +21,7 @@
 // list cannot anticipate.
 
 import type { AssistantDecision, EscalationReason } from "./provider.ts";
+import { effectiveMustRespondPersonally } from "../coach/safety-policy.ts";
 
 /** One pattern set per `coachMustRespondPersonally` enum value — see
  * lib/coach/coach-onboarding-questions.ts's comm_must_respond_personally
@@ -130,7 +131,9 @@ export function enforceCoachCommunicationAuthority(
     return { kind: "escalate", escalationReason: "out_of_authority", responseText: decision.responseText };
   }
 
-  const topic = detectMustRespondPersonallyTopic(clientMessage, communication.coachMustRespondPersonally);
+  // Gate 3.1 — OPTIM's locked minimum (pain/injury, emotional distress)
+  // always applies on top of the coach's own topics.
+  const topic = detectMustRespondPersonallyTopic(clientMessage, effectiveMustRespondPersonally(communication.coachMustRespondPersonally));
   if (topic) {
     return { kind: "escalate", escalationReason: FORCED_ESCALATION_REASON[topic], responseText: decision.responseText };
   }

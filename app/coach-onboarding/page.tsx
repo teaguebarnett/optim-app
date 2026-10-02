@@ -3,7 +3,8 @@ import { LiveCoachOnboarding } from "@/components/coach-onboarding/live-coach-on
 import { resolveAppMode } from "@/lib/production/mode";
 import { getOwnCoachBrainState } from "@/lib/production/coach-brain";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { ALL_CHAPTER_IDS_IN_ORDER, type CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
+import { CHAPTER_ORDER as ALL_CHAPTER_IDS_IN_ORDER } from "@/lib/coach/calibration/questions";
+import type { CalibrationChapterId as CoachOnboardingChapterId } from "@/lib/coach/calibration/types";
 
 /**
  * The Coach Calibration survey. Sits outside /coach/* so it never renders

@@ -18,6 +18,10 @@ import { createDefaultCoachOperatingModel } from "./operating-model.ts";
 import type { CoachAiAuthoritySettings } from "./ai-authority.ts";
 import { defaultAiAuthorityConfig } from "./ai-authority.ts";
 import type { CoachProfileId, WorkspaceId } from "../tenancy/types.ts";
+import { effectiveMustRespondPersonally } from "./safety-policy.ts";
+import { methodCoversResistance } from "./method-resolution.ts";
+import { findCalibrationQuestion } from "./calibration/questions.ts";
+import { formatByKey } from "./calibration/format.ts";
 
 /** One prior coach decision or correction, offered as future context for
  * similar situations. Never auto-added — see
@@ -152,24 +156,28 @@ function phraseList(values: string[], phrases: Record<string, string>): string[]
  * be dishonest. Wiring this up needs a real onboarding question and
  * Playbook-editing UI first (separate follow-up work), not a prompt change. */
 export function renderPlaybookForPrompt(content: CoachPlaybookContent): string {
-  const { operatingModel: m, examples } = content;
-  const lines: string[] = [];
-  lines.push(`Coaching style: ${m.communication.tone}, ${m.communication.conciseness} responses, directness ${m.communication.directness}/5, warmth ${m.communication.warmth}/5.`);
-  lines.push(`Program philosophy: ${m.programArchitecture.progressionMethod}, RPE/RIR target proximity: ${m.programArchitecture.proximityToFailure}.`);
-  lines.push(`Substitution rule: ${m.programArchitecture.substitutionLogic}.`);
-  lines.push(`Nutrition philosophy: ${m.nutritionPhilosophy.calorieTargetPhilosophy}; adherence standard: ${m.nutritionPhilosophy.adherenceStandard}.`);
-  lines.push(`Safety: pain -> ${m.safety.painResponsePolicy}; injury -> ${m.safety.injuryResponsePolicy}; medical concern -> ${m.safety.medicalConcernPolicy}.`);
-  if (m.safety.absoluteOverrideRules.length > 0) {
-    lines.push(`Coach's absolute rules (never overridden): ${m.safety.absoluteOverrideRules.join("; ")}.`);
-  }
+  return content.operatingModel.calibration?.schema === 2 ? renderV2Method(content) : renderV1Method(content);
+}
 
-  const mustEscalate = phraseList(m.communication.coachMustRespondPersonally, MUST_RESPOND_PERSONALLY_PHRASES);
+/** Gate 3.1 — only what the coach actually provided is presented as their
+ * methodology. A value with no coach provenance (never asked, skipped, or an
+ * OPTIM starting value) is left out entirely — chat asks or escalates
+ * instead of following an OPTIM default as if the coach said it. */
+function coachSaid(m: CoachOperatingModel, ...questionIds: string[]): boolean {
+  return questionIds.every((id) => {
+    const p = m.provenance[id];
+    return !!p && (p.source === "coach_selected" || p.source === "coach_confirmed");
+  });
+}
+
+function sharedEscalationLines(content: CoachPlaybookContent, lines: string[]) {
+  const m = content.operatingModel;
+  const mustEscalate = phraseList(effectiveMustRespondPersonally(m.communication.coachMustRespondPersonally), MUST_RESPOND_PERSONALLY_PHRASES);
   if (mustEscalate.length > 0) {
     lines.push(
       `This coach always wants to respond personally to: ${mustEscalate.join("; ")}. You must escalate to the coach (never answer these yourself) whenever a client message is genuinely about one of these, using whichever escalation reason best fits.`
     );
   }
-
   const wantsEverythingReviewed = m.communication.aiMayRespondDirectly.length === 0;
   if (wantsEverythingReviewed) {
     lines.push(
@@ -181,12 +189,80 @@ export function renderPlaybookForPrompt(content: CoachPlaybookContent): string {
       lines.push(`This coach has said you may answer directly, with no need to escalate for review, for: ${mayRespond.join("; ")}.`);
     }
   }
-
-  if (examples.length > 0) {
+  if (content.examples.length > 0) {
     lines.push("Examples of how this coach has resolved similar situations before:");
-    for (const ex of examples.slice(-5)) {
+    for (const ex of content.examples.slice(-5)) {
       lines.push(`- Situation: ${ex.situation} -> Resolution: ${ex.resolution}`);
     }
   }
+}
+
+function renderV1Method(content: CoachPlaybookContent): string {
+  const { operatingModel: m } = content;
+  const lines: string[] = [];
+  if (coachSaid(m, "comm_missed_workout_reply", "comm_message_length", "comm_directness", "comm_warmth")) {
+    lines.push(`Coaching style: ${m.communication.tone}, ${m.communication.conciseness} responses, directness ${m.communication.directness}/5, warmth ${m.communication.warmth}/5.`);
+  }
+  const progression = coachSaid(m, "program_progression");
+  const proximity = coachSaid(m, "program_proximity_to_failure") && m.programArchitecture.usesRpeOrRir !== "neither";
+  if (progression && proximity) lines.push(`Program philosophy: ${m.programArchitecture.progressionMethod}, RPE/RIR target proximity: ${m.programArchitecture.proximityToFailure}.`);
+  else if (progression) lines.push(`Program philosophy: ${m.programArchitecture.progressionMethod}.`);
+  const safety: string[] = [];
+  if (coachSaid(m, "scn_pain")) safety.push(`pain -> ${m.safety.painResponsePolicy}`);
+  if (coachSaid(m, "scn_possible_injury")) safety.push(`injury -> ${m.safety.injuryResponsePolicy}`);
+  if (coachSaid(m, "safety_out_of_scope")) safety.push(`medical or out-of-scope question -> ${m.safety.outOfScopeHandling}`);
+  if (safety.length > 0) lines.push(`Safety: ${safety.join("; ")}.`);
+  if (m.safety.absoluteOverrideRules.length > 0) {
+    lines.push(`Coach's absolute rules (never overridden): ${m.safety.absoluteOverrideRules.join("; ")}.`);
+  }
+  sharedEscalationLines(content, lines);
+  return lines.join("\n");
+}
+
+function renderV2Method(content: CoachPlaybookContent): string {
+  const { operatingModel: m } = content;
+  const answers = m.calibration?.answers ?? {};
+  const lines: string[] = [];
+  const has = (key: string) => answers[key] !== undefined && !(typeof answers[key] === "object" && (answers[key] as { notApplicable?: boolean })?.notApplicable);
+  const value = (key: string) => formatByKey(key, answers);
+
+  if (coachSaid(m, "comm_voice_sample", "comm_message_length", "comm_directness", "comm_warmth")) {
+    lines.push(`Coaching style: ${m.communication.tone}, ${m.communication.conciseness} responses, directness ${m.communication.directness}/5, warmth ${m.communication.warmth}/5.`);
+  }
+  const voice: string[] = [];
+  if (has("comm_accountability")) voice.push(`accountability ${m.communication.accountabilityLevel}/5`);
+  if (has("comm_technical_language")) voice.push(`technical language: ${value("comm_technical_language")}`);
+  if (has("comm_humor")) voice.push(`humor: ${value("comm_humor").toLowerCase()}`);
+  if (voice.length) lines.push(`Voice: ${voice.join("; ")}.`);
+  if (has("comm_avoided_phrases")) lines.push(`Never use these phrases or tones: ${value("comm_avoided_phrases")}.`);
+  if (has("practice_success_definition")) lines.push(`What successful coaching means to this coach: ${value("practice_success_definition")}`);
+
+  if (methodCoversResistance(m)) {
+    const training: string[] = [];
+    for (const key of ["t_reps", "t_sets", "t_effort_rir", "t_effort_plain", "t_progression_method", "t_deload_approach", "t_swap_rule"]) {
+      if (has(key)) training.push(`${findCalibrationQuestion(key)?.summaryLabel.toLowerCase() ?? key}: ${value(key)}`);
+    }
+    if (training.length) lines.push(`Training method (the coach's confirmed rules): ${training.join("; ")}.`);
+  }
+
+  const scope = m.calibration?.nutritionScope;
+  if (scope === "none") lines.push("Nutrition: not part of this coach's service — don't give nutrition guidance; let the client know their coach can advise if needed.");
+  else if (scope === "full" || scope === "guidance") {
+    const nutrition: string[] = [];
+    for (const key of ["n_approach", "n_calorie_method", "n_protein_basis", "n_protein_amount", "w_rate_of_loss", "n_rate_of_gain", "n_food_principles", "n_supplements", "n_adherence_standard", "n_wont_advise"]) {
+      if (has(key)) nutrition.push(`${findCalibrationQuestion(key)?.summaryLabel.toLowerCase() ?? key}: ${value(key)}`);
+    }
+    lines.push(`Nutrition (${scope === "full" ? "full nutrition coaching" : "general guidance only"} — explain the coach's approach, never change targets): ${nutrition.length ? nutrition.join("; ") : "no specific rules given"}.`);
+  }
+
+  const safety: string[] = [];
+  if (has("scn_pain")) safety.push(`pain -> ${m.safety.painResponsePolicy}`);
+  if (has("scn_possible_injury")) safety.push(`injury -> ${m.safety.injuryResponsePolicy}`);
+  if (has("safety_policy")) safety.push(`medical or out-of-scope question -> ${m.safety.outOfScopeHandling}`);
+  if (safety.length > 0) lines.push(`Safety: ${safety.join("; ")}.`);
+  if (m.safety.absoluteOverrideRules.length > 0) {
+    lines.push(`Coach's absolute rules (never overridden): ${m.safety.absoluteOverrideRules.join("; ")}.`);
+  }
+  sharedEscalationLines(content, lines);
   return lines.join("\n");
 }

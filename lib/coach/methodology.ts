@@ -21,6 +21,7 @@
 import { COACH_ONBOARDING_QUESTIONS, type CoachOnboardingQuestionDef } from "./coach-onboarding-questions.ts";
 import { applyCoachAnswersToModel } from "./coach-onboarding-engine.ts";
 import { isCoachOperatingModelConfirmed, type CoachOperatingModel } from "./operating-model.ts";
+import { methodCoversResistance } from "./method-resolution.ts";
 
 /** Every coach-onboarding question whose answer the training generator
  * (program-directions.ts, universal-program-generation.ts,
@@ -63,6 +64,9 @@ export function requiredMethodQuestionIds(usesRpeOrRir: string): MethodQuestionI
 
 export interface MethodologyConfirmation {
   confirmed: boolean;
+  /** Gate 3.1 — false when a confirmed v2 method doesn't include a
+   * resistance-training base (e.g. an endurance-only coach). */
+  coversResistance: boolean;
   /** When the coach confirmed this method (operatingModel.activatedAtIso). */
   confirmedAtIso: string | null;
   operatingModelVersion: number;
@@ -71,12 +75,26 @@ export interface MethodologyConfirmation {
 }
 
 export function getMethodologyConfirmation(model: CoachOperatingModel | null): MethodologyConfirmation {
-  if (!model) return { confirmed: false, confirmedAtIso: null, operatingModelVersion: 0, unconfirmedFields: GENERATION_METHOD_QUESTION_IDS.map(fieldLabel) };
+  if (!model) return { confirmed: false, coversResistance: false, confirmedAtIso: null, operatingModelVersion: 0, unconfirmedFields: GENERATION_METHOD_QUESTION_IDS.map(fieldLabel) };
+  if (model.calibration?.schema === 2) {
+    // A v2 method is confirmed as a whole at calibration; generation only
+    // needs it to cover resistance training (never filled from defaults).
+    const statusOk = model.status === "active" && !!model.activatedAtIso;
+    const covers = methodCoversResistance(model);
+    return {
+      confirmed: statusOk && covers,
+      coversResistance: covers,
+      confirmedAtIso: statusOk ? (model.activatedAtIso ?? null) : null,
+      operatingModelVersion: model.version,
+      unconfirmedFields: covers ? [] : ["Resistance-training method"],
+    };
+  }
   const required = requiredMethodQuestionIds(model.programArchitecture.usesRpeOrRir);
   const unconfirmed = required.filter((id) => !isCoachOperatingModelConfirmed(model, [id]));
   const statusOk = model.status === "active" && !!model.activatedAtIso;
   return {
     confirmed: statusOk && unconfirmed.length === 0,
+    coversResistance: true,
     confirmedAtIso: statusOk ? (model.activatedAtIso ?? null) : null,
     operatingModelVersion: model.version,
     unconfirmedFields: (statusOk ? unconfirmed : required).map(fieldLabel),

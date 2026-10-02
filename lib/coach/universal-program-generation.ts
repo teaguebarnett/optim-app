@@ -26,14 +26,14 @@ import {
 import {
   equipmentForClient,
   pickExercise,
-  repRangeForPhilosophy,
   SPLIT_LIBRARY,
   MINUTES_PER_EXERCISE_BUDGET,
   equipmentTagForExerciseName,
   type ConstraintCheckResult,
   type ConstraintValidation,
 } from "./activation-generation.ts";
-import { computeProgramPhases, computeWeekParameters, shiftRepRange, applyRpeOffset, type WeekParameters } from "./program-periodization.ts";
+import { computeProgramPhases, computeWeekParameters, type WeekParameters } from "./program-periodization.ts";
+import { constrainRpe, constrainSets, resolveBaseRpe, resolveBaseSets, resolvePhaseRepRange, resolveResistanceDays, resolveSessionCap } from "./method-resolution.ts";
 import {
   applyResistanceRules,
   applyContinuousRules,
@@ -434,10 +434,9 @@ function buildUniversalResistanceSessionForDay(
   maxSessionLengthMinutes: number,
   rules: ApplicableRule[]
 ): { session: Session; diagnostics: RuleApplicationDiagnostics } {
-  const baseRange = repRangeForPhilosophy(com.programArchitecture.repRangePhilosophy);
-  const [baseRepLow, baseRepHigh] = shiftRepRange(baseRange, params.repRangeShift);
-  const baseRpe: RpeValue = com.programArchitecture.proximityToFailure === "0_1_reps_in_reserve" ? 9 : com.programArchitecture.proximityToFailure === "2_4_reps_in_reserve" ? 7 : 8;
-  const baseTargetRpe = applyRpeOffset(baseRpe, params.intensityRpeOffset);
+  // Gate 3.1 — per-exercise values come from the coach's method through
+  // lib/coach/method-resolution.ts (v1 methods resolve exactly as before).
+  const client = { trainingExperience: profile.trainingExperience };
   const avoidedTerms = avoidedTermsForProfile(profile, com);
 
   const usedNames = new Set<string>();
@@ -452,8 +451,10 @@ function buildUniversalResistanceSessionForDay(
     if (!picked) continue;
     usedNames.add(picked.name);
     const isFirstCompound = picked.isCompound && order === 1;
-    const baseWorkingSets = picked.isCompound ? com.programArchitecture.setsPerExerciseMax : com.programArchitecture.setsPerExerciseMin;
-    const workingSets = Math.max(1, Math.round(baseWorkingSets * params.volumeMultiplier));
+    const [baseRepLow, baseRepHigh] = resolvePhaseRepRange(com, picked.isCompound, params.repRangeShift);
+    const baseTargetRpe: RpeValue = constrainRpe(com, picked.isCompound, resolveBaseRpe(com, picked.isCompound) + params.intensityRpeOffset, params.isDeload);
+    const baseWorkingSets = resolveBaseSets(com, picked.isCompound, client);
+    const workingSets = constrainSets(com, picked.isCompound, Math.round(baseWorkingSets * params.volumeMultiplier), params.isDeload, client);
     const warmupSets = isFirstCompound ? 2 : picked.isCompound ? 1 : 0;
     const restSeconds = picked.isCompound ? 150 : 75;
 
@@ -723,7 +724,8 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
   // resistance work on has real surplus days that decideContinuousDays can
   // legitimately place cardio on — a coach-methodology-driven bound, not a
   // demographic assumption.
-  const resistanceDayCount = Math.max(1, Math.min(profile.availableDays.length, com.programArchitecture.typicalFrequencyDaysMax));
+  const { count: resistanceDayCount, belowCoachMinimum: daysBelowMinimum } = resolveResistanceDays(com, profile.availableDays.length);
+  const { cap: sessionCapMinutes, belowCoachMinimum: sessionBelowMinimum } = resolveSessionCap(com, profile.maxSessionLengthMinutes);
   const plan = resolveSplitPlanForDayCount(direction.splitKey, resistanceDayCount);
   const equipment = equipmentForClient(profile);
   const phases = computeProgramPhases(durationWeeks);
@@ -739,13 +741,13 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
 
   const weeks: UniversalProgramWeek[] = [];
   for (let weekNumber = 1; weekNumber <= durationWeeks; weekNumber++) {
-    const params = computeWeekParameters(weekNumber, durationWeeks, phases, com);
+    const params = computeWeekParameters(weekNumber, durationWeeks, phases, com, { trainingExperience: profile.trainingExperience });
     const days: UniversalProgramDay[] = DAYS_OF_WEEK_ORDER.map((dayOfWeek): UniversalProgramDay => ({ dayOfWeek, type: "rest" }));
 
     profile.availableDays.slice(0, resistanceDayCount).forEach((dayOfWeek, i) => {
       const idx = days.findIndex((d) => d.dayOfWeek === dayOfWeek);
       if (idx === -1) return;
-      const { session, diagnostics } = buildUniversalResistanceSessionForDay(dayOfWeek, plan.dayPatterns[i], equipment, com, profile, params, profile.maxSessionLengthMinutes, effectiveRules);
+      const { session, diagnostics } = buildUniversalResistanceSessionForDay(dayOfWeek, plan.dayPatterns[i], equipment, com, profile, params, sessionCapMinutes, effectiveRules);
       sessionDiagnostics.push(diagnostics);
       // Phase 11C — power (a finisher block, appended after the resistance
       // work) and mobility (a warm-up block, prepended before it) are each
@@ -824,7 +826,13 @@ export function buildUniversalProgramForDirection(direction: ProgramDirectionSum
     name: `${direction.label} — ${direction.splitName}`,
     durationWeeks,
     weeks,
-    generationRationale: buildGenerationRationale(direction, resistanceDayCount, continuousDays, usesIntervalConditioning(com), usesAthleticPowerTraining(com), usesMobilityWork(com)),
+    generationRationale: [
+      buildGenerationRationale(direction, resistanceDayCount, continuousDays, usesIntervalConditioning(com), usesAthleticPowerTraining(com), usesMobilityWork(com)),
+      daysBelowMinimum !== null ? `This client has ${profile.availableDays.length} available day${profile.availableDays.length === 1 ? "" : "s"} — below this coach's usual minimum of ${daysBelowMinimum}.` : "",
+      sessionBelowMinimum !== null ? `This client's sessions are capped at ${profile.maxSessionLengthMinutes} minutes — below this coach's usual minimum of ${sessionBelowMinimum}.` : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
     directionLabel: direction.label,
     status: "assigned",
     createdAtIso: input.nowIso,

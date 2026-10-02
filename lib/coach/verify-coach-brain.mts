@@ -1,11 +1,10 @@
-// Gate 3 — Coach Brain pure rules (lib/coach/coach-brain.ts). The answer
-// fixtures are generated from the real question bank (every required,
-// visible question explicitly answered), so these checks track the survey's
-// actual content rather than a hand-copied list.
+// Gate 3 / 3.1 — Coach Brain pure rules (lib/coach/coach-brain.ts). The
+// answer fixtures are generated from the real v2 question bank (every
+// required question that applies, explicitly answered), so these checks
+// track the interview's actual content rather than a hand-copied list.
 
 import assert from "node:assert/strict";
 import {
-  LIVE_UNSUPPORTED_CHAPTERS,
   liveCalibrationChapters,
   requiredCalibrationQuestionIds,
   calibrationReadiness,
@@ -23,12 +22,14 @@ import {
   draftMethodVersionIdOf,
   type ConfirmedCoachMethod,
 } from "./coach-brain.ts";
-import { COACH_ONBOARDING_QUESTIONS, ALL_CHAPTER_IDS_IN_ORDER, visibleQuestionsForChapter, type CoachOnboardingAnswers } from "./coach-onboarding-questions.ts";
-import { applicableChapters } from "./coach-onboarding-engine.ts";
-import { createDefaultCoachOperatingModel, isCoachOperatingModelConfirmed } from "./operating-model.ts";
+import { createDefaultCoachOperatingModel } from "./operating-model.ts";
 import { confirmMethodology, getMethodologyConfirmation, GENERATION_METHOD_QUESTION_IDS, parseMethodAnswers } from "./methodology.ts";
 import { DEFAULT_AI_AUTHORITY_LEVEL, AI_AUTHORITY_LEVELS, AI_AUTHORITY_LEVEL_LIVE_DESCRIPTIONS } from "./ai-authority.ts";
 import { buildSystemPrompt, UNCONFIRMED_METHOD_POLICY, type AssistantContextSnapshot } from "../ai/context.ts";
+import { answerAllRequired } from "./calibration/fixtures.ts";
+import { ALL_CALIBRATION_ITEMS, CHAPTER_ORDER, answerKeyOf } from "./calibration/questions.ts";
+import { buildCalibrationContext, isApplicableItem } from "./calibration/engine.ts";
+import type { CalibrationAnswers } from "./calibration/types.ts";
 
 let passed = 0;
 let failed = 0;
@@ -49,32 +50,9 @@ const COACH_A = "coach-a";
 const COACH_B = "coach-b";
 const WS = "ws-1";
 
-/** Answers every currently-visible question in every chapter with a real
- * option value, repeating until conditional questions stop appearing. */
-function answerEverything(seed: CoachOnboardingAnswers = {}): CoachOnboardingAnswers {
-  const answers: CoachOnboardingAnswers = { nutrition_offered: true, ...seed };
-  for (let pass = 0; pass < 6; pass++) {
-    let added = 0;
-    for (const chapter of applicableChapters(answers)) {
-      for (const q of visibleQuestionsForChapter(chapter, answers)) {
-        if (answers[q.id] !== undefined) continue;
-        const first = q.options?.[0]?.value;
-        let value: CoachOnboardingAnswers[string];
-        if (q.type === "multi_select" || q.type === "scenario") value = first ? [first] : ["x"];
-        else if (q.type === "boolean") value = true;
-        else if (q.type === "slider" || q.type === "number") value = q.min ?? 1;
-        else if (q.type === "text") value = "Explicit coach answer";
-        else value = first ?? "x";
-        answers[q.id] = value;
-        added++;
-      }
-    }
-    if (added === 0) break;
-  }
-  return answers;
-}
+const SCOPE: CalibrationAnswers = { coaching_areas: ["strength", "physique"], experience_levels: ["intermediate"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["build_muscle", "get_stronger"] };
 
-function build(answers: CoachOnboardingAnswers, opts: { coachUserId?: string; authorityConfirmed?: boolean } = {}) {
+function build(answers: CalibrationAnswers, opts: { coachUserId?: string; authorityConfirmed?: boolean } = {}) {
   return buildMethodFromCalibration({
     answers,
     aiAuthority: conservativeAuthorityConfig(),
@@ -87,56 +65,59 @@ function build(answers: CoachOnboardingAnswers, opts: { coachUserId?: string; au
   });
 }
 
-const FULL = answerEverything();
+const FULL = answerAllRequired(SCOPE);
 
 console.log("\n1. What counts as calibrated\n");
 
-check("an empty calibration is not ready and lists every required question", () => {
+check("an empty calibration is not ready: areas aren't confirmed, authority isn't confirmed", () => {
   const r = calibrationReadiness({ answers: {}, aiAuthorityConfirmed: false });
   assert.equal(r.ready, false);
-  assert.ok(r.unansweredQuestionIds.length > 40, `only ${r.unansweredQuestionIds.length} required`);
+  assert.ok(r.unansweredQuestionIds.includes("coaching_areas"));
   assert.equal(r.authorityUnconfirmed, true);
 });
 
-check("every required question answered + authority explicitly confirmed → ready", () => {
+check("every required question that applies answered + authority explicitly confirmed → ready", () => {
   const r = calibrationReadiness({ answers: FULL, aiAuthorityConfirmed: true });
   assert.deepEqual(r.unansweredQuestionIds, []);
   assert.equal(r.ready, true);
 });
 
-check("all questions answered but authority never confirmed → NOT ready (no silent authority)", () => {
+check("all answered but authority never confirmed → NOT ready (no silent authority)", () => {
   const r = calibrationReadiness({ answers: FULL, aiAuthorityConfirmed: false });
   assert.equal(r.ready, false);
   assert.equal(r.authorityUnconfirmed, true);
 });
 
 check("a single missing required answer blocks confirmation", () => {
-  const id = requiredCalibrationQuestionIds(FULL)[5];
+  const id = requiredCalibrationQuestionIds(FULL).find((k) => k.startsWith("t_"))!;
   const partial = { ...FULL };
   delete partial[id];
   const r = calibrationReadiness({ answers: partial, aiAuthorityConfirmed: true });
-  assert.deepEqual(r.unansweredQuestionIds, [id]);
+  assert.ok(r.unansweredQuestionIds.includes(id));
   assert.throws(() => build(partial), CalibrationIncompleteError);
 });
 
-check("whitespace-only text or an empty list is not an answer", () => {
-  const textQ = requiredCalibrationQuestionIds(FULL).map((id) => COACH_ONBOARDING_QUESTIONS.find((q) => q.id === id)!).find((q) => q.type === "multi_select" || q.type === "scenario")!;
-  const r = calibrationReadiness({ answers: { ...FULL, [textQ.id]: [] }, aiAuthorityConfirmed: true });
-  assert.ok(r.unansweredQuestionIds.includes(textQ.id));
+check("an empty list is not an answer", () => {
+  const r = calibrationReadiness({ answers: { ...FULL, t_effort_metric: [] }, aiAuthorityConfirmed: true });
+  assert.equal(r.ready, false);
 });
 
-console.log("\n2. Live-unsupported survey content\n");
-
-check("'existing work' (demo templates/meals) is hidden in live calibration", () => {
-  assert.deepEqual([...LIVE_UNSUPPORTED_CHAPTERS], ["existing_work"]);
-  assert.ok(!liveCalibrationChapters(FULL).includes("existing_work"));
-  assert.ok(liveCalibrationChapters(FULL).includes("ai_authority") && liveCalibrationChapters(FULL).includes("review"));
+check("a carried-over answer flagged for confirmation blocks confirming until looked at", () => {
+  const r = calibrationReadiness({ answers: { ...FULL, __needsConfirmation: ["t_session_length"] }, aiAuthorityConfirmed: true });
+  assert.equal(r.ready, false);
+  assert.deepEqual(r.needsConfirmation, ["t_session_length"]);
 });
 
-check("hidden unsupported chapters contribute no required questions (never block completion)", () => {
-  const required = new Set(requiredCalibrationQuestionIds(FULL));
-  const fromHidden = COACH_ONBOARDING_QUESTIONS.filter((q) => LIVE_UNSUPPORTED_CHAPTERS.includes(q.chapter) && required.has(q.id));
-  assert.equal(fromHidden.length, 0);
+console.log("\n2. Scope comes only from the coach's confirmed areas\n");
+
+check("before areas are confirmed, only Step 0 exists", () => {
+  assert.deepEqual(liveCalibrationChapters({}), ["your_coaching"]);
+});
+
+check("confirmed areas assemble the chapters; authority and review always apply", () => {
+  const chapters = liveCalibrationChapters(FULL);
+  for (const c of ["your_coaching", "training", "strength", "physique", "nutrition", "voice", "safety", "ai_authority", "review"]) assert.ok(chapters.includes(c as never), c);
+  for (const c of ["endurance", "sport_performance", "integration", "general_fitness"]) assert.ok(!chapters.includes(c as never), c);
 });
 
 console.log("\n3. Mapping explicit answers → confirmed method, with provenance\n");
@@ -148,24 +129,37 @@ check("confirmed method: active, versioned, owned by the confirming coach", () =
   assert.equal(operatingModel.version, 1);
   assert.equal(operatingModel.coachId, COACH_A);
   assert.equal(aiAuthority.coachId, COACH_A);
+  assert.equal(operatingModel.calibration?.schema, 2);
 });
 
-check("every required answer carries coach provenance (calibration_answer)", () => {
+check("every answered question carries coach provenance (calibration_answer)", () => {
   const { operatingModel } = build(FULL);
-  const required = requiredCalibrationQuestionIds(FULL);
-  assert.ok(isCoachOperatingModelConfirmed(operatingModel, required));
-  for (const id of required) assert.equal(knowledgeSourceOf(operatingModel.provenance[id]?.source), "calibration_answer", id);
+  const ctx = buildCalibrationContext(FULL);
+  for (const key of requiredCalibrationQuestionIds(FULL)) {
+    const id = ALL_CALIBRATION_ITEMS.find((q) => q.kind !== "group" && answerKeyOf(q) === key && isApplicableItem(q, ctx))?.id ?? key;
+    const p = operatingModel.provenance[id];
+    assert.ok(p && isCoachAuthoredSource(knowledgeSourceOf(p.source)), key);
+  }
 });
 
-check("a value the coach never answered stays a system default — never coach truth", () => {
+check("a question the coach never answered has NO provenance — unknown, never an implied rule", () => {
   const { operatingModel } = build(FULL);
-  const unanswered = Object.entries(operatingModel.provenance).filter(([id]) => FULL[id] === undefined);
-  for (const [, p] of unanswered) assert.ok(!isCoachAuthoredSource(knowledgeSourceOf(p.source)));
+  assert.equal(operatingModel.provenance.t_rest_periods, undefined);
+  assert.equal(operatingModel.provenance.sit_low_sleep, undefined);
+  assert.ok(Object.values(operatingModel.provenance).every((p) => isCoachAuthoredSource(knowledgeSourceOf(p.source))));
 });
 
-check("the calibration-confirmed method also satisfies program generation's method gate", () => {
+check("the calibration-confirmed method satisfies program generation's method gate", () => {
   const { operatingModel } = build(FULL);
   assert.equal(getMethodologyConfirmation(operatingModel).confirmed, true);
+});
+
+check("ranges are stored truthfully in the Brain (never collapsed)", () => {
+  const answers = { ...FULL, t_session_length: { min: 60, max: 75, unit: "min" } };
+  const { operatingModel } = build(answers);
+  assert.deepEqual(operatingModel.calibration?.answers.t_session_length, { min: 60, max: 75, unit: "min" });
+  // The legacy single field is NOT set from a range (exact-or-none).
+  assert.equal(operatingModel.programArchitecture.sessionDurationMinutesTypical, 60 === 60 ? createDefaultCoachOperatingModel({ coachId: "x", workspaceId: "y", nowIso: NOW, businessName: "z" }).programArchitecture.sessionDurationMinutesTypical : -1);
 });
 
 console.log("\n4. Defaults and legacy configuration never count\n");
@@ -173,24 +167,19 @@ console.log("\n4. Defaults and legacy configuration never count\n");
 check("OPTIM's default model is not confirmed and its provenance is system_default", () => {
   const model = createDefaultCoachOperatingModel({ coachId: COACH_A, workspaceId: WS, nowIso: NOW, businessName: "OPTIM" });
   assert.equal(getMethodologyConfirmation(model).confirmed, false);
-  assert.equal(isCoachOperatingModelConfirmed(model, requiredCalibrationQuestionIds(FULL)), false);
   for (const p of Object.values(model.provenance)) assert.equal(knowledgeSourceOf(p.source), "system_default");
 });
 
-check("legacy 12-field confirmation is NOT calibration: its answers leave most required questions unanswered", () => {
-  // What the legacy Settings form submits: the 12 generation fields only.
-  const legacyAnswers = Object.fromEntries(GENERATION_METHOD_QUESTION_IDS.map((id) => [id, FULL[id] ?? ""]));
-  const parsed = parseMethodAnswers(legacyAnswers);
+check("legacy 12-field confirmation is NOT calibration", () => {
+  const legacyAnswers = { program_splits: ["full_body"], program_frequency: "3_4", program_sets_reps: "3_4", program_rep_philosophy: "moderate_8_12", program_rpe_rir: "rir", program_proximity_to_failure: "1_2_reps_in_reserve", program_progression: "double_progression", program_deload: "6", program_warmup: "minimal", program_cardio: "rarely_used", program_exercises_avoided: "", practice_common_goals: ["build_muscle"] };
+  const parsed = parseMethodAnswers(Object.fromEntries(GENERATION_METHOD_QUESTION_IDS.map((id) => [id, (legacyAnswers as Record<string, unknown>)[id] ?? ""])) as never);
   assert.ok(parsed.ok, parsed.ok ? "" : parsed.message);
   const base = createDefaultCoachOperatingModel({ coachId: COACH_A, workspaceId: WS, nowIso: NOW, businessName: "OPTIM" });
   const legacy = confirmMethodology(base, (parsed as { ok: true; answers: Parameters<typeof confirmMethodology>[1] }).answers, NOW);
-  // The legacy form looked "confirmed" to generation…
   assert.equal(getMethodologyConfirmation(legacy).confirmed, true);
-  // …but as calibration it is nowhere near complete, so it can't seed a Brain.
-  const r = calibrationReadiness({ answers: legacyAnswers, aiAuthorityConfirmed: false });
+  const r = calibrationReadiness({ answers: legacyAnswers as never, aiAuthorityConfirmed: false });
   assert.equal(r.ready, false);
-  assert.ok(r.unansweredQuestionIds.length > 30, `${r.unansweredQuestionIds.length}`);
-  assert.throws(() => build(legacyAnswers), CalibrationIncompleteError);
+  assert.throws(() => build(legacyAnswers as never));
 });
 
 check("inferred values are never coach-authored", () => {
@@ -282,11 +271,13 @@ console.log("\n7. Coach isolation (pure)\n");
 
 check("Coach A's confirmed method is owned by A; building B's from B's answers never mixes", () => {
   const a = build(FULL, { coachUserId: COACH_A });
-  const bAnswers = answerEverything({ program_splits: ["upper_lower"] });
+  const bAnswers = answerAllRequired({ ...SCOPE, t_splits: { base: ["upper_lower"], varies: "no" } });
   const b = build(bAnswers, { coachUserId: COACH_B });
   assert.equal(a.operatingModel.coachId, COACH_A);
   assert.equal(b.operatingModel.coachId, COACH_B);
   assert.notEqual(a.operatingModel, b.operatingModel);
+  assert.deepEqual(a.operatingModel.programArchitecture.preferredSplits, ["full_body"]);
+  assert.deepEqual(b.operatingModel.programArchitecture.preferredSplits, ["upper_lower"]);
 });
 
 console.log("\n8. Stale-draft protection\n");
@@ -350,7 +341,7 @@ console.log("\n9. Chapter order sanity\n");
 
 check("live chapters keep the canonical order", () => {
   const live = liveCalibrationChapters(FULL);
-  const order = live.map((c) => ALL_CHAPTER_IDS_IN_ORDER.indexOf(c));
+  const order = live.map((c) => CHAPTER_ORDER.indexOf(c));
   assert.deepEqual(order, [...order].sort((x, y) => x - y));
 });
 

@@ -8,12 +8,25 @@
 // same prerequisites; this form only reflects them.
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { MissingPrerequisite } from "@/lib/coach/generation-prerequisites";
 import type { SaveResult } from "@/components/coach/live-start-date-form";
 
-export function LiveProposalGenerateForm({ action, missing }: { action: (prev: SaveResult, formData: FormData) => Promise<SaveResult>; missing: MissingPrerequisite[] }) {
+export function LiveProposalGenerateForm({
+  action,
+  missing,
+  programLengthHint = null,
+}: {
+  action: (prev: SaveResult, formData: FormData) => Promise<SaveResult>;
+  missing: MissingPrerequisite[];
+  /** Gate 3.1 — the coach's usual program length from their method. */
+  programLengthHint?: { min: number; max: number | null; preferred: number | null } | null;
+}) {
+  const [weeks, setWeeks] = useState<string>(programLengthHint ? (programLengthHint.preferred !== null ? String(programLengthHint.preferred) : "") : "4");
+  const weeksNumber = Number(weeks);
+  const outsideUsual = !!programLengthHint && weeks !== "" && Number.isFinite(weeksNumber) && (weeksNumber < programLengthHint.min || (programLengthHint.max !== null && weeksNumber > programLengthHint.max));
+  const usualLabel = programLengthHint ? (programLengthHint.max === null ? `${programLengthHint.min}+` : programLengthHint.min === programLengthHint.max ? String(programLengthHint.min) : `${programLengthHint.min}–${programLengthHint.max}`) : null;
   const [result, formAction, pending] = useActionState(action, null);
   const blocked = missing.length > 0;
 
@@ -43,12 +56,13 @@ export function LiveProposalGenerateForm({ action, missing }: { action: (prev: S
         </label>
         <label className="flex flex-col gap-1 text-xs text-neutral">
           Weeks
-          <input type="number" name="durationWeeks" required defaultValue={4} min={1} max={20} step={1} className="w-24 rounded border border-border-strong bg-transparent px-2 py-1.5 text-sm text-off-white" />
+          <input type="number" name="durationWeeks" required value={weeks} onChange={(e) => setWeeks(e.target.value)} min={1} max={20} step={1} className="w-24 rounded border border-border-strong bg-transparent px-2 py-1.5 text-sm text-off-white" />
         </label>
         <Button type="submit" variant="primary" size="sm" loading={pending} disabled={blocked}>
           {pending ? "Generating…" : "Generate proposal"}
         </Button>
       </form>
+      {usualLabel ? <p className="text-xs text-neutral">Your usual program length: {usualLabel} weeks.{outsideUsual ? " This is outside it — that's fine if it's intentional." : ""}</p> : null}
       {result ? (
         <p role="status" className={`text-sm ${result.ok ? "text-success" : "text-error"}`}>
           {result.message}

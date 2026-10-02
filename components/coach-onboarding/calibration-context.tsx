@@ -19,10 +19,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useCoachOperatingModel } from "@/hooks/use-coach-operating-model";
-import { applicableChapters, applyCoachAnswersToModel } from "@/lib/coach/coach-onboarding-engine";
 import { createDefaultCoachOperatingModel, type CoachOperatingModel } from "@/lib/coach/operating-model";
 import { liveCalibrationChapters, calibrationReadiness, conservativeAuthorityConfig, authoritySettings } from "@/lib/coach/coach-brain";
-import type { CoachOnboardingAnswers, CoachOnboardingChapterId } from "@/lib/coach/coach-onboarding-questions";
+import { applyCalibrationAnswersToModel } from "@/lib/coach/calibration/model";
+import type { CalibrationAnswers as CoachOnboardingAnswers, CalibrationChapterId as CoachOnboardingChapterId } from "@/lib/coach/calibration/types";
 import type { AiAuthorityConfig, CoachAiAuthoritySettings } from "@/lib/coach/ai-authority";
 import { confirmCalibrationAction, discardMethodReviewAction, saveCalibrationProgressAction } from "@/app/actions/coach-calibration";
 import type { SaveCalibrationInput } from "@/lib/production/coach-brain";
@@ -43,6 +43,9 @@ export interface CalibrationAdapter {
   businessName: string;
   answers: CoachOnboardingAnswers;
   saveAnswers: (next: CoachOnboardingAnswers, options?: { debounce?: boolean }) => void;
+  /** Applies a change to the LATEST answers (never a stale snapshot), so two
+   * quick changes on one screen can't overwrite each other. */
+  updateAnswers: (update: (prev: CoachOnboardingAnswers) => CoachOnboardingAnswers, options?: { debounce?: boolean }) => void;
   saveStatus: SaveStatus;
   saveError: string | null;
   retrySave: () => void;
@@ -84,16 +87,21 @@ export function DemoCalibrationProvider({ businessName, children }: { businessNa
   const adapter: CalibrationAdapter = {
     mode: "demo",
     businessName,
-    answers: com.answers,
-    saveAnswers: (next) => com.saveAnswers(next),
+    answers: com.answers as unknown as CoachOnboardingAnswers,
+    saveAnswers: (next) => com.saveAnswers(next as never),
+    updateAnswers: (update) => com.saveAnswers(update(com.answers as unknown as CoachOnboardingAnswers) as never),
     saveStatus: "idle",
     saveError: null,
     retrySave: () => {},
     hasProgress: !!com.progress?.updatedAtIso,
     initialPosition: null,
     recordPosition: () => {},
-    chapters: applicableChapters(com.answers),
-    buildDraftModel: com.buildDraftModel,
+    chapters: liveCalibrationChapters(com.answers as unknown as CoachOnboardingAnswers),
+    buildDraftModel: () => {
+      const nowIso = new Date().toISOString();
+      const base = createDefaultCoachOperatingModel({ coachId: com.coachId ?? "", workspaceId: com.workspaceId, nowIso, businessName });
+      return applyCalibrationAnswersToModel(base, com.answers as unknown as CoachOnboardingAnswers, nowIso);
+    },
     previousActiveModel: previousActive,
     isRevision: !!previousActive,
     requireExplicitCompletion: false,
@@ -130,6 +138,11 @@ const TEXT_DEBOUNCE_MS = 600;
 
 export function LiveCalibrationProvider({ initial, children }: { initial: LiveCalibrationInitial; children: ReactNode }) {
   const router = useRouter();
+  // The session's mode is fixed when it starts: confirming refreshes the page
+  // (and the server then reports no open review), which must not turn an
+  // "updated method" completion into a first-calibration one.
+  const [sessionMode] = useState(initial.mode);
+  const [sessionActiveModel] = useState(initial.activeModel);
   const [answers, setAnswers] = useState<CoachOnboardingAnswers>(initial.answers);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -196,12 +209,18 @@ export function LiveCalibrationProvider({ initial, children }: { initial: LiveCa
     if (timer.current) clearTimeout(timer.current);
   }, []);
 
+  const answersRef = useRef<CoachOnboardingAnswers>(initial.answers);
   const saveAnswers = useCallback(
     (next: CoachOnboardingAnswers, options?: { debounce?: boolean }) => {
+      answersRef.current = next;
       setAnswers(next);
       enqueue({ answers: next }, !!options?.debounce);
     },
     [enqueue]
+  );
+  const updateAnswers = useCallback(
+    (update: (prev: CoachOnboardingAnswers) => CoachOnboardingAnswers, options?: { debounce?: boolean }) => saveAnswers(update(answersRef.current), options),
+    [saveAnswers]
   );
 
   const retrySave = useCallback(() => {
@@ -252,7 +271,7 @@ export function LiveCalibrationProvider({ initial, children }: { initial: LiveCa
     // here; the server rebuilds and validates it on confirm.
     const nowIso = new Date().toISOString();
     const base = createDefaultCoachOperatingModel({ coachId: initial.coachUserId, workspaceId: initial.workspaceId, nowIso, businessName: initial.businessName });
-    return applyCoachAnswersToModel(base, answers, nowIso);
+    return applyCalibrationAnswersToModel(base, answers, nowIso);
   }, [answers, initial.coachUserId, initial.workspaceId, initial.businessName]);
 
   const adapter: CalibrationAdapter = {
@@ -260,6 +279,7 @@ export function LiveCalibrationProvider({ initial, children }: { initial: LiveCa
     businessName: initial.businessName,
     answers,
     saveAnswers,
+    updateAnswers,
     saveStatus,
     saveError,
     retrySave,
@@ -268,8 +288,8 @@ export function LiveCalibrationProvider({ initial, children }: { initial: LiveCa
     recordPosition,
     chapters: liveCalibrationChapters(answers),
     buildDraftModel,
-    previousActiveModel: initial.mode === "review" ? initial.activeModel : null,
-    isRevision: initial.mode === "review",
+    previousActiveModel: sessionMode === "review" ? sessionActiveModel : null,
+    isRevision: sessionMode === "review",
     requireExplicitCompletion: true,
     authority,
     markReviewReached,
@@ -283,9 +303,9 @@ export function LiveCalibrationProvider({ initial, children }: { initial: LiveCa
       router.refresh();
       return { ok: true };
     },
-    afterConfirmHref: initial.mode === "review" ? "/coach/settings" : "/coach",
+    afterConfirmHref: sessionMode === "review" ? "/coach/settings" : "/coach",
     discardReview:
-      initial.mode === "review"
+      sessionMode === "review"
         ? async () => {
             const result = await discardMethodReviewAction().catch(() => ({ ok: false as const, message: "Couldn't reach OPTIM." }));
             if (result.ok) router.push("/coach/settings");
