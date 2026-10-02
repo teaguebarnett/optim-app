@@ -27,6 +27,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { useCalibration } from "@/components/coach-onboarding/calibration-context";
 import { AiAuthorityPanel } from "@/components/coach/ai-authority-panel";
 import { ALL_CALIBRATION_ITEMS, CALIBRATION_CHAPTERS, CHAPTER_ORDER, answerKeyOf } from "@/lib/coach/calibration/questions";
@@ -557,26 +558,18 @@ function CompactProgress({
         <span>
           Chapter {chapterNumber} of {chapters.length} · {summary.percentComplete}% complete
         </span>
-        <label className="sr-only" htmlFor="calibration-chapter-picker">
-          Jump to chapter
-        </label>
-        <select
+        <SelectMenu
           id="calibration-chapter-picker"
+          ariaLabel="Jump to chapter"
           value={chapterId}
-          onChange={(e) => onSelectChapter(e.target.value as CoachOnboardingChapterId)}
-          className="min-h-11 max-w-[55%] rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 text-meta text-off-white"
-        >
-          {chapters.map((id) => {
+          onChange={onSelectChapter}
+          className="max-w-[55%]"
+          options={chapters.map((id) => {
             const status = chapterStatus(id, cal.answers, { aiAuthorityConfirmed: cal.authority ? cal.authority.confirmed : true });
             const note = railNote(id, status, cal.answers);
-            return (
-              <option key={id} value={id}>
-                {CHAPTER_META.get(id)!.title}
-                {status === "complete" && id !== "review" ? " ✓" : note ? ` — ${note}` : ""}
-              </option>
-            );
+            return { value: id, label: CHAPTER_META.get(id)!.title, description: status === "complete" && id !== "review" ? "Complete" : note || undefined };
           })}
-        </select>
+        />
       </div>
       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border">
         <div className="h-full rounded-full bg-accent" style={{ width: `${summary.percentComplete}%` }} />

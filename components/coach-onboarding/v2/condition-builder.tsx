@@ -8,12 +8,13 @@
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { describeDecisionPolicy, opsForFactor, validateDecisionPolicy } from "@/lib/coach/calibration/decision-policy";
 import type { ChoiceOption, ConditionOp, DecisionCondition, DecisionPolicy, DecisionRule, FactorDef, ScenarioSpec } from "@/lib/coach/calibration/types";
 
 const OP_LABELS: Record<ConditionOp, string> = { is: "is", is_not: "is not", is_one_of: "is one of", gte: "is at least", lte: "is at most", between: "is between" };
 
-const selectClass = "min-h-11 rounded-[var(--radius-sm)] border border-border-strong bg-surface-input px-2 text-meta text-off-white";
+const inputClass = "min-h-11 rounded-[var(--radius-sm)] border border-border-strong bg-surface-input px-2 text-meta text-off-white";
 
 function emptyCondition(factors: FactorDef[]): DecisionCondition {
   const f = factors[0];
@@ -37,28 +38,10 @@ function ConditionRow({ condition, factors, onChange, onRemove }: { condition: D
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] bg-surface px-3 py-2">
-      <select aria-label="Condition" value={factor.id} onChange={(e) => setFactor(e.target.value)} className={selectClass}>
-        {factors.map((f) => (
-          <option key={f.id} value={f.id}>
-            {f.label}
-          </option>
-        ))}
-      </select>
-      <select aria-label="Comparison" value={condition.op} onChange={(e) => setOp(e.target.value as ConditionOp)} className={selectClass}>
-        {ops.map((op) => (
-          <option key={op} value={op}>
-            {OP_LABELS[op]}
-          </option>
-        ))}
-      </select>
+      <SelectMenu ariaLabel="Condition" value={factor.id} options={factors.map((f) => ({ value: f.id, label: f.label }))} onChange={setFactor} />
+      <SelectMenu ariaLabel="Comparison" value={condition.op} options={ops.map((op) => ({ value: op, label: OP_LABELS[op] }))} onChange={setOp} />
       {factor.type === "enum" && condition.op !== "is_one_of" ? (
-        <select aria-label="Value" value={String(condition.value)} onChange={(e) => onChange({ ...condition, value: e.target.value })} className={selectClass}>
-          {enumOptions.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <SelectMenu ariaLabel="Value" value={String(condition.value)} options={enumOptions.map((o) => ({ value: o.value, label: o.label }))} onChange={(v) => onChange({ ...condition, value: v })} />
       ) : null}
       {factor.type === "enum" && condition.op === "is_one_of" ? (
         <span className="flex flex-wrap gap-1.5">
@@ -80,21 +63,26 @@ function ConditionRow({ condition, factors, onChange, onRemove }: { condition: D
         </span>
       ) : null}
       {factor.type === "number" && condition.op !== "between" ? (
-        <input type="number" aria-label="Value" value={typeof condition.value === "number" ? condition.value : ""} onChange={(e) => onChange({ ...condition, value: Number(e.target.value) })} className={`${selectClass} w-20`} />
+        <input type="number" aria-label="Value" value={typeof condition.value === "number" ? condition.value : ""} onChange={(e) => onChange({ ...condition, value: Number(e.target.value) })} className={`${inputClass} w-20`} />
       ) : null}
       {factor.type === "number" && condition.op === "between" ? (
         <span className="flex items-center gap-1.5">
-          <input type="number" aria-label="From" value={Array.isArray(condition.value) ? (condition.value[0] as number) : ""} onChange={(e) => onChange({ ...condition, value: [Number(e.target.value), Array.isArray(condition.value) ? (condition.value[1] as number) : Number(e.target.value)] })} className={`${selectClass} w-16`} />
+          <input type="number" aria-label="From" value={Array.isArray(condition.value) ? (condition.value[0] as number) : ""} onChange={(e) => onChange({ ...condition, value: [Number(e.target.value), Array.isArray(condition.value) ? (condition.value[1] as number) : Number(e.target.value)] })} className={`${inputClass} w-16`} />
           <span className="text-meta text-neutral">and</span>
-          <input type="number" aria-label="To" value={Array.isArray(condition.value) ? (condition.value[1] as number) : ""} onChange={(e) => onChange({ ...condition, value: [Array.isArray(condition.value) ? (condition.value[0] as number) : Number(e.target.value), Number(e.target.value)] })} className={`${selectClass} w-16`} />
+          <input type="number" aria-label="To" value={Array.isArray(condition.value) ? (condition.value[1] as number) : ""} onChange={(e) => onChange({ ...condition, value: [Array.isArray(condition.value) ? (condition.value[0] as number) : Number(e.target.value), Number(e.target.value)] })} className={`${inputClass} w-16`} />
         </span>
       ) : null}
       {factor.type === "number" && factor.unit ? <span className="text-meta text-neutral">{factor.unit}</span> : null}
       {factor.type === "boolean" ? (
-        <select aria-label="Value" value={String(condition.value)} onChange={(e) => onChange({ ...condition, value: e.target.value === "true" })} className={selectClass}>
-          <option value="true">Yes</option>
-          <option value="false">No</option>
-        </select>
+        <SelectMenu
+          ariaLabel="Value"
+          value={String(condition.value)}
+          options={[
+            { value: "true", label: "Yes" },
+            { value: "false", label: "No" },
+          ]}
+          onChange={(v) => onChange({ ...condition, value: v === "true" })}
+        />
       ) : null}
       <button type="button" aria-label="Remove condition" onClick={onRemove} className="ml-auto rounded-full p-2 text-neutral hover:text-off-white">
         <Trash2 size={14} aria-hidden="true" />
@@ -105,16 +93,7 @@ function ConditionRow({ condition, factors, onChange, onRemove }: { condition: D
 
 function ActionSelect({ actions, value, onChange, label }: { actions: ChoiceOption[]; value: string | undefined; onChange: (v: string) => void; label: string }) {
   return (
-    <select aria-label={label} value={value ?? ""} onChange={(e) => onChange(e.target.value)} className={`${selectClass} min-w-[12rem] max-w-full`}>
-      <option value="" disabled>
-        Choose what happens
-      </option>
-      {actions.map((a) => (
-        <option key={a.value} value={a.value}>
-          {a.label}
-        </option>
-      ))}
-    </select>
+    <SelectMenu ariaLabel={label} value={value ?? ""} options={actions.map((a) => ({ value: a.value, label: a.label }))} onChange={onChange} placeholder="Choose what happens" className="min-w-[12rem]" />
   );
 }
 
