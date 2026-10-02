@@ -34,6 +34,7 @@ import type { CoachOnboardingAnswers } from "../coach/coach-onboarding-questions
 import { CHAPTER_ORDER } from "../coach/calibration/questions.ts";
 import { validateCalibrationAnswers } from "../coach/calibration/validate.ts";
 import { isV2Answers, mapV1AnswersToV2 } from "../coach/calibration/v1-migration.ts";
+import { carryOverUnchangedProvenance, diffCalibrationAnswers } from "../coach/calibration/settings-editor.ts";
 import type { CalibrationAnswers, CalibrationChapterId } from "../coach/calibration/types.ts";
 import type { AiAuthorityConfig, AiAuthorityLevel, CoachAiAuthoritySettings } from "../coach/ai-authority.ts";
 import { AI_AUTHORITY_LEVELS } from "../coach/ai-authority.ts";
@@ -360,6 +361,60 @@ export async function confirmOwnCalibration(): Promise<{ versionId: string; vers
   });
   if (error || !data) throw new Error(`Couldn't confirm your coaching method: ${error?.message ?? "no version returned"}`);
   return { versionId: data as string, version: nextVersion };
+}
+
+/**
+ * Gate 3.2 — Settings is the editor for a calibrated coach's method. The
+ * coach edits a draft of their active answers in the browser; confirming
+ * sends the whole answer set here, where it is validated and built exactly
+ * like a calibration (same validation, applicability, readiness and model
+ * projection) and confirmed atomically as ONE new immutable version. The
+ * active version is never mutated; nothing is saved until this runs.
+ *
+ * `baseVersionId` is the version the coach started editing from — if it's
+ * no longer active (another tab saved, or authority changed) nothing is
+ * written. Authority is carried over unchanged (it has its own confirmed
+ * control). A submission with no actual change is refused.
+ */
+export async function confirmOwnMethodEdit(input: { answers: CalibrationAnswers; baseVersionId: string }): Promise<{ versionId: string; version: number; changed: number }> {
+  const state = await getOwnCoachBrainState();
+  const active = state.activeMethod;
+  if (state.calibration.state !== "calibrated" || !active) throw new Error("Finish calibration before editing your method.");
+  if (!active.operatingModel.calibration) throw new Error("Refine your method once before editing it in Settings.");
+  if (active.versionId !== input.baseVersionId) throw new Error("Your method changed since you started editing. Reload Settings and make your change again.");
+
+  const previousAnswers = (state.activeCalibrationAnswers ?? {}) as CalibrationAnswers;
+  const nowIso = new Date().toISOString();
+  const built = buildMethodFromCalibration({
+    answers: input.answers,
+    aiAuthority: active.aiAuthority.global,
+    aiAuthorityConfirmed: true,
+    coachUserId: state.coachUserId,
+    workspaceId: state.workspaceId,
+    businessName: await businessNameFor(state.workspaceId),
+    methodVersion: active.version + 1,
+    nowIso,
+  });
+  const changes = diffCalibrationAnswers(previousAnswers, built.answers);
+  if (changes.length === 0) throw new Error("There are no changes to save.");
+  const operatingModel = {
+    ...built.operatingModel,
+    provenance: carryOverUnchangedProvenance({ previousProvenance: active.operatingModel.provenance ?? {}, previousAnswers, nextProvenance: built.operatingModel.provenance, nextAnswers: built.answers }),
+  };
+
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase.rpc("confirm_coach_method", {
+    p_workspace_id: state.workspaceId,
+    p_source: "method_review",
+    p_operating_model: operatingModel,
+    // Authority is unchanged by a methodology edit — the exact confirmed
+    // settings carry over.
+    p_ai_authority: active.aiAuthority,
+    p_calibration_answers: built.answers,
+    p_expected_active_version_id: active.versionId,
+  });
+  if (error || !data) throw new Error(`Couldn't save your method: ${error?.message ?? "no version returned"}`);
+  return { versionId: data as string, version: active.version + 1, changed: changes.length };
 }
 
 /** A calibrated coach's explicit authority change (Settings). Creates a new

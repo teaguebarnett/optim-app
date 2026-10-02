@@ -42,6 +42,14 @@ export function WheelColumn({ values, index, onChange, ariaLabel, id }: WheelCol
   const [activeIndex, setActiveIndex] = useState(index);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Only a scroll the person started reports a value. The mount-time
+  // scrollTo (centering the starting row) also fires a scroll event; without
+  // this, merely displaying a wheel would commit its starting value as if it
+  // had been chosen.
+  const userScrolled = useRef(false);
+  const markUserScroll = () => {
+    userScrolled.current = true;
+  };
 
   useEffect(() => {
     containerRef.current?.scrollTo({ top: index * ROW_HEIGHT, behavior: "auto" });
@@ -64,6 +72,7 @@ export function WheelColumn({ values, index, onChange, ariaLabel, id }: WheelCol
   }
 
   function handleScroll() {
+    if (!userScrolled.current) return;
     if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
     scrollTimeout.current = setTimeout(() => {
       const el = containerRef.current;
@@ -90,6 +99,9 @@ export function WheelColumn({ values, index, onChange, ariaLabel, id }: WheelCol
       aria-label={ariaLabel}
       tabIndex={0}
       onScroll={handleScroll}
+      onPointerDown={markUserScroll}
+      onTouchStart={markUserScroll}
+      onWheel={markUserScroll}
       onKeyDown={handleKeyDown}
       className="relative flex-1 snap-y snap-mandatory overflow-y-scroll overscroll-contain outline-none [&::-webkit-scrollbar]:hidden"
       style={{

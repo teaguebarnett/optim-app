@@ -60,6 +60,8 @@ export async function LiveCoachSettingsPage() {
         {method ? (
           <CoachMethodSettings
             model={method.operatingModel}
+            versionId={method.versionId}
+            authority={method.aiAuthority}
             version={method.version}
             confirmedLabel={format(method.confirmedAtIso) ?? ""}
             calibratedLabel={format(state.calibration.calibratedAtIso)}
@@ -75,7 +77,9 @@ export async function LiveCoachSettingsPage() {
         )}
       </section>
 
-      {method ? (
+      {/* Gate 3.2 — for an adaptive-calibration method, authority is one of
+          the method's categories (inside the editor above). */}
+      {method && !method.operatingModel.calibration ? (
         <section className="space-y-3">
           <div className="flex items-center gap-2">
             <Sparkles size={16} className="text-accent-fg" aria-hidden="true" />

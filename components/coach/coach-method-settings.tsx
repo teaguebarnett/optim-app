@@ -1,41 +1,47 @@
 "use client";
 
-// Gate 3 — Settings → Coaching method. The coach-facing view of their Coach
-// Brain's active method: confirmed status, the same human-readable summary
-// the calibration Review shows, and one way to change it — "Review or update
-// your method", which opens a DRAFT prefilled from the active method. The
-// active method keeps running until the coach explicitly confirms the
-// update. No low-level configuration fields here (the legacy 12-field form,
-// components/coach/live-coach-playbook-summary.tsx, is no longer shown).
+// Gate 3 — Settings → Coaching method: the coach's active Coach Brain method.
+//
+// Gate 3.2 — for a method confirmed through the adaptive calibration, this IS
+// the method editor (CoachMethodEditor): categories open in place and edit
+// the canonical answers; a confirmed edit becomes one new version. The coach
+// is never sent back through the calibration interview. A method confirmed
+// before the adaptive calibration (v1, no v2 answers to edit) still refines
+// once through the interview, unchanged.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MethodSummaryGrid } from "@/components/coach-onboarding/method-summary";
-import { CalibrationSummary } from "@/components/coach-onboarding/v2/calibration-summary";
+import { CoachMethodEditor } from "@/components/coach/coach-method-editor";
 import { startMethodReviewAction } from "@/app/actions/coach-calibration";
 import type { CoachOperatingModel } from "@/lib/coach/operating-model";
-import type { CalibrationChapterId as CoachOnboardingChapterId } from "@/lib/coach/calibration/types";
+import type { CoachAiAuthoritySettings } from "@/lib/coach/ai-authority";
 
 export function CoachMethodSettings({
   model,
+  versionId,
   version,
   confirmedLabel,
   calibratedLabel,
   hasOpenReview,
+  authority,
 }: {
   model: CoachOperatingModel;
+  versionId: string;
   version: number;
   confirmedLabel: string;
   calibratedLabel: string | null;
   hasOpenReview: boolean;
+  authority: CoachAiAuthoritySettings;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<{ version: number; changed: number } | null>(null);
 
-  async function openReview(chapter?: CoachOnboardingChapterId) {
+  async function openReview() {
     setBusy(true);
     setError(null);
     const result = await startMethodReviewAction();
@@ -44,7 +50,31 @@ export function CoachMethodSettings({
       setError(result.message);
       return;
     }
-    router.push(chapter ? `/coach-onboarding?chapter=${chapter}` : "/coach-onboarding");
+    router.push("/coach-onboarding");
+  }
+
+  if (model.calibration) {
+    return (
+      <div className="space-y-5">
+        <StatusCard version={version} confirmedLabel={confirmedLabel} calibratedLabel={calibratedLabel} />
+        {saved ? (
+          <p role="status" className="rounded-[var(--radius-sm)] bg-success/10 px-3 py-2 text-meta text-off-white">
+            Saved — version {saved.version} is now your active method ({saved.changed} setting{saved.changed === 1 ? "" : "s"} changed).
+          </p>
+        ) : null}
+        <CoachMethodEditor
+          key={versionId}
+          activeAnswers={model.calibration.answers}
+          baseVersionId={versionId}
+          version={version}
+          authority={authority}
+          onSaved={(v, changed) => {
+            setSaved({ version: v, changed });
+            router.refresh();
+          }}
+        />
+      </div>
+    );
   }
 
   return (
@@ -61,23 +91,14 @@ export function CoachMethodSettings({
             <p className="mt-1.5 max-w-xl text-meta text-neutral">OPTIM follows this method for everything it prepares for your clients. It never changes on its own — only when you confirm an update.</p>
           </div>
         </div>
-        {model.calibration ? (
-          <Button onClick={() => openReview()} disabled={busy}>
-            {hasOpenReview ? "Continue reviewing" : "Review or update your method"} <ArrowRight size={16} aria-hidden="true" />
-          </Button>
-        ) : (
-          // A method from before the adaptive calibration: changing it means
-          // refining it (below). This only shows the method that's active now.
-          <Button variant="secondary" onClick={() => document.getElementById("current-method-summary")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-            View current method
-          </Button>
-        )}
+        {/* A method from before the adaptive calibration: changing it means
+            refining it (below). This only shows the method that's active now. */}
+        <Button variant="secondary" onClick={() => document.getElementById("current-method-summary")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+          View current method
+        </Button>
       </div>
-      {hasOpenReview && model.calibration ? <p className="text-meta text-warning-strong">You have method changes in progress that aren’t active yet. Your current method stays in use until you confirm them.</p> : null}
       {error ? <p role="alert" className="text-meta text-error-strong">{error}</p> : null}
-      {model.calibration ? (
-        <CalibrationSummary answers={model.calibration.answers} onEditChapter={(chapter) => void openReview(chapter)} />
-      ) : (
+      {
         <>
           {/* Gate 3.1 — a method confirmed before the adaptive calibration. It
               stays active; refining is optional and never automatic. */}
@@ -99,7 +120,23 @@ export function CoachMethodSettings({
             <MethodSummaryGrid model={model} />
           </div>
         </>
-      )}
+      }
+    </div>
+  );
+}
+
+function StatusCard({ version, confirmedLabel, calibratedLabel }: { version: number; confirmedLabel: string; calibratedLabel: string | null }) {
+  return (
+    <div className="flex items-start gap-3 rounded-[var(--radius-lg)] border border-border bg-charcoal p-4 sm:p-5">
+      <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
+      <div>
+        <p className="text-subheading text-off-white">Calibration complete · method active</p>
+        <p className="mt-0.5 text-meta text-neutral">
+          Version {version} · last confirmed {confirmedLabel}
+          {calibratedLabel && calibratedLabel !== confirmedLabel ? ` · first calibrated ${calibratedLabel}` : ""}
+        </p>
+        <p className="mt-1.5 max-w-xl text-meta text-neutral">OPTIM only changes this method when you confirm an update. Open any area below to edit it — nothing changes until you review and confirm.</p>
+      </div>
     </div>
   );
 }

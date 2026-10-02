@@ -33,7 +33,9 @@ export default async function CoachOnboardingPage({ searchParams }: { searchPara
   // Passed to the same client component (not returned as a different one) so
   // the post-confirmation refresh can't unmount the wizard's completion screen.
   const reviewEntry =
-    state.calibration.state === "calibrated" && !(openProgress && openProgress.mode === "review") ? { versionLabel: `version ${state.activeMethod?.version ?? 1}` } : null;
+    state.calibration.state === "calibrated" && !(openProgress && openProgress.mode === "review")
+      ? { versionLabel: `version ${state.activeMethod?.version ?? 1}`, editInSettings: !!state.activeMethod?.operatingModel.calibration }
+      : null;
 
   const supabase = await getSupabaseServerClient();
   const { data: workspace } = await supabase.from("workspaces").select("business_name").eq("id", state.workspaceId).maybeSingle();

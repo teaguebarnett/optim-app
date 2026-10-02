@@ -9,6 +9,7 @@
 import { revalidatePath } from "next/cache";
 import {
   confirmOwnCalibration,
+  confirmOwnMethodEdit,
   discardOwnMethodReview,
   saveOwnCalibrationProgress,
   startOwnMethodReview,
@@ -16,6 +17,7 @@ import {
   type SaveCalibrationInput,
 } from "@/lib/production/coach-brain";
 import type { AiAuthorityConfig, CoachAiAuthoritySettings } from "@/lib/coach/ai-authority";
+import type { CalibrationAnswers } from "@/lib/coach/calibration/types";
 
 export type CalibrationActionResult<T extends object = object> = ({ ok: true } & T) | { ok: false; message: string };
 
@@ -61,6 +63,19 @@ export async function discardMethodReviewAction(): Promise<CalibrationActionResu
     return { ok: true };
   } catch (err) {
     return failure(err, "Couldn't discard your changes.");
+  }
+}
+
+/** Gate 3.2 — Settings → confirm the coach's edited method as one new
+ * version (see confirmOwnMethodEdit). */
+export async function confirmMethodEditAction(input: { answers: CalibrationAnswers; baseVersionId: string }): Promise<CalibrationActionResult<{ version: number; changed: number }>> {
+  try {
+    const { version, changed } = await confirmOwnMethodEdit(input);
+    revalidatePath("/coach", "layout");
+    revalidatePath("/coach/settings");
+    return { ok: true, version, changed };
+  } catch (err) {
+    return failure(err, "Couldn't save your method.");
   }
 }
 
