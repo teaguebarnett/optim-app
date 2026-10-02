@@ -56,7 +56,7 @@ export const AREA_OPTIONS: ChoiceOption[] = [
   { value: "sport_performance", label: "Sport performance", description: "Athletes in a sport — speed, power, conditioning" },
   { value: "endurance", label: "Endurance", description: "Running, cycling, triathlon, swimming, rowing" },
   { value: "general_fitness", label: "General fitness", description: "Health, fitness and consistency for everyday people" },
-  { value: "weight_management", label: "Weight management", description: "Fat loss and keeping it off" },
+  { value: "weight_management", label: "Weight management", description: "Fat loss, weight gain or keeping weight steady" },
 ];
 
 export const STRENGTH_SPECIALTY_OPTIONS = opts([
@@ -109,7 +109,7 @@ const SEASON_KEYS = opts([
 const GOAL_KEYS = opts([
   ["lose_fat", "Fat loss"],
   ["maintenance", "Maintenance / recomposition"],
-  ["build_muscle", "Muscle gain"],
+  ["build_muscle", "Muscle or weight gain"],
 ]);
 
 const EVENT_KEYS = opts([
@@ -142,6 +142,10 @@ function dayCountKeys(ctx: CalibrationContext): ChoiceOption[] {
 
 const num = (min: number, max: number, step: number, unit: string, extra: Partial<NumberSpec> = {}): NumberSpec => ({ min, max, step, unit, ...extra });
 
+const CHECKIN_DAYS = num(1, 30, 1, "days", { hardMin: 1 });
+const CHECKIN_WEEKS = num(1, 12, 1, "weeks", { hardMin: 1 });
+const RATE_OF_GAIN = num(0, 0.5, 0.05, "% bodyweight/week", { hardMin: 0 });
+
 // ---------------------------------------------------------------------------
 // Visibility helpers
 // ---------------------------------------------------------------------------
@@ -154,6 +158,21 @@ const nutritionOn = (ctx: CalibrationContext) => ctx.nutritionScope === "full" |
 const nutritionFull = (ctx: CalibrationContext) => ctx.nutritionScope === "full";
 const endurance = (ctx: CalibrationContext) => has(ctx, "endurance");
 const advancedServed = (ctx: CalibrationContext) => ctx.experience.includes("advanced");
+
+// Weight goals come only from the coach's confirmed goals — a coach who
+// doesn't coach a goal never sees that goal's questions.
+const coachesFatLoss = (ctx: CalibrationContext) => ctx.goals.includes("lose_fat");
+const coachesWeightGain = (ctx: CalibrationContext) => ctx.goals.includes("gain_weight");
+/** Any goal that runs a gaining phase (muscle gain or weight gain). */
+const gaining = (ctx: CalibrationContext) => coachesWeightGain(ctx) || ctx.goals.includes("build_muscle");
+const wmArea = (ctx: CalibrationContext) => has(ctx, "weight_management");
+const wmGain = (ctx: CalibrationContext) => wmArea(ctx) && coachesWeightGain(ctx);
+const wmMaintenance = (ctx: CalibrationContext) => wmArea(ctx) && ctx.goals.includes("maintain_weight");
+
+// Cardio questions follow the coach's own answer about cardio. Endurance
+// coaches answer volume in the Endurance module instead.
+const cardioRoles = (ctx: CalibrationContext) => arr(ans(ctx, "t_cardio_roles"));
+const saysNoCardio = (ctx: CalibrationContext) => cardioRoles(ctx).includes("none");
 
 // ---------------------------------------------------------------------------
 // Factor catalog (situations)
@@ -320,6 +339,8 @@ const YOUR_COACHING: Q[] = [
       options: opts([
         ["build_muscle", "Build muscle"],
         ["lose_fat", "Lose fat"],
+        ["gain_weight", "Gain weight"],
+        ["maintain_weight", "Maintain weight"],
         ["recomposition", "Body recomposition"],
         ["get_stronger", "Get stronger"],
         ["athletic_performance", "Athletic performance"],
@@ -385,7 +406,7 @@ const PHILOSOPHY: Q[] = [
     prompt: "How long is a typical program or training block?",
     kind: "layered",
     control: { kind: "range", spec: num(2, 24, 1, "weeks", { hardMin: 1, allowPreferred: true }) },
-    variesBy: (c) => (endurance(c) || has(c, "sport_performance") ? [dim("event", "By event", EVENT_KEYS)] : []),
+    variesBy: (c) => [...(endurance(c) ? [dim("event", "By event", EVENT_KEYS)] : []), ...(has(c, "sport_performance") ? [bySeason()] : [])],
     required: true,
     status: "B",
     summaryLabel: "Program length",
@@ -408,14 +429,43 @@ const PHILOSOPHY: Q[] = [
     summaryLabel: "Clients you don't take on",
   },
   {
-    id: "checkin_rhythm",
+    id: "checkin",
     chapter: "philosophy",
-    prompt: "How often do you check in with an active client?",
-    kind: "control",
-    control: { kind: "number", spec: num(1, 30, 1, "days", { hardMin: 1 }) },
+    prompt: "How often do you typically schedule a structured coaching check-in with an active client?",
+    explanation: "A structured review of progress, adherence, training and nutrition, and any adjustments needed — not normal day-to-day messaging.",
+    kind: "group",
     required: true,
     status: "C",
-    summaryLabel: "Check-in rhythm",
+    summaryLabel: "Structured check-ins",
+    parts: [
+      {
+        id: "checkin_approach",
+        chapter: "philosophy",
+        prompt: "Schedule",
+        kind: "control",
+        control: { kind: "single", options: opts([["every_n_days", "Every set number of days"], ["every_n_weeks", "Every set number of weeks"], ["as_needed", "No fixed schedule — as needed"], ["varies", "It varies by client"]]) },
+        required: true,
+        status: "C",
+        summaryLabel: "Check-in schedule",
+      },
+      {
+        id: "checkin_rhythm",
+        chapter: "philosophy",
+        prompt: "Check in every",
+        kind: "control",
+        control: { kind: "number", spec: CHECKIN_DAYS },
+        dynamicControl: (c) => ({ kind: "number", spec: ans(c, "checkin_approach") === "every_n_weeks" ? CHECKIN_WEEKS : CHECKIN_DAYS }),
+        required: true,
+        status: "C",
+        // A value confirmed before the schedule question existed stays
+        // visible (and kept) until the coach answers the schedule.
+        visibleIf: (c) => {
+          const approach = ans(c, "checkin_approach");
+          return approach === "every_n_days" || approach === "every_n_weeks" || (approach === undefined && ans(c, "checkin_rhythm") !== undefined);
+        },
+        summaryLabel: "Check-in every",
+      },
+    ],
   },
 ];
 
@@ -615,7 +665,7 @@ const TRAINING: Q[] = [
     chapter: "training",
     prompt: "How long are your sessions, usually?",
     kind: "control",
-    control: { kind: "range", spec: num(20, 120, 5, "min", { hardMin: 1, allowPreferred: true }) },
+    control: { kind: "range", spec: num(20, 120, 1, "min", { hardMin: 1, allowPreferred: true }) },
     required: true,
     status: "B",
     visibleIf: t,
@@ -712,9 +762,10 @@ const TRAINING: Q[] = [
   {
     id: "t_percent_1rm",
     chapter: "training",
-    prompt: "What percentage range do most working sets use?",
+    prompt: "What percentage of 1RM do you typically use for normal dynamic working sets?",
+    explanation: "Regular sets through a full range of motion, so this tops out at 100%. Supramaximal work (holds, eccentrics, partials) is asked separately.",
     kind: "control",
-    control: { kind: "range", spec: num(50, 100, 2.5, "% of 1RM", { hardMin: 0, hardMax: 100 }) },
+    control: { kind: "range", spec: num(50, 100, 1, "% of 1RM", { hardMin: 0, hardMax: 100 }) },
     required: true,
     status: "C",
     visibleIf: (c) => t(c) && effortMetrics(c).includes("percent_1rm"),
@@ -826,7 +877,7 @@ const TRAINING: Q[] = [
     chapter: "training",
     prompt: "How long do clients rest between working sets?",
     kind: "layered",
-    control: { kind: "range", spec: num(0.5, 5, 0.5, "min", { hardMin: 0 }) },
+    control: { kind: "range", spec: num(0.5, 5, 0.25, "min", { hardMin: 0 }) },
     variesBy: () => [byExerciseType()],
     required: false,
     status: "C",
@@ -847,36 +898,66 @@ const TRAINING: Q[] = [
   {
     id: "t_cardio_roles",
     chapter: "training",
-    prompt: "What role does cardio play in your programs?",
+    prompt: "Do you prescribe cardio? If so, what role does it play?",
     kind: "control",
     control: {
       kind: "multi",
       options: [
         ...opts([["optional_low_intensity", "Optional, low-intensity extra"], ["fat_loss", "Part of fat-loss work"], ["conditioning", "Conditioning, for everyone"], ["health", "General health"]]),
-        { value: "none", label: "Rarely part of my programs", exclusive: true },
+        { value: "none", label: "I don't prescribe cardio", exclusive: true },
       ],
     },
     required: true,
     status: "A",
-    visibleIf: (c) => t(c) && !endurance(c),
+    visibleIf: (c) => (t(c) || has(c, "general_fitness") || wmArea(c) || coachesFatLoss(c)) && !endurance(c),
     summaryLabel: "Cardio",
   },
   {
-    id: "t_cardio_minutes",
+    id: "t_cardio_fat_loss_minutes",
     chapter: "training",
-    prompt: "Roughly how many minutes of cardio a week?",
+    prompt: "For fat-loss clients, roughly how many minutes of cardio a week do you prescribe?",
     kind: "control",
-    control: { kind: "range", spec: num(0, 300, 15, "min/week", { hardMin: 0 }) },
+    control: { kind: "range", spec: num(0, 300, 5, "min/week", { hardMin: 0 }) },
     required: false,
     status: "C",
-    visibleIf: (c) => t(c) && !endurance(c) && arr(ans(c, "t_cardio_roles")).length > 0 && !arr(ans(c, "t_cardio_roles")).includes("none"),
-    summaryLabel: "Weekly cardio",
+    visibleIf: (c) => !endurance(c) && cardioRoles(c).includes("fat_loss"),
+    summaryLabel: "Weekly cardio for fat loss",
+  },
+  {
+    id: "t_cardio_health_minutes",
+    chapter: "training",
+    prompt: "For general health, roughly how many minutes of cardio a week do you recommend?",
+    kind: "control",
+    control: { kind: "range", spec: num(0, 300, 5, "min/week", { hardMin: 0 }) },
+    required: false,
+    status: "C",
+    visibleIf: (c) => !endurance(c) && cardioRoles(c).includes("health"),
+    summaryLabel: "Weekly cardio for health",
+  },
+  {
+    id: "t_conditioning_minutes",
+    chapter: "training",
+    prompt: "Roughly how many minutes of conditioning a week do you program?",
+    kind: "control",
+    control: { kind: "range", spec: num(0, 300, 5, "min/week", { hardMin: 0 }) },
+    required: false,
+    status: "C",
+    // Sport-performance coaches describe conditioning in their own module.
+    visibleIf: (c) => !endurance(c) && !has(c, "sport_performance") && cardioRoles(c).includes("conditioning"),
+    summaryLabel: "Weekly conditioning",
   },
 ];
 
 // ---------------------------------------------------------------------------
 // Strength (S)
 // ---------------------------------------------------------------------------
+
+const SUPRAMAXIMAL_METHODS = opts([
+  ["static_holds", "Static holds / walkouts"],
+  ["eccentrics", "Eccentrics"],
+  ["partials", "Partial-range overloads"],
+]);
+const supramaximalMethods = (c: CalibrationContext) => arr(ans(c, "s_supramaximal")).filter((v) => v !== "none");
 
 const STRENGTH: Q[] = [
   {
@@ -904,6 +985,34 @@ const STRENGTH: Q[] = [
     status: "C",
     visibleIf: (c) => has(c, "strength"),
     summaryLabel: "Lift variations",
+  },
+  {
+    id: "s_supramaximal",
+    chapter: "strength",
+    prompt: "Do you use supramaximal loading methods?",
+    explanation: "Loads above a client's 1RM — separate from normal working sets.",
+    kind: "control",
+    control: { kind: "multi", options: [...SUPRAMAXIMAL_METHODS, { value: "none", label: "No — I don't use supramaximal loading", exclusive: true }], otherAllowed: true },
+    required: false,
+    status: "C",
+    visibleIf: (c) => has(c, "strength"),
+    summaryLabel: "Supramaximal methods",
+  },
+  {
+    id: "s_supramaximal_load",
+    chapter: "strength",
+    prompt: "What loading do you use for supramaximal work?",
+    explanation: "As a percentage of the client's 1RM — this can go above 100%.",
+    kind: "layered",
+    control: { kind: "range", spec: num(100, 130, 1, "% of 1RM", { hardMin: 0 }) },
+    variesBy: (c) => {
+      const keys = SUPRAMAXIMAL_METHODS.filter((o) => supramaximalMethods(c).includes(o.value));
+      return keys.length > 1 ? [dim("method", "By method", keys)] : [];
+    },
+    required: false,
+    status: "C",
+    visibleIf: (c) => has(c, "strength") && supramaximalMethods(c).length > 0,
+    summaryLabel: "Supramaximal loading",
   },
   {
     id: "s_max_testing",
@@ -955,7 +1064,7 @@ const STRENGTH: Q[] = [
     chapter: "strength",
     prompt: "In the final week, how much bodyweight do you plan to cut at most?",
     kind: "control",
-    control: { kind: "range", spec: num(0, 8, 0.5, "% bodyweight", { hardMin: 0, hardMax: 100 }) },
+    control: { kind: "range", spec: num(0, 8, 0.1, "% bodyweight", { hardMin: 0, hardMax: 100 }) },
     required: false,
     status: "C",
     visibleIf: (c) => has(c, "strength") && ans(c, "s_weight_class") === true,
@@ -1098,10 +1207,10 @@ const SPORT_PERFORMANCE: Q[] = [
 
 const volumeUnit = (c: CalibrationContext) => String(ans(c, "e_volume_unit") ?? "hours");
 const VOLUME_SPECS: Record<string, NumberSpec> = {
-  hours: num(2, 20, 0.5, "hours/week", { hardMin: 0 }),
-  km: num(10, 150, 5, "km/week", { hardMin: 0 }),
-  mi: num(5, 100, 5, "mi/week", { hardMin: 0 }),
-  load: num(100, 1000, 25, "load points/week", { hardMin: 0 }),
+  hours: num(2, 20, 0.25, "hours/week", { hardMin: 0 }),
+  km: num(10, 150, 1, "km/week", { hardMin: 0 }),
+  mi: num(5, 100, 1, "mi/week", { hardMin: 0 }),
+  load: num(100, 1000, 10, "load points/week", { hardMin: 0 }),
 };
 export function enduranceVolumeSpec(unit: string): NumberSpec {
   return VOLUME_SPECS[unit] ?? VOLUME_SPECS.hours;
@@ -1123,7 +1232,7 @@ const ENDURANCE: Q[] = [
   {
     id: "e_days",
     chapter: "endurance",
-    prompt: "How many days a week do your athletes train?",
+    prompt: "How many days a week do your athletes do endurance training?",
     kind: "layered",
     control: { kind: "range", spec: num(2, 7, 1, "days/week", { hardMin: 1, hardMax: 7 }) },
     variesBy: () => [byExperience()],
@@ -1201,8 +1310,8 @@ const ENDURANCE: Q[] = [
     summaryLabel: "Long session",
     parts: [
       { id: "e_long_basis", chapter: "endurance", prompt: "Cap it by", kind: "control", control: { kind: "single", options: opts([["percent_of_week", "Share of weekly volume"], ["max_duration", "Maximum duration"], ["not_capped", "I don't cap it"]]) }, required: true, status: "C", summaryLabel: "Long-session cap basis" },
-      { id: "e_long_percent", chapter: "endurance", prompt: "Share of weekly volume", kind: "control", control: { kind: "range", spec: num(15, 50, 5, "% of week", { hardMin: 0, hardMax: 100 }) }, required: true, status: "C", visibleIf: (c) => ans(c, "e_long_basis") === "percent_of_week", summaryLabel: "Long session share" },
-      { id: "e_long_minutes", chapter: "endurance", prompt: "Maximum duration", kind: "control", control: { kind: "range", spec: num(60, 240, 15, "min", { hardMin: 1 }) }, required: true, status: "C", visibleIf: (c) => ans(c, "e_long_basis") === "max_duration", summaryLabel: "Long session duration" },
+      { id: "e_long_percent", chapter: "endurance", prompt: "Share of weekly volume", kind: "control", control: { kind: "range", spec: num(15, 50, 1, "% of week", { hardMin: 0, hardMax: 100 }) }, required: true, status: "C", visibleIf: (c) => ans(c, "e_long_basis") === "percent_of_week", summaryLabel: "Long session share" },
+      { id: "e_long_minutes", chapter: "endurance", prompt: "Maximum duration", kind: "control", control: { kind: "range", spec: num(60, 240, 5, "min", { hardMin: 1 }) }, required: true, status: "C", visibleIf: (c) => ans(c, "e_long_basis") === "max_duration", summaryLabel: "Long session duration" },
     ],
   },
   {
@@ -1319,7 +1428,7 @@ const INTEGRATION: Q[] = [
     summaryLabel: "Same-day sessions",
     parts: [
       { id: "x_same_day_rule", chapter: "integration", prompt: "Same-day rule", kind: "control", control: { kind: "single", options: opts([["not_allowed", "Not on the same day"], ["strength_first", "Yes — strength first"], ["endurance_first", "Yes — endurance first"], ["either_order", "Yes — either order"]]) }, required: true, status: "C", summaryLabel: "Same-day rule" },
-      { id: "x_hours_apart", chapter: "integration", prompt: "Minimum hours apart", kind: "control", control: { kind: "number", spec: num(0, 12, 1, "hours", { hardMin: 0, hardMax: 24 }) }, required: false, status: "C", visibleIf: (c) => !!ans(c, "x_same_day_rule") && ans(c, "x_same_day_rule") !== "not_allowed", summaryLabel: "Hours apart" },
+      { id: "x_hours_apart", chapter: "integration", prompt: "Minimum hours apart", kind: "control", control: { kind: "number", spec: num(0, 12, 0.5, "hours", { hardMin: 0, hardMax: 24 }) }, required: false, status: "C", visibleIf: (c) => !!ans(c, "x_same_day_rule") && ans(c, "x_same_day_rule") !== "not_allowed", summaryLabel: "Hours apart" },
     ],
   },
   {
@@ -1340,8 +1449,16 @@ const INTEGRATION: Q[] = [
 // ---------------------------------------------------------------------------
 
 const gf = (c: CalibrationContext) => has(c, "general_fitness");
-const wm = (c: CalibrationContext) => c.weightManagement;
 const leverIncludesSteps = (c: CalibrationContext) => arr(ans(c, "w_levers")).includes("steps");
+
+/** Adjustment levers, minus any the coach's own answers rule out: cardio when
+ * they don't prescribe it, training volume when they don't program training. */
+function leverOptions(c: CalibrationContext, options: ChoiceOption[]): ChoiceOption[] {
+  return options.filter((o) => !(o.value === "cardio" && saysNoCardio(c)) && !(o.value === "training_volume" && !c.training));
+}
+const FAT_LOSS_LEVERS = opts([["steps", "Daily steps"], ["cardio", "Cardio"], ["calories", "Calories"], ["training_volume", "Training volume"]]);
+const GAIN_LEVERS = opts([["add_calories", "Add calories"], ["calorie_dense", "More calorie-dense foods or drinks"], ["reduce_activity", "Reduce cardio or daily activity"], ["appetite_adherence", "Address appetite and adherence first"]]);
+const MAINTENANCE_LEVERS = opts([["calories", "Calories"], ["steps", "Daily steps or activity"], ["cardio", "Cardio"], ["habits", "Review habits and routine first"]]);
 
 const GENERAL_FITNESS: Q[] = [
   {
@@ -1372,7 +1489,7 @@ const GENERAL_FITNESS: Q[] = [
     chapter: "general_fitness",
     prompt: "What daily step target do you usually set?",
     kind: "control",
-    control: { kind: "range", spec: num(3000, 15000, 500, "steps/day", { hardMin: 0 }) },
+    control: { kind: "range", spec: num(3000, 15000, 100, "steps/day", { hardMin: 0 }) },
     required: false,
     allowNotApplicable: true,
     status: "C",
@@ -1404,74 +1521,65 @@ const GENERAL_FITNESS: Q[] = [
 ];
 
 const WEIGHT_MANAGEMENT: Q[] = [
+  // --- Fat loss (only for coaches who coach fat loss) ---
   {
     id: "w_rate_of_loss",
     chapter: "weight_management",
-    prompt: "What weekly rate of loss do you aim for?",
+    prompt: "For fat-loss clients, what weekly rate of loss do you aim for?",
     kind: "layered",
     control: { kind: "range", spec: num(0.25, 1.25, 0.05, "% bodyweight/week", { hardMin: 0 }) },
     variesBy: () => [dim("starting_point", "By starting point", opts([["larger", "Clients with more to lose"], ["leaner", "Leaner clients"]]))],
     required: true,
     status: "B",
-    visibleIf: wm,
-    summaryLabel: "Rate of loss",
+    visibleIf: coachesFatLoss,
+    summaryLabel: "Fat-loss rate",
   },
   {
     id: "w_levers",
     chapter: "weight_management",
-    prompt: "When progress slows, which levers do you pull — in what order?",
+    prompt: "When a fat-loss client stops losing weight at the expected rate, what do you adjust first?",
+    explanation: "Pick what you'd change first, then add the rest in the order you'd use them.",
     kind: "control",
-    control: { kind: "ranked", options: opts([["steps", "Daily steps"], ["cardio", "Cardio"], ["calories", "Calories"], ["training_volume", "Training volume"]]) },
+    control: { kind: "ranked", options: FAT_LOSS_LEVERS },
+    dynamicControl: (c) => ({ kind: "ranked", options: leverOptions(c, FAT_LOSS_LEVERS) }),
     required: true,
     status: "C",
-    visibleIf: wm,
-    summaryLabel: "Levers, in order",
+    visibleIf: coachesFatLoss,
+    summaryLabel: "Fat-loss stall: what you adjust, in order",
   },
   {
     id: "w_steps_target",
     answerKey: "steps_target",
     chapter: "weight_management",
-    prompt: "What daily step target do you usually set?",
+    prompt: "When you use daily steps for fat loss, what target do you usually set?",
     kind: "control",
-    control: { kind: "range", spec: num(3000, 15000, 500, "steps/day", { hardMin: 0 }) },
+    control: { kind: "range", spec: num(3000, 15000, 100, "steps/day", { hardMin: 0 }) },
     required: false,
     status: "C",
-    visibleIf: (c) => wm(c) && leverIncludesSteps(c) && !gf(c),
+    visibleIf: (c) => coachesFatLoss(c) && leverIncludesSteps(c) && !gf(c),
     summaryLabel: "Daily steps",
-  },
-  {
-    id: "w_data_threshold",
-    answerKey: "data_threshold_weeks",
-    chapter: "weight_management",
-    prompt: "How many weeks of data do you want before changing targets or calling a stall?",
-    kind: "control",
-    control: { kind: "range", spec: num(1, 6, 1, "weeks", { hardMin: 1, allowOpenMax: true }) },
-    required: true,
-    status: "C",
-    visibleIf: (c) => wm(c) && !nutritionFull(c),
-    summaryLabel: "Data before a change",
   },
   {
     id: "w_breaks",
     chapter: "weight_management",
-    prompt: "Do you plan breaks from dieting?",
+    prompt: "During a fat-loss phase, do you plan breaks from dieting?",
     kind: "control",
     control: { kind: "single", options: opts([["diet_breaks", "Yes — planned diet breaks"], ["maintenance_phases", "Yes — longer maintenance phases"], ["none", "No planned breaks"]]) },
     required: true,
     status: "C",
-    visibleIf: wm,
+    visibleIf: coachesFatLoss,
     summaryLabel: "Breaks from dieting",
   },
   {
     id: "w_break_every",
     chapter: "weight_management",
-    prompt: "How often?",
+    prompt: "How often do you schedule a diet break or maintenance phase?",
     kind: "control",
     control: { kind: "range", spec: num(4, 20, 1, "weeks", { hardMin: 1 }) },
     required: true,
     status: "C",
-    visibleIf: (c) => wm(c) && !!ans(c, "w_breaks") && ans(c, "w_breaks") !== "none",
-    summaryLabel: "Break every",
+    visibleIf: (c) => coachesFatLoss(c) && !!ans(c, "w_breaks") && ans(c, "w_breaks") !== "none",
+    summaryLabel: "Diet break every",
   },
   {
     id: "w_after_goal",
@@ -1481,8 +1589,72 @@ const WEIGHT_MANAGEMENT: Q[] = [
     scenario: { actions: opts([["straight_to_maintenance", "Straight to maintenance calories"], ["gradual_increase", "Gradual increase (reverse diet)"]]), factors: [F.phaseWeeks, F.hunger, F.preference], allowDepends: true },
     required: false,
     status: "C",
-    visibleIf: wm,
+    visibleIf: coachesFatLoss,
     summaryLabel: "Moving to maintenance",
+  },
+  // --- Weight gain (weight-management coaches who coach weight gain) ---
+  {
+    id: "w_rate_of_gain",
+    answerKey: "n_rate_of_gain",
+    chapter: "weight_management",
+    prompt: "For weight-gain clients, what weekly rate of gain do you aim for?",
+    kind: "control",
+    control: { kind: "range", spec: RATE_OF_GAIN },
+    required: true,
+    status: "B",
+    visibleIf: wmGain,
+    summaryLabel: "Rate of gain",
+  },
+  {
+    id: "w_gain_levers",
+    chapter: "weight_management",
+    prompt: "When a weight-gain client stops gaining at the expected rate, what do you adjust first?",
+    explanation: "Pick what you'd change first, then add the rest in the order you'd use them.",
+    kind: "control",
+    control: { kind: "ranked", options: GAIN_LEVERS },
+    required: true,
+    status: "C",
+    visibleIf: wmGain,
+    summaryLabel: "Gain stall: what you adjust, in order",
+  },
+  // --- Maintenance (weight-management coaches who coach maintenance) ---
+  {
+    id: "w_maintenance_band",
+    chapter: "weight_management",
+    prompt: "For maintenance clients, how much bodyweight change do you accept before stepping in?",
+    explanation: "In either direction, as a share of bodyweight.",
+    kind: "control",
+    control: { kind: "range", spec: num(0.5, 5, 0.1, "% bodyweight", { hardMin: 0, hardMax: 100 }) },
+    required: true,
+    status: "C",
+    visibleIf: wmMaintenance,
+    summaryLabel: "Maintenance: accepted change",
+  },
+  {
+    id: "w_maintenance_adjust",
+    chapter: "weight_management",
+    prompt: "When a maintenance client moves outside that range, what do you adjust first?",
+    explanation: "Pick what you'd change first, then add the rest in the order you'd use them.",
+    kind: "control",
+    control: { kind: "ranked", options: MAINTENANCE_LEVERS },
+    dynamicControl: (c) => ({ kind: "ranked", options: leverOptions(c, MAINTENANCE_LEVERS) }),
+    required: true,
+    status: "C",
+    visibleIf: wmMaintenance,
+    summaryLabel: "Maintenance: what you adjust, in order",
+  },
+  // --- Shared by every weight goal the coach coaches ---
+  {
+    id: "w_data_threshold",
+    answerKey: "data_threshold_weeks",
+    chapter: "weight_management",
+    prompt: "How many weeks of bodyweight data do you want before changing targets or calling a stall?",
+    kind: "control",
+    control: { kind: "range", spec: num(1, 6, 1, "weeks", { hardMin: 1, allowOpenMax: true }) },
+    required: true,
+    status: "C",
+    visibleIf: (c) => (coachesFatLoss(c) || wmGain(c) || wmMaintenance(c)) && !nutritionFull(c),
+    summaryLabel: "Data before a change",
   },
 ];
 
@@ -1642,7 +1814,10 @@ const NUTRITION: Q[] = [
     kind: "layered",
     control: { kind: "range", spec: proteinSpec("per_lb_bodyweight") },
     dynamicControl: (c) => ({ kind: "range", spec: proteinSpec(proteinBasis(c)) }),
-    variesBy: (c) => (nutritionFull(c) ? [dim("goal", "By client goal", GOAL_KEYS)] : []),
+    variesBy: (c) => {
+      const keys = GOAL_KEYS.filter((k) => (k.value === "lose_fat" ? coachesFatLoss(c) : k.value === "build_muscle" ? gaining(c) : c.goals.includes("maintain_weight") || c.goals.includes("recomposition")));
+      return nutritionFull(c) && keys.length > 1 ? [dim("goal", "By client goal", keys)] : [];
+    },
     required: true,
     status: "B",
     visibleIf: (c) => nutritionOn(c) && !!proteinBasis(c) && proteinBasis(c) !== "no_target",
@@ -1696,12 +1871,14 @@ const NUTRITION: Q[] = [
   {
     id: "n_rate_of_gain",
     chapter: "nutrition",
-    prompt: "What weekly rate of gain do you aim for when building muscle?",
+    prompt: "For clients in a gaining phase, what weekly rate of gain do you aim for?",
     kind: "control",
-    control: { kind: "range", spec: num(0, 0.5, 0.05, "% bodyweight/week", { hardMin: 0 }) },
+    control: { kind: "range", spec: RATE_OF_GAIN },
     required: true,
     status: "B",
-    visibleIf: (c) => nutritionFull(c) && c.goals.includes("build_muscle"),
+    // Asked once: weight-management coaches who coach weight gain answer it
+    // in that chapter.
+    visibleIf: (c) => nutritionFull(c) && gaining(c) && !wmGain(c),
     summaryLabel: "Rate of gain",
   },
   {
@@ -1796,7 +1973,7 @@ const SITUATIONS: Q[] = [
   situation("sit_schedule_change", "A client can't train on a planned day. What should happen?", [["shift_days", "Shift the remaining days"], ["drop_lowest_priority", "Drop the lowest-priority session"], ["ask_client", "Ask the client which day works"]], [F.sessionType, F.daysLeft]),
   situation("sit_low_sleep", "A client reports poor sleep this week. What should happen?", [["reduce_intensity", "Ease intensity slightly"], ["hold_plan", "Keep the plan as written"], ["ask_client", "Ask how they feel first"]], [F.nights, F.sessionType, F.phase]),
   situation("sit_travel", "A client is travelling. What should happen?", [["travel_friendly", "Swap to travel-friendly sessions"], ["maintenance", "A simple maintenance routine"], ["pause", "Pause and resume after the trip"]], [F.reason]),
-  situation("sit_rapid_progress", "A client is progressing faster than expected. What should happen?", [["accelerate", "Speed up the progression"], ["hold_and_monitor", "Hold and keep confirming"], ["flag_for_coach", "Flag it for me"]], [F.weeksTrend, F.experience]),
+  situation("sit_rapid_progress", "A client's training is progressing faster than expected. What should happen?", [["accelerate", "Speed up the progression"], ["hold_and_monitor", "Hold and keep confirming"], ["flag_for_coach", "Flag it for me"]], [F.weeksTrend, F.experience]),
   situation("sit_dislike", "A client dislikes an exercise or session. What should happen?", [["swap_using_rule", "Swap it using my swap rule"], ["keep_and_note", "Keep it, and note the feedback for me"], ["ask_coach", "Ask me first"]], [F.sessionType]),
   situation("sit_soreness", "A client reports unusually high soreness (not pain). What should happen?", [["reduce_affected", "Reduce work for the affected area"], ["hold_plan", "Keep the plan — normal soreness"], ["flag_for_coach", "Flag it for me"]], [F.weeksTrend, F.phase]),
   situation("sit_effort_high", "Effort has been higher than planned for several sessions. What should happen first?", [["reduce_load_or_volume", "Reduce load or volume slightly"], ["hold_and_monitor", "Hold and keep monitoring"], ["earlier_deload", "Bring the deload forward"], ["flag_for_coach", "Flag it for me"]], [F.weeksTrend, F.recovery, F.phase], (c) => c.training),
@@ -1808,15 +1985,16 @@ const SITUATIONS: Q[] = [
   situation("sit_missed_long", "An athlete misses the long session. What should happen?", [["move_later", "Move it later in the week"], ["skip", "Skip it and carry on"], ["shorten_and_move", "Shorter version on another day"]], [F.eventSoon, F.daysLeft], endurance),
   situation("sit_easy_too_fast", "Easy sessions are being done too fast. What should happen?", [["remind_and_cap", "Remind them and cap the pace"], ["switch_to_hr", "Switch easy days to heart rate"], ["flag_for_coach", "Flag it for me"]], [F.weeksTrend], endurance),
   situation("sit_return_illness", "An athlete returns after a few days of illness. What should happen?", [["easy_return", "A few easy days before structure"], ["resume_plan", "Resume the plan"], ["flag_for_coach", "Flag it for me"]], [F.missedCount, F.eventSoon], endurance),
-  situation("sit_stall_high_adherence", "Bodyweight has stalled and adherence is high. What should happen?", [["reduce_calories", "Reduce calories slightly"], ["increase_activity", "Increase activity first"], ["hold_and_reassess", "Hold and reassess"], ["address_adherence", "Address adherence first"]], [F.stallWeeks, F.adherence, F.performance, F.recovery, F.hunger, F.activityTrend, F.rateSoFar, F.phaseWeeks, F.preference], wm),
-  situation("sit_stall_uncertain", "Bodyweight has stalled and adherence is uncertain. What should happen first?", [["review_logging", "Review logging first"], ["ask_client", "Ask the client directly"], ["flag_for_coach", "Flag it for me"]], [F.stallWeeks, F.tracking], wm),
-  situation("sit_loss_too_fast", "Weight is dropping faster than intended. What should happen?", [["add_calories", "Bring calories up toward the target rate"], ["hold_and_monitor", "Hold and monitor"], ["flag_for_coach", "Flag it for me"]], [F.aboveTarget, F.weeksTrend, F.performance], wm),
-  situation("sit_hunger", "A client reports excessive hunger. What should happen first?", [["more_volume_foods", "More protein, fiber and food volume, same calories"], ["small_refeed", "Add a small planned refeed"], ["flag_for_coach", "Flag it for me"]], [F.phaseWeeks, F.rateSoFar], nutritionFull),
+  situation("sit_stall_high_adherence", "A fat-loss client's bodyweight has stopped decreasing, and adherence is high. What should happen?", [["reduce_calories", "Reduce calories slightly"], ["increase_activity", "Increase activity first"], ["hold_and_reassess", "Hold and reassess"], ["address_adherence", "Re-check adherence before changing anything"]], [F.stallWeeks, F.adherence, F.performance, F.recovery, F.hunger, F.activityTrend, F.rateSoFar, F.phaseWeeks, F.preference], coachesFatLoss, "Fat-loss stall, adherence high"),
+  situation("sit_stall_uncertain", "A fat-loss client's bodyweight has stopped decreasing, and adherence is uncertain. What should happen first?", [["review_logging", "Review logging first"], ["ask_client", "Ask the client directly"], ["flag_for_coach", "Flag it for me"]], [F.stallWeeks, F.tracking], coachesFatLoss, "Fat-loss stall, adherence uncertain"),
+  situation("sit_loss_too_fast", "A fat-loss client is losing weight faster than intended. What should happen?", [["add_calories", "Bring calories up toward the target rate"], ["hold_and_monitor", "Hold and monitor"], ["flag_for_coach", "Flag it for me"]], [F.aboveTarget, F.weeksTrend, F.performance], coachesFatLoss, "Fat loss faster than intended"),
+  situation("sit_hunger", "A fat-loss client reports excessive hunger. What should happen first?", [["more_volume_foods", "More protein, fiber and food volume, same calories"], ["small_refeed", "Add a small planned refeed"], ["flag_for_coach", "Flag it for me"]], [F.phaseWeeks, F.rateSoFar], (c) => nutritionFull(c) && coachesFatLoss(c), "Fat-loss hunger"),
   situation("sit_social_meal", "A client has a planned social meal. What should happen?", [["adjust_around", "Help adjust the meals around it"], ["guilt_free", "Treat it as a guilt-free exception"], ["no_change", "No change needed"]], [F.rateSoFar], nutritionFull),
   situation("sit_travel_nutrition", "A client is travelling and can't follow their usual structure. What should happen?", [["simplify", "Simplify to protein and a calorie ballpark"], ["pause_tracking", "Pause tracking for the trip"], ["best_effort", "Keep the usual targets, best effort"]], [F.reason], nutritionFull),
   situation("sit_macro_misses", "A client keeps missing macro targets. What should happen first?", [["simplify_targets", "Simplify the targets"], ["fewer_tracked_meals", "Track fewer meals"], ["flag_for_coach", "Flag it for me"]], [F.tracking, F.weeksTrend], (c) => nutritionFull(c) && approachTracks(c)),
   situation("sit_digestion", "A client reports digestive problems. What should OPTIM suggest first?", [["review_triggers", "Review common trigger foods"], ["flag_for_coach", "Flag it for me"]], [F.weeksTrend], nutritionFull, "Digestive problems (first step)"),
-  situation("sit_gain_stall", "In a gaining phase, bodyweight isn't moving. What should happen?", [["add_calories", "Add calories"], ["hold_and_reassess", "Hold and reassess"], ["flag_for_coach", "Flag it for me"]], [F.stallWeeks, F.adherence, F.performance], (c) => nutritionFull(c) && c.goals.includes("build_muscle")),
+  situation("sit_gain_stall", "A weight-gain client's bodyweight has stopped increasing, and adherence is high. What should happen?", [["add_calories", "Add calories"], ["calorie_dense", "More calorie-dense foods or drinks"], ["reduce_activity", "Reduce cardio or daily activity"], ["hold_and_reassess", "Hold and reassess"], ["flag_for_coach", "Flag it for me"]], [F.stallWeeks, F.adherence, F.performance], (c) => gaining(c) && (nutritionFull(c) || wmGain(c)), "Weight-gain stall, adherence high"),
+  situation("sit_gain_appetite", "A weight-gain client is struggling to eat enough to keep gaining. What should happen first?", [["calorie_dense", "More calorie-dense foods or drinks"], ["extra_meal", "Add a meal or snack"], ["reduce_activity", "Reduce cardio or daily activity"], ["flag_for_coach", "Flag it for me"]], [F.weeksTrend, F.rateSoFar], (c) => gaining(c) && (nutritionFull(c) || wmGain(c)), "Weight-gain appetite"),
 ];
 
 // ---------------------------------------------------------------------------

@@ -206,8 +206,11 @@ export function applyCalibrationAnswersToModel(base: CoachOperatingModel, rawAns
   if (a("comm_avoided_phrases") !== undefined) cm.avoidedPhrasesOrTones = arr(a("comm_avoided_phrases"));
   if (a("comm_ai_direct_response") !== undefined) cm.aiMayRespondDirectly = arr(a("comm_ai_direct_response")).filter((v) => v !== "none");
   cm.coachMustRespondPersonally = arr(a("comm_must_respond_personally"));
-  const checkin = a("checkin_rhythm") as { value?: number } | undefined;
-  if (checkin?.value !== undefined) cm.checkInCadence = `every_${checkin.value}_days`;
+  const checkinApproach = str(a("checkin_approach"));
+  const checkin = a("checkin_rhythm") as { value?: number; unit?: string } | undefined;
+  if (checkinApproach === "as_needed") cm.checkInCadence = "as_needed";
+  else if (checkinApproach === "varies") cm.checkInCadence = "varies_by_client";
+  else if (checkin?.value !== undefined) cm.checkInCadence = `every_${checkin.value}_${checkin.unit === "weeks" ? "weeks" : "days"}`;
 
   // --- Safety ---
   const sf = model.safety;

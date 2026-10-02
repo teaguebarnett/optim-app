@@ -7,7 +7,9 @@ import { COACH_ONBOARDING_QUESTIONS } from "./coach-onboarding-questions.ts";
 import { applyCoachAnswersToModel } from "./coach-onboarding-engine.ts";
 import { createDefaultCoachOperatingModel, type CoachOperatingModel } from "./operating-model.ts";
 import { ALL_CALIBRATION_ITEMS, CALIBRATION_QUESTIONS, answerKeyOf } from "./calibration/questions.ts";
-import { applicableCalibrationChapters, applicableItemKeys, buildCalibrationContext, calibrationV2Readiness, chapterStatus, pruneCalibrationAnswers, unresolvedKeysInOrder } from "./calibration/engine.ts";
+import { applicableCalibrationChapters, applicableItemKeys, buildCalibrationContext, calibrationV2Readiness, chapterStatus, isApplicableItem, pruneCalibrationAnswers, unresolvedKeysInOrder } from "./calibration/engine.ts";
+import { enduranceVolumeSpec, proteinSpec } from "./calibration/questions.ts";
+import { hasUnitLabel, unitLabel } from "./calibration/units.ts";
 import { interpretCoachDescription, suggestedAreas } from "./calibration/step0-interpreter.ts";
 import { validateCalibrationAnswers, checkControl } from "./calibration/validate.ts";
 import { applyCalibrationAnswersToModel } from "./calibration/model.ts";
@@ -242,44 +244,56 @@ const PERSONAS: { name: string; scope: CalibrationAnswers; must: string[]; never
   {
     name: "powerlifting",
     scope: { coaching_areas: ["strength"], strength_specialties: ["powerlifting"], experience_levels: ["intermediate", "advanced"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["get_stronger"] },
-    must: ["t_days", "t_reps", "t_effort_rir", "t_long_term_structure", "s_lift_frequency", "s_max_testing", "s_peaking", "n_approach"],
-    never: ["p_weekly_sets", "p_intensity_techniques", "e_weekly_volume", "w_rate_of_loss", "g_intensity_guide", "sp_competition", "x_priority", "n_fueling", "n_rate_of_gain"],
+    must: ["t_days", "t_reps", "t_effort_rir", "t_long_term_structure", "s_lift_frequency", "s_max_testing", "s_peaking", "s_supramaximal", "n_approach"],
+    never: ["p_weekly_sets", "p_intensity_techniques", "e_weekly_volume", "w_rate_of_loss", "g_intensity_guide", "sp_competition", "x_priority", "n_fueling", "n_rate_of_gain", "w_gain_levers", "sit_gain_stall", "sit_stall_high_adherence", "s_supramaximal_load"],
   },
   {
     name: "hypertrophy",
     scope: { coaching_areas: ["physique"], experience_levels: ["intermediate"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["build_muscle", "recomposition", "lose_fat"] },
-    must: ["p_weekly_sets", "p_exercise_selection", "n_rate_of_gain", "n_recomposition", "w_rate_of_loss", "sit_cant_feel"],
-    never: ["s_max_testing", "s_peaking", "t_percent_1rm", "e_days", "sp_season_approach", "pk_older_build_in"],
+    must: ["p_weekly_sets", "p_exercise_selection", "n_rate_of_gain", "n_recomposition", "w_rate_of_loss", "sit_cant_feel", "sit_gain_stall", "sit_stall_high_adherence"],
+    never: ["s_max_testing", "s_peaking", "s_supramaximal", "t_percent_1rm", "e_days", "sp_season_approach", "pk_older_build_in", "w_gain_levers", "w_maintenance_band"],
   },
   {
     name: "50+ general-pop fat loss at home",
     scope: { coaching_areas: ["general_fitness", "weight_management"], experience_levels: ["beginner"], client_modifiers: ["older_adults", "home_limited"], nutrition_scope: "full", practice_goals: ["lose_fat", "general_health"], programs_resistance: true, t_effort_metric: ["plain_cues"] },
-    must: ["t_effort_plain", "g_intensity_guide", "w_rate_of_loss", "w_levers", "pk_older_build_in", "pk_home_equipment", "n_approach"],
-    never: ["t_effort_rir", "t_percent_1rm", "t_long_term_structure", "s_peaking", "p_intensity_techniques", "e_taper", "n_fueling", "n_rate_of_gain", "sit_cant_feel"],
+    must: ["t_effort_plain", "g_intensity_guide", "w_rate_of_loss", "w_levers", "t_cardio_roles", "sit_stall_high_adherence", "pk_older_build_in", "pk_home_equipment", "n_approach"],
+    never: ["t_effort_rir", "t_percent_1rm", "t_long_term_structure", "s_peaking", "s_supramaximal", "p_intensity_techniques", "e_taper", "n_fueling", "n_rate_of_gain", "sit_cant_feel", "w_gain_levers", "sit_gain_stall", "sit_gain_appetite", "w_maintenance_band"],
   },
   {
     name: "marathon",
     scope: { coaching_areas: ["endurance"], endurance_sports: ["running"], experience_levels: ["beginner", "intermediate"], client_modifiers: ["none"], nutrition_scope: "guidance", practice_goals: ["endurance_event"], e_intensity_method: ["pace", "heart_rate"] },
     must: ["e_days", "e_weekly_volume", "e_quality_sessions", "e_zone_source", "e_taper", "e_strength_rule", "n_protein_basis", "n_fueling", "sit_missed_long"],
-    never: ["t_splits", "t_reps", "t_effort_rir", "p_weekly_sets", "s_max_testing", "sit_cant_feel", "sit_reps_missed", "n_recomposition", "w_rate_of_loss", "n_calorie_method", "e_discipline"],
+    never: ["t_splits", "t_reps", "t_effort_rir", "p_weekly_sets", "s_max_testing", "sit_cant_feel", "sit_reps_missed", "n_recomposition", "w_rate_of_loss", "n_calorie_method", "e_discipline", "t_cardio_roles", "t_cardio_fat_loss_minutes", "t_cardio_health_minutes", "t_conditioning_minutes"],
   },
   {
     name: "sport performance",
     scope: { coaching_areas: ["sport_performance"], sport_performance_sports: ["soccer"], experience_levels: ["intermediate"], client_modifiers: ["none"], nutrition_scope: "none", practice_goals: ["athletic_performance"], programs_resistance: true },
     must: ["sp_season_approach", "sp_competition", "sp_speed_power", "sp_conditioning", "t_days", "t_long_term_structure"],
-    never: ["p_weekly_sets", "s_peaking", "e_days", "w_rate_of_loss", "n_approach", "x_priority"],
+    never: ["p_weekly_sets", "s_peaking", "s_supramaximal", "e_days", "w_rate_of_loss", "n_approach", "x_priority", "t_conditioning_minutes", "sit_gain_stall"],
   },
   {
     name: "hybrid strength + endurance",
     scope: { coaching_areas: ["strength", "endurance"], endurance_sports: ["running"], experience_levels: ["intermediate"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["get_stronger", "endurance_event"] },
     must: ["t_days", "s_lift_frequency", "e_weekly_volume", "x_priority", "x_same_day", "x_hard_days", "n_fueling"],
-    never: ["e_strength_rule", "t_cardio_roles", "p_weekly_sets", "sp_competition", "w_rate_of_loss"],
+    never: ["e_strength_rule", "t_cardio_roles", "t_cardio_fat_loss_minutes", "t_cardio_health_minutes", "t_conditioning_minutes", "p_weekly_sets", "sp_competition", "w_rate_of_loss"],
   },
   {
     name: "general-fitness only (no weight management)",
     scope: { coaching_areas: ["general_fitness"], experience_levels: ["beginner"], client_modifiers: ["none"], nutrition_scope: "guidance", practice_goals: ["general_health"], programs_resistance: true },
-    must: ["g_intensity_guide", "g_activity_emphasis", "g_habit_pacing", "t_days"],
-    never: ["w_rate_of_loss", "w_levers", "w_breaks", "sit_stall_high_adherence", "sit_loss_too_fast", "w_data_threshold"],
+    must: ["g_intensity_guide", "g_activity_emphasis", "g_habit_pacing", "t_days", "t_cardio_roles"],
+    never: ["w_rate_of_loss", "w_levers", "w_breaks", "sit_stall_high_adherence", "sit_loss_too_fast", "w_data_threshold", "w_gain_levers", "w_maintenance_band", "sit_gain_stall", "sit_gain_appetite", "sit_hunger", "n_rate_of_gain", "s_supramaximal"],
+  },
+  {
+    name: "weight-gain-focused physique coach",
+    scope: { coaching_areas: ["physique", "weight_management"], experience_levels: ["beginner", "intermediate"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["build_muscle", "gain_weight"] },
+    must: ["n_rate_of_gain", "w_gain_levers", "sit_gain_stall", "sit_gain_appetite", "p_weekly_sets", "t_cardio_roles"],
+    never: ["w_rate_of_loss", "w_levers", "w_breaks", "w_break_every", "w_after_goal", "sit_stall_high_adherence", "sit_stall_uncertain", "sit_loss_too_fast", "sit_hunger", "w_maintenance_band", "s_supramaximal", "t_cardio_fat_loss_minutes"],
+  },
+  {
+    name: "coach who explicitly does not prescribe cardio",
+    scope: { coaching_areas: ["strength", "weight_management"], experience_levels: ["intermediate"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["get_stronger", "lose_fat"], t_cardio_roles: ["none"] },
+    must: ["t_cardio_roles", "w_rate_of_loss", "w_levers", "s_supramaximal"],
+    never: ["t_cardio_fat_loss_minutes", "t_cardio_health_minutes", "t_conditioning_minutes", "w_gain_levers", "sit_gain_stall"],
   },
 ];
 
@@ -358,7 +372,7 @@ check("incomplete or invalid policies are refused (no fallback, unknown factor, 
 check("the policy reads as plain language", () => {
   const text = describeDecisionPolicy(STALL_POLICY, STALL_SPEC);
   assert.match(text, /^If how long it's stalled ≥ 2 weeks and adherence is high/);
-  assert.match(text, /Else if adherence is low → Address adherence first\./);
+  assert.match(text, /Else if adherence is low → Re-check adherence before changing anything\./);
   assert.match(text, /Otherwise → Hold and reassess\./);
 });
 
@@ -632,6 +646,223 @@ check("unresolved-only navigation lists just the unresolved keys, in interview o
   const order = ["your_coaching", "philosophy", "training"];
   const firstTraining = required.findIndex((k) => k.startsWith("t_"));
   assert.ok(required.slice(0, firstTraining).every((k) => !k.startsWith("t_")), order.join(">"));
+});
+
+
+console.log("\n10. Content clarity + goal-aware applicability (first-time calibration QA)\n");
+
+const item = (id: string) => ALL_CALIBRATION_ITEMS.find((q) => q.id === id)!;
+const visibleIds = (answers: CalibrationAnswers) => {
+  const ctx = buildCalibrationContext(answers);
+  return new Set(ALL_CALIBRATION_ITEMS.filter((q) => q.kind !== "group" && isApplicableItem(q, ctx)).map((q) => q.id));
+};
+const PL = PERSONAS[0].scope;
+
+check("check-in asks about a STRUCTURED coaching check-in, not day-to-day messaging", () => {
+  const g = CALIBRATION_QUESTIONS.find((q) => q.id === "checkin")!;
+  assert.match(g.prompt, /structured coaching check-in/);
+  assert.match(g.explanation ?? "", /not normal day-to-day messaging/);
+  assert.deepEqual(item("checkin_approach").control && (item("checkin_approach").control as { options: { value: string }[] }).options.map((o) => o.value), ["every_n_days", "every_n_weeks", "as_needed", "varies"]);
+});
+
+check("cadence: as-needed and varies-by-client need no number; days/weeks ask for one in that unit", () => {
+  const a = answerAllRequired(PL);
+  for (const approach of ["as_needed", "varies"]) {
+    const v = validateCalibrationAnswers({ ...a, checkin_approach: approach, checkin_rhythm: { value: 7, unit: "days" } });
+    assert.ok(v.ok);
+    assert.equal(v.answers.checkin_rhythm, undefined, "no forced cadence");
+    assert.equal(calibrationV2Readiness({ answers: v.answers, aiAuthorityConfirmed: true }).unansweredKeys.includes("checkin_rhythm"), false);
+  }
+  const weeks = validateCalibrationAnswers({ ...a, checkin_approach: "every_n_weeks", checkin_rhythm: { value: 2, unit: "weeks" } });
+  assert.ok(weeks.ok);
+  assert.deepEqual(weeks.answers.checkin_rhythm, { value: 2, unit: "weeks" });
+  const stale = validateCalibrationAnswers({ ...a, checkin_approach: "every_n_weeks", checkin_rhythm: { value: 7, unit: "days" } });
+  assert.ok(stale.ok);
+  assert.equal(stale.answers.checkin_rhythm, undefined, "a days value isn't read as weeks");
+  assert.equal(v2Model({ ...a, checkin_approach: "as_needed" }).communication.checkInCadence, "as_needed");
+  assert.equal(v2Model({ ...a, checkin_approach: "varies" }).communication.checkInCadence, "varies_by_client");
+  assert.equal(v2Model({ ...a, checkin_approach: "every_n_weeks", checkin_rhythm: { value: 2, unit: "weeks" } }).communication.checkInCadence, "every_2_weeks");
+  assert.equal(v2Model({ ...a, checkin_approach: "every_n_days", checkin_rhythm: { value: 10, unit: "days" } }).communication.checkInCadence, "every_10_days");
+});
+
+check("a check-in value confirmed before the schedule question existed is kept — and the schedule is asked, never invented", () => {
+  const old = answerAllRequired(PL);
+  delete old.checkin_approach;
+  old.checkin_rhythm = { value: 7, unit: "days" };
+  const v = validateCalibrationAnswers(old);
+  assert.ok(v.ok);
+  assert.deepEqual(v.answers.checkin_rhythm, { value: 7, unit: "days" });
+  assert.equal(v.answers.checkin_approach, undefined);
+  assert.ok(calibrationV2Readiness({ answers: v.answers, aiAuthorityConfirmed: true }).unansweredKeys.includes("checkin_approach"));
+});
+
+check("normal dynamic %1RM stays capped at 100%", () => {
+  const q = item("t_percent_1rm");
+  assert.match(q.prompt, /normal dynamic working sets/);
+  assert.equal((q.control as { spec: { hardMax: number } }).spec.hardMax, 100);
+  const a = answerAllRequired({ ...PL, t_effort_metric: ["percent_1rm"] });
+  assert.ok(validateCalibrationAnswers({ ...a, t_percent_1rm: { min: 70, max: 85, unit: "% of 1RM" } }).ok);
+  assert.equal(validateCalibrationAnswers({ ...a, t_percent_1rm: { min: 90, max: 110, unit: "% of 1RM" } }).ok, false);
+});
+
+check("supramaximal loading: Strength coaches only, loading asked only after they say yes, and it may exceed 100%", () => {
+  const a = answerAllRequired(PL);
+  assert.ok(visibleIds(a).has("s_supramaximal"));
+  assert.ok(!visibleIds(a).has("s_supramaximal_load"));
+  assert.ok(!visibleIds({ ...a, s_supramaximal: ["none"] }).has("s_supramaximal_load"));
+  const yes = { ...a, s_supramaximal: ["static_holds", "eccentrics"], s_supramaximal_load: { base: { min: 105, max: 120, unit: "% of 1RM" }, varies: "method", exceptions: { eccentrics: { min: 110, max: 125, unit: "% of 1RM" } } } };
+  assert.ok(visibleIds(yes).has("s_supramaximal_load"));
+  const v = validateCalibrationAnswers(yes);
+  assert.ok(v.ok, v.ok ? "" : v.message);
+  assert.equal((v.answers.s_supramaximal_load as { base: { max: number } }).base.max, 120);
+  assert.equal(item("s_supramaximal").status, "C");
+  assert.equal(item("s_supramaximal_load").status, "C");
+  for (const p of [PERSONAS[1], PERSONAS[2], PERSONAS[3], PERSONAS[4], PERSONAS[6]]) assert.ok(!visibleIds(answerAllRequired(p.scope)).has("s_supramaximal"), p.name);
+});
+
+check("every numeric and range control names its unit in plain words", () => {
+  const specs: { id: string; unit: string }[] = [];
+  const answersSets = PERSONAS.map((p) => answerAllRequired(p.scope));
+  for (const q of ALL_CALIBRATION_ITEMS) {
+    for (const a of [{}, ...answersSets]) {
+      const c = (q.dynamicControl ? q.dynamicControl(buildCalibrationContext(a)) : q.control) as { kind?: string; spec?: { unit: string } } | undefined;
+      if (c && (c.kind === "number" || c.kind === "range") && c.spec) specs.push({ id: q.id, unit: c.spec.unit });
+    }
+  }
+  for (const u of ["hours", "km", "mi", "load"]) specs.push({ id: `e_weekly_volume:${u}`, unit: enduranceVolumeSpec(u).unit });
+  for (const b of ["per_lb_bodyweight", "per_kg_bodyweight", "fixed_grams"]) specs.push({ id: `n_protein_amount:${b}`, unit: proteinSpec(b).unit });
+  const missing = specs.filter((s) => !s.unit || !hasUnitLabel(s.unit));
+  assert.deepEqual(missing, []);
+  assert.equal(unitLabel("min"), "minutes");
+  assert.equal(unitLabel("min/week"), "minutes/week");
+});
+
+check("numeric steps never invent methodology: minutes are representable to the minute, typed values kept exactly", () => {
+  const a = answerAllRequired({ ...PERSONAS[2].scope, t_cardio_roles: ["fat_loss", "health"] });
+  for (const [key, min, max] of [["t_cardio_fat_loss_minutes", 1, 7], ["t_cardio_fat_loss_minutes", 22, 143], ["t_cardio_health_minutes", 0, 271], ["t_session_length", 47, 73]] as const) {
+    const unit = key === "t_session_length" ? "min" : "min/week";
+    const v = validateCalibrationAnswers({ ...a, [key]: { min, max, unit } });
+    assert.ok(v.ok, `${key} ${min}–${max}`);
+    assert.deepEqual({ min: (v.answers[key] as { min: number }).min, max: (v.answers[key] as { max: number }).max }, { min, max });
+  }
+  const minuteSpecs = ALL_CALIBRATION_ITEMS.map((q) => q.control as { kind?: string; spec?: { unit: string; step: number } } | undefined).filter((c) => c?.spec && /^min/.test(c.spec.unit));
+  assert.ok(minuteSpecs.length > 0);
+  for (const c of minuteSpecs) assert.ok(c!.spec!.step <= 5, `${c!.spec!.unit} step ${c!.spec!.step}`);
+});
+
+check("cardio volume is hidden from a coach who doesn't prescribe cardio", () => {
+  const ids = visibleIds(answerAllRequired(PERSONAS[8].scope));
+  assert.ok(ids.has("t_cardio_roles"));
+  for (const id of ["t_cardio_fat_loss_minutes", "t_cardio_health_minutes", "t_conditioning_minutes"]) assert.ok(!ids.has(id), id);
+  assert.equal(item("t_cardio_roles").control && (item("t_cardio_roles").control as { options: { value: string; label: string }[] }).options.find((o) => o.value === "none")?.label, "I don't prescribe cardio");
+});
+
+check("cardio volume appears in the context the coach prescribes it for", () => {
+  const base = answerAllRequired(PERSONAS[2].scope);
+  const fat = visibleIds({ ...base, t_cardio_roles: ["fat_loss"] });
+  assert.ok(fat.has("t_cardio_fat_loss_minutes") && !fat.has("t_cardio_health_minutes") && !fat.has("t_conditioning_minutes"));
+  const health = visibleIds({ ...base, t_cardio_roles: ["health"] });
+  assert.ok(health.has("t_cardio_health_minutes") && !health.has("t_cardio_fat_loss_minutes"));
+  const optional = visibleIds({ ...base, t_cardio_roles: ["optional_low_intensity"] });
+  assert.ok(!optional.has("t_cardio_fat_loss_minutes") && !optional.has("t_cardio_health_minutes"), "an optional extra has no prescribed volume");
+  const cond = visibleIds({ ...base, t_cardio_roles: ["conditioning"] });
+  assert.ok(cond.has("t_conditioning_minutes"));
+  const sp = visibleIds({ ...answerAllRequired(PERSONAS[4].scope), t_cardio_roles: ["conditioning"] });
+  assert.ok(!sp.has("t_conditioning_minutes") && sp.has("sp_conditioning"), "sport performance owns conditioning");
+  assert.match(item("t_cardio_fat_loss_minutes").prompt, /fat-loss clients/);
+  assert.match(item("t_cardio_health_minutes").prompt, /general health/);
+});
+
+check("no generic cardio questions for an endurance coach (the Endurance module owns volume)", () => {
+  for (const p of [PERSONAS[3], PERSONAS[5]]) {
+    const ids = visibleIds({ ...answerAllRequired(p.scope), practice_goals: [...(p.scope.practice_goals as string[]), "lose_fat"] });
+    for (const id of ["t_cardio_roles", "t_cardio_fat_loss_minutes", "t_cardio_health_minutes", "t_conditioning_minutes"]) assert.ok(!ids.has(id), `${p.name}: ${id}`);
+    assert.ok(ids.has("e_weekly_volume"));
+  }
+});
+
+check("a lever the coach ruled out isn't offered, and a stale choice is dropped rather than refused", () => {
+  const a = answerAllRequired(PERSONAS[8].scope);
+  const opts = (buildCalibrationContext(a) && item("w_levers").dynamicControl!(buildCalibrationContext(a))) as { options: { value: string }[] };
+  assert.ok(!opts.options.some((o) => o.value === "cardio"));
+  const v = validateCalibrationAnswers({ ...a, w_levers: ["cardio", "calories"] });
+  assert.ok(v.ok);
+  assert.deepEqual(v.answers.w_levers, ["calories"]);
+  const only = validateCalibrationAnswers({ ...a, w_levers: ["cardio"] });
+  assert.ok(only.ok);
+  assert.equal(only.answers.w_levers, undefined);
+});
+
+check("fat-loss questions are hidden from a weight-gain-only coach; weight-gain ones from a fat-loss-only coach", () => {
+  const gain = visibleIds(answerAllRequired(PERSONAS[7].scope));
+  for (const id of ["w_rate_of_loss", "w_levers", "w_breaks", "w_after_goal", "sit_stall_high_adherence", "sit_stall_uncertain", "sit_loss_too_fast", "sit_hunger"]) assert.ok(!gain.has(id), `gain coach saw ${id}`);
+  assert.ok(gain.has("w_rate_of_gain") && gain.has("w_gain_levers"));
+  const fatOnly = visibleIds(answerAllRequired({ coaching_areas: ["weight_management"], experience_levels: ["beginner"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["lose_fat"] }));
+  for (const id of ["w_rate_of_gain", "n_rate_of_gain", "w_gain_levers", "sit_gain_stall", "sit_gain_appetite", "w_maintenance_band"]) assert.ok(!fatOnly.has(id), `fat-loss coach saw ${id}`);
+  assert.ok(fatOnly.has("w_rate_of_loss") && fatOnly.has("sit_stall_high_adherence"));
+});
+
+check("a general-fitness coach without weight management sees neither branch", () => {
+  const ids = visibleIds(answerAllRequired(PERSONAS[6].scope));
+  for (const q of ALL_CALIBRATION_ITEMS) if (q.chapter === "weight_management") assert.ok(!ids.has(q.id), q.id);
+  for (const id of ["sit_stall_high_adherence", "sit_gain_stall", "sit_gain_appetite", "sit_loss_too_fast", "sit_hunger"]) assert.ok(!ids.has(id), id);
+});
+
+check("every bodyweight scenario names its goal and appears only for coaches of that goal", () => {
+  const fatLoss = ["sit_stall_high_adherence", "sit_stall_uncertain", "sit_loss_too_fast", "sit_hunger"];
+  const gain = ["sit_gain_stall", "sit_gain_appetite"];
+  for (const id of fatLoss) assert.match(item(id).prompt, /^A fat-loss client/, id);
+  for (const id of gain) assert.match(item(id).prompt, /^A weight-gain client/, id);
+  assert.equal(item("sit_stall_high_adherence").prompt, "A fat-loss client's bodyweight has stopped decreasing, and adherence is high. What should happen?");
+  assert.equal(item("sit_gain_stall").prompt, "A weight-gain client's bodyweight has stopped increasing, and adherence is high. What should happen?");
+  for (const q of ALL_CALIBRATION_ITEMS.filter((x) => x.chapter === "situations")) {
+    if (/bodyweight|weight|hunger|eat enough/i.test(q.prompt)) assert.ok([...fatLoss, ...gain].includes(q.id), `${q.id} talks about bodyweight without naming a goal`);
+  }
+  const fatCoach = answerAllRequired({ coaching_areas: ["weight_management"], experience_levels: ["beginner"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["lose_fat"] });
+  assert.ok(gain.every((id) => !visibleIds(fatCoach).has(id)));
+});
+
+check("a multi-goal weight-management coach gets each branch once, with no duplicate rate-of-gain question", () => {
+  const a = answerAllRequired({ coaching_areas: ["weight_management", "physique"], experience_levels: ["beginner"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["lose_fat", "gain_weight", "maintain_weight", "build_muscle"] });
+  const ids = visibleIds(a);
+  for (const id of ["w_rate_of_loss", "w_levers", "w_rate_of_gain", "w_gain_levers", "w_maintenance_band", "w_maintenance_adjust", "sit_stall_high_adherence", "sit_gain_stall"]) assert.ok(ids.has(id), id);
+  assert.ok(!ids.has("n_rate_of_gain"), "rate of gain asked once, in Weight management");
+  assert.ok(calibrationV2Readiness({ answers: a, aiAuthorityConfirmed: true }).ready);
+  const keyCounts = new Map<string, number>();
+  for (const q of ALL_CALIBRATION_ITEMS) if (q.kind !== "group" && ids.has(q.id)) keyCounts.set(answerKeyOf(q), (keyCounts.get(answerKeyOf(q)) ?? 0) + 1);
+  assert.deepEqual([...keyCounts].filter(([, n]) => n > 1), [], "no answer is asked twice");
+});
+
+check("protein 'varies by goal' only offers the goals the coach coaches", () => {
+  const a = answerAllRequired(PERSONAS[1].scope);
+  const dims = item("n_protein_amount").variesBy!(buildCalibrationContext(a));
+  assert.deepEqual(dims[0].keys.map((k) => k.value), ["lose_fat", "maintenance", "build_muscle"]);
+  const single = answerAllRequired({ ...PERSONAS[0].scope, practice_goals: ["build_muscle"] });
+  assert.deepEqual(item("n_protein_amount").variesBy!(buildCalibrationContext(single)), [], "one goal → nothing to vary by");
+});
+
+check("program length varies by season for sport performance — never by endurance events", () => {
+  const dims = item("program_length").variesBy!(buildCalibrationContext(answerAllRequired(PERSONAS[4].scope)));
+  assert.deepEqual(dims.map((d) => d.id), ["season_phase"]);
+  const endurance = item("program_length").variesBy!(buildCalibrationContext(answerAllRequired(PERSONAS[3].scope)));
+  assert.deepEqual(endurance.map((d) => d.id), ["event"]);
+});
+
+check("an already-confirmed method's answers are never rewritten: retired keys drop, new questions stay unknown", () => {
+  const confirmed = { ...answerAllRequired(PERSONAS[2].scope), t_cardio_roles: ["fat_loss"], t_cardio_minutes: { min: 120, max: 180, unit: "min/week" } } as CalibrationAnswers;
+  delete confirmed.checkin_approach;
+  const v = validateCalibrationAnswers(confirmed);
+  assert.ok(v.ok);
+  assert.equal(v.answers.t_cardio_minutes, undefined, "the old generic cardio total isn't kept");
+  assert.equal(v.answers.t_cardio_fat_loss_minutes, undefined, "…and isn't reinterpreted as fat-loss cardio");
+  assert.equal(v.answers.checkin_approach, undefined, "a schedule is never manufactured");
+});
+
+check("v1 refinement: the carried-over cadence is flagged for confirmation (its meaning narrowed)", () => {
+  const r = mapV1AnswersToV2({ ...V1_FULL, comm_checkin_cadence: "weekly" } as never);
+  assert.equal(r.answers.checkin_approach, "every_n_days");
+  assert.deepEqual(r.answers.checkin_rhythm, { value: 7, unit: "days" });
+  assert.ok((r.answers.__needsConfirmation as string[]).includes("checkin_approach") && (r.answers.__needsConfirmation as string[]).includes("checkin_rhythm"));
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

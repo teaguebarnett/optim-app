@@ -168,7 +168,18 @@ function checkItem(q: CalibrationQuestion, v: unknown, ctx: CalibrationContext):
     }
     case "control": {
       const control = controlFor(q, ctx);
-      return control ? checkControl(v, control) : { ok: false, message: "Unknown question." };
+      if (!control) return { ok: false, message: "Unknown question." };
+      // Options computed from earlier answers (e.g. no "Cardio" lever once the
+      // coach says they don't prescribe cardio): a choice that's no longer
+      // offered is stale, not malformed — drop it, and the whole answer if
+      // nothing is left.
+      if (q.dynamicControl && (control.kind === "multi" || control.kind === "ranked") && Array.isArray(v)) {
+        const offered = new Set(control.options.map((o) => o.value));
+        const kept = v.filter((x) => typeof x !== "string" || offered.has(x) || (control.kind === "multi" && control.otherAllowed && x.startsWith(OTHER_PREFIX)));
+        if (kept.length === 0 && v.length > 0) return { ok: "drop" };
+        return checkControl(kept, control);
+      }
+      return checkControl(v, control);
     }
     case "layered":
       return checkLayered(v, q, ctx);

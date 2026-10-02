@@ -11,6 +11,8 @@ import { OptionCard } from "@/components/ui/option-card";
 import { TextArea } from "@/components/ui/textarea";
 import { NumberWheel } from "@/components/ui/number-wheel";
 import { Button } from "@/components/ui/button";
+import { buildStepRange } from "@/lib/numeric-wheel";
+import { unitFitsInWheel, unitLabel } from "@/lib/coach/calibration/units";
 import type { ChoiceOption, ControlSpec, NumberAnswer, NumberSpec, RangeAnswer } from "@/lib/coach/calibration/types";
 
 const OTHER = "other:";
@@ -236,18 +238,38 @@ function startValue(spec: NumberSpec): number {
   return snap(spec.min + (spec.max - spec.min) / 3, spec.step);
 }
 
+/** "From (minutes)" — the unit sits right above the wheel it describes. */
+function WheelHeading({ prefix, unit }: { prefix?: string; unit: string }) {
+  const label = unitLabel(unit);
+  return (
+    <p className="mb-1.5 text-meta font-medium text-neutral">
+      {prefix ? (
+        <>
+          {prefix} <span className="text-off-white">({label})</span>
+        </>
+      ) : (
+        <span className="text-off-white">{label.charAt(0).toUpperCase() + label.slice(1)}</span>
+      )}
+    </p>
+  );
+}
+
 /** A wheel whose bounds the coach can extend, plus a typed fallback for any
- * value. The wheel's bounds are a convenience — never a limit. */
-function ExpandableWheel({ id, label, spec, value, onSet }: { id: string; label: string; spec: NumberSpec; value: number; onSet: (n: number) => void }) {
+ * value. The wheel's bounds are a convenience — never a limit — and its step
+ * is a scrolling shortcut, never a precision limit: a typed value between
+ * steps (22 on a 5-minute wheel) is shown exactly. */
+function ExpandableWheel({ id, label, prefix, spec, value, onSet }: { id: string; label: string; prefix?: string; spec: NumberSpec; value: number; onSet: (n: number) => void }) {
   const span = spec.max - spec.min;
   const [lo, setLo] = useState(Math.min(spec.min, value));
   const [hi, setHi] = useState(Math.max(spec.max, value));
   const canLower = spec.hardMin === undefined || lo > spec.hardMin;
   const canRaise = spec.hardMax === undefined || hi < spec.hardMax;
+  const grid = buildStepRange(lo, hi, spec.step);
+  const values = grid.some((v) => Math.abs(v - value) < 1e-9) ? grid : [...grid, value].sort((a, b) => a - b);
   return (
     <div className="min-w-0 flex-1">
-      <p className="mb-1.5 text-meta font-medium text-neutral">{label}</p>
-      <NumberWheel key={`${lo}-${hi}`} id={id} fieldLabel={label} value={value} onChange={onSet} min={lo} max={hi} step={spec.step} formatValue={fmt} />
+      <WheelHeading prefix={prefix} unit={spec.unit} />
+      <NumberWheel key={`${lo}-${hi}`} id={id} fieldLabel={`${label} (${unitLabel(spec.unit)})`} value={value} onChange={onSet} values={values} unit={unitFitsInWheel(spec.unit) ? spec.unit : undefined} formatValue={fmt} />
       <div className="mt-1.5 flex justify-between gap-2">
         <button type="button" disabled={!canLower} onClick={() => setLo(Math.max(spec.hardMin ?? -Infinity, snap(lo - Math.max(spec.step, span / 2), spec.step)))} className="min-h-9 text-meta text-accent-fg underline-offset-2 hover:underline disabled:invisible">
           Lower…
@@ -276,7 +298,7 @@ function TypedNumber({ spec, label, onSet }: { spec: NumberSpec; label: string; 
   };
   return (
     <div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <input
           type="number"
           inputMode="decimal"
@@ -286,9 +308,9 @@ function TypedNumber({ spec, label, onSet }: { spec: NumberSpec; label: string; 
             setPending(null);
           }}
           aria-label={label}
-          placeholder={spec.unit}
           className="min-h-11 w-28 rounded-[var(--radius-sm)] border border-border-strong bg-surface-input px-3 text-body text-off-white"
         />
+        <span className="text-meta text-off-white">{unitLabel(spec.unit)}</span>
         <Button type="button" variant="secondary" onClick={submit}>
           Set
         </Button>
@@ -297,7 +319,7 @@ function TypedNumber({ spec, label, onSet }: { spec: NumberSpec; label: string; 
       {pending !== null ? (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] bg-warning-soft px-3 py-2 text-meta text-warning-strong">
           <span>
-            {fmt(pending)} {spec.unit} is outside the usual range — keep it?
+            {fmt(pending)} {unitLabel(spec.unit)} is outside the usual range — keep it?
           </span>
           <button
             type="button"
@@ -326,15 +348,15 @@ export function NumberAnswerInput({ id, spec, value, onChange, label }: { id: st
   const set = (n: number) => onChange({ value: n, unit: spec.unit });
   return (
     <div className="max-w-sm">
-      <ExpandableWheel key={`${id}-${spec.min}-${spec.max}-${spec.unit}-${shown}`} id={id} label={spec.unit} spec={spec} value={shown} onSet={set} />
+      <ExpandableWheel key={`${id}-${spec.min}-${spec.max}-${spec.unit}-${shown}`} id={id} label={label} spec={spec} value={shown} onSet={set} />
       <div className="mt-3 flex flex-wrap items-center gap-3 text-meta">
         {!current ? (
           <Button type="button" variant="secondary" onClick={() => set(shown)}>
-            Use {fmt(shown)} {spec.unit}
+            Use {fmt(shown)} {unitLabel(spec.unit)}
           </Button>
         ) : (
           <span className="text-neutral">
-            Set to <strong className="text-off-white">{fmt(current.value)} {spec.unit}</strong>
+            Set to <strong className="text-off-white">{fmt(current.value)} {unitLabel(spec.unit)}</strong>
           </span>
         )}
         <button type="button" onClick={() => setTyping((t) => !t)} className="min-h-9 text-accent-fg underline-offset-2 hover:underline">
@@ -368,30 +390,32 @@ export function RangeAnswerInput({ id, spec, value, onChange, label }: { id: str
 
   return (
     <div className="max-w-lg">
-      <div className="flex gap-4">
-        <ExpandableWheel key={`${id}-from-${spec.min}-${spec.max}-${spec.unit}-${from}`} id={`${id}-from`} label="From" spec={spec} value={from} onSet={(n) => commit({ ...base, min: n })} />
+      {/* Bottom-aligned so a heading that wraps ("From (% of bodyweight/week)")
+          never pushes one wheel out of line with the other. */}
+      <div className="flex items-end gap-4">
+        <ExpandableWheel key={`${id}-from-${spec.min}-${spec.max}-${spec.unit}-${from}`} id={`${id}-from`} label={`${label} from`} prefix="From" spec={spec} value={from} onSet={(n) => commit({ ...base, min: n })} />
         {openMax ? (
           <div className="flex min-w-0 flex-1 flex-col">
-            <p className="mb-1.5 text-meta font-medium text-neutral">To</p>
+            <WheelHeading prefix="To" unit={spec.unit} />
             <div className="flex flex-1 items-center justify-center rounded-[var(--radius-md)] bg-surface px-3 text-body text-off-white">or more</div>
           </div>
         ) : (
-          <ExpandableWheel key={`${id}-to-${spec.min}-${spec.max}-${spec.unit}-${to ?? from}`} id={`${id}-to`} label="To" spec={spec} value={to ?? from} onSet={(n) => commit({ ...base, max: n })} />
+          <ExpandableWheel key={`${id}-to-${spec.min}-${spec.max}-${spec.unit}-${to ?? from}`} id={`${id}-to`} label={`${label} to`} prefix="To" spec={spec} value={to ?? from} onSet={(n) => commit({ ...base, max: n })} />
         )}
       </div>
-      <p className="mt-2 text-meta text-neutral">{spec.unit}. The same number twice means a single value.</p>
+      <p className="mt-2 text-meta text-neutral">The same number twice means a single value.</p>
       <div className="mt-3 flex flex-wrap items-center gap-3 text-meta">
         {!current ? (
           <Button type="button" variant="secondary" onClick={() => commit(base)}>
             Use {fmt(base.min)}
-            {base.max === null ? "+" : base.max !== base.min ? `–${fmt(base.max)}` : ""} {spec.unit}
+            {base.max === null ? "+" : base.max !== base.min ? `–${fmt(base.max)}` : ""} {unitLabel(spec.unit)}
           </Button>
         ) : (
           <span className="text-neutral">
             Set to{" "}
             <strong className="text-off-white">
               {fmt(current.min)}
-              {current.max === null ? "+" : current.max !== current.min ? `–${fmt(current.max)}` : ""} {spec.unit}
+              {current.max === null ? "+" : current.max !== current.min ? `–${fmt(current.max)}` : ""} {unitLabel(spec.unit)}
             </strong>
           </span>
         )}
@@ -406,7 +430,7 @@ export function RangeAnswerInput({ id, spec, value, onChange, label }: { id: str
         </button>
       </div>
       {typing ? (
-        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+        <div className="mt-2 grid gap-3 sm:grid-cols-2 sm:gap-x-6">
           <div>
             <p className="mb-1 text-meta text-neutral">From</p>
             <TypedNumber spec={spec} label={`${label} from`} onSet={(n) => commit({ ...base, min: n })} />
@@ -432,7 +456,7 @@ export function RangeAnswerInput({ id, spec, value, onChange, label }: { id: str
                 <TypedNumber spec={{ ...spec, min: current.min, max: current.max ?? spec.max }} label={`${label} usual value`} onSet={(n) => commit({ ...base, preferred: n })} />
                 {current.preferred !== undefined ? (
                   <span className="text-meta text-neutral">
-                    Usually <strong className="text-off-white">{fmt(current.preferred)}</strong> ·{" "}
+                    Usually <strong className="text-off-white">{fmt(current.preferred)} {unitLabel(spec.unit)}</strong> ·{" "}
                     <button type="button" onClick={() => commit({ min: current.min, max: current.max })} className="text-accent-fg underline-offset-2 hover:underline">
                       Remove
                     </button>

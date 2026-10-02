@@ -126,7 +126,12 @@ export function mapV1AnswersToV2(v1: CoachOnboardingAnswers): V1MappingResult {
   const excluded = arr(v1.practice_excluded).filter((v) => v !== "under_17");
   if (arr(v1.practice_excluded).length) set("practice_excluded", excluded.length ? excluded : ["none"]);
   const cadence: Record<string, number> = { daily: 1, weekly: 7, biweekly: 14, monthly: 30 };
-  if (str(v1.comm_checkin_cadence) && cadence[str(v1.comm_checkin_cadence)!]) set("checkin_rhythm", { value: cadence[str(v1.comm_checkin_cadence)!], unit: "days" });
+  // v1 asked about any check-in; v2 asks about a structured check-in, so the
+  // carried-over cadence is flagged for the coach to confirm.
+  if (str(v1.comm_checkin_cadence) && cadence[str(v1.comm_checkin_cadence)!]) {
+    set("checkin_approach", "every_n_days", true);
+    set("checkin_rhythm", { value: cadence[str(v1.comm_checkin_cadence)!], unit: "days" }, true);
+  }
   if (arr(v1.practice_important_behaviors).length) set("comm_reinforce", arr(v1.practice_important_behaviors));
 
   // --- Training ---
