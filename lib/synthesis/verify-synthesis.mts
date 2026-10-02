@@ -13,7 +13,7 @@ import { canReadSynthesisState, type SynthesisActor } from "./access.ts";
 import { deriveClientState, type ClientState } from "./client-state.ts";
 import { deriveConstraintSet, effectiveConstraints, hardConstraints } from "./constraints.ts";
 import { deriveGoalContract } from "./goal-contract.ts";
-import { createKnowledgeRegistry, FOUNDATION_KNOWLEDGE, FOUNDATION_KNOWLEDGE_VERSION, LEGACY_LIBRARY_SOURCE } from "./knowledge/registry.ts";
+import { createKnowledgeRegistry, FOUNDATION_KNOWLEDGE, FOUNDATION_KNOWLEDGE_VERSION } from "./knowledge/registry.ts";
 import { validatePlanSpecification, type PlanSpecification } from "./plan-spec.ts";
 import { createPlannerRegistry, plannerDomainsForGoal, runPlanner, type DomainPlanner } from "./planner.ts";
 import { evaluatePlanningReadiness } from "./readiness.ts";
@@ -125,20 +125,17 @@ check("1. Fitness Knowledge is separate from the Coach Brain", () => {
   const a = buildSynthesisInput({ knowledge: FOUNDATION_KNOWLEDGE, coachMethod: method({ min: 2, max: 3 }), client: state("c1") });
   const b = buildSynthesisInput({ knowledge: FOUNDATION_KNOWLEDGE, coachMethod: method({ min: 4, max: 6 }), client: state("c1") });
   assert.equal(a.knowledge, b.knowledge);
-  // Entries are versioned, source-aware, immutable; un-curated fields stay undefined.
-  const squat = FOUNDATION_KNOWLEDGE.exercises().find((e) => /squat/i.test(e.name));
-  assert.ok(squat && squat.version === 1 && squat.support.sources.includes(LEGACY_LIBRARY_SOURCE.id));
-  assert.equal(squat.primaryMuscles, undefined, "un-curated stays undefined, never guessed");
+  // Entries are versioned, source-aware and immutable.
+  const squat = FOUNDATION_KNOWLEDGE.getExercise("exercise.barbell_back_squat");
+  assert.ok(squat && squat.version === 1 && squat.evidence.status === "internal_curation");
+  assert.ok(FOUNDATION_KNOWLEDGE.sourcesFor(squat.id).some((s) => s.type === "internal_curation"));
   assert.throws(() => ((squat as { name: string }).name = "x"));
-  assert.ok(FOUNDATION_KNOWLEDGE.get(squat.pattern)?.kind === "movement_pattern");
-  // Extensible and validated: a principle can be added; unknown sources are rejected.
-  const ext = createKnowledgeRegistry({
-    version: "0.2.0-test",
-    sources: [{ id: "src.test", type: "guideline", title: "Test guideline" }],
-    entries: [{ id: "principle.test", kind: "principle", domain: "resistance_training", version: 1, scope: "coaching", support: { sources: ["src.test"], strength: "moderate" }, topic: "weekly_sets", statement: "test", appliesTo: { goalClasses: ["hypertrophy"] } }],
-  });
+  assert.ok(FOUNDATION_KNOWLEDGE.get(`pattern.${squat.patterns[0]}`)?.kind === "movement_pattern");
+  // Extensible and validated: a concept can be added; unknown sources are rejected.
+  const concept = (sourceId: string) => ({ id: "concept.test", kind: "concept" as const, domain: "resistance_training" as const, version: 1, scope: "coaching" as const, evidence: { status: "sourced" as const, level: "consensus_guideline" as const, sources: [{ sourceId }] }, topic: "test", name: "Test", coachMethodDimension: null, claims: [{ id: "c.def", kind: "definition" as const, statement: "test", evidence: { status: "sourced" as const, level: "consensus_guideline" as const, sources: [{ sourceId }] } }] });
+  const ext = createKnowledgeRegistry({ version: "0.2.0-test", sources: [{ id: "src.test", type: "guideline", title: "Test guideline", citation: "Test.", url: "https://example.org" }], entries: [concept("src.test")] });
   assert.equal(ext.byDomain("resistance_training").length, 1);
-  assert.throws(() => createKnowledgeRegistry({ version: "x", sources: [], entries: [{ id: "p", kind: "principle", domain: "nutrition", version: 1, scope: "coaching", support: { sources: ["nope"], strength: "unrated" }, topic: "t", statement: "s" }] }));
+  assert.throws(() => createKnowledgeRegistry({ version: "x", sources: [], entries: [concept("nope")] }));
 });
 
 // 2 -------------------------------------------------------------------------

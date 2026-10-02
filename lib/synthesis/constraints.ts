@@ -11,7 +11,7 @@
 
 import { termsMentionedInRestrictionText } from "../coach/program-directions.ts";
 import type { DayOfWeek } from "../types.ts";
-import type { Demand } from "./knowledge/types.ts";
+import type { BodyPosition, Demand, Level, MovementPatternId } from "./knowledge/taxonomy.ts";
 import { isKnown } from "./facts.ts";
 import type { ClientState } from "./client-state.ts";
 
@@ -24,8 +24,10 @@ export type ConstraintTag =
   | { kind: "equipment_available"; equipment: string[] }
   | { kind: "body_area"; area: string }
   | { kind: "avoid_exercise_term"; term: string }
-  | { kind: "avoid_movement_pattern"; pattern: string }
-  | { kind: "avoid_demand"; demand: Demand }
+  /** Structured tags below are matched against exercise metadata (exercise-eligibility.ts). */
+  | { kind: "avoid_movement_pattern"; pattern: MovementPatternId }
+  | { kind: "avoid_demand"; demand: Demand; atOrAbove: Level }
+  | { kind: "avoid_position"; position: BodyPosition }
   | { kind: "requires_coach_review" }
   | { kind: "free_text"; text: string; interpretation: "needs_coach_interpretation" };
 

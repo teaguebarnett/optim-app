@@ -95,7 +95,8 @@
     "test:db": "supabase test db",
     "verify:method-settings": "node --experimental-strip-types lib/coach/verify-method-settings.mts",
     "verify:client-entry": "node --experimental-strip-types lib/coach/verify-client-entry.mts",
-    "verify:synthesis": "node --experimental-strip-types lib/synthesis/verify-synthesis.mts"
+    "verify:synthesis": "node --experimental-strip-types lib/synthesis/verify-synthesis.mts",
+    "verify:knowledge": "node --experimental-strip-types lib/synthesis/knowledge/verify-knowledge.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",

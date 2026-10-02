@@ -1,18 +1,20 @@
-// Gate 4.0C-1 — the canonical OPTIM Fitness Knowledge layer: what is
-// generally true or supported about training, nutrition, anatomy and
-// recovery, independent of any coach or client.
+// Gate 4.0C-1 / 4.0C-1B — the canonical OPTIM Fitness Knowledge layer:
+// what is generally true or supported about training, independent of any
+// coach or client.
 //
-// It is NOT the Coach Brain (how one coach chooses to coach) and it never
-// overrides it; it is never modified by a client's restrictions. Planners
-// query it through FitnessKnowledgeRegistry — never raw documents at
-// runtime.
+// It is NOT the Coach Brain (how one coach chooses to coach) and never
+// overrides it: guidance claims describe what sources support; where valid
+// coaching choices differ, the coach's method decides. It never contains
+// client facts. Planners query it through FitnessKnowledgeRegistry.
 //
-// Every entry is versioned and source-aware. An optional field left
-// undefined means "not yet curated" — never "none" or "low". Knowledge that
-// belongs to qualified clinical judgment is marked so, and is never turned
-// into coaching permission.
+// Every entry is versioned and carries Evidence that says honestly what it
+// rests on: an external source, OPTIM's own curation, or nothing yet
+// (source_needed).
 
 import type { GoalClass } from "../goal-contract.ts";
+import type { ApparatusId, BodyPosition, Demand, EquipmentId, JointActionId, Level, MovementPatternId, MuscleId, ProgressionMode, TrainingQuality } from "./taxonomy.ts";
+
+export type { Demand, Level } from "./taxonomy.ts";
 
 export const KNOWLEDGE_DOMAINS = [
   "anatomy",
@@ -31,42 +33,44 @@ export const KNOWLEDGE_DOMAINS = [
 export type KnowledgeDomain = (typeof KNOWLEDGE_DOMAINS)[number];
 
 // ---------------------------------------------------------------------------
-// Sources and support — no evidence hierarchy is hard-coded here; which
-// sources feed OPTIM (and how they rank) is a later decision.
+// Sources and evidence
 // ---------------------------------------------------------------------------
 
-export type KnowledgeSourceType =
-  | "guideline"
-  | "position_stand"
-  | "systematic_review"
-  | "textbook"
-  | "exercise_database"
-  | "expert_consensus"
-  | "internal_curation";
+export const KNOWLEDGE_SOURCE_TYPES = ["position_stand", "guideline", "meta_analysis", "systematic_review", "textbook", "exercise_database", "expert_consensus", "internal_curation"] as const;
+export type KnowledgeSourceType = (typeof KNOWLEDGE_SOURCE_TYPES)[number];
 
 export interface KnowledgeSource {
   id: string;
   type: KnowledgeSourceType;
   title: string;
+  /** Full citation for external sources (required for them). */
   citation?: string;
+  doi?: string;
   url?: string;
-  /** ISO date the source was published or last revised. */
+  pmid?: string;
+  /** YYYY, YYYY-MM or YYYY-MM-DD. */
   publishedOn?: string;
-  /** The source's own edition/version, when it has one. */
-  edition?: string;
+  /** How this record was checked (e.g. "PubMed record + abstract, 2026-10-02"). */
+  verifiedVia?: string;
 }
 
-export type SupportStrength = "strong" | "moderate" | "limited" | "expert_opinion" | "unrated";
-
-export interface KnowledgeSupport {
-  /** KnowledgeSource ids. */
-  sources: string[];
-  strength: SupportStrength;
-  notes?: string;
+export interface SourceCitation {
+  sourceId: string;
+  /** Where in the source (e.g. "abstract"). */
+  locator?: string;
 }
 
-/** Coaching knowledge vs. something that needs qualified clinical/medical
- * judgment (which OPTIM never treats as coaching permission). */
+/** The kind of evidence — derived from the cited sources' types, never a
+ * free judgement. */
+export type EvidenceLevel = "consensus_guideline" | "meta_analysis" | "systematic_review" | "reference_work";
+
+export type Evidence =
+  | { status: "sourced"; level: EvidenceLevel; sources: SourceCitation[]; notes?: string }
+  /** OPTIM's own curation (taxonomy, exercise ratings). Honest, not science. */
+  | { status: "internal_curation"; sources: SourceCitation[]; reviewedByQualifiedExpert: boolean; notes?: string }
+  /** A claim worth having, with no source yet. Never presented as evidence. */
+  | { status: "source_needed"; notes: string };
+
 export type KnowledgeScope = "coaching" | "requires_clinical_judgment";
 
 export interface KnowledgeEntryBase {
@@ -75,69 +79,70 @@ export interface KnowledgeEntryBase {
   /** Bumped whenever the entry's meaning changes. */
   version: number;
   scope: KnowledgeScope;
-  support: KnowledgeSupport;
+  evidence: Evidence;
 }
 
 // ---------------------------------------------------------------------------
-// Anatomy / biomechanics
+// Taxonomy entries (generated from taxonomy.ts)
 // ---------------------------------------------------------------------------
 
 export interface MuscleEntry extends KnowledgeEntryBase {
   kind: "muscle";
+  muscle: MuscleId;
   name: string;
   region: "upper" | "lower" | "trunk";
 }
 
-export interface JointEntry extends KnowledgeEntryBase {
-  kind: "joint";
-  name: string;
-  /** Joint action ids, e.g. "shoulder_flexion". */
-  actions: string[];
+export interface JointActionEntry extends KnowledgeEntryBase {
+  kind: "joint_action";
+  action: JointActionId;
+  joint: string;
 }
 
 export interface MovementPatternEntry extends KnowledgeEntryBase {
   kind: "movement_pattern";
+  pattern: MovementPatternId;
   name: string;
+  category: string;
 }
 
 // ---------------------------------------------------------------------------
-// Exercise knowledge
+// Exercises
 // ---------------------------------------------------------------------------
-
-export type Level = "low" | "moderate" | "high";
-export type Demand = "spinal_loading" | "bracing" | "impact" | "overhead" | "grip" | "balance";
 
 export interface ExerciseEntry extends KnowledgeEntryBase {
   kind: "exercise";
   name: string;
-  /** MovementPatternEntry id. */
-  pattern: string;
-  equipment: string[];
-  laterality?: "bilateral" | "unilateral" | "alternating";
-  mechanics?: "compound" | "isolation";
-  /** MuscleEntry ids. */
-  primaryMuscles?: string[];
-  secondaryMuscles?: string[];
-  jointActions?: string[];
-  demands?: Partial<Record<Demand, Level>>;
-  skill?: Level;
-  stability?: Level;
-  loadingPotential?: Level;
-  impact?: Level;
-  fatigue?: Level;
-  prescriptionMode?: "reps" | "time" | "distance";
-  /** ExerciseEntry ids that can stand in without changing intent. */
-  substitutes?: string[];
-  /** Tags a client constraint can exclude on (e.g. "spinal_loading_high"). */
-  restrictionTags?: string[];
-  progressions?: string[];
-  regressions?: string[];
+  /** Alternate names — for search only, never for logic. */
+  aliases: string[];
+  /** The exercise's name in lib/coach/exercise-library.ts, when it's there. */
+  legacyName?: string;
+  /** Every pattern that genuinely applies; the first is the main one. */
+  patterns: MovementPatternId[];
+  primaryMuscles: MuscleId[];
+  secondaryMuscles: MuscleId[];
+  jointActions: JointActionId[];
+  equipment: EquipmentId;
+  apparatus: ApparatusId[];
+  positions: BodyPosition[];
+  laterality: "bilateral" | "unilateral" | "alternating";
+  mechanics: "compound" | "isolation";
+  contraction: "dynamic" | "isometric";
+  prescription: Array<"reps" | "time" | "distance">;
+  demands: Record<Demand, Level>;
+  loadingPotential: Level;
+  /** How commonly it's used to train each quality — not a prescription. */
+  suitability: Record<TrainingQuality, Level>;
+  progressionModes: ProgressionMode[];
+  /** Structural ordering consideration: e.g. high-skill/high-fatigue lifts tend to go early. */
+  ordering: "early" | "flexible" | "late";
+  /** Harder variants (exercise ids). Easier variants are derived. */
+  harderVariants: string[];
 }
 
 // ---------------------------------------------------------------------------
-// Principles (resistance, endurance, hybrid, weight management, nutrition,
-// recovery, general fitness, sport) — a statement plus optional parameter
-// ranges, scoped by goal class / population.
+// Concepts — resistance-training ideas a planner reasons with, each made of
+// claims that carry their own evidence.
 // ---------------------------------------------------------------------------
 
 export interface ParameterRange {
@@ -146,28 +151,49 @@ export interface ParameterRange {
   unit: string;
 }
 
-export interface PrincipleEntry extends KnowledgeEntryBase {
-  kind: "principle";
-  /** e.g. "weekly_sets_per_muscle", "rate_of_weight_loss". */
-  topic: string;
+/** The dimension of a coach's method a concept relates to. Generic names —
+ * the knowledge layer never imports the Coach Brain. */
+export type CoachMethodDimension =
+  | "training_days"
+  | "weekly_volume"
+  | "rep_ranges"
+  | "load"
+  | "effort"
+  | "rest"
+  | "exercise_order"
+  | "progression"
+  | "deload"
+  | "split"
+  | "exercise_selection"
+  | "session_length";
+
+export interface KnowledgeClaim {
+  id: string;
+  kind: "definition" | "general_guidance" | "relationship";
   statement: string;
+  appliesTo?: { goalClasses?: GoalClass[]; qualities?: TrainingQuality[]; trainingStatus?: Array<"novice" | "intermediate" | "advanced" | "trained" | "untrained"> };
   parameters?: Record<string, ParameterRange>;
-  appliesTo?: { goalClasses?: GoalClass[]; populations?: string[] };
+  evidence: Evidence;
 }
 
-/** Special populations / scope modifiers (older adults, pregnancy and
- * postpartum, adolescents, beginners, highly trained, injury contexts) —
- * coaching adjustments, never treatment logic. */
+export interface ConceptEntry extends KnowledgeEntryBase {
+  kind: "concept";
+  topic: string;
+  name: string;
+  /** Where coaches legitimately differ, the coach's method decides here. */
+  coachMethodDimension: CoachMethodDimension | null;
+  claims: KnowledgeClaim[];
+}
+
+/** Special populations — coaching considerations, never treatment logic. */
 export interface PopulationModifierEntry extends KnowledgeEntryBase {
   kind: "population_modifier";
   population: string;
-  /** What a coach generally adjusts (statement form, not prescriptions). */
   coachingConsiderations: string[];
-  /** Situations that must go to a qualified professional. */
   referralTriggers: string[];
 }
 
-export type KnowledgeEntry = MuscleEntry | JointEntry | MovementPatternEntry | ExerciseEntry | PrincipleEntry | PopulationModifierEntry;
+export type KnowledgeEntry = MuscleEntry | JointActionEntry | MovementPatternEntry | ExerciseEntry | ConceptEntry | PopulationModifierEntry;
 
 /** A pointer recorded in provenance: which knowledge, at which version. */
 export interface KnowledgeRef {
@@ -175,21 +201,67 @@ export interface KnowledgeRef {
   version: number;
 }
 
-export interface ExerciseQuery {
-  pattern?: string;
-  /** Any of these equipment ids is available. */
-  equipmentAnyOf?: string[];
-  /** Exclude exercises carrying any of these restriction tags. */
-  excludeRestrictionTags?: string[];
+// ---------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------
+
+export interface ExerciseFilter {
+  patternsAnyOf?: MovementPatternId[];
+  excludePatterns?: MovementPatternId[];
+  primaryMusclesAnyOf?: MuscleId[];
+  /** Primary or secondary. */
+  musclesAnyOf?: MuscleId[];
+  /** Implements available. */
+  equipmentAnyOf?: EquipmentId[];
+  /** When given, an exercise's apparatus must all be in this list. Omitted = not filtered. */
+  apparatusAvailable?: ApparatusId[];
+  excludePositions?: BodyPosition[];
+  /** Each listed demand must be at or below the level. */
+  maxDemands?: Partial<Record<Demand, Level>>;
+  mechanics?: ExerciseEntry["mechanics"];
+  laterality?: ExerciseEntry["laterality"][];
+  contraction?: ExerciseEntry["contraction"];
+  /** Minimum suitability for a training quality. */
+  suitableFor?: { quality: TrainingQuality; atLeast: Level };
+}
+
+export interface SubstituteContext extends Omit<ExerciseFilter, "patternsAnyOf" | "primaryMusclesAnyOf"> {
+  /** What must be preserved. Default "target_and_pattern". */
+  preserve?: "target_and_pattern" | "target" | "pattern";
+}
+
+export interface SubstituteCandidate {
+  exercise: ExerciseEntry;
+  sharedPrimaryMuscles: MuscleId[];
+  sharedPatterns: MovementPatternId[];
+  sameMechanics: boolean;
+}
+
+export interface SourceNeededItem {
+  entryId: string;
+  claimId?: string;
+  statement: string;
+  notes: string;
 }
 
 /** The read interface planners use. */
 export interface FitnessKnowledgeRegistry {
-  /** Version of the whole knowledge set (recorded in provenance). */
   readonly version: string;
   get(id: string): KnowledgeEntry | undefined;
   byDomain(domain: KnowledgeDomain): KnowledgeEntry[];
-  exercises(query?: ExerciseQuery): ExerciseEntry[];
+  getExercise(id: string): ExerciseEntry | undefined;
+  exercises(): ExerciseEntry[];
+  findExercises(filter?: ExerciseFilter): ExerciseEntry[];
+  exercisesForMuscle(muscle: MuscleId, role?: "primary" | "any"): ExerciseEntry[];
+  exercisesForPattern(pattern: MovementPatternId): ExerciseEntry[];
+  /** Valid candidates only, sorted by id — never a universal preference ranking. */
+  substitutesFor(exerciseId: string, context?: SubstituteContext): SubstituteCandidate[];
+  easierVariants(exerciseId: string): ExerciseEntry[];
+  concepts(): ConceptEntry[];
+  concept(topic: string): ConceptEntry | undefined;
   source(id: string): KnowledgeSource | undefined;
+  /** The sources behind an entry or one of its claims. */
+  sourcesFor(entryId: string, claimId?: string): KnowledgeSource[];
+  sourceNeeded(): SourceNeededItem[];
   ref(id: string): KnowledgeRef | undefined;
 }
