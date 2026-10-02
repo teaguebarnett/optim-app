@@ -1,8 +1,8 @@
 "use client";
 
 // Gate 3.2 — Settings → Coaching method is the Coach Brain editor for a
-// calibrated coach. Each methodology category is a tile: closed, it shows the
-// same summary Settings always showed; open, it renders the SAME controls the
+// calibrated coach. Each methodology category is a row: closed, just its
+// title (a scannable index of the method); open, it renders the SAME controls the
 // calibration interview uses (CalibrationField over the canonical question
 // bank), filtered by the same applicability rules. Edits stay in a local
 // draft — nothing is saved until the coach reviews exactly what changed and
@@ -11,16 +11,16 @@
 // never changes on its own.
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, CircleAlert } from "lucide-react";
+import { ChevronRight, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { CalibrationField } from "@/components/coach-onboarding/v2/calibration-field";
 import { ControlInput } from "@/components/coach-onboarding/v2/controls";
-import { ChapterSummaryBody, STATUS_C_COPY } from "@/components/coach-onboarding/v2/calibration-summary";
+import { STATUS_C_COPY } from "@/components/coach-onboarding/v2/calibration-summary";
 import { LiveAiAuthorityPanel } from "@/components/coach/live-ai-authority-panel";
 import { CALIBRATION_QUESTIONS, answerKeyOf, chapterMeta } from "@/lib/coach/calibration/questions";
 import { editorChapters, editorQuestions, methodEditState, questionAnswerKeys, type MethodChange } from "@/lib/coach/calibration/settings-editor";
-import { AI_AUTHORITY_LEVEL_LABELS, AI_AUTHORITY_LEVEL_LIVE_DESCRIPTIONS, type CoachAiAuthoritySettings } from "@/lib/coach/ai-authority";
+import type { CoachAiAuthoritySettings } from "@/lib/coach/ai-authority";
 import { confirmMethodEditAction } from "@/app/actions/coach-calibration";
 import type { CalibrationAnswerValue, CalibrationAnswers, CalibrationChapterId, CalibrationQuestion } from "@/lib/coach/calibration/types";
 
@@ -139,28 +139,25 @@ export function CoachMethodEditor({
         </p>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* A short index of the method's areas: titles only until the coach opens
+          one. One area open at a time; the draft lives above the rows, so
+          closing an area never loses an unsaved edit. */}
+      <div className="max-w-4xl divide-y divide-border overflow-hidden rounded-[var(--radius-lg)] border border-border-strong bg-surface-raised">
         {chapters.map((id) => {
           const isOpen = open === id;
           return (
-            <section key={id} id={`method-tile-${id}`} className={`scroll-mt-24 rounded-[var(--radius-lg)] border bg-surface-raised ${isOpen ? "border-accent/40 lg:col-span-2" : "border-border-strong"}`}>
+            <section key={id} id={`method-tile-${id}`} className="scroll-mt-24">
               <TileHeader title={chapterMeta(id)?.title ?? id} open={isOpen} onToggle={() => toggle(id)} edited={changedChapters.has(id)} needsInput={needsChapters.has(id)} controls={`method-tile-body-${id}`} />
-              <div id={`method-tile-body-${id}`} className={isOpen ? "space-y-6 border-t border-border px-4 pb-5 pt-5 sm:px-5" : "px-4 pb-5 sm:px-5"}>
-                {isOpen ? (
-                  editorQuestions(id, draft).map((q) => <SettingField key={q.id} q={q} answers={draft} onChange={onChange} needsInput={questionAnswerKeys(q).some((k) => needsKeys.has(k))} />)
-                ) : (
-                  <div className="-mt-3">
-                    <ChapterSummaryBody chapterId={id} answers={draft} />
-                  </div>
-                )}
+              <div id={`method-tile-body-${id}`} hidden={!isOpen} className="space-y-6 border-t border-border px-4 pb-6 pt-5 sm:px-5">
+                {isOpen ? editorQuestions(id, draft).map((q) => <SettingField key={q.id} q={q} answers={draft} onChange={onChange} needsInput={questionAnswerKeys(q).some((k) => needsKeys.has(k))} />) : null}
               </div>
             </section>
           );
         })}
 
-        <section id={`method-tile-${AUTHORITY}`} className={`scroll-mt-24 rounded-[var(--radius-lg)] border bg-surface-raised ${open === AUTHORITY ? "border-accent/40 lg:col-span-2" : "border-border-strong"}`}>
+        <section id={`method-tile-${AUTHORITY}`} className="scroll-mt-24">
           <TileHeader title="AI coaching authority" open={open === AUTHORITY} onToggle={() => toggle(AUTHORITY)} controls="method-tile-body-authority" />
-          <div id="method-tile-body-authority" className={open === AUTHORITY ? "border-t border-border px-4 pb-5 pt-5 sm:px-5" : "px-4 pb-5 sm:px-5"}>
+          <div id="method-tile-body-authority" hidden={open !== AUTHORITY} className="border-t border-border px-4 pb-6 pt-5 sm:px-5">
             {open === AUTHORITY ? (
               <div className="space-y-3">
                 <p className="text-meta text-neutral">How much you want OPTIM to take on for your clients. A change here is confirmed on its own and saved as a new version of your method.</p>
@@ -169,14 +166,7 @@ export function CoachMethodEditor({
                   <LiveAiAuthorityPanel initialSettings={authority} />
                 </div>
               </div>
-            ) : (
-              <dl className="grid grid-cols-1 gap-0.5 sm:grid-cols-[minmax(0,11rem)_1fr] sm:gap-3">
-                <dt className="text-meta text-neutral">Level</dt>
-                <dd className="text-body text-off-white">
-                  {AI_AUTHORITY_LEVEL_LABELS[authority.global.level]} — {AI_AUTHORITY_LEVEL_LIVE_DESCRIPTIONS[authority.global.level]}
-                </dd>
-              </dl>
-            )}
+            ) : null}
           </div>
         </section>
       </div>
@@ -234,15 +224,19 @@ function labelForKey(key: string): string {
 
 function TileHeader({ title, open, onToggle, edited, needsInput, controls }: { title: string; open: boolean; onToggle: () => void; edited?: boolean; needsInput?: boolean; controls: string }) {
   return (
-    <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={controls} className="flex min-h-14 w-full items-center justify-between gap-3 rounded-[var(--radius-lg)] px-4 py-4 text-left sm:px-5">
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-controls={controls}
+      className={`flex min-h-14 w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors sm:px-5 ${open ? "bg-accent-soft/40" : "hover:bg-surface"}`}
+      style={{ transitionDuration: "var(--motion-fast)" }}
+    >
       <span className="flex flex-wrap items-center gap-2">
-        <span className="text-subheading text-off-white">{title}</span>
+        <span className={`text-body font-medium ${open ? "text-accent-fg" : "text-off-white"}`}>{title}</span>
         {needsInput ? <span className="rounded-full bg-warning-soft px-2 py-0.5 text-[11px] font-semibold text-warning-strong">Needs input</span> : edited ? <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent-fg">Edited</span> : null}
       </span>
-      <span className="flex items-center gap-1.5 text-meta text-accent-fg">
-        <span className="hidden sm:inline">{open ? "Done" : "Edit"}</span>
-        <ChevronDown size={18} aria-hidden="true" className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} style={{ transitionDuration: "var(--motion-fast)" }} />
-      </span>
+      <ChevronRight size={18} aria-hidden="true" className={`shrink-0 transition-transform ${open ? "rotate-90 text-accent-fg" : "text-neutral"}`} style={{ transitionDuration: "var(--motion-fast)" }} />
     </button>
   );
 }
