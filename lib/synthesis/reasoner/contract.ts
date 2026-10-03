@@ -9,12 +9,14 @@
 // not narrated by the model. The parser is strict: wrong types, unknown
 // values or oversized text reject the output; nothing is coerced. Text
 // caps only stop runaway prose — the first live v1.1 run showed tighter
-// caps rejected otherwise-valid plans (failure taxonomy: SCHEMA_LIMITATION).
+// caps rejected otherwise-valid plans (failure taxonomy: SCHEMA_LIMITATION):
+// 10 of 25 first attempts failed only on prose length or list size, each
+// costing a repair call. Caps now sit well above observed good outputs.
 
 import type { DayOfWeek } from "../../types.ts";
 import { DAY_ORDER } from "../client-state.ts";
 
-export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.0";
+export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.1";
 
 export const DECISION_TOPICS = ["frequency", "structure", "schedule", "exercise_selection", "prescription", "progression", "recovery", "duration", "other"] as const;
 export type DecisionTopic = (typeof DECISION_TOPICS)[number];
@@ -174,26 +176,26 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
         setsDeltas: pr.setsDeltas === undefined ? [0] : arr(pr.setsDeltas, "progression.setsDeltas", 52).map((d, i) => int(d, `progression.setsDeltas[${i}]`, -2, 2)),
         deloadWeeks: pr.deloadWeeks === undefined ? [] : arr(pr.deloadWeeks, "progression.deloadWeeks", 12).map((w, i) => int(w, `progression.deloadWeeks[${i}]`, 1, 52)),
       },
-      monitoring: strList(p.monitoring, "plan.monitoring", 4, 200),
+      monitoring: strList(p.monitoring, "plan.monitoring", 6, 200),
       constraintsApplied: (p.constraintsApplied === undefined ? [] : arr(p.constraintsApplied, "plan.constraintsApplied", 15)).map((x, i) => {
         const c = obj(x, `constraintsApplied[${i}]`);
         return { constraintId: str(c.id, `constraintsApplied[${i}].id`, 200), how: str(c.how, `constraintsApplied[${i}].how`, 300) };
       }),
-      assumptions: strList(p.assumptions, "plan.assumptions", 5, 300),
-      unresolved: (p.unresolved === undefined ? [] : arr(p.unresolved, "plan.unresolved", 5)).map((x, i) => {
+      assumptions: strList(p.assumptions, "plan.assumptions", 10, 300),
+      unresolved: (p.unresolved === undefined ? [] : arr(p.unresolved, "plan.unresolved", 10)).map((x, i) => {
         const u = obj(x, `unresolved[${i}]`);
         return { fact: str(u.fact, `unresolved[${i}].fact`, 160), why: str(u.why, `unresolved[${i}].why`, 400), providedBy: oneOf(u.from, `unresolved[${i}].from`, PROVIDERS) };
       }),
-      conflicts: (p.conflicts === undefined ? [] : arr(p.conflicts, "plan.conflicts", 5)).map((x, i) => {
+      conflicts: (p.conflicts === undefined ? [] : arr(p.conflicts, "plan.conflicts", 10)).map((x, i) => {
         const c = obj(x, `conflicts[${i}]`);
         return { coachRuleKey: str(c.rule, `conflicts[${i}].rule`, 80), issue: str(c.issue, `conflicts[${i}].issue`, 400) };
       }),
-      decisions: arr(p.decisions, "plan.decisions", 8).map((x, i): ReasonerDecision => {
+      decisions: arr(p.decisions, "plan.decisions", 12).map((x, i): ReasonerDecision => {
         const d = obj(x, `decisions[${i}]`);
         return {
           topic: oneOf(d.topic, `decisions[${i}].topic`, DECISION_TOPICS),
-          decision: str(d.decision, `decisions[${i}].decision`, 160),
-          because: str(d.because, `decisions[${i}].because`, 400),
+          decision: str(d.decision, `decisions[${i}].decision`, 300),
+          because: str(d.because, `decisions[${i}].because`, 600),
           coachRuleKeys: strList(d.coach, `decisions[${i}].coach`, 10, 80),
           clientFactRefs: strList(d.client, `decisions[${i}].client`, 10, 120),
           knowledgeRefs: strList(d.evidence, `decisions[${i}].evidence`, 10, 120),
@@ -226,10 +228,11 @@ DESIGN PRINCIPLES
 - Decide the architecture before choosing exercises: days per week (available days are a ceiling, not a target), split, then each session's purpose and placement for recovery between sessions that load the same muscles.
 - Every session has one clear purpose. Repeat an exercise in the week only on purpose, and say why in its note.
 - Train every major muscle the goal requires at least once a week if an eligible exercise exists; if not, say so in "assumptions".
+- Balance weekly pushing and pulling volume unless the goal or the constraints justify otherwise — then say why.
 - Fit each session inside bounds.minutes, including rest and warm-up.
 - If a decision-critical fact is missing or contradictory, return NEEDS_INPUT instead of guessing. Never invent client facts. Medical questions go to the coach.
 
-OUTPUT — one JSON object, no prose. Keep text short; OPTIM renders explanations from your references.
+OUTPUT — one JSON object, no prose. Keep text short (one sentence per field; "decision" ≤ 150 characters); OPTIM renders explanations from your references. Every open question belongs in "unresolved" (up to 10) — never drop one to stay brief.
 {"status":"PLAN","plan":{
  "domain":"resistance"|"general_fitness",
  "goalEmphasis":{"primary":"strength"|"hypertrophy"|"general","secondary":"strength"|"hypertrophy"|null,"why":str},
@@ -242,7 +245,7 @@ OUTPUT — one JSON object, no prose. Keep text short; OPTIM renders explanation
  "monitoring":[≤4 str, optional — OPTIM adds the coach's deload triggers itself],
  "constraintsApplied":[{"id":<constraint id from "constraints">,"how":str}],
  "assumptions":[str],"unresolved":[{"fact":str,"why":str,"from":"client"|"coach"|"either"}],"conflicts":[{"rule":<coach key>,"issue":str}],
- "decisions":[≤8 {"topic":"frequency"|"structure"|"schedule"|"exercise_selection"|"prescription"|"progression"|"recovery"|"duration"|"other","decision":str,"because":str,"coach":[keys],"client":[refs],"evidence":[refs]}]
+ "decisions":[≤12 {"topic":"frequency"|"structure"|"schedule"|"exercise_selection"|"prescription"|"progression"|"recovery"|"duration"|"other","decision":str,"because":str,"coach":[keys],"client":[refs],"evidence":[refs]}]
 }}
 or {"status":"NEEDS_INPUT","needsInput":[{"fact":str,"why":str,"blockedDecision":str,"providedBy":"client"|"coach"|"either"}],"summary":str}
 One session per scheduled day, in schedule order. Cover at least frequency, structure, schedule, exercise_selection, prescription and progression in "decisions", each with the exact refs you used.`;

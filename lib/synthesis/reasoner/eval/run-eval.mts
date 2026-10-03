@@ -2,7 +2,7 @@
 //
 //   offline (default)       scripted model — proves the HARD rails for every scenario (CI-safe)
 //   --live                  real model via ANTHROPIC_API_KEY (never printed), metered by a LEDGER
-//   --ledger <file>         required with --live: shared call/token ledger; hard cap 30 calls
+//   --ledger <file>         required with --live: ledger of calls that EXECUTED (consumed tokens); cap 30
 //   --max-calls <n>         cap (default 30); refuses to start a call that would exceed it
 //   --only 01,05,25         subset
 //   --repeat <n>            run each selected scenario n times (variance)
@@ -34,27 +34,38 @@ const ledgerPath = arg("--ledger");
 interface Ledger { calls: number; inputTokens: number; outputTokens: number; latencyMs: number; entries: Array<{ at: string; scenario: string; inputTokens: number; outputTokens: number; latencyMs: number }> }
 const readLedger = (): Ledger => (ledgerPath && existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, "utf8")) : { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, entries: [] });
 let ledger = readLedger();
+let inFlight = 0;
 const saveLedger = () => ledgerPath && writeFileSync(ledgerPath, JSON.stringify(ledger, null, 1));
 
 async function liveModel(scenario: string): Promise<ReasonerModel> {
   const key = (process.env.ANTHROPIC_API_KEY ?? "").trim();
   if (!key || /\s/.test(key)) throw new Error("Set ANTHROPIC_API_KEY (one key) to run --live.");
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: key, authToken: null, maxRetries: 1 });
+  const client = new Anthropic({ apiKey: key, authToken: null, maxRetries: 3 });
   const modelId = process.env.AI_MODEL_ID || "claude-opus-5";
   return {
     provider: "anthropic",
     modelId,
     async generate({ systemPrompt, userMessage, maxOutputTokens }) {
-      // Budget guard: never START a call beyond the cap (checked against the shared ledger).
+      // Budget guard: the ledger counts only calls that executed and consumed tokens; calls in
+      // flight are reserved so concurrency can never overshoot the cap.
       ledger = readLedger();
-      if (ledger.calls >= maxCalls) throw Object.assign(new Error("live call budget exhausted"), { name: "BudgetExhausted" });
-      ledger.calls++;
-      saveLedger();
+      if (ledger.calls + inFlight >= maxCalls) throw Object.assign(new Error("live call budget exhausted"), { name: "BudgetExhausted" });
+      inFlight++;
       const t = Date.now();
-      const res = await client.messages.create({ model: modelId, max_tokens: maxOutputTokens, system: systemPrompt, messages: [{ role: "user", content: userMessage }], output_config: { effort: (process.env.REASONER_EFFORT as "high" | "medium" | undefined) ?? "high" } }, { timeout: 300_000 });
+      let res;
+      try {
+        res = await client.messages.create({ model: modelId, max_tokens: maxOutputTokens, system: systemPrompt, messages: [{ role: "user", content: userMessage }], output_config: { effort: (process.env.REASONER_EFFORT as "high" | "medium" | undefined) ?? "high" } }, { timeout: 300_000 });
+      } catch (err) {
+        // Rejected before execution (billing, refusal, network…): not counted; recorded by status only.
+        const status = (err as { status?: number }).status;
+        throw Object.assign(new Error("provider request failed"), { name: `ProviderRequestFailed${status ? `_${status}` : ""}` });
+      } finally {
+        inFlight--;
+      }
       const latencyMs = Date.now() - t;
       ledger = readLedger();
+      ledger.calls++;
       ledger.inputTokens += res.usage.input_tokens;
       ledger.outputTokens += res.usage.output_tokens;
       ledger.latencyMs += latencyMs;
