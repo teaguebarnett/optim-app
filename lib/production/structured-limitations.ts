@@ -15,6 +15,7 @@
 
 import "server-only";
 import { resolveStructuredJsonProvider } from "../ai/resolve.ts";
+import { redactSecrets } from "../ai/safe-errors.ts";
 import { recordDecisionEvidence } from "./decision-evidence.ts";
 import { getAuthenticatedContext, isWorkspaceStaffRole, requireWorkspaceRole } from "./auth.ts";
 import { UnauthorizedError } from "./errors.ts";
@@ -70,8 +71,16 @@ export async function proposeStructuredLimitations(params: { workspaceId: string
   const model = resolved.provider
     ? { modelId: resolved.provider.modelId, generateJson: (r: { systemPrompt: string; userMessage: string; maxOutputTokens: number }) => resolved.provider!.generateJson({ ...r, timeoutMs: resolved.timeoutMs }) }
     : null;
+  if (!resolved.provider) console.error(`proposeStructuredLimitations: interpreter unavailable (${JSON.stringify({ ...resolved.diagnostic, keyProblem: resolved.keyProblem ?? null })})`);
   // Only the coach's limitation text and the canonical vocabulary are sent — no client identity or other health details.
-  return interpretLimitationText({ sourceText: state.documentedText, knowledge: FOUNDATION_KNOWLEDGE, model, unavailableReason: resolved.provider ? undefined : resolved.reason });
+  return interpretLimitationText({
+    sourceText: state.documentedText,
+    knowledge: FOUNDATION_KNOWLEDGE,
+    model,
+    unavailableReason: resolved.provider ? undefined : resolved.reason,
+    // Safe metadata only (category / status class / request id) — never provider text or credentials.
+    onDiagnostic: (d) => console.error(`proposeStructuredLimitations: ${d.outcome} (${redactSecrets(JSON.stringify({ detail: d.detail, diagnostic: d.diagnostic ?? null }))})`),
+  });
 }
 
 export interface ConfirmLimitationsInput {

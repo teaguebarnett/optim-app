@@ -9,13 +9,17 @@
 // inlined into a client bundle.
 
 import "server-only";
+import { validateApiKey, type CredentialProblem } from "./safe-errors.ts";
 
 export type ConfiguredAiProviderId = "anthropic" | "fake";
 
 export interface AiEnvConfig {
   providerId: ConfiguredAiProviderId;
   modelId: string;
+  /** The validated key (trimmed), or undefined when missing or malformed. */
   anthropicApiKey: string | undefined;
+  /** Why the configured key was rejected (never its value). */
+  anthropicKeyProblem: CredentialProblem | null;
   timeoutMs: number;
 }
 
@@ -32,10 +36,14 @@ export function getAiEnvConfig(): AiEnvConfig {
   const modelId = process.env.AI_MODEL_ID || DEFAULT_MODEL_ID;
   const timeoutMs = Number(process.env.AI_TIMEOUT_MS) > 0 ? Number(process.env.AI_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
 
+  // Gate 4.0C-2A fix — a malformed key (e.g. pasted twice, with a line
+  // break) is rejected here, before any request could carry it.
+  const key = validateApiKey(process.env.ANTHROPIC_API_KEY);
   return {
     providerId,
     modelId,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    anthropicApiKey: key.ok ? key.key : undefined,
+    anthropicKeyProblem: key.ok ? null : key.problem,
     timeoutMs,
   };
 }

@@ -96,9 +96,12 @@ export class AiProviderTimeoutError extends Error {
 }
 
 export class AiProviderUnavailableError extends Error {
-  constructor(message = "The AI provider is unavailable.") {
+  /** Safe metadata only (category, status class, request id) — never message text from the provider. */
+  readonly diagnostic?: import("./safe-errors.ts").ProviderDiagnostic;
+  constructor(message = "The AI provider is unavailable.", diagnostic?: import("./safe-errors.ts").ProviderDiagnostic) {
     super(message);
     this.name = "AiProviderUnavailableError";
+    this.diagnostic = diagnostic;
   }
 }
 

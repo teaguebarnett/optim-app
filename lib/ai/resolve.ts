@@ -11,6 +11,7 @@
 
 import "server-only";
 import { AiProviderMisconfiguredError, type ChatModelProvider, type StructuredJsonProvider } from "./provider.ts";
+import { CREDENTIAL_PROBLEM_TEXT, type ProviderDiagnostic } from "./safe-errors.ts";
 import { getAiEnvConfig, isRealProductionDeploy } from "./env.ts";
 import { AnthropicChatModelProvider } from "./providers/anthropic-provider.ts";
 import { FakeChatModelProvider } from "./providers/fake-provider.ts";
@@ -31,6 +32,8 @@ export function resolveChatModelProvider(playbook: CoachPlaybookContent, context
   }
 
   if (!env.anthropicApiKey) {
+    // Never includes the value — only which check failed.
+    if (env.anthropicKeyProblem && env.anthropicKeyProblem !== "missing") throw new AiProviderMisconfiguredError(`ANTHROPIC_API_KEY ${CREDENTIAL_PROBLEM_TEXT[env.anthropicKeyProblem]}. Set it to exactly one key.`);
     throw new AiProviderMisconfiguredError(
       "AI_PROVIDER is unset (defaults to \"anthropic\") but ANTHROPIC_API_KEY is not configured. " +
         "Set ANTHROPIC_API_KEY, or explicitly set AI_PROVIDER=fake for local/test use only. See .env.example."
@@ -47,9 +50,11 @@ export function resolveChatModelProvider(playbook: CoachPlaybookContent, context
  * reason instead of throwing. The fake chat provider has no interpreter —
  * AI_PROVIDER=fake means "manual".
  */
-export function resolveStructuredJsonProvider(): { provider: StructuredJsonProvider; timeoutMs: number } | { provider: null; reason: string } {
+export function resolveStructuredJsonProvider(): { provider: StructuredJsonProvider; timeoutMs: number } | { provider: null; reason: string; diagnostic: ProviderDiagnostic; keyProblem?: string | null } {
   const env = getAiEnvConfig();
-  if (env.providerId === "fake") return { provider: null, reason: "OPTIM's interpreter is turned off in this environment." };
-  if (!env.anthropicApiKey) return { provider: null, reason: "OPTIM's interpreter isn't configured." };
+  const unavailable = (reason: string, category: ProviderDiagnostic["category"]) => ({ provider: null, reason, diagnostic: { provider: "anthropic", category, atIso: new Date().toISOString() } }) as const;
+  if (env.providerId === "fake") return unavailable("OPTIM's interpreter is turned off in this environment.", "config_invalid");
+  // Missing or malformed key: the coach sees a product message; the problem kind goes to server logs only.
+  if (!env.anthropicApiKey) return { ...unavailable("OPTIM's interpreter isn't available right now.", "config_invalid"), keyProblem: env.anthropicKeyProblem };
   return { provider: new AnthropicChatModelProvider(env.anthropicApiKey, env.modelId), timeoutMs: env.timeoutMs };
 }

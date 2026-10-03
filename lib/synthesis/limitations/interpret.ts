@@ -8,6 +8,7 @@
 // the coach gets the manual editor instead. Vague words ("heavy", "hard")
 // are never silently mapped — they become a clarification the coach answers.
 
+import { INTERPRETER_UNAVAILABLE_MESSAGE } from "../../ai/safe-errors.ts";
 import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import { RESTRICTION_OPTIONS, resolveRestrictionOption } from "./vocabulary.ts";
 
@@ -158,16 +159,39 @@ export function manualProposal(sourceText: string, reason: string): Interpretati
   return applyVagueGuard({ sourceText, interpreter: { kind: "manual", reason }, restrictions: [], clarifications: [], unsupported: [] });
 }
 
-export async function interpretLimitationText(params: { sourceText: string; knowledge: FitnessKnowledgeRegistry; model: StructuredJsonModel | null; unavailableReason?: string }): Promise<InterpretationProposal> {
+/** Shown to the coach whenever automatic interpretation isn't possible — never provider/error text. */
+export const MANUAL_FALLBACK_MESSAGE = INTERPRETER_UNAVAILABLE_MESSAGE;
+
+export interface InterpretationDiagnostic {
+  outcome: "provider_failed" | "output_rejected";
+  /** Safe category / validation reason; never provider message text. */
+  detail: string;
+  diagnostic?: unknown;
+}
+
+export async function interpretLimitationText(params: {
+  sourceText: string;
+  knowledge: FitnessKnowledgeRegistry;
+  model: StructuredJsonModel | null;
+  unavailableReason?: string;
+  /** Server-side, safe metadata for logs. Never reaches the coach. */
+  onDiagnostic?: (d: InterpretationDiagnostic) => void;
+}): Promise<InterpretationProposal> {
   const text = params.sourceText.trim();
   if (!text) return manualProposal(text, "There's no limitation text to interpret.");
-  if (!params.model) return manualProposal(text, params.unavailableReason ?? "OPTIM's interpreter isn't available right now.");
+  if (!params.model) return manualProposal(text, params.unavailableReason ?? MANUAL_FALLBACK_MESSAGE);
   let raw: unknown;
   try {
     raw = await params.model.generateJson({ systemPrompt: buildInterpretationPrompt(params.knowledge), userMessage: `Coach's limitation text:\n"""${text}"""`, maxOutputTokens: 1500 });
   } catch (err) {
-    return manualProposal(text, `OPTIM's interpreter didn't respond (${err instanceof Error ? err.message : "error"}).`);
+    // The error's message is deliberately never read: provider/runtime text can contain secrets.
+    params.onDiagnostic?.({ outcome: "provider_failed", detail: err instanceof Error ? err.name : "unknown", diagnostic: (err as { diagnostic?: unknown })?.diagnostic });
+    return manualProposal(text, MANUAL_FALLBACK_MESSAGE);
   }
   const parsed = parseInterpretation(raw, text, params.knowledge, params.model.modelId);
-  return parsed.ok ? parsed.proposal : manualProposal(text, `OPTIM's interpretation was discarded because it didn't validate (${parsed.reason}).`);
+  if (!parsed.ok) {
+    params.onDiagnostic?.({ outcome: "output_rejected", detail: parsed.reason.slice(0, 120) });
+    return manualProposal(text, MANUAL_FALLBACK_MESSAGE);
+  }
+  return parsed.proposal;
 }

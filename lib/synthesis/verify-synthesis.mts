@@ -357,7 +357,7 @@ check("14. Invite/onboarding flow is unchanged", () => {
       return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx|mts)$/.test(f) ? [p] : [];
     });
   const ALLOWED = ["lib/production/synthesis.ts", "lib/production/structured-limitations.ts", "app/actions/structured-limitations.ts", "components/coach/live-client-workspace.tsx", "components/coach/resistance-planner-preview.tsx", "components/coach/structured-limitations-card.tsx"];
-  const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => /from ["'][^"']*\/synthesis\//.test(readFileSync(f, "utf8")));
+  const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => !/verify-[^/]*\.mts$/.test(f) && /from ["'][^"']*\/synthesis\//.test(readFileSync(f, "utf8")));
   const unexpected = importers.filter((f) => !ALLOWED.some((a) => f.endsWith(a)));
   assert.deepEqual(unexpected, [], `unexpected importers: ${unexpected.join(", ")}`);
   assert.ok(!importers.some((f) => /onboarding|invit|auth|\(client\)/.test(f)), "onboarding / invitation / auth / client app never import synthesis");

@@ -11,13 +11,18 @@ import {
   proposeStructuredLimitations,
   type ConfirmLimitationsInput,
 } from "../../lib/production/structured-limitations";
-import type { InterpretationProposal } from "../../lib/synthesis/limitations/interpret";
+import { MANUAL_FALLBACK_MESSAGE, type InterpretationProposal } from "../../lib/synthesis/limitations/interpret";
+
+/** Messages written by our own code that are safe to show as-is; anything else becomes a generic message. */
+const SAFE_MESSAGES = new Set(["There's no documented limitation to interpret."]);
+const safeMessage = (err: unknown, fallback: string) => (err instanceof Error && SAFE_MESSAGES.has(err.message) ? err.message : fallback);
 
 export async function proposeStructuredLimitationsAction(params: { workspaceId: string; clientProfileId: string }): Promise<{ ok: true; proposal: InterpretationProposal } | { ok: false; message: string }> {
   try {
     return { ok: true, proposal: await proposeStructuredLimitations(params) };
   } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : "Couldn't interpret the limitation." };
+    console.error(`proposeStructuredLimitationsAction failed: ${err instanceof Error ? err.name : "unknown"}`);
+    return { ok: false, message: safeMessage(err, MANUAL_FALLBACK_MESSAGE) };
   }
 }
 
@@ -26,7 +31,8 @@ export async function confirmStructuredLimitationsAction(input: ConfirmLimitatio
     const result = await confirmStructuredLimitations(input);
     if (!result.ok) return result;
   } catch (err) {
-    return { ok: false, errors: [err instanceof Error ? err.message : "Couldn't save the confirmation."] };
+    console.error(`confirmStructuredLimitationsAction failed: ${err instanceof Error ? err.name : "unknown"}`);
+    return { ok: false, errors: ["Couldn't save the confirmation. Nothing was changed — try again."] };
   }
   revalidatePath(`/coach/clients/${input.clientProfileId}`);
   revalidatePath(`/coach/clients/${input.clientProfileId}/planner-review`);

@@ -29,6 +29,7 @@ import {
   type StructuredJsonRequest,
 } from "../provider.ts";
 import { RESPONSE_MAX_OUTPUT_TOKENS } from "../response-policy.ts";
+import { classifyProviderError, validateApiKey } from "../safe-errors.ts";
 
 const VALID_KINDS: AssistantDecisionKind[] = ["answer", "clarify", "escalate", "propose_action"];
 const VALID_REASONS: EscalationReason[] = [
@@ -97,9 +98,15 @@ export class AnthropicChatModelProvider implements ChatModelProvider, Structured
   readonly modelId: string;
   private readonly client: Anthropic;
 
-  constructor(apiKey: string, modelId: string) {
+  /** `fetch` is injectable for tests only. */
+  constructor(apiKey: string, modelId: string, options: { fetch?: typeof fetch } = {}) {
     this.modelId = modelId;
-    this.client = new Anthropic({ apiKey, maxRetries: 1 });
+    // Exactly one credential: the validated key as X-Api-Key, and an
+    // explicit null authToken so the SDK can never add a second credential
+    // from a stray ANTHROPIC_AUTH_TOKEN environment variable.
+    const key = validateApiKey(apiKey);
+    if (!key.ok) throw new AiProviderUnavailableError("Anthropic credential is malformed.", { provider: "anthropic", category: "config_invalid", atIso: new Date().toISOString() });
+    this.client = new Anthropic({ apiKey: key.key, authToken: null, maxRetries: 1, ...(options.fetch ? { fetch: options.fetch } : {}) });
   }
 
   async generate(request: ChatGenerationRequest): Promise<ChatGenerationResult> {
@@ -155,10 +162,15 @@ export class AnthropicChatModelProvider implements ChatModelProvider, Structured
   }
 }
 
+/**
+ * Gate 4.0C-2A fix — never forwards provider/SDK/runtime message text: it
+ * can contain request headers (a malformed key was once echoed inside a
+ * Headers.append TypeError). Only a fixed message plus safe metadata leave.
+ */
 function mapProviderError(err: unknown): Error {
-  if (err instanceof AiProviderInvalidOutputError) return err;
+  if (err instanceof AiProviderInvalidOutputError) return new AiProviderInvalidOutputError("model output did not match the expected shape");
+  if (err instanceof AiProviderUnavailableError || err instanceof AiProviderTimeoutError) return err;
   if (err instanceof Anthropic.APIConnectionTimeoutError) return new AiProviderTimeoutError();
-  if (err instanceof Anthropic.RateLimitError) return new AiProviderUnavailableError("Anthropic rate limit exceeded");
-  if (err instanceof Anthropic.APIError) return new AiProviderUnavailableError(`Anthropic API error: ${err.message}`);
-  return new AiProviderUnavailableError(err instanceof Error ? err.message : String(err));
+  const diagnostic = classifyProviderError(err, "anthropic");
+  return new AiProviderUnavailableError(`Anthropic request failed (${diagnostic.category}${diagnostic.statusClass ? `, ${diagnostic.statusClass}` : ""}).`, diagnostic);
 }
