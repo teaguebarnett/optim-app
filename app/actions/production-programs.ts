@@ -85,6 +85,7 @@ import type { AppState } from "../../lib/state";
 import type { DailyActivityContent } from "../../lib/production/validation";
 import type { ClientAssignedProgram } from "../../lib/types";
 import type { UniversalTrainingProgramContent } from "../../lib/training/types";
+import { summarizeLegacyProposal, type LegacyProposalSummary } from "../../lib/coach/legacy-proposal-summary";
 import type { DayOfWeek } from "../../lib/types";
 
 interface OwnClientIdentity {
@@ -406,6 +407,20 @@ async function generateUniversalProgramProposalContent(params: { workspaceId: st
   };
 
   return { content: contentWithProvenance, direction, profile, com, nowIso, ruleApplication };
+}
+
+/** Gate 4.0C-2A (internal QA) — runs the LEGACY generator in memory for
+ * side-by-side comparison with the new resistance planner. Nothing is
+ * persisted: generateUniversalProgramProposalContent only reads, and its
+ * result is summarized and discarded. */
+export async function previewLegacyProposalForComparisonAction(params: { workspaceId: string; clientProfileId: string; durationWeeks: number }): Promise<{ ok: true; summary: LegacyProposalSummary } | { ok: false; message: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  try {
+    const { content } = await generateUniversalProgramProposalContent({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, title: "Legacy comparison (not saved)", durationWeeks: params.durationWeeks });
+    return { ok: true, summary: summarizeLegacyProposal(content) };
+  } catch (err) {
+    return { ok: false, message: err instanceof GenerationPrerequisitesError ? `Legacy generator refused: ${err.message}` : err instanceof Error ? err.message : "Legacy generation failed." };
+  }
 }
 
 export interface GenerationPrerequisitesView {

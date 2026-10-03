@@ -25,6 +25,8 @@ import {
   type ChatGenerationResult,
   type ChatModelProvider,
   type EscalationReason,
+  type StructuredJsonProvider,
+  type StructuredJsonRequest,
 } from "../provider.ts";
 import { RESPONSE_MAX_OUTPUT_TOKENS } from "../response-policy.ts";
 
@@ -90,7 +92,7 @@ function validateDecision(raw: unknown): AssistantDecision {
   return { kind, responseText: obj.responseText, escalationReason, proposedAction };
 }
 
-export class AnthropicChatModelProvider implements ChatModelProvider {
+export class AnthropicChatModelProvider implements ChatModelProvider, StructuredJsonProvider {
   readonly id = "anthropic";
   readonly modelId: string;
   private readonly client: Anthropic;
@@ -127,11 +129,36 @@ export class AnthropicChatModelProvider implements ChatModelProvider {
       const decision = validateDecision(extractJsonObject(textBlock.text));
       return { decision, modelId: this.modelId, latencyMs: Date.now() - start };
     } catch (err) {
-      if (err instanceof AiProviderInvalidOutputError) throw err;
-      if (err instanceof Anthropic.APIConnectionTimeoutError) throw new AiProviderTimeoutError();
-      if (err instanceof Anthropic.RateLimitError) throw new AiProviderUnavailableError("Anthropic rate limit exceeded");
-      if (err instanceof Anthropic.APIError) throw new AiProviderUnavailableError(`Anthropic API error: ${err.message}`);
-      throw new AiProviderUnavailableError(err instanceof Error ? err.message : String(err));
+      throw mapProviderError(err);
     }
   }
+
+  /** Gate 4.0C-2A — one JSON object, parsed but NOT validated (the caller owns the schema). */
+  async generateJson(request: StructuredJsonRequest): Promise<unknown> {
+    try {
+      const response = await this.client.messages.create(
+        {
+          model: this.modelId,
+          max_tokens: request.maxOutputTokens,
+          system: request.systemPrompt,
+          messages: [{ role: "user", content: request.userMessage }],
+          output_config: { effort: "medium" },
+        },
+        { timeout: request.timeoutMs }
+      );
+      const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+      if (!textBlock) throw new AiProviderInvalidOutputError("model response contained no text block");
+      return extractJsonObject(textBlock.text);
+    } catch (err) {
+      throw mapProviderError(err);
+    }
+  }
+}
+
+function mapProviderError(err: unknown): Error {
+  if (err instanceof AiProviderInvalidOutputError) return err;
+  if (err instanceof Anthropic.APIConnectionTimeoutError) return new AiProviderTimeoutError();
+  if (err instanceof Anthropic.RateLimitError) return new AiProviderUnavailableError("Anthropic rate limit exceeded");
+  if (err instanceof Anthropic.APIError) return new AiProviderUnavailableError(`Anthropic API error: ${err.message}`);
+  return new AiProviderUnavailableError(err instanceof Error ? err.message : String(err));
 }

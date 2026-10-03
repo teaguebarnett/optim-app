@@ -45,6 +45,12 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
         case "avoid_position":
           if (exercise.positions.includes(t.position)) v("metadata", `position ${t.position}`);
           break;
+        case "avoid_exercise":
+          if (exercise.id === t.exerciseId) v("metadata", "excluded by the coach");
+          break;
+        case "avoid_equipment":
+          if (exercise.equipment === t.equipment) v("metadata", `uses ${t.equipment}`);
+          break;
         case "equipment_available":
           if (!t.equipment.includes(exercise.equipment)) v("metadata", `needs ${exercise.equipment}`);
           break;

@@ -10,7 +10,7 @@
 // deployment, mirroring lib/production/mode.ts's own hard production gate.
 
 import "server-only";
-import { AiProviderMisconfiguredError, type ChatModelProvider } from "./provider.ts";
+import { AiProviderMisconfiguredError, type ChatModelProvider, type StructuredJsonProvider } from "./provider.ts";
 import { getAiEnvConfig, isRealProductionDeploy } from "./env.ts";
 import { AnthropicChatModelProvider } from "./providers/anthropic-provider.ts";
 import { FakeChatModelProvider } from "./providers/fake-provider.ts";
@@ -38,4 +38,18 @@ export function resolveChatModelProvider(playbook: CoachPlaybookContent, context
   }
 
   return new AnthropicChatModelProvider(env.anthropicApiKey, env.modelId);
+}
+
+/**
+ * Gate 4.0C-2A — the structured-JSON provider for proposing structured
+ * readings of coach text. Unlike chat, an unavailable model is not an
+ * error here: the coach always has a manual editor, so this returns the
+ * reason instead of throwing. The fake chat provider has no interpreter —
+ * AI_PROVIDER=fake means "manual".
+ */
+export function resolveStructuredJsonProvider(): { provider: StructuredJsonProvider; timeoutMs: number } | { provider: null; reason: string } {
+  const env = getAiEnvConfig();
+  if (env.providerId === "fake") return { provider: null, reason: "OPTIM's interpreter is turned off in this environment." };
+  if (!env.anthropicApiKey) return { provider: null, reason: "OPTIM's interpreter isn't configured." };
+  return { provider: new AnthropicChatModelProvider(env.anthropicApiKey, env.modelId), timeoutMs: env.timeoutMs };
 }

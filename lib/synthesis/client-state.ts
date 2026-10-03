@@ -13,6 +13,8 @@ import { equipmentForClient } from "../coach/activation-generation.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES, type HealthReviewRecord, type HealthReviewStatus, type OnboardingProgress } from "../coach/types.ts";
 import type { DayOfWeek } from "../types.ts";
 import { known, missing, type Fact, type FactBasis } from "./facts.ts";
+import { FOUNDATION_KNOWLEDGE } from "./knowledge/registry.ts";
+import { isCurrentFor, parseStoredLimitations, type StoredStructuredLimitations } from "./limitations/confirm.ts";
 
 export const DAY_ORDER: DayOfWeek[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DAY_KEYS: Record<string, DayOfWeek> = { mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday", sun: "Sunday" };
@@ -82,6 +84,11 @@ export interface ClientState {
       outcome: HealthReviewStatus | null;
       /** The coach's own documented boundary from the review. */
       coachDocumentedLimitation: Fact<string>;
+      /** The coach-confirmed structured form of that boundary — known only
+       * while it matches the current documented text. */
+      coachStructuredLimitations: Fact<StoredStructuredLimitations>;
+      /** none: nothing confirmed; current: applies; stale: confirmed against older text. */
+      structuredStatus: "none" | "current" | "stale";
     };
   };
 }
@@ -163,6 +170,8 @@ export function deriveClientState(src: ClientStateSources): ClientState {
   const reviewStatus: ClientState["health"]["review"]["status"] = !review ? "none" : RESOLVED_HEALTH_REVIEW_STATUSES.has(review.status) ? "resolved" : "open";
   const documented = review?.documentedLimitations?.trim();
   const coachBasis: FactBasis = "coach_confirmed";
+  const structured = review ? parseStoredLimitations(review.structuredLimitations, FOUNDATION_KNOWLEDGE) : null;
+  const structuredCurrent = !!structured && reviewStatus === "resolved" && isCurrentFor(structured, documented);
 
   return {
     clientProfileId: src.clientProfileId,
@@ -217,6 +226,8 @@ export function deriveClientState(src: ClientStateSources): ClientState {
         status: reviewStatus,
         outcome: review?.status ?? null,
         coachDocumentedLimitation: documented ? known(documented, coachBasis, { kind: "health_review", ref: "health_review.documentedLimitations" }) : missing("health_review.documentedLimitations"),
+        coachStructuredLimitations: structuredCurrent ? known(structured!, coachBasis, { kind: "health_review", ref: "health_review.structuredLimitations" }) : missing("health_review.structuredLimitations"),
+        structuredStatus: !structured ? "none" : structuredCurrent ? "current" : "stale",
       },
     },
   };

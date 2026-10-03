@@ -208,6 +208,13 @@ export interface HealthReviewRecord {
    * so it actually reaches the same planning constraints every other
    * reported restriction does — never just decorative text on this record. */
   documentedLimitations?: string;
+  /** Gate 4.0C-2A — the escalations row holding the current decision (the
+   * write target for a structured confirmation). Supabase mode only. */
+  decisionEscalationId?: string;
+  /** Gate 4.0C-2A — the coach-confirmed structured form of
+   * documentedLimitations, as stored (validated on read by
+   * lib/synthesis/limitations/confirm.ts's parseStoredLimitations). */
+  structuredLimitations?: unknown;
 }
 
 export interface OnboardingProgress {

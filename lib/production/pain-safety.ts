@@ -147,7 +147,7 @@ export async function resolveHealthReviewRecordForClient(clientProfileId: string
   const supabase = await getSupabaseServerClient();
   const { data, error } = await supabase
     .from("escalations")
-    .select("proposed_response, health_review_status, documented_limitations, health_review_decided_at, created_at, updated_at")
+    .select("id, proposed_response, health_review_status, documented_limitations, health_review_decided_at, created_at, updated_at")
     .eq("client_profile_id", clientProfileId)
     .eq("reason_category", "pain_or_safety")
     .order("created_at", { ascending: false });
@@ -173,6 +173,7 @@ export async function resolveHealthReviewRecordForClient(clientProfileId: string
 
   const decided = data.filter((row) => row.health_review_decided_at);
   const mostRecentDecision = decided.sort((a, b) => (b.health_review_decided_at as string).localeCompare(a.health_review_decided_at as string))[0];
+  const structuredLimitations = await readStructuredLimitations(supabase, mostRecentDecision.id as string);
   return {
     clientId: clientProfileId,
     workspaceId,
@@ -181,7 +182,22 @@ export async function resolveHealthReviewRecordForClient(clientProfileId: string
     documentedLimitations: (mostRecentDecision.documented_limitations as string | null) ?? undefined,
     createdAtIso: mostRecentReport.created_at as string,
     updatedAtIso: (mostRecentDecision.health_review_decided_at as string) ?? nowIso,
+    decisionEscalationId: mostRecentDecision.id as string,
+    ...(structuredLimitations ? { structuredLimitations } : {}),
   };
+}
+
+/** Gate 4.0C-2A — the coach-confirmed structured limitation on the decision
+ * row. Read separately so a database without migration 030 yet still
+ * resolves the health review exactly as before (no structure = planning
+ * asks for it); any other error is real and surfaces. */
+async function readStructuredLimitations(supabase: Awaited<ReturnType<typeof getSupabaseServerClient>>, escalationId: string): Promise<unknown> {
+  const { data, error } = await supabase.from("escalations").select("structured_limitations").eq("id", escalationId).maybeSingle();
+  if (error) {
+    if (error.code === "42703" || /structured_limitations/.test(error.message)) return undefined;
+    throw new Error(`resolveHealthReviewRecordForClient (structured limitations) failed: ${error.message}`);
+  }
+  return (data?.structured_limitations as unknown) ?? undefined;
 }
 
 export interface HealthReviewDecisionInput {

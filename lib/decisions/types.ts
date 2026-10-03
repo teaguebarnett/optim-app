@@ -68,6 +68,17 @@ export const DECISION_TYPE_REGISTRY: Record<string, { domain: DecisionDomain; va
       optionalString(v.documentedLimitations, "documentedLimitations", t);
     },
   },
+  // Gate 4.0C-2A — the coach confirming (or editing) OPTIM's structured
+  // reading of their documented limitation. proposedValue = what OPTIM
+  // proposed; chosenValue = what the coach confirmed. History only — the
+  // escalations row holds the current, canonical structured limitation.
+  structured_limitations_confirmation: {
+    domain: "safety",
+    validateValue: (v, t) => {
+      if (!Array.isArray(v.optionIds) || v.optionIds.some((x) => typeof x !== "string")) throw new InvalidDecisionEvidenceError(`${t}: "optionIds" must be an array of strings`);
+      optionalString(v.sourceText, "sourceText", t);
+    },
+  },
   // Phase 8C — a real, wired resistance-item edit. Deliberately holds only
   // the fields that actually changed (see lib/training/program-proposal-editing.ts's
   // groupDeltasByItem) — never the item's full prescription snapshot, so

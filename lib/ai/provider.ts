@@ -128,3 +128,20 @@ export interface ChatModelProvider {
   readonly modelId: string;
   generate(request: ChatGenerationRequest): Promise<ChatGenerationResult>;
 }
+
+/** Gate 4.0C-2A — a single structured-JSON completion (used to PROPOSE a
+ * structured reading of coach-written text). Same boundary, same vendor
+ * file, same untrusted-output posture as chat: the caller validates the
+ * JSON against its own schema before using any of it. */
+export interface StructuredJsonRequest {
+  systemPrompt: string;
+  userMessage: string;
+  maxOutputTokens: number;
+  timeoutMs: number;
+}
+
+export interface StructuredJsonProvider {
+  readonly id: string;
+  readonly modelId: string;
+  generateJson(request: StructuredJsonRequest): Promise<unknown>;
+}

@@ -11,7 +11,7 @@
 
 import { termsMentionedInRestrictionText } from "../coach/program-directions.ts";
 import type { DayOfWeek } from "../types.ts";
-import type { BodyPosition, Demand, Level, MovementPatternId } from "./knowledge/taxonomy.ts";
+import type { BodyPosition, Demand, EquipmentId, Level, MovementPatternId } from "./knowledge/taxonomy.ts";
 import { isKnown } from "./facts.ts";
 import type { ClientState } from "./client-state.ts";
 
@@ -28,6 +28,9 @@ export type ConstraintTag =
   | { kind: "avoid_movement_pattern"; pattern: MovementPatternId }
   | { kind: "avoid_demand"; demand: Demand; atOrAbove: Level }
   | { kind: "avoid_position"; position: BodyPosition }
+  /** A specific exercise, by Fitness Knowledge id (never by name). */
+  | { kind: "avoid_exercise"; exerciseId: string }
+  | { kind: "avoid_equipment"; equipment: EquipmentId }
   | { kind: "requires_coach_review" }
   | { kind: "free_text"; text: string; interpretation: "needs_coach_interpretation" };
 
@@ -200,7 +203,19 @@ export function deriveConstraintSet(state: ClientState): ConstraintSet {
     });
   }
 
-  return { clientProfileId: state.clientProfileId, constraints: applySupersession(out) };
+  const derived: ConstraintSet = { clientProfileId: state.clientProfileId, constraints: applySupersession(out) };
+  // The coach's confirmed structured limitation expresses their documented words.
+  const structured = state.health.review.coachStructuredLimitations;
+  if (!isKnown(structured)) return derived;
+  return applyCoachStructuredRestrictions(derived, [
+    {
+      id: "health_review",
+      interprets: coachText ? [id("coach_documented_limitation")] : [],
+      description: structured.value.noExerciseRestrictions ? "Coach confirmed: this limitation doesn't restrict exercises." : `Coach-confirmed: ${structured.value.restrictions.map((r) => r.label).join("; ")}.`,
+      tags: structured.value.restrictions.flatMap((r) => r.tags),
+      ref: `health_review.structuredLimitations@${structured.value.confirmedAtIso}`,
+    },
+  ]);
 }
 
 /** A coach-confirmed movement restriction supersedes OPTIM's unconfirmed

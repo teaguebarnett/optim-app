@@ -38,6 +38,12 @@ import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction
 import { ClientStateNoticeSection } from "@/components/coach/client-state-notice";
 import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
+import { StructuredLimitationsCard } from "@/components/coach/structured-limitations-card";
+import { ResistancePlannerPreview } from "@/components/coach/resistance-planner-preview";
+import { previewResistancePlanAction } from "@/app/actions/structured-limitations";
+import { getLimitationsState } from "@/lib/production/structured-limitations";
+import { allRestrictionOptions } from "@/lib/synthesis/limitations/vocabulary";
+import { FOUNDATION_KNOWLEDGE } from "@/lib/synthesis/knowledge/registry";
 import { formatHeightFromAnswers, describePrimaryGoal, formatFieldValue, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
 import type { OnboardingStepAnswers, OnboardingStepId } from "@/lib/coach/types";
 
@@ -70,6 +76,21 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
     getRecentActivityAction(clientId),
     getGenerationPrerequisitesAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
   ]);
+  // Gate 4.0C-2A — coach-confirmed structured limitations + the new planner (review only).
+  const onboardingComplete = !!detail.onboarding?.completedAtIso;
+  // Both are additive: a failure here is logged and hides the new cards, never the workspace.
+  const soft = async <T,>(label: string, f: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await f();
+    } catch (err) {
+      console.error(`LiveClientWorkspace: ${label} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  };
+  const [limitationsState, plannerView] = onboardingComplete
+    ? await Promise.all([soft("limitations state", () => getLimitationsState({ workspaceId: detail.workspaceId, clientProfileId: clientId })), soft("planner preview", () => previewResistancePlanAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }))])
+    : [null, null];
+  const limitationOptions = allRestrictionOptions(FOUNDATION_KNOWLEDGE).map((o) => ({ id: o.id, group: o.group, label: o.label, help: o.help }));
   const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
   // lib/client-state/presentation.ts) — eagerly resolving each one's own
@@ -232,6 +253,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
           <LiveStartDateForm action={setStartDateAction} initialDateIso={detail.startDateIso} timezone={detail.timezone} timezoneSource={detail.timezoneSource} />
         </Card>
 
+        {limitationsState ? <StructuredLimitationsCard workspaceId={detail.workspaceId} clientProfileId={clientId} state={limitationsState} options={limitationOptions} /> : null}
+
         <Card>
           <h3 className="mb-2 text-sm font-medium text-off-white">Training program</h3>
           <p className="mb-2 text-sm text-neutral">
@@ -250,6 +273,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
         </Card>
 
         {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
+
+        {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}
 
         <Card>
           <h3 className="mb-2 text-sm font-medium text-off-white">Nutrition plan</h3>

@@ -241,6 +241,7 @@ function plan(input: SynthesisInput, ctx: { nowIso: string }): PlanSpecification
   const mainSlots = strengthGoal ? 2 : 1;
   const usedThisWeek = new Map<string, string[]>();
   const mainPatternUses = new Map<string, number>();
+  const weekExposure = new Map<MuscleId, number>();
   const sessions: ResistanceSessionPlan[] = [];
   const uncovered: string[] = [];
   chosen.split.sessions.forEach((purpose, si) => {
@@ -273,7 +274,12 @@ function plan(input: SynthesisInput, ctx: { nowIso: string }): PlanSpecification
       const open = purpose.targets.filter((t) => !picked.some((p) => p.e.primaryMuscles.includes(t)));
       if (!pick("main", open, true)) break;
     }
-    for (const target of purpose.targets) {
+    // Accessory targets in order of least direct exposure so far this week
+    // (template priority breaks ties), so a time-limited session rotates
+    // targets across the week instead of always filling the same one.
+    const exposure = (m: MuscleId) => weekExposure.get(m) ?? 0;
+    const accessoryOrder = [...purpose.targets].sort((a, b) => exposure(a) - exposure(b) || purpose.targets.indexOf(a) - purpose.targets.indexOf(b));
+    for (const target of accessoryOrder) {
       if (picked.some((p) => p.e.primaryMuscles.includes(target))) continue;
       if (!trainable.has(target)) {
         uncovered.push(`${labels[si]}: ${target} (no eligible exercise)`);
@@ -284,12 +290,13 @@ function plan(input: SynthesisInput, ctx: { nowIso: string }): PlanSpecification
     const orderRank = { early: 0, flexible: 1, late: 2 } as const;
     picked.sort((a, b) => (a.plan.role === b.plan.role ? 0 : a.plan.role === "main" ? -1 : 1) || orderRank[a.e.ordering] - orderRank[b.e.ordering] || (a.e.mechanics === b.e.mechanics ? 0 : a.e.mechanics === "compound" ? -1 : 1));
     for (const p of picked) {
+      for (const m of p.e.primaryMuscles) weekExposure.set(m, (weekExposure.get(m) ?? 0) + 1);
       usedThisWeek.set(p.e.id, [...(usedThisWeek.get(p.e.id) ?? []), purpose.id]);
       if (p.plan.role === "main") mainPatternUses.set(p.e.patterns[0], (mainPatternUses.get(p.e.patterns[0]) ?? 0) + 1);
     }
     sessions.push({ day: schedule.days[si], purpose: labels[si], targets: purpose.targets, exercises: picked.map((p) => p.plan), estimatedMinutes: Math.round(minutes) });
   });
-  rules.push("resistance.selection.score_v1", "resistance.order.main_then_ordering_hint");
+  rules.push("resistance.selection.score_v1", "resistance.selection.rotate_accessory_targets_by_exposure", "resistance.order.main_then_ordering_hint");
   knowledgeUsed.add("concept.resistance.exercise_order");
   const thin = sessions.find((s) => s.exercises.length < 2);
   if (thin) return needsInput([{ fact: "coach_decision.session_content", why: `${thin.purpose} can't hold two eligible exercises within ${cap} min.`, blockedDecision: "Session contents.", providedBy: "coach" }, ...apparatusAsks()]);

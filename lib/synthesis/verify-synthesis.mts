@@ -347,7 +347,8 @@ check("13. Coach Brain behavior is unchanged", () => {
 
 // 14 ------------------------------------------------------------------------
 check("14. Invite/onboarding flow is unchanged", () => {
-  // Nothing in the app imports the synthesis layer yet except its own server adapter.
+  // Only the coach-side review integration (Gate 4.0C-2A) may import the
+  // synthesis layer — never onboarding, invitations, auth or the client app.
   const root = new URL("../../", import.meta.url).pathname;
   const walk = (d: string): string[] =>
     readdirSync(d).flatMap((f) => {
@@ -355,8 +356,11 @@ check("14. Invite/onboarding flow is unchanged", () => {
       if (["node_modules", ".next", ".git", "synthesis"].includes(f)) return [];
       return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx|mts)$/.test(f) ? [p] : [];
     });
-  const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => !f.endsWith("lib/production/synthesis.ts") && /from ["'][^"']*synthesis/.test(readFileSync(f, "utf8")));
-  assert.deepEqual(importers, [], `unexpected importers: ${importers.join(", ")}`);
+  const ALLOWED = ["lib/production/synthesis.ts", "lib/production/structured-limitations.ts", "app/actions/structured-limitations.ts", "components/coach/live-client-workspace.tsx", "components/coach/resistance-planner-preview.tsx", "components/coach/structured-limitations-card.tsx"];
+  const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => /from ["'][^"']*\/synthesis\//.test(readFileSync(f, "utf8")));
+  const unexpected = importers.filter((f) => !ALLOWED.some((a) => f.endsWith(a)));
+  assert.deepEqual(unexpected, [], `unexpected importers: ${unexpected.join(", ")}`);
+  assert.ok(!importers.some((f) => /onboarding|invit|auth|\(client\)/.test(f)), "onboarding / invitation / auth / client app never import synthesis");
   const adapter = readFileSync(new URL("../production/synthesis.ts", import.meta.url), "utf8");
   assert.ok(!/redirect|onboarding_progress"\)\.(insert|update|upsert)/.test(adapter));
 });
