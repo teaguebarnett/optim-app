@@ -93,7 +93,7 @@ export function plannerReviewView(run: PlannerRun, knowledge: FitnessKnowledgeRe
       weeklyDirectSets: Object.entries(r.weeklyMuscleSets)
         .filter(([, v]) => v.direct > 0)
         .map(([m, v]) => ({ muscle: human(m), sets: v.direct }))
-        .sort((a, b) => b.sets - a.sets),
+        .sort((a, b) => b.sets - a.sets || a.muscle.localeCompare(b.muscle)),
       progression: readable(`${s.progression!.rationale} ${s.progression!.value.rule}`),
       recovery: s.recovery!.rationale,
       constraintsApplied: s.constraintsApplied.map((c) => `${constraintLabel(c.constraintId)}: ${readable(c.how.replace(/exercise\.[a-z0-9_]+/g, (id) => knowledge.getExercise(id)?.name ?? id))}`),

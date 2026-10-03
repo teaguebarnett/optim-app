@@ -1,27 +1,36 @@
-// Gate 4.0C-3 — the reasoner's strict output contract and its prompt.
+// Gate 4.0C-3 / 3A — the reasoner's strict output contract and its prompt.
 //
-// The model returns ONE JSON object: either a resistance plan (a designed
-// microcycle + week-by-week progression rules + decision evidence) or
-// NEEDS_INPUT. The parser is strict: wrong types, missing fields, unknown
-// enum values or oversized text reject the output — it is never coerced.
-// Week-by-week prescriptions are expanded deterministically from the
-// microcycle and the progression rules (expand.ts), so the model reasons
-// and OPTIM's rails compute.
+// v2 (Reasoner v1.1) is decision-focused: the model returns the plan's
+// DECISIONS (structure, session purposes, exercise ids, prescriptions,
+// a progression pattern, short rationale with references). Everything
+// OPTIM can derive deterministically — default rest/effort from the coach's
+// ranges, every week's prescription, week notes, the coach's deload
+// triggers in monitoring, constraint bookkeeping — is derived in expand.ts,
+// not narrated by the model. The parser is strict: wrong types, unknown
+// values or oversized text reject the output; nothing is coerced. Text
+// caps only stop runaway prose — the first live v1.1 run showed tighter
+// caps rejected otherwise-valid plans (failure taxonomy: SCHEMA_LIMITATION).
 
 import type { DayOfWeek } from "../../types.ts";
 import { DAY_ORDER } from "../client-state.ts";
 
-export const REASONER_PROMPT_VERSION = "reasoner-resistance-v1.3";
+export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.0";
+
+export const DECISION_TOPICS = ["frequency", "structure", "schedule", "exercise_selection", "prescription", "progression", "recovery", "duration", "other"] as const;
+export type DecisionTopic = (typeof DECISION_TOPICS)[number];
+export type RepZone = "as_prescribed" | "lower_half" | "upper_half";
 
 export interface ReasonerExercise {
   exerciseId: string;
   role: "main" | "accessory";
   sets: number;
   reps: { min: number; max: number };
-  /** Reps in reserve; null only when the coach expresses effort in plain words. */
+  /** Narrower than the coach's RIR range, or null = the coach's range for this role. */
   rir: { min: number; max: number } | null;
+  /** Narrower than the coach's rest range (seconds), or null = the coach's range for this role. */
   restSeconds: { min: number; max: number } | null;
-  why: string;
+  /** Only when it adds information (e.g. why it repeats). */
+  note: string | null;
 }
 
 export interface ReasonerSession {
@@ -30,17 +39,6 @@ export interface ReasonerSession {
   purpose: string;
   exercises: ReasonerExercise[];
 }
-
-export interface ReasonerWeekRule {
-  week: number;
-  kind: "build" | "deload";
-  repZone: "as_prescribed" | "lower_half" | "upper_half";
-  setsDelta: number;
-  note: string;
-}
-
-export const DECISION_TOPICS = ["frequency", "structure", "schedule", "exercise_selection", "prescription", "progression", "recovery", "duration", "other"] as const;
-export type DecisionTopic = (typeof DECISION_TOPICS)[number];
 
 export interface ReasonerDecision {
   topic: DecisionTopic;
@@ -56,11 +54,11 @@ export interface ReasonerPlan {
   goalEmphasis: { primary: "strength" | "hypertrophy" | "general"; secondary: "strength" | "hypertrophy" | null; rationale: string };
   frequency: { daysPerWeek: number; rationale: string };
   schedule: { days: DayOfWeek[]; rationale: string };
-  /** split = one of the coach's allowed split ids for the chosen day count. */
   architecture: { split: string; name: string; rationale: string };
   sessions: ReasonerSession[];
   durationWeeks: number;
-  progression: { model: string; rationale: string; weeks: ReasonerWeekRule[] };
+  /** repZones / setsDeltas cycle week by week; deloadWeeks are explicit. */
+  progression: { model: string; rationale: string; repZones: RepZone[]; setsDeltas: number[]; deloadWeeks: number[] };
   monitoring: string[];
   constraintsApplied: Array<{ constraintId: string; how: string }>;
   assumptions: string[];
@@ -78,21 +76,21 @@ export type ReasonerOutput =
 // ---------------------------------------------------------------------------
 
 class SchemaError extends Error {}
-const MAX_TEXT = 700;
 const obj = (v: unknown, at: string): Record<string, unknown> => {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new SchemaError(`${at} must be an object`);
   return v as Record<string, unknown>;
 };
 const arr = (v: unknown, at: string, max = 60): unknown[] => {
   if (!Array.isArray(v)) throw new SchemaError(`${at} must be an array`);
-  if (v.length > max) throw new SchemaError(`${at} has too many items`);
+  if (v.length > max) throw new SchemaError(`${at} has too many items (max ${max})`);
   return v;
 };
-const str = (v: unknown, at: string, max = MAX_TEXT): string => {
+const str = (v: unknown, at: string, max: number): string => {
   if (typeof v !== "string" || !v.trim()) throw new SchemaError(`${at} must be a non-empty string`);
-  if (v.length > max) throw new SchemaError(`${at} is too long`);
+  if (v.length > max) throw new SchemaError(`${at} is too long (max ${max} chars)`);
   return v.trim();
 };
+const optStr = (v: unknown, at: string, max: number): string | null => (v === undefined || v === null || v === "" ? null : str(v, at, max));
 const int = (v: unknown, at: string, min: number, max: number): number => {
   if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) throw new SchemaError(`${at} must be an integer ${min}–${max}`);
   return v;
@@ -105,15 +103,18 @@ const oneOf = <T extends string>(v: unknown, at: string, allowed: readonly T[]):
   if (typeof v !== "string" || !(allowed as readonly string[]).includes(v)) throw new SchemaError(`${at} must be one of ${allowed.join(", ")}`);
   return v as T;
 };
-const range = (v: unknown, at: string, min: number, max: number, integer: boolean) => {
-  const o = obj(v, at);
-  const lo = integer ? int(o.min, `${at}.min`, min, max) : num(o.min, `${at}.min`, min, max);
-  const hi = integer ? int(o.max, `${at}.max`, min, max) : num(o.max, `${at}.max`, min, max);
-  if (lo > hi) throw new SchemaError(`${at}.min must not exceed max`);
+/** [min, max] pair. */
+const pair = (v: unknown, at: string, min: number, max: number, integer: boolean) => {
+  const a = arr(v, at, 2);
+  if (a.length !== 2) throw new SchemaError(`${at} must be [min, max]`);
+  const lo = integer ? int(a[0], `${at}[0]`, min, max) : num(a[0], `${at}[0]`, min, max);
+  const hi = integer ? int(a[1], `${at}[1]`, min, max) : num(a[1], `${at}[1]`, min, max);
+  if (lo > hi) throw new SchemaError(`${at}: min must not exceed max`);
   return { min: lo, max: hi };
 };
-const strList = (v: unknown, at: string, max = 40) => arr(v, at, max).map((x, i) => str(x, `${at}[${i}]`, 200));
+const strList = (v: unknown, at: string, maxItems: number, maxLen: number) => (v === undefined ? [] : arr(v, at, maxItems).map((x, i) => str(x, `${at}[${i}]`, maxLen)));
 const PROVIDERS = ["client", "coach", "either"] as const;
+const ZONES = ["as_prescribed", "lower_half", "upper_half"] as const;
 
 export type ParsedOutput = { ok: true; output: ReasonerOutput } | { ok: false; errors: string[] };
 
@@ -122,12 +123,12 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
     const o = obj(raw, "output");
     const status = oneOf(o.status, "status", ["PLAN", "NEEDS_INPUT"] as const);
     if (status === "NEEDS_INPUT") {
-      const needsInput = arr(o.needsInput, "needsInput", 20).map((x, i) => {
+      const needsInput = arr(o.needsInput, "needsInput", 10).map((x, i) => {
         const n = obj(x, `needsInput[${i}]`);
-        return { fact: str(n.fact, `needsInput[${i}].fact`, 200), why: str(n.why, `needsInput[${i}].why`), blockedDecision: str(n.blockedDecision, `needsInput[${i}].blockedDecision`), providedBy: oneOf(n.providedBy, `needsInput[${i}].providedBy`, PROVIDERS) };
+        return { fact: str(n.fact, `needsInput[${i}].fact`, 160), why: str(n.why, `needsInput[${i}].why`, 300), blockedDecision: str(n.blockedDecision, `needsInput[${i}].blockedDecision`, 200), providedBy: oneOf(n.providedBy, `needsInput[${i}].providedBy`, PROVIDERS) };
       });
       if (!needsInput.length) throw new SchemaError("needsInput must list at least one missing input");
-      return { ok: true, output: { status, needsInput, summary: str(o.summary, "summary") } };
+      return { ok: true, output: { status, needsInput, summary: str(o.summary, "summary", 300) } };
     }
     const p = obj(o.plan, "plan");
     const ge = obj(p.goalEmphasis, "plan.goalEmphasis");
@@ -140,55 +141,63 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
       return {
         day: oneOf(s.day, `sessions[${i}].day`, DAY_ORDER),
         title: str(s.title, `sessions[${i}].title`, 80),
-        purpose: str(s.purpose, `sessions[${i}].purpose`),
-        exercises: arr(s.exercises, `sessions[${i}].exercises`, 12).map((y, j): ReasonerExercise => {
+        purpose: str(s.purpose, `sessions[${i}].purpose`, 240),
+        exercises: arr(s.exercises, `sessions[${i}].exercises`, 10).map((y, j): ReasonerExercise => {
           const e = obj(y, `sessions[${i}].exercises[${j}]`);
           const at = `sessions[${i}].exercises[${j}]`;
           return {
-            exerciseId: str(e.exerciseId, `${at}.exerciseId`, 120),
+            exerciseId: str(e.id, `${at}.id`, 80),
             role: oneOf(e.role, `${at}.role`, ["main", "accessory"] as const),
             sets: int(e.sets, `${at}.sets`, 1, 12),
-            reps: range(e.reps, `${at}.reps`, 1, 50, true),
-            rir: e.rir === null ? null : range(e.rir, `${at}.rir`, 0, 10, false),
-            restSeconds: e.restSeconds === null ? null : range(e.restSeconds, `${at}.restSeconds`, 0, 900, true),
-            why: str(e.why, `${at}.why`, 300),
+            reps: pair(e.reps, `${at}.reps`, 1, 50, true),
+            rir: e.rir === undefined || e.rir === null ? null : pair(e.rir, `${at}.rir`, 0, 10, false),
+            restSeconds: e.rest === undefined || e.rest === null ? null : pair(e.rest, `${at}.rest`, 0, 900, true),
+            note: optStr(e.note, `${at}.note`, 200),
           };
         }),
       };
     });
+    const repZones = arr(pr.repZones, "progression.repZones", 52).map((z, i) => oneOf(z, `progression.repZones[${i}]`, ZONES));
+    if (!repZones.length) throw new SchemaError("progression.repZones must have at least one entry");
     const plan: ReasonerPlan = {
       domain: oneOf(p.domain, "plan.domain", ["resistance", "general_fitness"] as const),
-      goalEmphasis: { primary: oneOf(ge.primary, "goalEmphasis.primary", ["strength", "hypertrophy", "general"] as const), secondary: ge.secondary === null ? null : oneOf(ge.secondary, "goalEmphasis.secondary", ["strength", "hypertrophy"] as const), rationale: str(ge.rationale, "goalEmphasis.rationale") },
-      frequency: { daysPerWeek: int(fr.daysPerWeek, "frequency.daysPerWeek", 1, 7), rationale: str(fr.rationale, "frequency.rationale") },
-      schedule: { days: arr(sc.days, "schedule.days", 7).map((d, i) => oneOf(d, `schedule.days[${i}]`, DAY_ORDER)), rationale: str(sc.rationale, "schedule.rationale") },
-      architecture: { split: str(ar.split, "architecture.split", 40), name: str(ar.name, "architecture.name", 80), rationale: str(ar.rationale, "architecture.rationale") },
+      goalEmphasis: { primary: oneOf(ge.primary, "goalEmphasis.primary", ["strength", "hypertrophy", "general"] as const), secondary: ge.secondary === null || ge.secondary === undefined ? null : oneOf(ge.secondary, "goalEmphasis.secondary", ["strength", "hypertrophy"] as const), rationale: str(ge.why, "goalEmphasis.why", 400) },
+      frequency: { daysPerWeek: int(fr.days, "frequency.days", 1, 7), rationale: str(fr.why, "frequency.why", 400) },
+      schedule: { days: arr(sc.days, "schedule.days", 7).map((d, i) => oneOf(d, `schedule.days[${i}]`, DAY_ORDER)), rationale: str(sc.why, "schedule.why", 400) },
+      architecture: { split: str(ar.split, "architecture.split", 40), name: str(ar.name, "architecture.name", 80), rationale: str(ar.why, "architecture.why", 400) },
       sessions,
-      durationWeeks: int(p.durationWeeks, "plan.durationWeeks", 1, 52),
+      durationWeeks: int(p.weeks, "plan.weeks", 1, 52),
       progression: {
-        model: str(pr.model, "progression.model", 120),
-        rationale: str(pr.rationale, "progression.rationale"),
-        weeks: arr(pr.weeks, "progression.weeks", 52).map((x, i): ReasonerWeekRule => {
-          const w = obj(x, `progression.weeks[${i}]`);
-          return { week: int(w.week, `weeks[${i}].week`, 1, 52), kind: oneOf(w.kind, `weeks[${i}].kind`, ["build", "deload"] as const), repZone: oneOf(w.repZone, `weeks[${i}].repZone`, ["as_prescribed", "lower_half", "upper_half"] as const), setsDelta: int(w.setsDelta, `weeks[${i}].setsDelta`, -4, 4), note: str(w.note, `weeks[${i}].note`, 200) };
-        }),
+        model: str(pr.model, "progression.model", 300),
+        rationale: str(pr.why, "progression.why", 400),
+        repZones,
+        setsDeltas: pr.setsDeltas === undefined ? [0] : arr(pr.setsDeltas, "progression.setsDeltas", 52).map((d, i) => int(d, `progression.setsDeltas[${i}]`, -2, 2)),
+        deloadWeeks: pr.deloadWeeks === undefined ? [] : arr(pr.deloadWeeks, "progression.deloadWeeks", 12).map((w, i) => int(w, `progression.deloadWeeks[${i}]`, 1, 52)),
       },
-      monitoring: strList(p.monitoring, "plan.monitoring", 12),
-      constraintsApplied: arr(p.constraintsApplied, "plan.constraintsApplied", 30).map((x, i) => {
+      monitoring: strList(p.monitoring, "plan.monitoring", 4, 200),
+      constraintsApplied: (p.constraintsApplied === undefined ? [] : arr(p.constraintsApplied, "plan.constraintsApplied", 15)).map((x, i) => {
         const c = obj(x, `constraintsApplied[${i}]`);
-        return { constraintId: str(c.constraintId, `constraintsApplied[${i}].constraintId`, 200), how: str(c.how, `constraintsApplied[${i}].how`) };
+        return { constraintId: str(c.id, `constraintsApplied[${i}].id`, 200), how: str(c.how, `constraintsApplied[${i}].how`, 300) };
       }),
-      assumptions: strList(p.assumptions, "plan.assumptions", 15),
-      unresolved: arr(p.unresolved, "plan.unresolved", 15).map((x, i) => {
+      assumptions: strList(p.assumptions, "plan.assumptions", 5, 300),
+      unresolved: (p.unresolved === undefined ? [] : arr(p.unresolved, "plan.unresolved", 5)).map((x, i) => {
         const u = obj(x, `unresolved[${i}]`);
-        return { fact: str(u.fact, `unresolved[${i}].fact`, 200), why: str(u.why, `unresolved[${i}].why`), providedBy: oneOf(u.providedBy, `unresolved[${i}].providedBy`, PROVIDERS) };
+        return { fact: str(u.fact, `unresolved[${i}].fact`, 160), why: str(u.why, `unresolved[${i}].why`, 400), providedBy: oneOf(u.from, `unresolved[${i}].from`, PROVIDERS) };
       }),
-      conflicts: arr(p.conflicts, "plan.conflicts", 15).map((x, i) => {
+      conflicts: (p.conflicts === undefined ? [] : arr(p.conflicts, "plan.conflicts", 5)).map((x, i) => {
         const c = obj(x, `conflicts[${i}]`);
-        return { coachRuleKey: str(c.coachRuleKey, `conflicts[${i}].coachRuleKey`, 120), issue: str(c.issue, `conflicts[${i}].issue`) };
+        return { coachRuleKey: str(c.rule, `conflicts[${i}].rule`, 80), issue: str(c.issue, `conflicts[${i}].issue`, 400) };
       }),
-      decisions: arr(p.decisions, "plan.decisions", 25).map((x, i): ReasonerDecision => {
+      decisions: arr(p.decisions, "plan.decisions", 8).map((x, i): ReasonerDecision => {
         const d = obj(x, `decisions[${i}]`);
-        return { topic: oneOf(d.topic, `decisions[${i}].topic`, DECISION_TOPICS), decision: str(d.decision, `decisions[${i}].decision`, 200), because: str(d.because, `decisions[${i}].because`), coachRuleKeys: strList(d.coachRuleKeys, `decisions[${i}].coachRuleKeys`), clientFactRefs: strList(d.clientFactRefs, `decisions[${i}].clientFactRefs`), knowledgeRefs: strList(d.knowledgeRefs, `decisions[${i}].knowledgeRefs`) };
+        return {
+          topic: oneOf(d.topic, `decisions[${i}].topic`, DECISION_TOPICS),
+          decision: str(d.decision, `decisions[${i}].decision`, 160),
+          because: str(d.because, `decisions[${i}].because`, 400),
+          coachRuleKeys: strList(d.coach, `decisions[${i}].coach`, 10, 80),
+          clientFactRefs: strList(d.client, `decisions[${i}].client`, 10, 120),
+          knowledgeRefs: strList(d.evidence, `decisions[${i}].evidence`, 10, 120),
+        };
       }),
     };
     if (!plan.decisions.length) throw new SchemaError("plan.decisions must explain the main decisions");
@@ -203,52 +212,37 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
 // Prompt (versioned; separate from chat)
 // ---------------------------------------------------------------------------
 
-export const REASONER_SYSTEM_PROMPT = `You are OPTIM's Fitness Reasoner for RESISTANCE TRAINING (strength / hypertrophy / general resistance support). You design one client's training plan as structured data for their coach to review. You do not approve or publish anything; deterministic validators check everything you return and reject violations.
+export const REASONER_SYSTEM_PROMPT = `You are OPTIM's Fitness Reasoner for resistance training (strength, hypertrophy, general resistance support). You design one client's plan as structured decisions for their coach to review. Deterministic validators check every field and reject violations; you never approve or publish.
 
-AUTHORITY (in order)
-1. Client constraints marked hard are absolute. Never use an exercise outside "evidence.exercises" (those are the only eligible candidates — everything else is already excluded for this client). Never loosen a restriction.
-2. The coach's method ("coachMethod.rules") is how THIS coach coaches. Stay inside every range they set (sets, reps, reps-in-reserve, rest, days, splits, program length, deload approach). Where the coach left discretion, choose using the client facts and the evidence. If following the method seems wrong for this client, still follow it and report the tension in "conflicts" — never silently choose against it.
-3. Fitness Knowledge ("evidence.claims") is general support. Cite only refs that appear there. A claim whose support says "NO SOURCE" is an open question — never present it as evidence.
+AUTHORITY — higher always wins
+1. System safety rules.
+2. "constraints": the coach-confirmed, client-specific boundary. It is COMPLETE: do not add, widen or narrow restrictions from anything else. Only exercises listed in "exercises" are eligible.
+3. "coach": this coach's method. Stay inside every range and rule (days, splits allowed for the chosen day count, sets, reps, RIR, rest, progression order, long-term structure, program length, deload approach). Where the coach leaves discretion, decide from client facts and evidence. If the method seems wrong for this client, follow it and report the tension in "conflicts".
+4. "client" facts and goal.
+5. "evidence": general support. Cite only its refs. A claim marked NO SOURCE is an open question, not evidence.
+6. Your own judgement — only inside all of the above.
 
-FREQUENCY AND STRUCTURE
-- Available days are a ceiling, not a target. Choose days per week inside "bounds.frequency" using goal, experience, current habit, recovery and session length — and explain why.
-- Design the week as a coached microcycle: every session needs a specific purpose (what it trains and why it sits on that day). Don't mechanically rotate labels; place sessions to manage recovery between sessions that load the same muscles.
-- Use only splits the coach allows for the chosen day count, unless none fits — then return NEEDS_INPUT.
-- Respect the session time cap ("bounds.sessionMinutesCap") including rest and warm-up.
-- Repeat an exercise within the week only on purpose (e.g. practising a main lift) and say so in its "why".
-- If restrictions remove whole muscle groups, plan the best coherent week with what is eligible and record the gap in "assumptions" or "unresolved" — don't pretend it is covered.
+DESIGN PRINCIPLES
+- Decide the architecture before choosing exercises: days per week (available days are a ceiling, not a target), split, then each session's purpose and placement for recovery between sessions that load the same muscles.
+- Every session has one clear purpose. Repeat an exercise in the week only on purpose, and say why in its note.
+- Train every major muscle the goal requires at least once a week if an eligible exercise exists; if not, say so in "assumptions".
+- Fit each session inside bounds.minutes, including rest and warm-up.
+- If a decision-critical fact is missing or contradictory, return NEEDS_INPUT instead of guessing. Never invent client facts. Medical questions go to the coach.
 
-PROGRESSION
-- Provide "progression.weeks" with exactly "durationWeeks" entries (week 1..N). repZone shifts reps within the prescribed range (lower_half = heavier, upper_half = lighter); setsDelta adjusts sets but every week must stay inside the coach's set range (a deload week may go below it).
-- Deload weeks only as the coach's method defines them: "none" → no deload weeks; "as_needed" → no scheduled deload weeks (put the coach's triggers in "monitoring"); "fixed" → deloads on the coach's interval.
-- durationWeeks must be inside "bounds.programWeeks".
-
-MISSING INFORMATION
-- If a fact needed for a decision is missing or contradictory and you would have to guess, return NEEDS_INPUT naming the fact, why it matters, the blocked decision and who should provide it (client / coach / either). Never invent client facts.
-- You are not a clinician. If something requires medical judgment, return NEEDS_INPUT for the coach.
-
-EVIDENCE OF REASONING
-- "decisions" holds concise decision evidence (no step-by-step thinking): what you decided, because…, and the exact coachRuleKeys, clientFactRefs and knowledgeRefs used (copied from the input). Give every decision a "topic"; cover at least frequency, structure, schedule, exercise_selection, prescription, progression and recovery.
-- "constraintsApplied" must list EVERY constraint id from "constraints" with how it shaped the plan.
-
-OUTPUT
-Be concise: every text field is one short sentence (exercise "why" and week "note" under 120 characters). At most 12 decisions.
-Return ONLY one JSON object, no prose, matching exactly:
+OUTPUT — one JSON object, no prose. Keep text short; OPTIM renders explanations from your references.
 {"status":"PLAN","plan":{
  "domain":"resistance"|"general_fitness",
- "goalEmphasis":{"primary":"strength"|"hypertrophy"|"general","secondary":"strength"|"hypertrophy"|null,"rationale":string},
- "frequency":{"daysPerWeek":int,"rationale":string},
- "schedule":{"days":["Monday",...],"rationale":string},
- "architecture":{"split":<one of the coach's allowed split ids for the chosen days>,"name":string,"rationale":string},
- "sessions":[{"day":"Monday","title":string,"purpose":string,"exercises":[{"exerciseId":string,"role":"main"|"accessory","sets":int,"reps":{"min":int,"max":int},"rir":{"min":number,"max":number}|null,"restSeconds":{"min":int,"max":int}|null,"why":string}]}],
- "durationWeeks":int,
- "progression":{"model":string,"rationale":string,"weeks":[{"week":int,"kind":"build"|"deload","repZone":"as_prescribed"|"lower_half"|"upper_half","setsDelta":int,"note":string}]},
- "monitoring":[string],
- "constraintsApplied":[{"constraintId":string,"how":string}],
- "assumptions":[string],
- "unresolved":[{"fact":string,"why":string,"providedBy":"client"|"coach"|"either"}],
- "conflicts":[{"coachRuleKey":string,"issue":string}],
- "decisions":[{"topic":"frequency"|"structure"|"schedule"|"exercise_selection"|"prescription"|"progression"|"recovery"|"duration"|"other","decision":string,"because":string,"coachRuleKeys":[string],"clientFactRefs":[string],"knowledgeRefs":[string]}]
+ "goalEmphasis":{"primary":"strength"|"hypertrophy"|"general","secondary":"strength"|"hypertrophy"|null,"why":str},
+ "frequency":{"days":int,"why":str},
+ "schedule":{"days":["Monday",...in week order],"why":str},
+ "architecture":{"split":<coach-allowed split id for that day count>,"name":str,"why":str},
+ "sessions":[{"day":"Monday","title":str,"purpose":str,"exercises":[{"id":<exercise id>,"role":"main"|"accessory","sets":int,"reps":[min,max],"rir":[min,max] or omit for the coach's range,"rest":[minSec,maxSec] or omit for the coach's range,"note":str or omit}]}],
+ "weeks":int,
+ "progression":{"model":str,"why":str,"repZones":[cycled weekly: "as_prescribed"|"lower_half"|"upper_half"],"setsDeltas":[cycled weekly ints, optional],"deloadWeeks":[ints, only if the coach schedules deloads]},
+ "monitoring":[≤4 str, optional — OPTIM adds the coach's deload triggers itself],
+ "constraintsApplied":[{"id":<constraint id from "constraints">,"how":str}],
+ "assumptions":[str],"unresolved":[{"fact":str,"why":str,"from":"client"|"coach"|"either"}],"conflicts":[{"rule":<coach key>,"issue":str}],
+ "decisions":[≤8 {"topic":"frequency"|"structure"|"schedule"|"exercise_selection"|"prescription"|"progression"|"recovery"|"duration"|"other","decision":str,"because":str,"coach":[keys],"client":[refs],"evidence":[refs]}]
 }}
-or {"status":"NEEDS_INPUT","needsInput":[{"fact":string,"why":string,"blockedDecision":string,"providedBy":"client"|"coach"|"either"}],"summary":string}
-Sessions must be listed in the same order as schedule.days, one session per scheduled day.`;
+or {"status":"NEEDS_INPUT","needsInput":[{"fact":str,"why":str,"blockedDecision":str,"providedBy":"client"|"coach"|"either"}],"summary":str}
+One session per scheduled day, in schedule order. Cover at least frequency, structure, schedule, exercise_selection, prescription and progression in "decisions", each with the exact refs you used.`;

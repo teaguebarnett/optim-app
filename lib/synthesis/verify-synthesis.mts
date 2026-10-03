@@ -336,7 +336,7 @@ check("13. Coach Brain behavior is unchanged", () => {
   const walk = (d: string): string[] => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : [join(d, f)]));
   for (const f of walk(dir).filter((f) => f.endsWith(".ts"))) {
     const src = readFileSync(f, "utf8");
-    assert.ok(!/confirmOwn|saveOwn|confirm_coach_method|\.insert\(|\.update\(|\.upsert\(|\.delete\(/.test(src), `${f} must not write`);
+    assert.ok(!/confirmOwn|saveOwn|confirm_coach_method|\.from\([^)]*\)[\s\S]{0,120}?\.(insert|update|upsert|delete)\(|\.rpc\(/.test(src), `${f} must not write`);
   }
   // Same method in, same frequency bounds out — and the method object is untouched.
   const m = method({ min: 2, max: 5 });

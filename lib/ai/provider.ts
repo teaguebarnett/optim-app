@@ -145,8 +145,18 @@ export interface StructuredJsonRequest {
   effort?: "low" | "medium" | "high";
 }
 
+export interface StructuredJsonResult {
+  json: unknown;
+  usage: { inputTokens: number; outputTokens: number } | null;
+  /** Provider request id when available (safe metadata). */
+  requestId: string | null;
+  latencyMs: number;
+}
+
 export interface StructuredJsonProvider {
   readonly id: string;
   readonly modelId: string;
   generateJson(request: StructuredJsonRequest): Promise<unknown>;
+  /** Same call, plus safe metadata (token usage, request id, latency). */
+  generateJsonWithMeta(request: StructuredJsonRequest): Promise<StructuredJsonResult>;
 }

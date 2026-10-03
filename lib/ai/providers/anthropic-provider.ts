@@ -27,6 +27,7 @@ import {
   type EscalationReason,
   type StructuredJsonProvider,
   type StructuredJsonRequest,
+  type StructuredJsonResult,
 } from "../provider.ts";
 import { RESPONSE_MAX_OUTPUT_TOKENS } from "../response-policy.ts";
 import { classifyProviderError, validateApiKey } from "../safe-errors.ts";
@@ -142,6 +143,12 @@ export class AnthropicChatModelProvider implements ChatModelProvider, Structured
 
   /** Gate 4.0C-2A — one JSON object, parsed but NOT validated (the caller owns the schema). */
   async generateJson(request: StructuredJsonRequest): Promise<unknown> {
+    return (await this.generateJsonWithMeta(request)).json;
+  }
+
+  /** Gate 4.0C-3A — the same call with safe metadata for the ReasonerRun artifact. */
+  async generateJsonWithMeta(request: StructuredJsonRequest): Promise<StructuredJsonResult> {
+    const start = Date.now();
     try {
       const response = await this.client.messages.create(
         {
@@ -155,7 +162,8 @@ export class AnthropicChatModelProvider implements ChatModelProvider, Structured
       );
       const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
       if (!textBlock) throw new AiProviderInvalidOutputError("model response contained no text block");
-      return extractJsonObject(textBlock.text);
+      const requestId = (response as { _request_id?: string | null })._request_id ?? null;
+      return { json: extractJsonObject(textBlock.text), usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens }, requestId, latencyMs: Date.now() - start };
     } catch (err) {
       throw mapProviderError(err);
     }

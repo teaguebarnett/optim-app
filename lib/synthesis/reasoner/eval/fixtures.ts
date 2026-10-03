@@ -12,9 +12,8 @@ import { withCoachConfirmedGoal, type GoalSpec } from "../../goal-contract.ts";
 import type { CoachStructuredRestriction } from "../../constraints.ts";
 import { FOUNDATION_KNOWLEDGE } from "../../knowledge/registry.ts";
 import { buildSynthesisInput, type SynthesisInput } from "../../synthesis-input.ts";
-import type { StructuredJsonModel } from "../../limitations/interpret.ts";
-import type { ReasonerPlan } from "../contract.ts";
 import type { ReasoningInput } from "../input.ts";
+import type { ReasonerModel } from "../reasoner.ts";
 
 export const NOW = "2026-10-03T12:00:00.000Z";
 const WS = "ws-eval";
@@ -87,74 +86,88 @@ export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMetho
 export const restrict = (tags: CoachStructuredRestriction["tags"], id = "eval"): CoachStructuredRestriction[] => [{ id, interprets: [], description: "Coach-confirmed restriction (eval)", tags, ref: "eval" }];
 
 // ---------------------------------------------------------------------------
-// Scripted model: builds a schema-valid plan from the reasoning input.
+// Scripted model: builds a schema-valid (v2) plan from the reasoning input.
 // ---------------------------------------------------------------------------
 
-const rule = (ri: ReasoningInput, prefix: string) => ri.coachMethod.rules.find((x) => x.label.startsWith(prefix));
-const rangeOf = (v: unknown) => v as { min: number; max: number };
+const rule = (ri: ReasoningInput, label: string) => ri.coach.rules.find((x) => x[1] === label);
+const rangeOf = (v: unknown) => {
+  const [min, max] = v as [number, number];
+  return { min, max };
+};
 
-export function scriptedPlan(ri: ReasoningInput, tweak?: (p: ReasonerPlan) => void): ReasonerPlan {
-  const days = ri.bounds.frequency.min;
-  const schedule = ri.bounds.availableDays.slice(0, days) as ReasonerPlan["schedule"]["days"];
-  const splitRule = rule(ri, `Splits allowed for ${days} days`);
-  const sets = { main: rangeOf(rule(ri, "Working sets per exercise — main")!.value), accessory: rangeOf(rule(ri, "Working sets per exercise — accessories")!.value) };
-  const reps = { main: rangeOf(rule(ri, "Rep range — main")!.value), accessory: rangeOf(rule(ri, "Rep range — accessories")!.value) };
-  const rir = { main: rangeOf(rule(ri, "Effort (reps in reserve) — main")?.value ?? { min: 1, max: 3 }), accessory: rangeOf(rule(ri, "Effort (reps in reserve) — accessories")?.value ?? { min: 1, max: 3 }) };
-  const rest = { main: rule(ri, "Rest between sets (min) — main") ? rangeOf(rule(ri, "Rest between sets (min) — main")!.value) : null, accessory: rule(ri, "Rest between sets (min) — accessories") ? rangeOf(rule(ri, "Rest between sets (min) — accessories")!.value) : null };
-  const pool = ri.evidence.exercises;
-  const deload = rule(ri, "Deloads")!.value as { approach: string; every: { min: number; max: number } | null };
-  const weeks = ri.bounds.programWeeks?.min ?? 8;
-  const every = deload.approach === "fixed" && deload.every ? deload.every.min : 0;
+/** The v2 wire shape (what a model returns) — loose on purpose so tests can corrupt any field. */
+export interface WireExercise { id: string; role: string; sets: number; reps: number[]; rir?: number[]; rest?: number[]; note?: string }
+export interface WireSession { day: string; title: string; purpose: string; exercises: WireExercise[] }
+export interface WirePlan {
+  domain: string;
+  goalEmphasis: { primary: string; secondary: string | null; why: string };
+  frequency: { days: number | string; why: string };
+  schedule: { days: string[]; why: string };
+  architecture: { split: string; name: string; why: string };
+  sessions: WireSession[];
+  weeks: number;
+  progression: { model: string; why: string; repZones: string[]; setsDeltas?: number[]; deloadWeeks: number[] };
+  constraintsApplied: Array<{ id: string; how: string }>;
+  conflicts?: Array<{ rule: string; issue: string }>;
+  decisions: Array<{ topic: string; decision: string; because: string; coach: string[]; client: string[]; evidence: string[] }>;
+}
+
+export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void): { status: "PLAN"; plan: WirePlan } {
+  const days = ri.bounds.days[0];
+  const schedule = ri.bounds.available.slice(0, days);
+  const split = (rule(ri, `splits allowed at ${days} days`)?.[2] as string[] | undefined)?.[0] ?? "full_body";
+  const sets = { main: rangeOf(rule(ri, "sets main")![2]), accessory: rangeOf(rule(ri, "sets accessory")![2]) };
+  const reps = { main: rangeOf(rule(ri, "reps main")![2]), accessory: rangeOf(rule(ri, "reps accessory")![2]) };
+  const deload = String(rule(ri, "deloads")![2]);
+  const every = /^fixed every (\d+)/.exec(deload)?.[1];
+  const weeks = ri.bounds.weeks?.[0] ?? 8;
+  const rows = ri.exercises.map((r) => r.split("|"));
   let cursor = 0;
   const sessions = schedule.map((day, i) => ({
     day,
     title: `Session ${String.fromCharCode(65 + i)}`,
     purpose: `Scripted session ${i + 1}`,
     exercises: [0, 1, 2].map((k) => {
-      const e = pool[cursor++ % pool.length];
-      const role = k === 0 && e.mechanics === "compound" ? ("main" as const) : ("accessory" as const);
-      const rr = rest[role];
-      return { exerciseId: e.id, role, sets: sets[role].min, reps: { ...reps[role] }, rir: { ...rir[role] }, restSeconds: rr ? { min: rr.min * 60, max: rr.max * 60 } : null, why: "Scripted selection; repeated only if the pool is small." };
+      const row = rows[cursor++ % rows.length];
+      const role = k === 0 && row[5] === "C" ? "main" : "accessory";
+      return { id: row[0], role, sets: sets[role].min, reps: [reps[role].min, reps[role].max], note: "Scripted; repeats only when the pool is small." };
     }),
   }));
-  const coachKey = ri.coachMethod.rules[0].key;
-  const factRef = ri.client.facts[0]?.ref;
-  const claimRef = ri.evidence.claims[0]?.ref;
-  const plan: ReasonerPlan = {
+  const coachKey = ri.coach.rules[0][0];
+  const factRef = Object.keys(ri.client.facts)[0];
+  const claimRef = ri.evidence[0]?.ref;
+  const plan: WirePlan = {
     domain: ri.domain.primary === "general_fitness" ? "general_fitness" : "resistance",
-    goalEmphasis: { primary: (ri.domain.resistanceEmphasis as ReasonerPlan["goalEmphasis"]["primary"]) ?? "general", secondary: null, rationale: "Scripted." },
-    frequency: { daysPerWeek: days, rationale: "Scripted: lowest allowed frequency." },
-    schedule: { days: schedule, rationale: "Scripted: first available days." },
-    architecture: { split: (splitRule?.value as string[] | undefined)?.[0] ?? "full_body", name: "Scripted", rationale: "Scripted." },
+    goalEmphasis: { primary: ri.domain.emphasis ?? "general", secondary: null, why: "Scripted." },
+    frequency: { days, why: "Scripted: lowest allowed frequency." },
+    schedule: { days: schedule, why: "Scripted: first available days." },
+    architecture: { split, name: "Scripted", why: "Scripted." },
     sessions,
-    durationWeeks: weeks,
-    progression: { model: "scripted", rationale: "Scripted.", weeks: Array.from({ length: weeks }, (_, i) => ({ week: i + 1, kind: every && (i + 1) % every === 0 ? ("deload" as const) : ("build" as const), repZone: "as_prescribed" as const, setsDelta: every && (i + 1) % every === 0 ? -1 : 0, note: "Scripted." })) },
-    monitoring: ["Reps and effort each session."],
-    constraintsApplied: ri.constraints.map((c) => ({ constraintId: c.id, how: "Respected (scripted)." })),
-    assumptions: [],
-    unresolved: [],
-    conflicts: [],
-    decisions: (["frequency", "structure", "schedule", "exercise_selection", "prescription", "progression", "recovery"] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", coachRuleKeys: [coachKey], clientFactRefs: factRef ? [factRef] : [], knowledgeRefs: claimRef ? [claimRef] : [] })),
+    weeks,
+    progression: { model: "scripted", why: "Scripted.", repZones: ["as_prescribed"], deloadWeeks: every ? Array.from({ length: Math.floor(weeks / Number(every)) }, (_, i) => (i + 1) * Number(every)) : [] },
+    constraintsApplied: ri.constraints.map((c) => ({ id: c.id, how: "Respected (scripted)." })),
+    decisions: (["frequency", "structure", "schedule", "exercise_selection", "prescription", "progression", "recovery"] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", coach: [coachKey], client: factRef ? [factRef] : [], evidence: claimRef ? [claimRef] : [] })),
   };
   tweak?.(plan);
-  return plan;
+  return { status: "PLAN", plan };
 }
 
-/** A fake model: calls `respond` with the parsed reasoning input; counts calls. */
-export function fakeModel(respond: (ri: ReasoningInput, attempt: number) => unknown): StructuredJsonModel & { calls: number; lastInput: ReasoningInput | null } {
+/** A fake model (ReasonerModel): calls `respond` with the parsed reasoning input; counts calls. */
+export function fakeModel(respond: (ri: ReasoningInput, attempt: number) => unknown): ReasonerModel & { calls: number; lastInput: ReasoningInput | null; lastUserMessage: string } {
   const m = {
+    provider: "scripted",
     modelId: "scripted-model",
     calls: 0,
     lastInput: null as ReasoningInput | null,
-    async generateJson(req: { userMessage: string }) {
+    lastUserMessage: "",
+    async generate(req: { userMessage: string }) {
       m.calls++;
+      m.lastUserMessage = req.userMessage;
       const json = req.userMessage.split("\n\nYour previous output was rejected")[0];
       const ri = JSON.parse(json) as ReasoningInput;
       m.lastInput = ri;
-      return respond(ri, m.calls);
+      return { json: respond(ri, m.calls), usage: { inputTokens: Math.ceil(req.userMessage.length / 4), outputTokens: 1000 }, latencyMs: 1, requestId: `req_scripted_${m.calls}` };
     },
   };
   return m;
 }
-
-export const planOutput = (p: ReasonerPlan) => ({ status: "PLAN", plan: p });

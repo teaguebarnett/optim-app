@@ -14,6 +14,7 @@ import { runFitnessReasoner, PROVIDER_FAILED_MESSAGE } from "../synthesis/reason
 import { reasonerReviewView, type ReasonerReviewView } from "../synthesis/reasoner/view.ts";
 
 const REASONER_TIMEOUT_MS = 300_000;
+const REASONER_EFFORT = "high" as const;
 
 export async function runFitnessReasonerPreview(params: { workspaceId: string; clientProfileId: string }): Promise<ReasonerReviewView> {
   const ctx = await getAuthenticatedContext();
@@ -27,7 +28,14 @@ export async function runFitnessReasonerPreview(params: { workspaceId: string; c
   const input = await loadSynthesisInputForClient(params.clientProfileId);
   const resolved = resolveStructuredJsonProvider();
   const model = resolved.provider
-    ? { modelId: resolved.provider.modelId, generateJson: (r: { systemPrompt: string; userMessage: string; maxOutputTokens: number }) => resolved.provider!.generateJson({ ...r, timeoutMs: REASONER_TIMEOUT_MS, effort: "high" }) }
+    ? {
+        provider: resolved.provider.id,
+        modelId: resolved.provider.modelId,
+        generate: async (r: { systemPrompt: string; userMessage: string; maxOutputTokens: number }) => {
+          const res = await resolved.provider!.generateJsonWithMeta({ ...r, timeoutMs: REASONER_TIMEOUT_MS, effort: REASONER_EFFORT });
+          return { json: res.json, usage: res.usage ?? undefined, requestId: res.requestId ?? undefined, latencyMs: res.latencyMs };
+        },
+      }
     : null;
   const result = await runFitnessReasoner({
     input,
