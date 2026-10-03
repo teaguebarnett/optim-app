@@ -1,0 +1,160 @@
+// Gate 4.0C-3 — shared fixtures for the reasoner tests and the evaluation
+// harness: a real v2 Coach Brain method (built through the calibration
+// pipeline) with explicit resistance answers, real ClientState derivation,
+// and a scripted "model" that produces schema-valid plans from the input it
+// is given (so hard rails can be tested offline, without a provider).
+
+import { answerAllRequired } from "../../../coach/calibration/fixtures.ts";
+import { buildMethodFromCalibration, type ConfirmedCoachMethod } from "../../../coach/coach-brain.ts";
+import type { HealthReviewRecord, OnboardingProgress } from "../../../coach/types.ts";
+import { deriveClientState } from "../../client-state.ts";
+import { withCoachConfirmedGoal, type GoalSpec } from "../../goal-contract.ts";
+import type { CoachStructuredRestriction } from "../../constraints.ts";
+import { FOUNDATION_KNOWLEDGE } from "../../knowledge/registry.ts";
+import { buildSynthesisInput, type SynthesisInput } from "../../synthesis-input.ts";
+import type { StructuredJsonModel } from "../../limitations/interpret.ts";
+import type { ReasonerPlan } from "../contract.ts";
+import type { ReasoningInput } from "../input.ts";
+
+export const NOW = "2026-10-03T12:00:00.000Z";
+const WS = "ws-eval";
+const r = (min: number, max: number, unit: string) => ({ min, max, unit });
+export const layer = (base: unknown, extra: Record<string, unknown> = {}) => ({ base, varies: "no", ...extra });
+export { r as range };
+
+export function coachMethod(over: Record<string, unknown> = {}): ConfirmedCoachMethod {
+  const built = buildMethodFromCalibration({
+    answers: answerAllRequired({ coaching_areas: ["strength"], strength_specialties: ["general_strength"], experience_levels: ["intermediate"], client_modifiers: ["none"], nutrition_scope: "full", practice_goals: ["get_stronger", "build_muscle"] }),
+    aiAuthority: { level: "advisor", domainOverrides: {} },
+    aiAuthorityConfirmed: true,
+    coachUserId: "coach-eval",
+    workspaceId: WS,
+    businessName: "OPTIM",
+    methodVersion: 7,
+    nowIso: NOW,
+  });
+  const om = structuredClone(built.operatingModel);
+  const a = om.calibration!.answers as Record<string, unknown>;
+  Object.assign(a, {
+    t_days: layer(r(3, 6, "days/week")),
+    t_session_length: r(45, 75, "min"),
+    t_splits: layer(["full_body", "upper_lower", "push_pull_legs"]),
+    t_sets: layer(r(2, 4, "sets"), { varies: "exercise_type", exceptions: { main: r(3, 4, "sets"), accessory: r(2, 3, "sets") } }),
+    t_reps: layer(r(5, 15, "reps")),
+    t_effort_metric: ["rir"],
+    t_effort_rir: layer(r(1, 3, "reps in reserve")),
+    t_progression_method: layer(["double_progression"]),
+    t_long_term_structure: layer("linear_phases"),
+    t_deload_approach: "fixed",
+    t_deload_every: r(4, 5, "weeks"),
+    t_rest_periods: layer(r(1, 3, "min")),
+    program_length: layer(r(8, 12, "weeks")),
+    t_warmup: "minimal",
+    t_exercises_avoided: [],
+  });
+  delete a.t_effort_plain;
+  delete a.t_deload_triggers;
+  for (const [k, v] of Object.entries(over)) {
+    if (v === undefined) delete a[k];
+    else a[k] = v;
+  }
+  return { versionId: "mv-eval-7", version: 7, source: "calibration", confirmedAtIso: NOW, operatingModel: om, aiAuthority: built.aiAuthority };
+}
+
+const BASE = {
+  about_you: { age: 30, sex: "female", heightFeet: 5, heightInchesRemainder: 6, weightLb: 150, weightDirection: "stable" },
+  your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"] },
+  starting_point: { trainingExperience: "comfortable_common", recentConsistency: "very_consistent", weeklyFrequency: 4 },
+  fuel_recovery: { typicalSleep: "7_8", hasDietaryRestrictions: "none" },
+  what_you_want: { primaryGoal: "build_muscle", secondaryGoals: [] },
+  health_finish: { hasInjuryHistory: false, safetyScreen: ["none"] },
+};
+export type Patch = Record<string, Record<string, unknown> | undefined>;
+
+export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMethod | null; restrictions?: CoachStructuredRestriction[]; healthReview?: HealthReviewRecord | null; coachConfirmedGoal?: GoalSpec; clientId?: string } = {}): SynthesisInput {
+  const id = opts.clientId ?? "client-eval";
+  const answers = structuredClone(BASE) as Record<string, Record<string, unknown>>;
+  for (const [step, values] of Object.entries(opts.patch ?? {})) {
+    if (values === undefined) delete answers[step];
+    else answers[step] = { ...(answers[step] ?? {}), ...values };
+  }
+  const onboarding = { clientId: id, workspaceId: WS, currentStepIndex: 6, answers, completedAtIso: NOW, updatedAtIso: NOW } as unknown as OnboardingProgress;
+  const client = deriveClientState({ clientProfileId: id, workspaceId: WS, onboarding, healthReview: opts.healthReview ?? null });
+  const input = buildSynthesisInput({ knowledge: FOUNDATION_KNOWLEDGE, coachMethod: opts.coach === undefined ? coachMethod() : opts.coach, client, coachStructuredRestrictions: opts.restrictions });
+  return opts.coachConfirmedGoal ? { ...input, goal: withCoachConfirmedGoal(input.goal, opts.coachConfirmedGoal) } : input;
+}
+
+export const restrict = (tags: CoachStructuredRestriction["tags"], id = "eval"): CoachStructuredRestriction[] => [{ id, interprets: [], description: "Coach-confirmed restriction (eval)", tags, ref: "eval" }];
+
+// ---------------------------------------------------------------------------
+// Scripted model: builds a schema-valid plan from the reasoning input.
+// ---------------------------------------------------------------------------
+
+const rule = (ri: ReasoningInput, prefix: string) => ri.coachMethod.rules.find((x) => x.label.startsWith(prefix));
+const rangeOf = (v: unknown) => v as { min: number; max: number };
+
+export function scriptedPlan(ri: ReasoningInput, tweak?: (p: ReasonerPlan) => void): ReasonerPlan {
+  const days = ri.bounds.frequency.min;
+  const schedule = ri.bounds.availableDays.slice(0, days) as ReasonerPlan["schedule"]["days"];
+  const splitRule = rule(ri, `Splits allowed for ${days} days`);
+  const sets = { main: rangeOf(rule(ri, "Working sets per exercise — main")!.value), accessory: rangeOf(rule(ri, "Working sets per exercise — accessories")!.value) };
+  const reps = { main: rangeOf(rule(ri, "Rep range — main")!.value), accessory: rangeOf(rule(ri, "Rep range — accessories")!.value) };
+  const rir = { main: rangeOf(rule(ri, "Effort (reps in reserve) — main")?.value ?? { min: 1, max: 3 }), accessory: rangeOf(rule(ri, "Effort (reps in reserve) — accessories")?.value ?? { min: 1, max: 3 }) };
+  const rest = { main: rule(ri, "Rest between sets (min) — main") ? rangeOf(rule(ri, "Rest between sets (min) — main")!.value) : null, accessory: rule(ri, "Rest between sets (min) — accessories") ? rangeOf(rule(ri, "Rest between sets (min) — accessories")!.value) : null };
+  const pool = ri.evidence.exercises;
+  const deload = rule(ri, "Deloads")!.value as { approach: string; every: { min: number; max: number } | null };
+  const weeks = ri.bounds.programWeeks?.min ?? 8;
+  const every = deload.approach === "fixed" && deload.every ? deload.every.min : 0;
+  let cursor = 0;
+  const sessions = schedule.map((day, i) => ({
+    day,
+    title: `Session ${String.fromCharCode(65 + i)}`,
+    purpose: `Scripted session ${i + 1}`,
+    exercises: [0, 1, 2].map((k) => {
+      const e = pool[cursor++ % pool.length];
+      const role = k === 0 && e.mechanics === "compound" ? ("main" as const) : ("accessory" as const);
+      const rr = rest[role];
+      return { exerciseId: e.id, role, sets: sets[role].min, reps: { ...reps[role] }, rir: { ...rir[role] }, restSeconds: rr ? { min: rr.min * 60, max: rr.max * 60 } : null, why: "Scripted selection; repeated only if the pool is small." };
+    }),
+  }));
+  const coachKey = ri.coachMethod.rules[0].key;
+  const factRef = ri.client.facts[0]?.ref;
+  const claimRef = ri.evidence.claims[0]?.ref;
+  const plan: ReasonerPlan = {
+    domain: ri.domain.primary === "general_fitness" ? "general_fitness" : "resistance",
+    goalEmphasis: { primary: (ri.domain.resistanceEmphasis as ReasonerPlan["goalEmphasis"]["primary"]) ?? "general", secondary: null, rationale: "Scripted." },
+    frequency: { daysPerWeek: days, rationale: "Scripted: lowest allowed frequency." },
+    schedule: { days: schedule, rationale: "Scripted: first available days." },
+    architecture: { split: (splitRule?.value as string[] | undefined)?.[0] ?? "full_body", name: "Scripted", rationale: "Scripted." },
+    sessions,
+    durationWeeks: weeks,
+    progression: { model: "scripted", rationale: "Scripted.", weeks: Array.from({ length: weeks }, (_, i) => ({ week: i + 1, kind: every && (i + 1) % every === 0 ? ("deload" as const) : ("build" as const), repZone: "as_prescribed" as const, setsDelta: every && (i + 1) % every === 0 ? -1 : 0, note: "Scripted." })) },
+    monitoring: ["Reps and effort each session."],
+    constraintsApplied: ri.constraints.map((c) => ({ constraintId: c.id, how: "Respected (scripted)." })),
+    assumptions: [],
+    unresolved: [],
+    conflicts: [],
+    decisions: (["frequency", "structure", "schedule", "exercise_selection", "prescription", "progression", "recovery"] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", coachRuleKeys: [coachKey], clientFactRefs: factRef ? [factRef] : [], knowledgeRefs: claimRef ? [claimRef] : [] })),
+  };
+  tweak?.(plan);
+  return plan;
+}
+
+/** A fake model: calls `respond` with the parsed reasoning input; counts calls. */
+export function fakeModel(respond: (ri: ReasoningInput, attempt: number) => unknown): StructuredJsonModel & { calls: number; lastInput: ReasoningInput | null } {
+  const m = {
+    modelId: "scripted-model",
+    calls: 0,
+    lastInput: null as ReasoningInput | null,
+    async generateJson(req: { userMessage: string }) {
+      m.calls++;
+      const json = req.userMessage.split("\n\nYour previous output was rejected")[0];
+      const ri = JSON.parse(json) as ReasoningInput;
+      m.lastInput = ri;
+      return respond(ri, m.calls);
+    },
+  };
+  return m;
+}
+
+export const planOutput = (p: ReasonerPlan) => ({ status: "PLAN", plan: p });

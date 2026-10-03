@@ -149,7 +149,7 @@ export class AnthropicChatModelProvider implements ChatModelProvider, Structured
           max_tokens: request.maxOutputTokens,
           system: request.systemPrompt,
           messages: [{ role: "user", content: request.userMessage }],
-          output_config: { effort: "medium" },
+          output_config: { effort: request.effort ?? "medium" },
         },
         { timeout: request.timeoutMs }
       );

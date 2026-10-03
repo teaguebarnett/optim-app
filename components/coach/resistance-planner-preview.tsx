@@ -8,12 +8,12 @@ import type { PlannerReviewView } from "@/lib/synthesis/planners/resistance/view
 
 const PROVIDER: Record<string, string> = { client: "Client", coach: "You", either: "You or the client" };
 
-export function ResistancePlannerPreview({ view, compareHref }: { view: PlannerReviewView; compareHref?: string }) {
+export function ResistancePlannerPreview({ view, compareHref, title = "New resistance planner — preview" }: { view: PlannerReviewView; compareHref?: string; title?: string }) {
   return (
     <Card className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="text-sm font-medium text-off-white">New resistance planner — preview</h3>
+          <h3 className="text-sm font-medium text-off-white">{title}</h3>
           <p className="mt-0.5 text-meta text-neutral">Review only. Not saved, not published, and it doesn&apos;t replace Generate Proposal.</p>
         </div>
         {compareHref ? (

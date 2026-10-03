@@ -42,3 +42,14 @@ export async function confirmStructuredLimitationsAction(input: ConfirmLimitatio
 export async function previewResistancePlanAction(params: { workspaceId: string; clientProfileId: string }) {
   return previewResistancePlan(params);
 }
+
+/** Gate 4.0C-3 (internal QA) — Fitness Reasoner v1 preview. In memory only. */
+export async function runFitnessReasonerPreviewAction(params: { workspaceId: string; clientProfileId: string }) {
+  try {
+    const { runFitnessReasonerPreview } = await import("../../lib/production/fitness-reasoner");
+    return await runFitnessReasonerPreview(params);
+  } catch (err) {
+    console.error(`runFitnessReasonerPreviewAction failed: ${err instanceof Error ? err.name : "unknown"}`);
+    return { status: "PROVIDER_FAILED" as const, message: "OPTIM's reasoner couldn't produce a plan right now. Nothing was changed — try again, or review the deterministic planner's proposal." };
+  }
+}

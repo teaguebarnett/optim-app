@@ -30,8 +30,9 @@ export interface ProvenanceRecord {
   rules: string[];
   planner: { id: string; version: string };
   generatedAtIso: string;
-  /** Model involvement. Always null in this gate: planning is deterministic. */
-  model: null;
+  /** Model involvement: null for deterministic planners; for the Fitness
+   * Reasoner, exactly which model, prompt and reasoner version produced it. */
+  model: null | { provider: string; modelId: string; promptVersion: string; reasonerVersion: string; attempts: number };
 }
 
 export type DecisionBasis = "coach_method" | "knowledge" | "client_input" | "planner_rule" | "coach_override";
@@ -157,7 +158,7 @@ export function validatePlanSpecification(spec: PlanSpecification, input: Synthe
   const p = spec.provenance;
   if (p.knowledge.version !== input.knowledge.version) errors.push("Provenance knowledge version doesn't match the input.");
   if ((p.coachBrain?.versionId ?? null) !== (input.coach?.versionId ?? null)) errors.push("Provenance Coach Brain version doesn't match the input.");
-  if (p.model !== null) errors.push("Model involvement recorded; planning must be deterministic.");
+  if (p.model !== null && !(p.model.modelId && p.model.promptVersion && p.model.reasonerVersion)) errors.push("Model involvement must record the model, prompt and reasoner versions.");
   if (p.rules.length === 0) errors.push("Provenance names no deterministic rule.");
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors };

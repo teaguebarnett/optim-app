@@ -141,6 +141,8 @@ export interface StructuredJsonRequest {
   userMessage: string;
   maxOutputTokens: number;
   timeoutMs: number;
+  /** Reasoning effort; defaults to "medium". */
+  effort?: "low" | "medium" | "high";
 }
 
 export interface StructuredJsonProvider {

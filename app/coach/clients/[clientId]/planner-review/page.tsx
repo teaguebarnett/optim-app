@@ -12,6 +12,10 @@ import { getClientDetailAction } from "@/app/actions/coach-roster";
 import { previewLegacyProposalForComparisonAction } from "@/app/actions/production-programs";
 import { previewResistancePlanAction } from "@/app/actions/structured-limitations";
 import { ResistancePlannerPreview } from "@/components/coach/resistance-planner-preview";
+import { ReasonerPreviewPanel } from "@/components/coach/reasoner-preview-panel";
+
+// The Fitness Reasoner preview is a long model call (internal QA only).
+export const maxDuration = 300;
 
 export default async function PlannerReviewPage({ params }: { params: Promise<{ clientId: string }> }) {
   if (resolveAppMode() !== "supabase") notFound();
@@ -33,9 +37,9 @@ export default async function PlannerReviewPage({ params }: { params: Promise<{ 
       </Link>
       <div>
         <h1 className="text-display text-off-white">Planner comparison</h1>
-        <p className="mt-1 text-body text-neutral">Internal QA for {detail.displayName}. Both proposals are generated in memory for comparison — nothing is saved or sent.</p>
+        <p className="mt-1 text-body text-neutral">Internal QA for {detail.displayName}. Every proposal here is generated in memory for comparison — nothing is saved or sent.</p>
       </div>
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-5 xl:grid-cols-3 lg:grid-cols-2">
         <section className="space-y-3">
           <h2 className="text-subheading text-off-white">Current generator (legacy)</h2>
           <Card className="space-y-3">
@@ -67,8 +71,12 @@ export default async function PlannerReviewPage({ params }: { params: Promise<{ 
           </Card>
         </section>
         <section className="space-y-3">
-          <h2 className="text-subheading text-off-white">New resistance planner</h2>
+          <h2 className="text-subheading text-off-white">Deterministic planner</h2>
           <ResistancePlannerPreview view={newView} />
+        </section>
+        <section className="space-y-3">
+          <h2 className="text-subheading text-off-white">Fitness Reasoner v1</h2>
+          <ReasonerPreviewPanel workspaceId={detail.workspaceId} clientProfileId={clientId} />
         </section>
       </div>
     </div>

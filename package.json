@@ -99,7 +99,9 @@
     "verify:knowledge": "node --experimental-strip-types lib/synthesis/knowledge/verify-knowledge.mts",
     "verify:resistance-planner": "node --experimental-strip-types lib/synthesis/planners/resistance/verify-resistance-planner.mts",
     "verify:limitations": "node --experimental-strip-types lib/synthesis/limitations/verify-limitations.mts",
-    "verify:provider-safety": "node --conditions=react-server --experimental-strip-types lib/ai/verify-provider-safety.mts"
+    "verify:provider-safety": "node --conditions=react-server --experimental-strip-types lib/ai/verify-provider-safety.mts",
+    "verify:reasoner": "node --experimental-strip-types lib/synthesis/reasoner/verify-reasoner.mts",
+    "eval:reasoner": "node --experimental-strip-types lib/synthesis/reasoner/eval/run-eval.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",

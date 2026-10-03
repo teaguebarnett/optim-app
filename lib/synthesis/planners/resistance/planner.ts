@@ -34,7 +34,7 @@ const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 const coach = (keys: string[]) => keys.map((k) => `coach:${k}`);
 const kn = (concept: string, claim: string) => `knowledge:concept.resistance.${concept}#${claim}`;
 
-function methodFor(input: SynthesisInput) {
+export function methodFor(input: SynthesisInput) {
   if (!input.coach) return null;
   return readResistanceMethod(input.coach.method, { trainingExperience: isKnown(input.client.training.experience) ? input.client.training.experience.value : undefined });
 }
@@ -100,14 +100,14 @@ const REQUIREMENTS: PlanningRequirement[] = [
   },
 ];
 
-interface PoolResult {
+export interface PoolResult {
   pool: ExerciseEntry[];
   excluded: Array<{ exerciseId: string; reasons: string[] }>;
   unknownApparatus: Map<ApparatusId, string[]>;
   byConstraint: Map<string, string[]>;
 }
 
-function buildPool(input: SynthesisInput, method: ResistanceMethod): PoolResult | null {
+export function buildPool(input: SynthesisInput, method: ResistanceMethod): PoolResult | null {
   const access = resolveEquipmentAccess(input.client);
   if (!access) return null;
   const equipment = new Set(availableEquipment(access));
