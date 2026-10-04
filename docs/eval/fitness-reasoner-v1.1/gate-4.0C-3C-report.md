@@ -61,3 +61,32 @@ The structured target was an **eval-only, in-memory** client-reported reading of
 - then do 1–2 live medium runs to confirm end-to-end passes.
 
 After that, integration architecture is justified.
+
+## Addendum — set-shift headroom fix and final live verification (closes 4.0C-3C)
+
+**Fix (deterministic phase expansion only):**
+- A phase's sets ±1 now applies to each exercise that has headroom inside the coach's set range for its role. An exercise already at the boundary keeps its listed sets. This is decided in `setsShiftFor()` *before* any value is produced, so nothing invalid is created and then clamped.
+- Week notes state the rule ("sets +1 where the coach's set range allows (exercises at the maximum keep their listed sets)").
+- Listed sets outside the coach's range are still rejected, and RIR/constraint-fit week checks are unchanged.
+- The prompt says the same (v2.3.1). No other reasoner changes.
+
+**Offline:**
+- `verify:reasoner` passes 24/24. New test 24 covers: +1 with headroom applies; +1 at the maximum leaves sets unchanged; mixed exercises; −1 never falls below the minimum; notes and every computed build week agree.
+- The eval passes 25/25. tsc, eslint and build are clean.
+- The **unedited** saved output of the earlier rejected live call now validates.
+- **Unrelated, pre-existing failures:**
+  - `verify:nutrition-authoring` (`.tsx` import);
+  - `verify:activation-lifecycle` is intermittent: legacy activation record ids use `Date.now()` and collide within one millisecond. It passed 2 of 3 runs with this patch and 2 of 2 without; the code is untouched by this gate.
+
+**Live (1 call, medium, first attempt only; the raw response was saved before parsing):**
+- PLANNED on attempt 1 · 9,185 in / 9,217 out tokens · 97 s.
+- **Structure:** 6 days / 12 weeks, both on the anchors with no deviations; push/pull/legs ×2.
+- **Bench target:** the structured target (Barbell Bench Press 405 lb × 1, eval-only and in memory) is blocked by C1, with interim work and a coach-review item.
+- **Phase/week consistency**, independently recomputed from the saved run:
+  - 372 prescriptions, 0 mismatches against the phase definitions, 0 set/RIR boundary violations;
+  - 84 "+1 set" shifts applied and 16 held at the coach's maximum. This is the fix exercised live.
+- **Bracing fit:** 3 conditional (K) exercises carry their conditions. The single uncertain (U) exercise (Lat Pulldown, the only vertical pull) has a rationale and a coach-review item, and the plan does not claim it fits.
+- **Effort:** every K/U and compound lift is at RIR 2–3, and RIR 1–2 is reserved for machine/cable isolation (17 of 31 exercises).
+- **Other:** no repetition flags, no hard-rule violations, and three coach-method tensions surfaced.
+
+**Verdict:** Gate 4.0C-3C can be closed. The resistance reasoner is ready for the **production-integration architecture** gate. The remaining weaknesses listed above (unreviewed curation, intake not yet collecting targets, n = 1 live pass for v1.3) carry into that gate as known risks, not blockers.

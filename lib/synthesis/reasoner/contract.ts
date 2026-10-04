@@ -16,7 +16,7 @@
 import type { DayOfWeek } from "../../types.ts";
 import { DAY_ORDER } from "../client-state.ts";
 
-export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.3";
+export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.3.1";
 
 export const DECISION_TOPICS = ["frequency", "structure", "schedule", "exercise_selection", "prescription", "effort", "progression", "recovery", "duration", "other"] as const;
 export type DecisionTopic = (typeof DECISION_TOPICS)[number];
@@ -77,7 +77,7 @@ export interface PhaseRolePlan {
   repZones: RepZone[];
   /** Added to each exercise's listed RIR (−1 = closer to failure). */
   rirDelta: number;
-  /** Added to each exercise's listed sets. */
+  /** Added to each exercise's listed sets where the coach's set range has headroom; exercises at the boundary keep their listed sets. */
   setsDelta: number;
   /** How loads advance: one of the coach's progression methods for the role, or "hold". */
   progress: string;
@@ -297,7 +297,7 @@ DESIGN PRINCIPLES
 - GOAL ACCESS: every entry in goal.targets (structured — prefer these) and any specific lift or skill named only in the goal's free text goes in "goalAccess". If its exercise appears in "blocked", the goal still stands but direct progression toward it is paused: status "blocked", blockedBy = the key it is listed under, interim = the qualities the plan preserves or develops meanwhile. Never describe interim exercises as progressing the blocked lift itself; resuming direct work is the coach's call.
 - EFFORT: coach effort ranges are boundaries, not targets. Choose each exercise's rir from its role, the session's purpose and priority, its fatigue cost (demands), how often those muscles are trained that week, and recovery — keep high-fatigue and repeated work further from failure and reserve the hard end for few, low-fatigue, high-priority sets. Explain the distribution in an "effort" decision. Exercises marked K or U (constraint-fit column) need reps min ≥ 6 and rir min ≥ 2 in every week.
 - CONSTRAINT FIT: "-" fits the constraints; K fits only under its stated conditions (submaximal, trunk supported by the pad/bench); U is uncertain — OPTIM can't establish it stays within the constraints even when submaximal. Prefer "-" and K. Use a U exercise only when no other eligible exercise serves that session purpose, and say why in its note; it goes to coach review. Never describe K or U work as proven safe.
-- PROGRESSION is a designed, executable block: contiguous phases covering week 1 to the last week. OPTIM computes every week's prescription from them, starting from each exercise as you list it: per role, "zones" (cycled weekly inside the phase: lower_half = heavier end of the listed rep range, upper_half = lighter end), "rir" (−1/0/+1 added to the listed RIR), "sets" (−1/0/+1 added to the listed sets) and "progress" (one of the coach's progression methods for that role, or "hold"). Every resulting week must stay inside the coach's ranges and each exercise's constraint-fit minimums. "focus" and "intent" are short labels with NO numbers — all numbers live in the structure, so the text can't contradict the prescription.
+- PROGRESSION is a designed, executable block: contiguous phases covering week 1 to the last week. OPTIM computes every week's prescription from them, starting from each exercise as you list it: per role, "zones" (cycled weekly inside the phase: lower_half = heavier end of the listed rep range, upper_half = lighter end), "rir" (−1/0/+1 added to the listed RIR), "sets" (−1/0/+1 added to the listed sets of each exercise that has room inside the coach's set range; exercises at that boundary keep their listed sets) and "progress" (one of the coach's progression methods for that role, or "hold"). Every resulting week must stay inside the coach's ranges and each exercise's constraint-fit minimums. "focus" and "intent" are short labels with NO numbers — all numbers live in the structure, so the text can't contradict the prescription.
 - If a decision-critical fact is missing or contradictory, return NEEDS_INPUT instead of guessing. Never invent client facts. Medical questions go to the coach.
 
 OUTPUT — one JSON object, no prose. Keep text short (one sentence per field; "decision" ≤ 150 characters); OPTIM renders explanations from your references. Every open question belongs in "unresolved" (up to 10) — never drop one to stay brief.

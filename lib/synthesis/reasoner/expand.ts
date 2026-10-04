@@ -71,20 +71,33 @@ export function weekPlan(plan: ReasonerPlan): PlannedWeek[] {
 
 /**
  * Gate 4.0C-3C — THE weekly prescription for one exercise, computed from its
- * listed values and the phase. Unclamped on purpose: expansion and
+ * listed values and the phase. Never clamped after the fact: expansion and
  * validation use the same numbers, so a phase that would push a week outside
- * the coach's ranges or a constraint-fit minimum is rejected, never silently
- * corrected into something the phase text no longer describes.
+ * the coach's RIR range or a constraint-fit minimum is rejected.
+ *
+ * Set shifts are defined per exercise: a phase's sets ±1 applies to each
+ * exercise that has headroom for it inside the coach's set range for its
+ * role; an exercise already at that boundary keeps its listed sets. This is
+ * decided BEFORE any value is produced (no invalid value is created and then
+ * corrected), and the week note states the rule, so the prescription matches
+ * the phase definition. Listed sets outside the coach's range are still
+ * rejected by the exercise-level check.
  */
-export function prescribedWeek(e: ReasonerExercise, w: PlannedWeek, method: ResistanceMethod): { sets: number; reps: { min: number; max: number }; rir: { min: number; max: number } | null; zone: RepZone } {
+export function setsShiftFor(e: ReasonerExercise, delta: number, method: ResistanceMethod): number {
+  const r = method.sets[e.role].value;
+  return delta !== 0 && e.sets + delta >= r.min && e.sets + delta <= r.max ? delta : 0;
+}
+
+export function prescribedWeek(e: ReasonerExercise, w: PlannedWeek, method: ResistanceMethod): { sets: number; reps: { min: number; max: number }; rir: { min: number; max: number } | null; zone: RepZone; setsShift: number } {
   const rir = effectiveRir(e, method);
   if (w.kind === "deload") {
     const coachRir = method.effort.rir?.[e.role].value ?? null;
-    return { sets: method.sets[e.role].value.min, reps: { ...e.reps }, rir: rir ? { min: coachRir?.max ?? rir.max, max: coachRir?.max ?? rir.max } : null, zone: "as_prescribed" };
+    return { sets: method.sets[e.role].value.min, reps: { ...e.reps }, rir: rir ? { min: coachRir?.max ?? rir.max, max: coachRir?.max ?? rir.max } : null, zone: "as_prescribed", setsShift: 0 };
   }
   const rp = w.phase?.[e.role];
   const z = rp ? rp.repZones[w.k % rp.repZones.length] : "as_prescribed";
-  return { sets: e.sets + (rp?.setsDelta ?? 0), reps: zone(e.reps, z), rir: rir ? { min: rir.min + (rp?.rirDelta ?? 0), max: rir.max + (rp?.rirDelta ?? 0) } : null, zone: z };
+  const setsShift = setsShiftFor(e, rp?.setsDelta ?? 0, method);
+  return { sets: e.sets + setsShift, reps: zone(e.reps, z), rir: rir ? { min: rir.min + (rp?.rirDelta ?? 0), max: rir.max + (rp?.rirDelta ?? 0) } : null, zone: z, setsShift };
 }
 
 const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
@@ -93,7 +106,8 @@ const ROLE_ZONE: Record<RepZone, string> = { as_prescribed: "listed rep ranges",
 export function weekNote(w: PlannedWeek): string {
   if (w.kind === "deload") return `${w.phase ? `${w.phase.focus}. ` : ""}Deload week (coach-scheduled): coach's minimum sets, easiest effort.`;
   if (!w.phase) return "Listed prescriptions.";
-  const role = (r: PhaseRolePlan) => `${ROLE_ZONE[r.repZones[w.k % r.repZones.length]]}, RIR ${signed(r.rirDelta)}, sets ${signed(r.setsDelta)}, progress: ${r.progress.replace(/_/g, " ")}`;
+  const sets = (d: number) => (d === 0 ? "sets 0" : `sets ${signed(d)} where the coach's set range allows (exercises at the ${d > 0 ? "maximum" : "minimum"} keep their listed sets)`);
+  const role = (r: PhaseRolePlan) => `${ROLE_ZONE[r.repZones[w.k % r.repZones.length]]}, RIR ${signed(r.rirDelta)}, ${sets(r.setsDelta)}, progress: ${r.progress.replace(/_/g, " ")}`;
   return `${w.phase.focus}. Mains: ${role(w.phase.main)}. Accessories: ${role(w.phase.accessory)}.`;
 }
 

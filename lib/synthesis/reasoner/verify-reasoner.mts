@@ -378,7 +378,8 @@ await check("20. Phases drive the actual weekly prescription; contradictions are
     assert.ok(w[4].note.includes("Accessories: heavier end of rep ranges, RIR 0, sets +1"), "week note rendered from the structure");
   }
   rejectedWith(await run(scenarioInput(), ok(two({ rir: -1 }, {}))), /takes exercise\.[a-z_]+ to RIR 0–2, outside the coach's 1–3/);
-  rejectedWith(await run(scenarioInput(), ok(two({}, { sets: 1 }) && ((p) => { two({}, { sets: 1 })(p); every(p, (e) => { if (e.role === "accessory") e.sets = 3; }); }))), /gives exercise\.[a-z_]+ 4 sets, outside the coach's 2–3/);
+  // Listed sets outside the coach's range are still rejected (a set shift never rescues or creates one — see test 24).
+  rejectedWith(await run(scenarioInput(), ok((p) => every(p, (e) => { if (e.role === "accessory") e.sets = 4; }))), /4 sets outside the coach's 2–3/);
   rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [ph([1, 8], "Accumulate", "Mains in the 8–12 zone at RIR 2–3.")]))), /must not contain numbers/);
   rejectedWith(await run(scenarioInput(), ok(two({ progress: "add_sets_weekly" }, {}))), /main progress "add_sets_weekly" isn't one of the coach's methods/);
   rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.model = "Double progression in 8–12 reps"))), /must not state reps, RIR\/RPE or sets/);
@@ -476,6 +477,55 @@ await check("23. Repetition is flagged only when unjustified (identical, unexpla
   assert.ok(!(await codes(forced, only)).includes("exercise_repeated_unjustified"), `${solo[1]} is the only option → not flagged`);
   // Taxonomy: only the unjustified code is a reasoning failure.
   assert.ok(!(await import("./eval/taxonomy.ts")).classifyResult.toString().includes('"exercise_repeated"'));
+});
+
+await check("24. Phase set shifts apply only where the coach's set range has headroom (never clamped after the fact)", async () => {
+  // Coach (fixture): sets main 3–4, accessory 2–3. Scripted lists mains at 3, accessories at 2.
+  const shifted = (main: Partial<WireRolePlan>, acc: Partial<WireRolePlan>, edit?: (p: WirePlan) => void) => (p: WirePlan) => {
+    edit?.(p);
+    p.progression.phases = [ph([1, 4], "Base", "Listed prescriptions."), ph([5, 8], "Shift", "Volume changes where allowed.", main, acc)];
+  };
+  const planned = async (f: (p: WirePlan) => void) => {
+    const r = await run(scenarioInput(), ok(f));
+    assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : "");
+    return r as Extract<ReasonerResult, { status: "PLANNED" }>;
+  };
+  const setsAt = (r: Extract<ReasonerResult, { status: "PLANNED" }>, week: number) => r.spec.resistance!.value.weeks[week - 1].sessions.map((s) => s.map((x) => x.sets));
+  const listed = (r: Extract<ReasonerResult, { status: "PLANNED" }>) => r.plan.sessions.map((s) => s.exercises.map((e) => e.sets));
+  const accIdx = (r: Extract<ReasonerResult, { status: "PLANNED" }>) => r.plan.sessions.flatMap((s, si) => s.exercises.map((e, xi) => ({ e, si, xi })));
+
+  // 1. +1 with headroom → applies (accessories 2 → 3).
+  const one = await planned(shifted({}, { sets: 1 }));
+  for (const { e, si, xi } of accIdx(one)) assert.equal(setsAt(one, 5)[si][xi], e.role === "accessory" ? e.sets + 1 : e.sets, `${e.exerciseId} week 5`);
+  // 2. +1 at the maximum → unchanged (accessories listed at 3).
+  const atMax = await planned(shifted({}, { sets: 1 }, (p) => every(p, (e) => { if (e.role === "accessory") e.sets = 3; })));
+  assert.deepEqual(setsAt(atMax, 5), listed(atMax), "at the coach's maximum: listed sets kept");
+  // 3. Mixed: alternate accessories at 2 and 3 → only those with headroom move; nothing exceeds 3.
+  let toggle = false;
+  const mixed = await planned(shifted({}, { sets: 1 }, (p) => every(p, (e) => { if (e.role === "accessory") e.sets = (toggle = !toggle) ? 2 : 3; })));
+  const moved = accIdx(mixed).filter(({ e }) => e.role === "accessory").map(({ e, si, xi }) => [e.sets, setsAt(mixed, 5)[si][xi]]);
+  assert.ok(moved.some(([a, b]) => a === 2 && b === 3) && moved.some(([a, b]) => a === 3 && b === 3) && moved.every(([, b]) => b <= 3));
+  // 4. −1 never falls below the minimum: accessories at 2 (min) stay; mains listed at 4 drop to 3, mains at 3 (min) stay.
+  let alt = false;
+  const down = await planned(shifted({ sets: -1 }, { sets: -1 }, (p) => every(p, (e) => { if (e.role === "main") e.sets = (alt = !alt) ? 4 : 3; })));
+  for (const { e, si, xi } of accIdx(down)) {
+    const min = e.role === "main" ? 3 : 2;
+    assert.equal(setsAt(down, 5)[si][xi], e.sets - 1 >= min ? e.sets - 1 : e.sets, `${e.exerciseId}: −1 only with headroom`);
+    assert.ok(setsAt(down, 5)[si][xi] >= min);
+  }
+  // 5. Notes and prescriptions agree: the note states the rule, and every computed week equals listed + applicable shift.
+  assert.ok(mixed.spec.resistance!.value.weeks[4].note.includes("Accessories: listed rep ranges, RIR 0, sets +1 where the coach's set range allows (exercises at the maximum keep their listed sets)"));
+  assert.ok(mixed.spec.resistance!.value.weeks[0].note.includes("sets 0"));
+  for (const r of [one, atMax, mixed, down])
+    for (const w of r.spec.resistance!.value.weeks.filter((x) => x.kind === "build")) { // deload weeks use the coach's minimum by design
+      const phase = r.plan.progression.phases.find((x) => w.week >= x.weeks.min && w.week <= x.weeks.max)!;
+      r.plan.sessions.forEach((s, si) => s.exercises.forEach((e, xi) => {
+        const d = phase[e.role].setsDelta;
+        const range = e.role === "main" ? [3, 4] : [2, 3];
+        const expected = d && e.sets + d >= range[0] && e.sets + d <= range[1] ? e.sets + d : e.sets;
+        assert.equal(w.sessions[si][xi].sets, expected, `week ${w.week} ${e.exerciseId}`);
+      }));
+    }
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
