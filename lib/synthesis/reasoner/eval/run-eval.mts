@@ -71,6 +71,7 @@ async function liveModel(scenario: string): Promise<ReasonerModel> {
       ledger.latencyMs += latencyMs;
       ledger.entries.push({ at: new Date().toISOString(), scenario, inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens, latencyMs });
       saveLedger();
+      if (res.stop_reason === "max_tokens") throw Object.assign(new Error("output hit max_tokens"), { name: "AiProviderInvalidOutputError", truncated: true, usage: { inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens } });
       const text = res.content.find((b) => b.type === "text");
       if (!text || text.type !== "text") throw Object.assign(new Error("no text"), { name: "AiProviderInvalidOutputError" });
       const s = text.text;

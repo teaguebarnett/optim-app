@@ -139,7 +139,15 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
       run.totals.latencyMs += res.latencyMs ?? 0;
     } catch (err) {
       const name = err instanceof Error ? err.name : "unknown";
-      rec.providerError = name;
+      // Gate 4.0C-3A: an executed-but-unusable call (e.g. truncated at max_tokens) still consumed tokens — record them.
+      const meta = err as { usage?: { inputTokens: number; outputTokens: number }; truncated?: boolean };
+      const truncated = meta.truncated === true;
+      rec.providerError = truncated ? `${name}:max_tokens` : name;
+      if (meta.usage && Number.isFinite(meta.usage.inputTokens) && Number.isFinite(meta.usage.outputTokens)) {
+        rec.usage = { inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens };
+        run.totals.inputTokens += meta.usage.inputTokens;
+        run.totals.outputTokens += meta.usage.outputTokens;
+      }
       params.onDiagnostic?.({ stage: "provider", detail: name });
       // Unreadable/truncated JSON is an output problem worth one repair; anything else is a provider failure.
       if (name === "AiProviderInvalidOutputError" || name === "SyntaxError") {

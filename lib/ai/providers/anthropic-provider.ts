@@ -160,8 +160,11 @@ export class AnthropicChatModelProvider implements ChatModelProvider, Structured
         },
         { timeout: request.timeoutMs }
       );
+      const usage = { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
+      // Gate 4.0C-3A: a max_tokens stop is a truncated (unparseable) output that still consumed tokens.
+      if (response.stop_reason === "max_tokens") throw new AiProviderInvalidOutputError("output hit the max_tokens limit", { usage, truncated: true });
       const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-      if (!textBlock) throw new AiProviderInvalidOutputError("model response contained no text block");
+      if (!textBlock) throw new AiProviderInvalidOutputError("model response contained no text block", { usage });
       const requestId = (response as { _request_id?: string | null })._request_id ?? null;
       return { json: extractJsonObject(textBlock.text), usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens }, requestId, latencyMs: Date.now() - start };
     } catch (err) {
@@ -176,7 +179,7 @@ export class AnthropicChatModelProvider implements ChatModelProvider, Structured
  * Headers.append TypeError). Only a fixed message plus safe metadata leave.
  */
 function mapProviderError(err: unknown): Error {
-  if (err instanceof AiProviderInvalidOutputError) return new AiProviderInvalidOutputError("model output did not match the expected shape");
+  if (err instanceof AiProviderInvalidOutputError) return new AiProviderInvalidOutputError("model output did not match the expected shape", { usage: err.usage, truncated: err.truncated });
   if (err instanceof AiProviderUnavailableError || err instanceof AiProviderTimeoutError) return err;
   if (err instanceof Anthropic.APIConnectionTimeoutError) return new AiProviderTimeoutError();
   const diagnostic = classifyProviderError(err, "anthropic");

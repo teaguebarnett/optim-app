@@ -120,9 +120,14 @@ export class AiProviderMisconfiguredError extends Error {
  * — never cast/guessed into one. See lib/ai/pipeline.ts's
  * validateAssistantDecision, the only place this is thrown from. */
 export class AiProviderInvalidOutputError extends Error {
-  constructor(reason: string) {
+  /** Gate 4.0C-3A — safe metadata when the call executed (e.g. hit max_tokens): tokens were consumed and must be accounted for. */
+  usage?: { inputTokens: number; outputTokens: number };
+  truncated?: boolean;
+  constructor(reason: string, meta?: { usage?: { inputTokens: number; outputTokens: number }; truncated?: boolean }) {
     super(`AI provider returned an invalid decision: ${reason}`);
     this.name = "AiProviderInvalidOutputError";
+    this.usage = meta?.usage;
+    this.truncated = meta?.truncated;
   }
 }
 

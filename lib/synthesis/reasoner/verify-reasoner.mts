@@ -221,5 +221,22 @@ await check("14. Only normalized synthesis data reaches the model; output defaul
   }
 });
 
+await check("15. A truncated (max_tokens) attempt is repaired once and its consumed tokens are recorded", async () => {
+  // Live evidence (Gate 4.0C-3A real-client runs): 2 of 3 high-effort calls stopped at max_tokens; the
+  // tokens they consumed were missing from the ReasonerRun totals.
+  const inner = ok();
+  let n = 0;
+  const truncating = { ...inner, async generate(req: Parameters<typeof inner.generate>[0]) {
+    if (++n === 1) throw Object.assign(new Error("truncated"), { name: "AiProviderInvalidOutputError", truncated: true, usage: { inputTokens: 7000, outputTokens: 16000 } });
+    return { ...(await inner.generate(req)), usage: { inputTokens: 7100, outputTokens: 9000 } };
+  } };
+  const r = await run(scenarioInput(), truncating);
+  assert.ok(r.status === "PLANNED" && r.attempts === 2, `expected PLANNED after one repair, got ${r.status}`);
+  assert.equal(r.run.attempts[0].providerError, "AiProviderInvalidOutputError:max_tokens");
+  assert.deepEqual(r.run.attempts[0].usage, { inputTokens: 7000, outputTokens: 16000 });
+  assert.equal(r.run.totals.inputTokens, 14100);
+  assert.equal(r.run.totals.outputTokens, 25000, "truncated attempt's output tokens are counted");
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
