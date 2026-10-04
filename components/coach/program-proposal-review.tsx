@@ -29,7 +29,7 @@ import {
   type ProgramProposalReviewView,
 } from "@/app/actions/production-programs";
 import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, BlockPatch } from "@/lib/training/program-proposal-editing";
-import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
+import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, ReasonerProvenance, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
 import { ProposalScheduleNavigator } from "@/components/coach/proposal-schedule-navigator";
 import { ProposalApproveForm } from "@/components/coach/proposal-approve-form";
 import { ProposalRejectForm } from "@/components/coach/proposal-reject-form";
@@ -71,6 +71,60 @@ function formatShortDate(iso: string): string {
 /** Exactly what this proposal was built from — recorded at generation time
  * (lib/coach/generation-prerequisites.ts), never recomputed from today's
  * state. */
+/** Gate 4.0C-4 — what OPTIM's Fitness Reasoner wants the coach to know, grouped
+ * NEEDS YOU (open by default) / WORTH KNOWING / HANDLED, plus the main decisions
+ * and the evidence each rests on. Plain language only — never the run JSON. */
+function ReasonerContextSection({ rp }: { rp: ReasonerProvenance }) {
+  const list = (items: string[]) => (
+    <ul className="mt-1.5 space-y-1 text-xs">
+      {items.map((line) => (
+        <li key={line} className="text-off-white">
+          • {line}
+        </li>
+      ))}
+    </ul>
+  );
+  return (
+    <div className="mb-3 space-y-2">
+      <p className="text-xs text-neutral">Prepared by OPTIM&apos;s Fitness Reasoner · {rp.headline}</p>
+      {rp.needsYou.length > 0 ? (
+        <details open className="rounded border border-warning bg-warning-soft/40 px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-warning-strong">Needs you · {rp.needsYou.length}</summary>
+          {list(rp.needsYou)}
+        </details>
+      ) : null}
+      {rp.worthKnowing.length > 0 ? (
+        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Worth knowing · {rp.worthKnowing.length}</summary>
+          {list(rp.worthKnowing)}
+        </details>
+      ) : null}
+      {rp.handled.length > 0 ? (
+        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Handled · {rp.handled.length}</summary>
+          {list(rp.handled)}
+        </details>
+      ) : null}
+      {rp.decisions.length > 0 ? (
+        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Why OPTIM decided this</summary>
+          <ul className="mt-1.5 space-y-1.5 text-xs">
+            {rp.decisions.map((d) => (
+              <li key={d.decision}>
+                <span className="text-off-white">{d.decision}</span> <span className="text-neutral">— {d.because}</span>
+                {d.evidence.length > 0 ? <span className="block text-neutral">Evidence: {d.evidence.join("; ")}</span> : null}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] text-neutral">
+            Run {rp.runId.slice(0, 8)} · {rp.reasonerVersion} · prompt {rp.promptVersion} · knowledge {rp.knowledgeVersion}
+          </p>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function InputsUsedSection({ inputs }: { inputs: GenerationInputs }) {
   return (
     <details className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2">
@@ -681,6 +735,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       </div>
 
       {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
+      {proposal.content.reasonerProvenance ? <ReasonerContextSection rp={proposal.content.reasonerProvenance} /> : null}
       {whyThisPlan.length > 0 ? (
         <details className="mb-2 rounded border border-border-strong bg-surface-raised px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-off-white">Why this plan</summary>

@@ -528,9 +528,38 @@ export interface UniversalTrainingProgramContent {
    * informational: nothing in generation/execution/validation reads this
    * back to change behavior. */
   adjustmentProvenance?: AdjustmentProvenance;
+  /** Gate 4.0C-4 — present ONLY on a draft prepared by the Fitness Reasoner.
+   * The coach-facing review context (NEEDS YOU / WORTH KNOWING / HANDLED) plus
+   * stable references to the persisted reasoner_generation_jobs row and its
+   * ReasonerRun for audit. Additive jsonb field (no column migration), same
+   * posture as adjustmentProvenance; nothing in execution reads it. */
+  reasonerProvenance?: ReasonerProvenance;
   status: "draft" | "assigned";
   createdAtIso: string;
   updatedAtIso: string;
+}
+
+/** Gate 4.0C-4 — see UniversalTrainingProgramContent.reasonerProvenance. */
+export interface ReasonerProvenance {
+  version: 1;
+  jobId: string;
+  runId: string;
+  reasonerVersion: string;
+  promptVersion: string;
+  knowledgeVersion: string;
+  modelId: string;
+  inputHash: string;
+  generatedAtIso: string;
+  /** One-line summary of the structure decision. */
+  headline: string;
+  /** Decisions the coach must make before (or when) sending. */
+  needsYou: string[];
+  /** Context worth reading, no action required. */
+  worthKnowing: string[];
+  /** What OPTIM already accounted for (constraints, coach rules, anchors). */
+  handled: string[];
+  /** The main decisions and the evidence each rests on (plain language). */
+  decisions: Array<{ decision: string; because: string; evidence: string[] }>;
 }
 
 export interface AdjustmentProvenanceChange {

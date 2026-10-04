@@ -4,7 +4,7 @@
 // boundary, and never persists, approves or publishes anything.
 
 import "server-only";
-import { resolveStructuredJsonProvider } from "../ai/resolve.ts";
+import { productionReasonerModel } from "./reasoner-proposals.ts";
 import { getAuthenticatedContext, isWorkspaceStaffRole, requireWorkspaceRole } from "./auth.ts";
 import { UnauthorizedError } from "./errors.ts";
 import { loadSynthesisInputForClient } from "./synthesis.ts";
@@ -13,8 +13,6 @@ import { FOUNDATION_KNOWLEDGE } from "../synthesis/knowledge/registry.ts";
 import { runFitnessReasoner, PROVIDER_FAILED_MESSAGE } from "../synthesis/reasoner/reasoner.ts";
 import { reasonerReviewView, type ReasonerReviewView } from "../synthesis/reasoner/view.ts";
 
-const REASONER_TIMEOUT_MS = 300_000;
-const REASONER_EFFORT = "high" as const;
 
 export async function runFitnessReasonerPreview(params: { workspaceId: string; clientProfileId: string }): Promise<ReasonerReviewView> {
   const ctx = await getAuthenticatedContext();
@@ -26,17 +24,8 @@ export async function runFitnessReasonerPreview(params: { workspaceId: string; c
     if (!data) throw new UnauthorizedError();
   }
   const input = await loadSynthesisInputForClient(params.clientProfileId);
-  const resolved = resolveStructuredJsonProvider();
-  const model = resolved.provider
-    ? {
-        provider: resolved.provider.id,
-        modelId: resolved.provider.modelId,
-        generate: async (r: { systemPrompt: string; userMessage: string; maxOutputTokens: number }) => {
-          const res = await resolved.provider!.generateJsonWithMeta({ ...r, timeoutMs: REASONER_TIMEOUT_MS, effort: REASONER_EFFORT });
-          return { json: res.json, usage: res.usage ?? undefined, requestId: res.requestId ?? undefined, latencyMs: res.latencyMs };
-        },
-      }
-    : null;
+  // Gate 4.0C-4 — the same production model boundary as Reasoner proposals (medium effort).
+  const model = await productionReasonerModel();
   const result = await runFitnessReasoner({
     input,
     model,

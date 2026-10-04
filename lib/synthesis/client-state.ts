@@ -132,6 +132,18 @@ export function deriveClientState(src: ClientStateSources): ClientState {
     return typeof v === "string" && (allowed as readonly string[]).includes(v) ? reported(step, key, v as T) : missing(ref(step, key));
   };
 
+  // Gate 4.0C-4 — structured performance targets: an explicit array answer, else the intake's
+  // optional lift-target fields (exercise id + load + optional reps). Never derived from free text.
+  function performanceTargetsFact(): Fact<PerformanceTargetValue[]> {
+    const explicit = parsePerformanceTargets(read("what_you_want", "performanceTargets"));
+    if (explicit.length) return reported("what_you_want", "performanceTargets", explicit);
+    const lift = read("what_you_want", "targetLift");
+    const value = read("what_you_want", "targetLiftValue");
+    const reps = read("what_you_want", "targetLiftReps");
+    const fromFields = typeof lift === "string" && lift !== "none" ? parsePerformanceTargets([{ exercise: lift, metric: "load", value, unit: "lb", atReps: reps, timeframe: null }]) : [];
+    return fromFields.length ? reported("what_you_want", "targetLift", fromFields) : missing(ref("what_you_want", "performanceTargets"));
+  }
+
   // Height: both parts or nothing.
   const feet = read("about_you", "heightFeet");
   const inches = read("about_you", "heightInchesRemainder");
@@ -216,7 +228,7 @@ export function deriveClientState(src: ClientStateSources): ClientState {
       secondary: list("what_you_want", "secondaryGoals"),
       targetWeightLb: num("what_you_want", "targetWeight"),
       successDefinition: str("what_you_want", "successDefinition"),
-      performanceTargets: ((targets) => (targets.length ? reported("what_you_want", "performanceTargets", targets) : missing<PerformanceTargetValue[]>(ref("what_you_want", "performanceTargets"))))(parsePerformanceTargets(read("what_you_want", "performanceTargets"))),
+      performanceTargets: performanceTargetsFact(),
     },
     health: {
       reportsCurrentLimitation: bool("health_finish", "hasInjuryHistory"),

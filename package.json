@@ -101,7 +101,8 @@
     "verify:limitations": "node --experimental-strip-types lib/synthesis/limitations/verify-limitations.mts",
     "verify:provider-safety": "node --conditions=react-server --experimental-strip-types lib/ai/verify-provider-safety.mts",
     "verify:reasoner": "node --experimental-strip-types lib/synthesis/reasoner/verify-reasoner.mts",
-    "eval:reasoner": "node --experimental-strip-types lib/synthesis/reasoner/eval/run-eval.mts"
+    "eval:reasoner": "node --experimental-strip-types lib/synthesis/reasoner/eval/run-eval.mts",
+    "verify:reasoner-integration": "node --experimental-strip-types lib/synthesis/reasoner/verify-reasoner-integration.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",

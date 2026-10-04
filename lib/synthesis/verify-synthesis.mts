@@ -356,7 +356,9 @@ check("14. Invite/onboarding flow is unchanged", () => {
       if (["node_modules", ".next", ".git", "synthesis"].includes(f)) return [];
       return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx|mts)$/.test(f) ? [p] : [];
     });
-  const ALLOWED = ["lib/production/synthesis.ts", "lib/production/structured-limitations.ts", "app/actions/structured-limitations.ts", "components/coach/live-client-workspace.tsx", "components/coach/resistance-planner-preview.tsx", "components/coach/structured-limitations-card.tsx", "lib/production/fitness-reasoner.ts", "components/coach/reasoner-preview-panel.tsx"];
+  const ALLOWED = ["lib/production/synthesis.ts", "lib/production/structured-limitations.ts", "app/actions/structured-limitations.ts", "components/coach/live-client-workspace.tsx", "components/coach/resistance-planner-preview.tsx", "components/coach/structured-limitations-card.tsx", "lib/production/fitness-reasoner.ts", "components/coach/reasoner-preview-panel.tsx",
+    // Gate 4.0C-4 — coach-side Reasoner proposals (flag-gated); still never onboarding/auth/client app.
+    "app/actions/production-programs.ts", "lib/production/reasoner-proposals.ts", "components/coach/reasoner-proposal-panel.tsx"];
   const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => !/verify-[^/]*\.mts$/.test(f) && /from ["'][^"']*\/synthesis\//.test(readFileSync(f, "utf8")));
   const unexpected = importers.filter((f) => !ALLOWED.some((a) => f.endsWith(a)));
   assert.deepEqual(unexpected, [], `unexpected importers: ${unexpected.join(", ")}`);

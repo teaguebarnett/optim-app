@@ -410,6 +410,13 @@ export function validateUniversalTrainingProgramContent(raw: unknown): Universal
   if (raw.appliedLearnedRuleIds !== undefined) requireArray(raw.appliedLearnedRuleIds, "appliedLearnedRuleIds", what).forEach((id, i) => requireString(id, `appliedLearnedRuleIds[${i}]`, what));
   if (raw.methodologyConflictedLearnedRuleIds !== undefined) requireArray(raw.methodologyConflictedLearnedRuleIds, "methodologyConflictedLearnedRuleIds", what).forEach((id, i) => requireString(id, `methodologyConflictedLearnedRuleIds[${i}]`, what));
   if (raw.adjustmentProvenance !== undefined && !isRecord(raw.adjustmentProvenance)) fail(what, `"adjustmentProvenance" must be an object`);
+  if (raw.reasonerProvenance !== undefined) {
+    if (!isRecord(raw.reasonerProvenance)) fail(what, `"reasonerProvenance" must be an object`);
+    const rp = raw.reasonerProvenance;
+    for (const k of ["jobId", "runId", "reasonerVersion", "promptVersion", "knowledgeVersion", "modelId", "inputHash", "generatedAtIso", "headline"]) requireString(rp[k], `reasonerProvenance.${k}`, what);
+    for (const k of ["needsYou", "worthKnowing", "handled"]) requireArray(rp[k], `reasonerProvenance.${k}`, what).forEach((x, i) => requireString(x, `reasonerProvenance.${k}[${i}]`, what));
+    requireArray(rp.decisions, "reasonerProvenance.decisions", what);
+  }
   requireString(raw.name, "name", what);
   requireNumber(raw.durationWeeks, "durationWeeks", what);
   const weeks = requireArray(raw.weeks, "weeks", what);

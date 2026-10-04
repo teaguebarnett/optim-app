@@ -197,7 +197,12 @@ await check("11. No plan is published automatically", () => {
 });
 
 await check("12. Legacy Generate Proposal unchanged; deterministic planner still available", async () => {
-  assert.ok(!/reasoner/i.test(readFileSync(new URL("../../../app/actions/production-programs.ts", import.meta.url), "utf8")));
+  // Gate 4.0C-4 wires the Reasoner in behind a server-side allowlist, in its own section; the
+  // legacy generator and createProgramProposalAction themselves must not reference it.
+  const actions = readFileSync(new URL("../../../app/actions/production-programs.ts", import.meta.url), "utf8");
+  const legacy = actions.slice(actions.indexOf("async function generateUniversalProgramProposalContent"), actions.indexOf("/** Gate 4.0C-2A (internal QA)"));
+  const create = actions.slice(actions.indexOf("export async function createProgramProposalAction"), actions.indexOf("// Gate 4.0C-4 — Fitness Reasoner proposals"));
+  assert.ok(legacy.length > 500 && create.length > 200 && !/reasoner/i.test(legacy + create), "legacy generation path untouched");
   const planner = readFileSync(new URL("../planners/resistance/planner.ts", import.meta.url), "utf8");
   assert.ok(!/reasoner/i.test(planner) && /model: null,/.test(planner));
   const { runPlanner } = await import("../planner.ts");

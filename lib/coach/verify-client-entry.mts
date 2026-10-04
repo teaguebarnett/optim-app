@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { clientOnboardingRedirect, resolveHomeRoute } from "./routing.ts";
 import { deriveLifecycle } from "./roster.ts";
-import { ONBOARDING_STEPS, momentsForStep, resumeMomentIndex } from "./onboarding-steps.ts";
+import { ONBOARDING_STEPS, findVisibleMomentIndex, momentsForStep, resumeMomentIndex } from "./onboarding-steps.ts";
 import { resolvePostSignInDestination } from "../auth/post-sign-in.ts";
 import type { ClientLifecycleStatus } from "./types";
 
@@ -93,7 +93,10 @@ check("a fully answered chapter resumes on its last screen (confirm and move on)
   const answers: Record<string, unknown> = {};
   for (const f of s.fields) answers[f.key] = f.type === "multi_select" ? [f.options?.[0]?.value] : (f.options?.[0]?.value ?? "x");
   const at = resumeMomentIndex(s, answers as never);
-  assert.equal(at, momentsForStep(s).length - 1);
+  // The last VISIBLE screen: a trailing conditional moment (Gate 4.0C-4's optional
+  // lift target, shown only for a strength goal) is skipped when it doesn't apply.
+  assert.equal(at, findVisibleMomentIndex(s, answers as never, momentsForStep(s).length - 1, -1));
+  assert.ok(at >= momentsForStep(s).length - 3);
 });
 
 console.log("\n4. Identity and tone\n");

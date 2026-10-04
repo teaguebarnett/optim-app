@@ -87,6 +87,12 @@ import type { ClientAssignedProgram } from "../../lib/types";
 import type { UniversalTrainingProgramContent } from "../../lib/training/types";
 import { summarizeLegacyProposal, type LegacyProposalSummary } from "../../lib/coach/legacy-proposal-summary";
 import type { DayOfWeek } from "../../lib/types";
+import { after } from "next/server";
+import { loadSynthesisInputForClient } from "../../lib/production/synthesis";
+import { getLatestReasonerJob, isReasonerProposalEnabled, runReasonerJob, startReasonerJob } from "../../lib/production/reasoner-proposals";
+import { reasonerResultToProgramContent } from "../../lib/synthesis/reasoner/to-program";
+import { FOUNDATION_KNOWLEDGE } from "../../lib/synthesis/knowledge/registry";
+import type { ReasonerJobView } from "../../lib/synthesis/reasoner/proposal-job";
 
 interface OwnClientIdentity {
   clientProfileId: string;
@@ -501,6 +507,84 @@ export async function createProgramProposalAction(params: { workspaceId: string;
   if (existing) throw new Error("This client already has a pending proposal. Approve or reject it before generating another.");
   const { content } = await generateUniversalProgramProposalContent({ ...params, coachId: ctx.userId });
   return createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content, proposedForClientProfileId: params.clientProfileId });
+}
+
+// ---------------------------------------------------------------------------
+// Gate 4.0C-4 — Fitness Reasoner proposals (controlled rollout).
+//
+// Same authority, prerequisites and one-pending-proposal rule as
+// createProgramProposalAction; the difference is WHO prepares the draft and
+// WHEN: the Reasoner runs in the background (after()), the coach's request
+// returns immediately, and the result is a DRAFT in the existing review /
+// approve lifecycle. No publish, no assignment, no fallback planner.
+// ---------------------------------------------------------------------------
+
+export type ReasonerProposalRequestResult =
+  | { ok: true; started: boolean; job: ReasonerJobView }
+  | { ok: false; reason: "not_enabled" | "prerequisites" | "pending_proposal"; message: string; missing?: MissingPrerequisite[] };
+
+/** Whether the Reasoner path is enabled for this client (server-side allowlist). Authorized read. */
+export async function getReasonerProposalAvailabilityAction(params: { workspaceId: string; clientProfileId: string }): Promise<{ enabled: boolean; job: ReasonerJobView | null }> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  if (!isReasonerProposalEnabled(params.clientProfileId)) return { enabled: false, job: null };
+  return { enabled: true, job: await getLatestReasonerJob(params.workspaceId, params.clientProfileId) };
+}
+
+/** Polling read for the coach's workspace while a job prepares. */
+export async function getReasonerJobAction(params: { workspaceId: string; clientProfileId: string }): Promise<ReasonerJobView | null> {
+  await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  if (!isReasonerProposalEnabled(params.clientProfileId)) return null;
+  return getLatestReasonerJob(params.workspaceId, params.clientProfileId);
+}
+
+export async function requestReasonerProposalAction(params: { workspaceId: string; clientProfileId: string; title: string }): Promise<ReasonerProposalRequestResult> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  if (!isReasonerProposalEnabled(params.clientProfileId)) return { ok: false, reason: "not_enabled", message: "OPTIM's reasoner isn't enabled for this client." };
+  const title = params.title.trim().slice(0, 120) || "Training program";
+  const { prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
+  if (!prerequisites.ready) return { ok: false, reason: "prerequisites", message: "Before OPTIM can prepare a proposal:", missing: prerequisites.missing };
+  if (await getPendingProgramProposal(params.workspaceId, params.clientProfileId)) return { ok: false, reason: "pending_proposal", message: "This client already has a pending proposal. Approve or reject it before preparing another." };
+
+  const { started, job } = await startReasonerJob({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, requestedBy: ctx.userId, title });
+  if (started) {
+    // Runs after the response is sent (the coach never waits ~100 s on a request);
+    // bounded by this route's maxDuration. A run that dies is closed as timed out on the next read.
+    after(() =>
+      runReasonerJob({
+        jobId: job.jobId,
+        loadInput: () => loadSynthesisInputForClient(params.clientProfileId),
+        saveDraft: (result) => saveReasonerDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, title, jobId: job.jobId, result }),
+      })
+    );
+  }
+  return { ok: true, started, job };
+}
+
+/** Persists a PLANNED Reasoner result as a DRAFT through the existing lifecycle, re-checking
+ * everything that could have changed while the Reasoner ran. Never publishes or assigns. */
+async function saveReasonerDraft(params: { workspaceId: string; clientProfileId: string; coachId: string; title: string; jobId: string; result: Parameters<typeof reasonerResultToProgramContent>[0]["result"] }): Promise<{ versionId: string } | { superseded: true } | { notSaved: string }> {
+  if (await getPendingProgramProposal(params.workspaceId, params.clientProfileId)) return { superseded: true };
+  const { method, onboarding, prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
+  if (!prerequisites.ready) return { notSaved: `The proposal wasn't saved because something changed while OPTIM was working: ${prerequisites.missing.map((m) => m.message).join(" ")}` };
+  // The Reasoner must have planned under the method that is active right now.
+  if (params.result.run.versions.coachMethod?.versionId !== method!.versionId) return { notSaved: "The proposal wasn't saved because your coaching method changed while OPTIM was working. Prepare a new one." };
+  const nowIso = new Date().toISOString();
+  const plan = params.result.plan;
+  const generationInputs = buildGenerationInputs({
+    playbookVersion: method!.version,
+    methodVersionId: method!.versionId,
+    operatingModel: method!.operatingModel,
+    onboarding: onboarding!,
+    profile: prerequisites.profile,
+    assumptions: prerequisites.assumptions,
+    nowIso,
+    rationale: plan.goalEmphasis.rationale,
+    whyThisPlan: [plan.frequency.rationale, plan.architecture.rationale, plan.progression.rationale].filter(Boolean),
+  });
+  const content = reasonerResultToProgramContent({ result: params.result, knowledge: FOUNDATION_KNOWLEDGE, programId: `reasoner-${params.jobId}`, workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: params.coachId, title: params.title, jobId: params.jobId, generationInputs, nowIso });
+  validateUniversalTrainingProgramContent(content);
+  const { versionId } = await createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content, proposedForClientProfileId: params.clientProfileId });
+  return { versionId };
 }
 
 export interface ProgramProposalReviewView {

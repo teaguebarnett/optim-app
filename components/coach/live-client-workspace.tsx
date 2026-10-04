@@ -34,7 +34,8 @@ import { LiveNutritionAssignmentForm, type NutritionAssignResult } from "@/compo
 import { LiveStartDateForm, type SaveResult } from "@/components/coach/live-start-date-form";
 import { LiveProposalGenerateForm } from "@/components/coach/live-proposal-generate-form";
 import { parseNutritionTargetsInput } from "@/lib/coach/nutrition-targets-input";
-import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction, resolveAdjustmentProposalAction, getGenerationPrerequisitesAction } from "@/app/actions/production-programs";
+import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction, resolveAdjustmentProposalAction, getGenerationPrerequisitesAction, getReasonerProposalAvailabilityAction } from "@/app/actions/production-programs";
+import { ReasonerProposalPanel } from "@/components/coach/reasoner-proposal-panel";
 import { ClientStateNoticeSection } from "@/components/coach/client-state-notice";
 import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
@@ -68,13 +69,18 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
   // fresh-generation alike, through the exact same existing review UI.
   await resolveAdjustmentProposalAction({ workspaceId: detail.workspaceId, clientProfileId: clientId });
 
-  const [history, notes, pendingProposal, clientStateFindings, recentActivity, generationPrerequisites] = await Promise.all([
+  const [history, notes, pendingProposal, clientStateFindings, recentActivity, generationPrerequisites, reasonerAvailability] = await Promise.all([
     getClientChatHistoryForCoachAction(clientId),
     getClientCoachNotesAction(clientId),
     getProgramProposalForReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
     getClientWorkspaceIntelligenceAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
     getRecentActivityAction(clientId),
     getGenerationPrerequisitesAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }),
+    // Gate 4.0C-4 — Reasoner proposals for allowlisted clients only; a failure keeps the legacy path.
+    getReasonerProposalAvailabilityAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }).catch((err) => {
+      console.error(`LiveClientWorkspace: reasoner availability failed: ${err instanceof Error ? err.name : "unknown"}`);
+      return { enabled: false, job: null };
+    }),
   ]);
   // Gate 4.0C-2A — coach-confirmed structured limitations + the new planner (review only).
   const onboardingComplete = !!detail.onboarding?.completedAtIso;
@@ -267,6 +273,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
           ) : null}
           {pendingProposal ? (
             <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
+          ) : reasonerAvailability.enabled ? (
+            <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
           ) : (
             <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
           )}

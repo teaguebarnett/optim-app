@@ -184,6 +184,18 @@ const GOAL_OPTIONS: OnboardingFieldOption[] = [
   { value: GOAL_HEALTH_CONSISTENCY, label: "Improve health and consistency", icon: HeartPulse },
 ];
 
+/** Gate 4.0C-4 — structured lift targets. Values are Fitness Knowledge exercise
+ * ids, so the synthesis layer maps them without interpreting free text. */
+export const TARGET_LIFT_NONE = "none";
+const TARGET_LIFT_OPTIONS: OnboardingFieldOption[] = [
+  { value: "exercise.barbell_bench_press", label: "Bench press" },
+  { value: "exercise.barbell_back_squat", label: "Back squat" },
+  { value: "exercise.conventional_deadlift", label: "Deadlift" },
+  { value: "exercise.overhead_press", label: "Overhead press" },
+  { value: TARGET_LIFT_NONE, label: "No specific lift" },
+];
+const hasStrengthGoal = (a: OnboardingStepAnswers) => a.primaryGoal === GOAL_GET_STRONGER || (Array.isArray(a.secondaryGoals) && (a.secondaryGoals as unknown[]).includes(GOAL_GET_STRONGER));
+
 // ---------------------------------------------------------------------------
 // Live flow — six chapters + Review
 // ---------------------------------------------------------------------------
@@ -251,7 +263,9 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     // moment — goal and start-date already give OPTIM what it needs to
     // plan around, so this is never the client's only reason to see this
     // screen.
-    moments: [["primaryGoal"], ["primaryGoalOther", "secondaryGoals"], ["successDefinition", "targetWeight"]],
+    // Gate 4.0C-4 — the optional structured lift target only appears for a
+    // strength goal (primary or secondary); everyone else never sees it.
+    moments: [["primaryGoal"], ["primaryGoalOther", "secondaryGoals"], ["successDefinition", "targetWeight"], ["targetLift"], ["targetLiftValue", "targetLiftReps"]],
     fields: [
       {
         key: "primaryGoal",
@@ -295,6 +309,39 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
         unit: "lb",
         icon: Scale,
         visibleIf: (a) => a.primaryGoal === GOAL_BUILD_MUSCLE || a.primaryGoal === GOAL_LOSE_FAT,
+      },
+      {
+        key: "targetLift",
+        label: "Is there a specific lift you're working toward? (optional)",
+        type: "single_select",
+        required: false,
+        icon: TrendingUp,
+        helpText: "If you have a number in mind, your coach can plan around it.",
+        options: TARGET_LIFT_OPTIONS,
+        visibleIf: hasStrengthGoal,
+      },
+      {
+        key: "targetLiftValue",
+        label: "Target weight for that lift",
+        type: "number_wheel",
+        required: false,
+        min: 45,
+        max: 1000,
+        step: 5,
+        unit: "lb",
+        icon: Scale,
+        visibleIf: (a) => hasStrengthGoal(a) && typeof a.targetLift === "string" && a.targetLift !== TARGET_LIFT_NONE,
+      },
+      {
+        key: "targetLiftReps",
+        label: "For how many reps? (1 = a one-rep max)",
+        type: "number_wheel",
+        required: false,
+        min: 1,
+        max: 20,
+        step: 1,
+        unit: "reps",
+        visibleIf: (a) => hasStrengthGoal(a) && typeof a.targetLift === "string" && a.targetLift !== TARGET_LIFT_NONE,
       },
     ],
   },
