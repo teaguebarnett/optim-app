@@ -78,7 +78,15 @@ function ex(id: string, s: Spec): ExerciseEntry {
     ordering: s.ordering,
     harderVariants: s.harder ?? [],
     loadedDemands: loadedDemands(s),
+    trunkSupport: trunkSupport(s),
   };
+}
+
+/** Gate 4.0C-3C — external = chest pad (prone); partial = seated machine (back pad) or lying on a bench; else none. */
+function trunkSupport(s: Spec): ExerciseEntry["trunkSupport"] {
+  if (s.positions.includes("prone") && s.equipment === "machine") return "external";
+  if ((s.equipment === "machine" && s.positions.includes("seated")) || (s.positions.includes("supine") && (s.apparatus ?? []).includes("bench"))) return "partial";
+  return "none";
 }
 
 /**

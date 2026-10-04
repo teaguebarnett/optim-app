@@ -95,7 +95,7 @@ export function varianceReport(results: ReasonerResult[], knowledge: FitnessKnow
       mainLiftOverlapMeanJaccard: meanPairwise(mainSets),
       sessionSignatureAgreement: sigAgreement,
       volumeCvMajorMuscles: cvs.length ? Math.round((cvs.reduce((s, x) => s + x, 0) / cvs.length) * 100) / 100 : 0,
-      repZonePatterns: distinct(plans.map((p) => p.progression.repZones.join(">"))),
+      repZonePatterns: distinct(plans.map((p) => p.progression.phases.map((ph) => `${ph.weeks.min}-${ph.weeks.max}:${ph.main.repZones.join("/")}`).join(">"))),
       warningsPerRun: planned.map((r) => r.quality.filter((q) => q.severity === "warning").length),
     },
     unexplainedVariation: unexplained,

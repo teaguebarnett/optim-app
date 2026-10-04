@@ -13,9 +13,10 @@ import { routeDomains } from "./domains.ts";
 import { parseReasonerOutput, REASONER_SYSTEM_PROMPT } from "./contract.ts";
 import { reasonerReviewView } from "./view.ts";
 import { canonicalJson, parseRun, runHash, serializeRun } from "./run.ts";
-import { coachMethod, fakeModel, layer, NOW, range, restrict, scenarioInput, scriptedOutput, type WirePlan } from "./eval/fixtures.ts";
+import { coachMethod, fakeModel, layer, NOW, range, restrict, scenarioInput, scriptedOutput, type WirePhase, type WirePlan, type WireRolePlan } from "./eval/fixtures.ts";
 import { known, missing } from "../facts.ts";
-import { exerciseEligibility } from "../exercise-eligibility.ts";
+import { demandCompatibility, exerciseEligibility } from "../exercise-eligibility.ts";
+import { parsePerformanceTargets } from "../goal-contract.ts";
 import { LOADED_DEMAND_CONDITION } from "../knowledge/types.ts";
 import { levelRank } from "../knowledge/taxonomy.ts";
 
@@ -248,6 +249,9 @@ await check("15. A truncated (max_tokens) attempt is repaired once and its consu
 // Gate 4.0C-3B — targeted regressions for the human-review findings.
 // ---------------------------------------------------------------------------
 
+/** A phase in the executable (Gate 4.0C-3C) shape; roles default to "listed prescription, hold". */
+const role = (over: Partial<WireRolePlan> = {}): WireRolePlan => ({ zones: ["as_prescribed"], rir: 0, sets: 0, progress: "hold", ...over });
+const ph = (weeks: number[], focus: string, intent: string, main: Partial<WireRolePlan> = {}, accessory: Partial<WireRolePlan> = {}): WirePhase => ({ weeks, focus, intent, main: role(main), accessory: role(accessory) });
 const bracingModerate = () => restrict([{ kind: "avoid_demand", demand: "bracing", atOrAbove: "moderate" }]);
 const every = (p: WirePlan, f: (e: WirePlan["sessions"][number]["exercises"][number]) => void) => p.sessions.forEach((s) => s.exercises.forEach(f));
 /** Puts `id` into the first session (replacing its last exercise) with the given prescription. */
@@ -271,13 +275,13 @@ await check("16. Bracing is load-sensitive: a generic knowledge rule, enforced a
   assert.ok(elig("exercise.cable_triceps_pushdown", "avoid_moderate").loadConditions.length === 0, "isolation keeps its base level");
   assert.ok(!elig("exercise.barbell_bench_press", "avoid_moderate").eligible, "base moderate bracing stays excluded");
   assert.ok(elig("exercise.lat_pulldown", "avoid_high").loadConditions.length === 0, "a high-bracing restriction doesn't cap a loaded-moderate lift");
-  // Reasoner: the row is marked S; heavy or near-failure prescriptions are rejected, submaximal ones pass.
+  // Reasoner: the row carries its constraint fit (U: cable pulldown, no trunk support); heavy or near-failure prescriptions are rejected.
   const m = ok();
   await run(scenarioInput({ restrictions: bracingModerate() }), m);
-  assert.ok(m.lastInput!.exercises.find((x) => x.startsWith("exercise.lat_pulldown|"))!.endsWith("|S"));
+  assert.ok(m.lastInput!.exercises.find((x) => x.startsWith("exercise.lat_pulldown|"))!.endsWith("|U"));
   assert.ok(m.lastInput!.exercises.find((x) => x.startsWith("exercise.chest_supported_row|"))!.endsWith("|-"));
-  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [4, 6], [2, 3]))), /lat_pulldown is marked S/);
-  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [1, 2]))), /lat_pulldown is marked S/);
+  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [4, 6], [2, 3]))), /lat_pulldown has conditional\/uncertain constraint fit/);
+  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [1, 2]))), /lat_pulldown has conditional\/uncertain constraint fit/);
   const fine = await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [2, 3])));
   assert.equal(fine.status, "PLANNED", fine.status === "REJECTED" ? fine.errors.join("; ") : "");
   // Without a bracing restriction nothing is capped.
@@ -349,10 +353,129 @@ await check("19. Major structural decisions are anchored; departures need a clie
   const reasoned = await run(scenarioInput(), ok((p) => { moreDays(p); p.deviations = [{ field: "days", because: "Client sleeps 7–8 h and is very consistent.", coach: [], client: [Object.keys(a.lastInput!.client.facts)[0]] }]; }));
   assert.equal(reasoned.status, "PLANNED", reasoned.status === "REJECTED" ? reasoned.errors.join("; ") : "");
   rejectedWith(await run(scenarioInput(), ok((p) => { p.weeks = 10; })), /Program length 10 departs from OPTIM's anchor \(8\)/);
-  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [{ weeks: [1, 3], focus: "a", intent: "b" }, { weeks: [5, 8], focus: "c", intent: "d" }]))), /contiguous from week 1/);
-  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [{ weeks: [1, 6], focus: "a", intent: "b" }]))), /end at week 6, but the program is 8 weeks/);
-  const phased = await run(scenarioInput(), ok((p) => (p.progression.phases = [{ weeks: [1, 4], focus: "Accumulate", intent: "Build volume at moderate effort." }, { weeks: [5, 8], focus: "Intensify", intent: "Heavier mains, accessories hold." }])));
+  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [ph([1, 3], "a", "b"), ph([5, 8], "c", "d")]))), /contiguous from week 1/);
+  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [ph([1, 6], "a", "b")]))), /end at week 6, but the program is 8 weeks/);
+  const phased = await run(scenarioInput(), ok((p) => (p.progression.phases = [ph([1, 4], "Accumulate", "Build volume at moderate effort."), ph([5, 8], "Intensify", "Heavier mains, accessories hold.")])));
   assert.ok(phased.status === "PLANNED" && phased.spec.resistance!.value.weeks[4].note.startsWith("Intensify."), "phase focus carried into week notes");
+});
+
+// ---------------------------------------------------------------------------
+// Gate 4.0C-3C — final targeted pass.
+// ---------------------------------------------------------------------------
+
+await check("20. Phases drive the actual weekly prescription; contradictions are rejected", async () => {
+  // Coach (fixture): RIR 1–3, sets main 3–4 / accessory 2–3, progression double_progression.
+  const two = (main: Partial<WireRolePlan>, acc: Partial<WireRolePlan>) => (p: WirePlan) => (p.progression.phases = [ph([1, 4], "Accumulate", "Build tolerance with listed prescriptions."), ph([5, 8], "Intensify", "Heavier ranges for accessories.", main, acc)]);
+  const good = await run(scenarioInput(), ok(two({ progress: "double_progression" }, { zones: ["lower_half"], sets: 1, progress: "double_progression" })));
+  assert.equal(good.status, "PLANNED", good.status === "REJECTED" ? good.errors.join("; ") : "");
+  if (good.status === "PLANNED") {
+    const w = good.spec.resistance!.value.weeks;
+    const listed = good.plan.sessions[0].exercises[1]; // an accessory
+    const w1 = w[0].sessions[0][1], w5 = w[4].sessions[0][1];
+    assert.deepEqual([w1.sets, w1.reps], [listed.sets, listed.reps], "phase 1 = listed prescription");
+    assert.equal(w5.sets, listed.sets + 1, "phase 2 adds the set it declares");
+    assert.ok(w5.reps.min === listed.reps.min && w5.reps.max < listed.reps.max, "phase 2 uses the heavier end of the listed range");
+    assert.ok(w[4].note.includes("Accessories: heavier end of rep ranges, RIR 0, sets +1"), "week note rendered from the structure");
+  }
+  rejectedWith(await run(scenarioInput(), ok(two({ rir: -1 }, {}))), /takes exercise\.[a-z_]+ to RIR 0–2, outside the coach's 1–3/);
+  rejectedWith(await run(scenarioInput(), ok(two({}, { sets: 1 }) && ((p) => { two({}, { sets: 1 })(p); every(p, (e) => { if (e.role === "accessory") e.sets = 3; }); }))), /gives exercise\.[a-z_]+ 4 sets, outside the coach's 2–3/);
+  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [ph([1, 8], "Accumulate", "Mains in the 8–12 zone at RIR 2–3.")]))), /must not contain numbers/);
+  rejectedWith(await run(scenarioInput(), ok(two({ progress: "add_sets_weekly" }, {}))), /main progress "add_sets_weekly" isn't one of the coach's methods/);
+  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.model = "Double progression in 8–12 reps"))), /must not state reps, RIR\/RPE or sets/);
+  // Constraint-fit minimums hold in EVERY week, not just the listed one.
+  const pulldownThenHarder = (p: WirePlan) => { place("exercise.lat_pulldown", [8, 12], [2, 3])(p); two({}, { rir: -1 })(p); };
+  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(pulldownThenHarder)), /takes exercise\.lat_pulldown \(constraint fit U\) below its minimums/);
+});
+
+await check("21. Bracing fit is graded honestly: compatible / conditional / uncertain / incompatible — submaximal is never proof", async () => {
+  const K = FOUNDATION_KNOWLEDGE;
+  const cons = scenarioInput({ restrictions: bracingModerate() }).constraints;
+  const fit = (id: string) => demandCompatibility(exerciseEligibility(K.getExercise(id)!, cons));
+  assert.deepEqual(
+    ["exercise.chest_supported_row", "exercise.machine_chest_press", "exercise.dumbbell_bench_press", "exercise.lat_pulldown", "exercise.seated_cable_row", "exercise.barbell_bench_press"].map(fit),
+    ["compatible", "conditional", "conditional", "uncertain", "uncertain", "incompatible"]
+  );
+  // Registry-wide rule, not a list: load-sensitive + no trunk support → uncertain; + partial support → conditional.
+  for (const e of K.exercises()) {
+    const c = exerciseEligibility(e, cons);
+    if (!c.loadConditions.length) continue;
+    assert.equal(c.loadConditions[0].certainty, e.trunkSupport === "none" ? "uncertain" : "conditional", e.id);
+    assert.ok(c.loadConditions[0].conditions.some((x) => /reps in reserve/.test(x)));
+  }
+  // Uncertain use: needs a rationale; then goes to coach review. Conditional use: conditions exposed, no review item.
+  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok((p) => { place("exercise.lat_pulldown", [8, 12], [2, 3])(p); delete p.sessions[0].exercises.at(-1)!.note; })), /uncertain constraint fit \(U\): say in its note why/);
+  const u = await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [2, 3])));
+  assert.ok(u.status === "PLANNED", u.status === "REJECTED" ? u.errors.join("; ") : "");
+  if (u.status === "PLANNED") {
+    assert.ok(u.spec.unresolved.some((x) => x.fact === "coach_decision.constraint_fit.exercise.lat_pulldown" && x.providedBy === "coach" && /can't establish/.test(x.why)));
+    assert.ok(u.quality.some((q) => q.code === "constraint_fit_uncertain" && /Coach review required/.test(q.message)));
+    assert.ok(!JSON.stringify([u.quality, u.spec.unresolved]).match(/\bsafe(ly)?\b/i), "never claims safety");
+  }
+  const k = await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.machine_chest_press", [8, 12], [2, 3])));
+  assert.ok(k.status === "PLANNED" && k.quality.some((q) => q.code === "constraint_fit_conditional" && /trunk kept against the pad or bench/.test(q.message)) && !k.spec.unresolved.some((x) => x.fact.endsWith("machine_chest_press")));
+  const m = ok();
+  await run(scenarioInput({ restrictions: bracingModerate() }), m);
+  const code = (id: string) => m.lastInput!.exercises.find((x) => x.startsWith(`${id}|`))!.split("|").at(-1);
+  assert.deepEqual([code("exercise.chest_supported_row"), code("exercise.machine_chest_press"), code("exercise.lat_pulldown")], ["-", "K", "U"]);
+});
+
+await check("22. Structured performance targets live in the GoalContract, are preferred over free text, and stay backward-compatible", async () => {
+  const bench = { exercise: "Barbell Bench Press", metric: "load" as const, value: 405, unit: "lb" as const, atReps: 1, timeframe: null };
+  assert.deepEqual(parsePerformanceTargets([bench, { exercise: "Bench", metric: "load", value: 405, unit: "reps" }, { exercise: "", metric: "load", value: 1, unit: "lb" }, "x"]).length, 1, "malformed targets dropped, never guessed");
+  // Intake (optional answer) → ClientState fact → GoalContract, client_reported.
+  const fromIntake = scenarioInput({ patch: { what_you_want: { primaryGoal: "get_stronger", secondaryGoals: [], successDefinition: "Bench 405", performanceTargets: [bench] } } });
+  assert.equal(fromIntake.goal.performanceTargets[0].value, 405);
+  assert.equal(fromIntake.goal.performanceTargets[0].basis, "client_reported");
+  assert.deepEqual(scenarioInput().goal.performanceTargets, [], "existing clients: no targets, nothing breaks");
+  // Coach confirmation carries targets as coach_confirmed.
+  const confirmed = (restrictions?: ReturnType<typeof bracingModerate>) => scenarioInput({ restrictions, patch: { what_you_want: { primaryGoal: "get_stronger", secondaryGoals: [] } }, coachConfirmedGoal: strengthGoal(["Barbell Bench Press"]), coachConfirmedTargets: [bench] });
+  assert.equal(confirmed().goal.performanceTargets[0].basis, "coach_confirmed");
+  // Reasoner prefers the structured target (deduped against the priority lift), with its metric.
+  const m = ok();
+  const r = await run(confirmed(bracingModerate()), m);
+  assert.equal(m.lastInput!.goal.targets.length, 1, "structured target supersedes the matching priority lift");
+  const t = m.lastInput!.goal.targets[0];
+  assert.deepEqual([t.source, t.exercise, t.status, t.blockedBy, t.metric?.value, t.metric?.unit, t.metric?.atReps], ["performance_target", "exercise.barbell_bench_press", "blocked", "C1", 405, "lb", 1]);
+  assert.ok(r.status === "PLANNED" && r.spec.unresolved.some((u) => u.fact.endsWith("barbell_bench_press") && /405 lb × 1/.test(u.why)));
+  // Trainable structured target: must be trained and recorded as direct.
+  const noBench = (p: WirePlan) => p.sessions.forEach((s) => (s.exercises = s.exercises.filter((e) => e.id !== "exercise.barbell_bench_press")));
+  rejectedWith(await run(confirmed(), ok((p) => { noBench(p); p.goalAccess = [{ target: "Bench 405", exercise: "exercise.barbell_bench_press", status: "direct" }]; })), /no session includes it|no session trains exercise\.barbell_bench_press/);
+  rejectedWith(await run(confirmed(), ok(noBench)), /no session trains exercise\.barbell_bench_press/);
+  const trained = await run(confirmed(), ok((p) => { noBench(p); p.sessions[0].exercises[0] = { id: "exercise.barbell_bench_press", role: "main", sets: 3, reps: [5, 8], rir: [1, 2] }; }));
+  assert.equal(trained.status, "PLANNED", trained.status === "REJECTED" ? trained.errors.join("; ") : "");
+  rejectedWith(await run(confirmed(), ok((p) => { noBench(p); p.sessions[0].exercises[0] = { id: "exercise.barbell_bench_press", role: "main", sets: 3, reps: [5, 8], rir: [1, 2] }; p.goalAccess = []; })), /Record the structured performance target .* as direct/);
+  // Free text only → no structured targets; the model's own goalAccess is the fallback (test 17).
+  const free = ok();
+  await run(scenarioInput({ patch: { what_you_want: { primaryGoal: "get_stronger", secondaryGoals: [], successDefinition: "Bench 405 safely" } } }), free);
+  assert.deepEqual(free.lastInput!.goal.targets, []);
+});
+
+await check("23. Repetition is flagged only when unjustified (identical, unexplained, with alternatives)", async () => {
+  const repeat = (mutate: (copy: WirePlan["sessions"][number]["exercises"][number]) => void, keepNotes = false) => (p: WirePlan) => {
+    if (!keepNotes) every(p, (e) => delete e.note);
+    const copy = structuredClone(p.sessions[0].exercises[1]);
+    mutate(copy);
+    p.sessions[1].exercises[1] = copy;
+  };
+  const codes = async (f: (p: WirePlan) => void, input = scenarioInput()) => {
+    const r = await run(input, ok(f));
+    assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : "");
+    return r.status === "PLANNED" ? r.quality.map((q) => q.code) : [];
+  };
+  assert.ok((await codes(repeat(() => {}))).includes("exercise_repeated_unjustified"), "identical + unexplained + alternatives → flagged");
+  assert.ok(!(await codes(repeat((c) => (c.reps = [c.reps[0], c.reps[0] + 2])))).includes("exercise_repeated_unjustified"), "differentiated exposure → intentional");
+  assert.ok(!(await codes(repeat(() => {}, true))).includes("exercise_repeated_unjustified"), "stated reason → intentional");
+  // The only eligible option for its pattern → necessary, not a failure.
+  const only = scenarioInput({ restrictions: restrict([{ kind: "avoid_movement_pattern", pattern: "squat" }, { kind: "avoid_movement_pattern", pattern: "single_leg" }]) });
+  const probe = ok();
+  await run(only, probe);
+  const pool = probe.lastInput!.exercises.map((x) => x.split("|"));
+  const solo = pool.find((row) => pool.filter((o) => o[2].split(",")[0] === row[2].split(",")[0] && o[3].split(",").some((m) => row[3].split(",").includes(m))).length === 1)!;
+  assert.ok(solo, "some pattern has a single eligible exercise");
+  const forced = (p: WirePlan) => { every(p, (e) => delete e.note); for (const i of [0, 1]) p.sessions[i].exercises[2] = { id: solo[0], role: "accessory", sets: 2, reps: [10, 12], rir: [2, 3] }; };
+  assert.ok(!(await codes(forced, only)).includes("exercise_repeated_unjustified"), `${solo[1]} is the only option → not flagged`);
+  // Taxonomy: only the unjustified code is a reasoning failure.
+  assert.ok(!(await import("./eval/taxonomy.ts")).classifyResult.toString().includes('"exercise_repeated"'));
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -46,10 +46,11 @@ export function classifyResult(r: ReasonerResult, opts: { hardFailures: string[]
       return out;
     case "PLANNED":
       for (const q of r.quality) {
-        if (q.code === "target_omitted" || q.code === "push_pull_balance" || q.code === "session_duration" || q.code === "exercise_repeated" || q.code === "unattributed_decision") out.push(f("REASONING_FAILURE", q.message));
+        if (q.code === "target_omitted" || q.code === "push_pull_balance" || q.code === "session_duration" || q.code === "exercise_repeated_unjustified" || q.code === "unattributed_decision") out.push(f("REASONING_FAILURE", q.message));
         else if (q.code === "target_excluded") out.push(f("KNOWLEDGE_GAP", `${q.message} (constraint-compatible exercise coverage)`));
         else if (q.code === "cites_unsourced") out.push(f("KNOWLEDGE_GAP", q.message));
         else if (q.code === "coach_method_conflict") out.push(f("COACH_BRAIN_GAP", q.message));
+        else if (q.code === "constraint_fit_uncertain") out.push(f("KNOWLEDGE_GAP", `${q.message} (load-sensitive demand knowledge)`));
       }
       for (const u of r.plan.unresolved) out.push(f(u.providedBy === "client" ? "CLIENT_DATA_GAP" : "COACH_BRAIN_GAP", `Unresolved: ${u.fact}`));
       if (r.attempts > 1) out.push(f("REASONING_FAILURE", `Needed ${r.attempts} attempts (first output failed validation/schema)`));

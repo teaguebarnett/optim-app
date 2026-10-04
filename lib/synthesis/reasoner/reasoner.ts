@@ -166,7 +166,7 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     }
     if (parsed.output.status === "NEEDS_INPUT") return finish({ status: "NEEDS_INPUT", source: "model", missing: parsed.output.needsInput, routing, summary: parsed.output.summary }, { missing: parsed.output.needsInput, needsInputSource: "model", summary: parsed.output.summary });
     const plan = parsed.output.plan;
-    const spec = expandReasonerPlan({ plan, reasoning, contextOnly, constraintIdMap, method, input, model: { provider: params.model.provider, modelId: params.model.modelId, promptVersion: REASONER_PROMPT_VERSION, attempts: attempt }, nowIso: params.nowIso });
+    const spec = expandReasonerPlan({ plan, reasoning, contextOnly, constraintIdMap, method, input, model: { provider: params.model.provider, modelId: params.model.modelId, promptVersion: REASONER_PROMPT_VERSION, attempts: attempt }, nowIso: params.nowIso, allowed });
     const v = validateReasonerPlan({ plan, spec, reasoning, allowed, method, input });
     if (v.ok) {
       const unattributed = (["frequency", "schedule", "weeklyStructure", "progression"] as const).filter((k) => spec[k]?.inputs.includes("reasoner:unattributed"));

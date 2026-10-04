@@ -147,6 +147,13 @@ export interface ExerciseEntry extends KnowledgeEntryBase {
    * resistance/exercises.ts), pending qualified review.
    */
   loadedDemands: Partial<Record<Demand, Level>>;
+  /**
+   * Gate 4.0C-3C — how much the setup externally supports the trunk:
+   * "external" (chest pad carries it), "partial" (back pad / bench), "none".
+   * Decides how far OPTIM can trust execution conditions to keep a
+   * load-sensitive demand low. Internal curation over positions/equipment.
+   */
+  trunkSupport: "external" | "partial" | "none";
 }
 
 /**
@@ -156,6 +163,19 @@ export interface ExerciseEntry extends KnowledgeEntryBase {
  * above both keeps the exercise at its base `demands`. Internal curation.
  */
 export const LOADED_DEMAND_CONDITION = { minReps: 6, minRir: 2 } as const;
+
+/**
+ * Gate 4.0C-3C — how confidently Fitness Knowledge can place an exercise
+ * relative to a demand restriction. Staying submaximal is NECESSARY for a
+ * load-sensitive exercise, never proof that it stays below the limit.
+ *  - compatible: base and loaded demand both below the limit.
+ *  - conditional: below the limit only under stated execution/loading
+ *    conditions, with the trunk partly supported by the setup.
+ *  - uncertain: knowledge can't establish it (no trunk support; bracing
+ *    then depends on load, setup, execution and the client) — coach review.
+ *  - incompatible: base demand at or above the limit.
+ */
+export type DemandCompatibility = "compatible" | "conditional" | "uncertain" | "incompatible";
 
 // ---------------------------------------------------------------------------
 // Concepts — resistance-training ideas a planner reasons with, each made of

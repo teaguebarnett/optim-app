@@ -49,12 +49,54 @@ export type GoalSpec =
 
 export type GoalEntry = GoalSpec & { basis: FactBasis; source: FactSource };
 
+/**
+ * Gate 4.0C-3C — a concrete performance target, when one exists in
+ * structured form (e.g. "Barbell Bench Press, 405 lb for 1"). Part of the
+ * canonical GoalContract, not a second goal system: it qualifies whichever
+ * goal it serves. Free-text success definitions stay as they are and remain
+ * the fallback when no structured target exists.
+ */
+export interface PerformanceTargetValue {
+  /** The movement as stated/confirmed — a knowledge exercise id or exercise name. */
+  exercise: string;
+  metric: "load" | "reps" | "time" | "distance";
+  value: number;
+  unit: "lb" | "kg" | "reps" | "s" | "min" | "m" | "km" | "mi";
+  /** For load targets: reps at that load (1 = a one-rep max). */
+  atReps: number | null;
+  timeframe: { weeks?: number; byDateIso?: string } | null;
+}
+export type PerformanceTarget = PerformanceTargetValue & { basis: FactBasis; source: FactSource };
+
+const METRIC_UNITS: Record<PerformanceTargetValue["metric"], readonly PerformanceTargetValue["unit"][]> = { load: ["lb", "kg"], reps: ["reps"], time: ["s", "min"], distance: ["m", "km", "mi"] };
+
+/** Strict reader: anything malformed is dropped, never guessed into a target. */
+export function parsePerformanceTargets(raw: unknown): PerformanceTargetValue[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PerformanceTargetValue[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== "object") continue;
+    const t = x as Record<string, unknown>;
+    const metric = t.metric as PerformanceTargetValue["metric"];
+    if (typeof t.exercise !== "string" || !t.exercise.trim() || !(metric in METRIC_UNITS)) continue;
+    if (typeof t.value !== "number" || !Number.isFinite(t.value) || t.value <= 0 || !METRIC_UNITS[metric].includes(t.unit as PerformanceTargetValue["unit"])) continue;
+    const atReps = typeof t.atReps === "number" && Number.isInteger(t.atReps) && t.atReps > 0 ? t.atReps : null;
+    const tf = t.timeframe as Record<string, unknown> | null | undefined;
+    const weeks = typeof tf?.weeks === "number" && Number.isInteger(tf.weeks) && tf.weeks > 0 ? tf.weeks : undefined;
+    const byDateIso = typeof tf?.byDateIso === "string" && /^\d{4}-\d{2}-\d{2}/.test(tf.byDateIso) ? tf.byDateIso : undefined;
+    out.push({ exercise: t.exercise.trim(), metric, value: t.value, unit: t.unit as PerformanceTargetValue["unit"], atReps: metric === "load" ? atReps : null, timeframe: weeks || byDateIso ? { ...(weeks ? { weeks } : {}), ...(byDateIso ? { byDateIso } : {}) } : null });
+  }
+  return out;
+}
+
 export interface GoalContract {
   clientProfileId: string;
   /** Null when the client hasn't stated a primary goal. */
   primary: GoalEntry | null;
   secondary: GoalEntry[];
   successDefinition: Fact<string>;
+  /** Structured performance targets (Gate 4.0C-3C); empty when none exist — free text is then the only source. */
+  performanceTargets: PerformanceTarget[];
   /** "client_reported" until a coach confirms the contract. */
   confirmation: "client_reported" | "coach_confirmed";
 }
@@ -116,13 +158,21 @@ export function deriveGoalContract(state: ClientState): GoalContract {
   const secondary = isKnown(state.goals.secondary)
     ? state.goals.secondary.value.map((v) => entry(v, state, state.goals.secondary.status === "known" ? state.goals.secondary.source.ref : "onboarding.what_you_want.secondaryGoals")).filter((g): g is GoalEntry => !!g && g.class !== primary?.class)
     : [];
-  return { clientProfileId: state.clientProfileId, primary, secondary, successDefinition: state.goals.successDefinition, confirmation: "client_reported" };
+  const pt = state.goals.performanceTargets;
+  const performanceTargets: PerformanceTarget[] = isKnown(pt) ? pt.value.map((v) => ({ ...v, basis: pt.basis, source: pt.source })) : [];
+  return { clientProfileId: state.clientProfileId, primary, secondary, successDefinition: state.goals.successDefinition, performanceTargets, confirmation: "client_reported" };
 }
 
 /** A coach-confirmed fact for a goal field (e.g. a timeline the coach and
  * client agreed). Returns a new contract — never mutates. */
-export function withCoachConfirmedGoal(contract: GoalContract, primary: GoalSpec): GoalContract {
-  return { ...contract, primary: { ...primary, basis: "coach_confirmed", source: { kind: "coach_brain", ref: "goal_contract.coach_confirmation" } }, confirmation: "coach_confirmed" };
+export function withCoachConfirmedGoal(contract: GoalContract, primary: GoalSpec, performanceTargets?: PerformanceTargetValue[]): GoalContract {
+  const source = { kind: "coach_brain" as const, ref: "goal_contract.coach_confirmation" };
+  return {
+    ...contract,
+    primary: { ...primary, basis: "coach_confirmed", source },
+    ...(performanceTargets ? { performanceTargets: parsePerformanceTargets(performanceTargets).map((t) => ({ ...t, basis: "coach_confirmed" as const, source })) } : {}),
+    confirmation: "coach_confirmed",
+  };
 }
 
 export const coachFact = <T>(value: T, ref: string): Fact<T> => known(value, "coach_confirmed", { kind: "coach_brain", ref });

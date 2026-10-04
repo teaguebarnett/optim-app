@@ -63,8 +63,22 @@ export function reviewPage(params: { id: string; title: string; result: Reasoner
     }
     if (p.goalAccess.length) lines.splice(lines.indexOf("**Plan**") + 1, 0, "", "**Goal access**", "", ...p.goalAccess.map((g) => `- ${g.target}: ${K.getExercise(g.exerciseId)?.name ?? g.exerciseId} — ${g.status === "blocked" ? `**direct work blocked** (${g.blockedBy}). Interim: ${g.interim ?? "—"} Coach review required before direct progression resumes.` : "trained directly."}`));
     if (input?.anchors) lines.push("", `- Anchors: ${input.anchors.days.value} days (${input.anchors.days.basis})${input.anchors.weeks ? `; ${input.anchors.weeks.value} weeks (${input.anchors.weeks.basis})` : ""}${p.deviations.length ? ` · **Deviations:** ${p.deviations.map((d) => `${d.field}: ${d.because}`).join("; ")}` : " · no deviations"}`);
-    lines.push("", `- Progression: ${p.progression.model} — ${p.progression.rationale} (rep zones cycle: ${p.progression.repZones.join(" → ")}${p.progression.deloadWeeks.length ? `; deload weeks ${p.progression.deloadWeeks.join(", ")}` : ""})`);
-    for (const ph of p.progression.phases) lines.push(`  - Weeks ${fmtRange(ph.weeks)} — **${ph.focus}**: ${ph.intent}`);
+    lines.push("", `- Progression: ${p.progression.model} — ${p.progression.rationale}${p.progression.deloadWeeks.length ? ` (deload weeks ${p.progression.deloadWeeks.join(", ")})` : ""}`);
+    // Gate 4.0C-3C — phases rendered from the computed weeks (OPTIM's week notes), never from free prose alone.
+    const weeks = r.spec.resistance?.value.weeks ?? [];
+    for (const ph of p.progression.phases) lines.push(`  - Weeks ${fmtRange(ph.weeks)} — **${ph.focus}** (${ph.intent}): ${weeks.filter((w) => w.week >= ph.weeks.min && w.week <= ph.weeks.max).map((w) => `w${w.week} ${w.note.replace(`${ph.focus}. `, "")}`).join(" · ")}`);
+    // What the phases actually do to each session's first two exercises (computed weeks, first week of each phase).
+    const firsts = p.progression.phases.map((ph) => weeks.find((w) => w.week === ph.weeks.min)).filter((w): w is NonNullable<typeof w> => !!w);
+    if (firsts.length) {
+      lines.push("", "_Computed prescription at the start of each phase (effort shown at its hardest end that week):_", "", `| Exercise (session) | ${firsts.map((w) => `Week ${w.week}`).join(" | ")} |`, `|---|${firsts.map(() => "---").join("|")}|`);
+      p.sessions.forEach((s, si) => s.exercises.slice(0, 2).forEach((e, xi) => {
+        const cell = (w: (typeof firsts)[number]) => {
+          const x = w.sessions[si]?.[xi];
+          return x ? `${x.sets}×${fmtRange(x.reps)}${x.effort.metric !== "plain" ? ` @ ${x.effort.metric.toUpperCase()} ${x.effort.target}` : ""}` : "—";
+        };
+        lines.push(`| ${K.getExercise(e.exerciseId)?.name ?? e.exerciseId} (${s.day.slice(0, 3)}) | ${firsts.map(cell).join(" | ")} |`);
+      }));
+    }
     lines.push("", "**Why (major decisions and their provenance)**", "");
     for (const d of p.decisions.slice(0, 8)) lines.push(`- **${d.decision}** — ${d.because} _[coach: ${d.coachRuleKeys.join(", ") || "—"}; client: ${d.clientFactRefs.map((x) => x.split(".").pop()).join(", ") || "—"}; evidence: ${d.knowledgeRefs.map((x) => x.split("#")[1]).join(", ") || "—"}]_`);
     lines.push("", "**Constraints applied**", "");

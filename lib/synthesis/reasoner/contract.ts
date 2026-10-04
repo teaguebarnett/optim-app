@@ -16,7 +16,7 @@
 import type { DayOfWeek } from "../../types.ts";
 import { DAY_ORDER } from "../client-state.ts";
 
-export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.2";
+export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.3";
 
 export const DECISION_TOPICS = ["frequency", "structure", "schedule", "exercise_selection", "prescription", "effort", "progression", "recovery", "duration", "other"] as const;
 export type DecisionTopic = (typeof DECISION_TOPICS)[number];
@@ -71,10 +71,25 @@ export interface AnchorDeviation {
   clientFactRefs: string[];
 }
 
+/** Gate 4.0C-3C — what a phase does to one role's prescriptions, applied deterministically to every week in it. */
+export interface PhaseRolePlan {
+  /** Cycled week by week inside the phase, applied to each exercise's listed rep range. */
+  repZones: RepZone[];
+  /** Added to each exercise's listed RIR (−1 = closer to failure). */
+  rirDelta: number;
+  /** Added to each exercise's listed sets. */
+  setsDelta: number;
+  /** How loads advance: one of the coach's progression methods for the role, or "hold". */
+  progress: string;
+}
+
+/** Executable: focus/intent are labels without numbers; the numbers live in main/accessory. */
 export interface ProgressionPhase {
   weeks: { min: number; max: number };
   focus: string;
   intent: string;
+  main: PhaseRolePlan;
+  accessory: PhaseRolePlan;
 }
 
 export interface ReasonerPlan {
@@ -86,7 +101,8 @@ export interface ReasonerPlan {
   sessions: ReasonerSession[];
   durationWeeks: number;
   /** repZones / setsDeltas cycle week by week; deloadWeeks are explicit. */
-  progression: { model: string; rationale: string; phases: ProgressionPhase[]; repZones: RepZone[]; setsDeltas: number[]; deloadWeeks: number[] };
+  /** Phases ARE the weekly prescription (Gate 4.0C-3C): weeks are expanded from them; deloadWeeks override. */
+  progression: { model: string; rationale: string; phases: ProgressionPhase[]; deloadWeeks: number[] };
   goalAccess: GoalAccess[];
   deviations: AnchorDeviation[];
   monitoring: string[];
@@ -187,13 +203,18 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
         }),
       };
     });
+    const rolePlan = (v: unknown, at: string): PhaseRolePlan => {
+      const r = obj(v, at);
+      const repZones = arr(r.zones, `${at}.zones`, 8).map((z, i) => oneOf(z, `${at}.zones[${i}]`, ZONES));
+      if (!repZones.length) throw new SchemaError(`${at}.zones must have at least one entry`);
+      return { repZones, rirDelta: int(r.rir ?? 0, `${at}.rir`, -1, 1), setsDelta: int(r.sets ?? 0, `${at}.sets`, -1, 1), progress: str(r.progress, `${at}.progress`, 40) };
+    };
     const phases = arr(pr.phases, "progression.phases", 6).map((x, i): ProgressionPhase => {
       const ph = obj(x, `progression.phases[${i}]`);
-      return { weeks: pair(ph.weeks, `progression.phases[${i}].weeks`, 1, 52, true), focus: str(ph.focus, `progression.phases[${i}].focus`, 120), intent: str(ph.intent, `progression.phases[${i}].intent`, 400) };
+      const at = `progression.phases[${i}]`;
+      return { weeks: pair(ph.weeks, `${at}.weeks`, 1, 52, true), focus: str(ph.focus, `${at}.focus`, 60), intent: str(ph.intent, `${at}.intent`, 300), main: rolePlan(ph.main, `${at}.main`), accessory: rolePlan(ph.accessory, `${at}.accessory`) };
     });
     if (!phases.length) throw new SchemaError("progression.phases must describe the block");
-    const repZones = arr(pr.repZones, "progression.repZones", 52).map((z, i) => oneOf(z, `progression.repZones[${i}]`, ZONES));
-    if (!repZones.length) throw new SchemaError("progression.repZones must have at least one entry");
     const plan: ReasonerPlan = {
       domain: oneOf(p.domain, "plan.domain", ["resistance", "general_fitness"] as const),
       goalEmphasis: { primary: oneOf(ge.primary, "goalEmphasis.primary", ["strength", "hypertrophy", "general"] as const), secondary: ge.secondary === null || ge.secondary === undefined ? null : oneOf(ge.secondary, "goalEmphasis.secondary", ["strength", "hypertrophy"] as const), rationale: str(ge.why, "goalEmphasis.why", 400) },
@@ -206,8 +227,6 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
         model: str(pr.model, "progression.model", 300),
         rationale: str(pr.why, "progression.why", 400),
         phases,
-        repZones,
-        setsDeltas: pr.setsDeltas === undefined ? [0] : arr(pr.setsDeltas, "progression.setsDeltas", 52).map((d, i) => int(d, `progression.setsDeltas[${i}]`, -2, 2)),
         deloadWeeks: pr.deloadWeeks === undefined ? [] : arr(pr.deloadWeeks, "progression.deloadWeeks", 12).map((w, i) => int(w, `progression.deloadWeeks[${i}]`, 1, 52)),
       },
       goalAccess: (p.goalAccess === undefined ? [] : arr(p.goalAccess, "plan.goalAccess", 4)).map((x, i): GoalAccess => {
@@ -221,7 +240,9 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
       monitoring: strList(p.monitoring, "plan.monitoring", 6, 200),
       constraintsApplied: (p.constraintsApplied === undefined ? [] : arr(p.constraintsApplied, "plan.constraintsApplied", 15)).map((x, i) => {
         const c = obj(x, `constraintsApplied[${i}]`);
-        return { constraintId: str(c.id, `constraintsApplied[${i}].id`, 200), how: str(c.how, `constraintsApplied[${i}].how`, 300) };
+        // 600 (Gate 4.0C-3C live evidence): accounting for conditional/uncertain constraint fit made a valid plan's
+        // "how" run past 300 chars — a SCHEMA_LIMITATION rejection, the same class 3A fixed for other text fields.
+        return { constraintId: str(c.id, `constraintsApplied[${i}].id`, 200), how: str(c.how, `constraintsApplied[${i}].how`, 600) };
       }),
       assumptions: strList(p.assumptions, "plan.assumptions", 10, 300),
       unresolved: (p.unresolved === undefined ? [] : arr(p.unresolved, "plan.unresolved", 10)).map((x, i) => {
@@ -273,9 +294,10 @@ DESIGN PRINCIPLES
 - Balance weekly pushing and pulling volume unless the goal or the constraints justify otherwise — then say why.
 - Fit each session inside bounds.minutes, including rest and warm-up.
 - STRUCTURAL ANCHORS: use anchors.days and anchors.weeks unless a fact or coach rule specific to this client requires otherwise — general population guidance alone is not a reason to depart. Record any departure in "deviations" with the client/coach refs that require it.
-- GOAL ACCESS: when a goal names a specific lift or skill, add it to "goalAccess". If its exercise appears in "blocked", the goal still stands but direct progression toward it is paused: status "blocked", blockedBy = the key it is listed under, interim = the qualities the plan preserves or develops meanwhile. Never describe interim exercises as progressing the blocked lift itself; resuming direct work is the coach's call.
-- EFFORT: coach effort ranges are boundaries, not targets. Choose each exercise's rir from its role, the session's purpose and priority, its fatigue cost (demands), how often those muscles are trained that week, and recovery — keep high-fatigue and repeated work further from failure and reserve the hard end for few, low-fatigue, high-priority sets. Explain the distribution in an "effort" decision. Exercises marked S (load column) stay submaximal: reps min ≥ 6 and rir min ≥ 2.
-- PROGRESSION is a designed block, not a repeated rule: contiguous phases covering week 1 to the last week, each with a focus and an intent tied to the goal (what changes for main lifts and for accessories, per the coach's progression order). repZones/setsDeltas are only the weekly wave inside that design.
+- GOAL ACCESS: every entry in goal.targets (structured — prefer these) and any specific lift or skill named only in the goal's free text goes in "goalAccess". If its exercise appears in "blocked", the goal still stands but direct progression toward it is paused: status "blocked", blockedBy = the key it is listed under, interim = the qualities the plan preserves or develops meanwhile. Never describe interim exercises as progressing the blocked lift itself; resuming direct work is the coach's call.
+- EFFORT: coach effort ranges are boundaries, not targets. Choose each exercise's rir from its role, the session's purpose and priority, its fatigue cost (demands), how often those muscles are trained that week, and recovery — keep high-fatigue and repeated work further from failure and reserve the hard end for few, low-fatigue, high-priority sets. Explain the distribution in an "effort" decision. Exercises marked K or U (constraint-fit column) need reps min ≥ 6 and rir min ≥ 2 in every week.
+- CONSTRAINT FIT: "-" fits the constraints; K fits only under its stated conditions (submaximal, trunk supported by the pad/bench); U is uncertain — OPTIM can't establish it stays within the constraints even when submaximal. Prefer "-" and K. Use a U exercise only when no other eligible exercise serves that session purpose, and say why in its note; it goes to coach review. Never describe K or U work as proven safe.
+- PROGRESSION is a designed, executable block: contiguous phases covering week 1 to the last week. OPTIM computes every week's prescription from them, starting from each exercise as you list it: per role, "zones" (cycled weekly inside the phase: lower_half = heavier end of the listed rep range, upper_half = lighter end), "rir" (−1/0/+1 added to the listed RIR), "sets" (−1/0/+1 added to the listed sets) and "progress" (one of the coach's progression methods for that role, or "hold"). Every resulting week must stay inside the coach's ranges and each exercise's constraint-fit minimums. "focus" and "intent" are short labels with NO numbers — all numbers live in the structure, so the text can't contradict the prescription.
 - If a decision-critical fact is missing or contradictory, return NEEDS_INPUT instead of guessing. Never invent client facts. Medical questions go to the coach.
 
 OUTPUT — one JSON object, no prose. Keep text short (one sentence per field; "decision" ≤ 150 characters); OPTIM renders explanations from your references. Every open question belongs in "unresolved" (up to 10) — never drop one to stay brief.
@@ -289,7 +311,7 @@ OUTPUT — one JSON object, no prose. Keep text short (one sentence per field; "
  "weeks":int,
  "deviations":[{"field":"days"|"weeks","because":str,"coach":[keys],"client":[refs]}] (only when departing from an anchor),
  "goalAccess":[{"target":str,"exercise":<exercise id>,"status":"direct"|"blocked","blockedBy":<key from "blocked"> or omit,"interim":str or omit}],
- "progression":{"model":str,"why":str,"phases":[{"weeks":[from,to],"focus":str,"intent":str}],"repZones":[cycled weekly: "as_prescribed"|"lower_half"|"upper_half"],"setsDeltas":[cycled weekly ints, optional],"deloadWeeks":[ints, only if the coach schedules deloads]},
+ "progression":{"model":str,"why":str,"phases":[{"weeks":[from,to],"focus":str,"intent":str,"main":{"zones":["as_prescribed"|"lower_half"|"upper_half",...],"rir":-1|0|1,"sets":-1|0|1,"progress":<coach method or "hold">},"accessory":{same}}],"deloadWeeks":[ints, only if the coach schedules deloads]},
  "monitoring":[≤4 str, optional — OPTIM adds the coach's deload triggers itself],
  "constraintsApplied":[{"id":<constraint id from "constraints">,"how":str}],
  "assumptions":[str],"unresolved":[{"fact":str,"why":str,"from":"client"|"coach"|"either"}],"conflicts":[{"rule":<coach key>,"issue":str}],

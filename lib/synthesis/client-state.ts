@@ -13,6 +13,7 @@ import { equipmentForClient } from "../coach/activation-generation.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES, type HealthReviewRecord, type HealthReviewStatus, type OnboardingProgress } from "../coach/types.ts";
 import type { DayOfWeek } from "../types.ts";
 import { known, missing, type Fact, type FactBasis } from "./facts.ts";
+import { parsePerformanceTargets, type PerformanceTargetValue } from "./goal-contract.ts";
 import { FOUNDATION_KNOWLEDGE } from "./knowledge/registry.ts";
 import { isCurrentFor, parseStoredLimitations, type StoredStructuredLimitations } from "./limitations/confirm.ts";
 
@@ -70,6 +71,8 @@ export interface ClientState {
     secondary: Fact<string[]>;
     targetWeightLb: Fact<number>;
     successDefinition: Fact<string>;
+    /** Gate 4.0C-3C — structured performance targets, when the intake provides them (optional, backward-compatible). */
+    performanceTargets: Fact<PerformanceTargetValue[]>;
   };
   health: {
     reportsCurrentLimitation: Fact<boolean>;
@@ -213,6 +216,7 @@ export function deriveClientState(src: ClientStateSources): ClientState {
       secondary: list("what_you_want", "secondaryGoals"),
       targetWeightLb: num("what_you_want", "targetWeight"),
       successDefinition: str("what_you_want", "successDefinition"),
+      performanceTargets: ((targets) => (targets.length ? reported("what_you_want", "performanceTargets", targets) : missing<PerformanceTargetValue[]>(ref("what_you_want", "performanceTargets"))))(parsePerformanceTargets(read("what_you_want", "performanceTargets"))),
     },
     health: {
       reportsCurrentLimitation: bool("health_finish", "hasInjuryHistory"),

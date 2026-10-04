@@ -124,6 +124,7 @@ function validateExercise(e: ExerciseEntry, ids: Set<string>, issues: string[], 
   if (!e.positions?.length) at("no body position");
   for (const p of e.positions ?? []) if (!has(BODY_POSITIONS, p)) at(`unknown position ${p}`);
   for (const d of DEMANDS) if (!has(LEVELS, e.demands?.[d])) at(`demand ${d} missing or invalid`);
+  if (!["external", "partial", "none"].includes(e.trunkSupport)) at("trunkSupport missing or invalid");
   for (const [d, l] of Object.entries(e.loadedDemands ?? {})) if (!has(DEMANDS, d) || !has(LEVELS, l) || levelRank(l) <= levelRank(e.demands[d as keyof typeof e.demands])) at(`loaded demand ${d} must be a higher level than its base demand`);
   if (!has(LEVELS, e.loadingPotential)) at("invalid loadingPotential");
   for (const q of TRAINING_QUALITIES) if (!has(LEVELS, e.suitability?.[q])) at(`suitability ${q} missing or invalid`);
@@ -287,7 +288,7 @@ function taxonomyEntries(): KnowledgeEntry[] {
   ];
 }
 
-export const FOUNDATION_KNOWLEDGE_VERSION = "0.3.0";
+export const FOUNDATION_KNOWLEDGE_VERSION = "0.4.0";
 
 /** The knowledge set OPTIM ships today. */
 export const FOUNDATION_KNOWLEDGE: FitnessKnowledgeRegistry = createKnowledgeRegistry({

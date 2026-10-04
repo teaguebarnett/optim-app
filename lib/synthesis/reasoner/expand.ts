@@ -19,7 +19,7 @@ import type { SynthesisInput } from "../synthesis-input.ts";
 import { RESISTANCE_PLANNER } from "../planners/resistance/planner.ts";
 import type { ResistanceMethod } from "../planners/resistance/method.ts";
 import { MAJOR_TARGETS } from "../planners/resistance/templates.ts";
-import type { DecisionTopic, ReasonerExercise, ReasonerPlan, RepZone } from "./contract.ts";
+import type { DecisionTopic, PhaseRolePlan, ProgressionPhase, ReasonerExercise, ReasonerPlan, RepZone } from "./contract.ts";
 import type { Allowed, ContextOnlyConstraint, ReasoningInput } from "./input.ts";
 import { REASONER_VERSION } from "./input.ts";
 import { LOADED_DEMAND_CONDITION } from "../knowledge/types.ts";
@@ -46,18 +46,56 @@ export function effectiveRestSeconds(e: ReasonerExercise, method: ResistanceMeth
   return e.restSeconds ?? (method.rest ? { min: method.rest[e.role].value.min * 60, max: method.rest[e.role].value.max * 60 } : null);
 }
 
-/** Week-by-week schedule from the cycled pattern; deload weeks are explicit. */
-export function weekPlan(plan: ReasonerPlan): Array<{ week: number; kind: "build" | "deload"; repZone: RepZone; setsDelta: number }> {
-  let build = 0;
+export const phaseOf = (plan: ReasonerPlan, week: number) => plan.progression.phases.find((p) => week >= p.weeks.min && week <= p.weeks.max) ?? null;
+
+export interface PlannedWeek {
+  week: number;
+  kind: "build" | "deload";
+  phase: ProgressionPhase | null;
+  /** Build-week index inside the phase (cycles the phase's rep zones). */
+  k: number;
+}
+
+/** Week-by-week schedule: each build week belongs to a phase; coach-scheduled deload weeks override. */
+export function weekPlan(plan: ReasonerPlan): PlannedWeek[] {
+  const seen = new Map<ProgressionPhase | null, number>();
   return Array.from({ length: plan.durationWeeks }, (_, i) => {
     const week = i + 1;
-    if (plan.progression.deloadWeeks.includes(week)) return { week, kind: "deload" as const, repZone: "as_prescribed" as const, setsDelta: 0 };
-    const k = build++;
-    return { week, kind: "build" as const, repZone: plan.progression.repZones[k % plan.progression.repZones.length], setsDelta: plan.progression.setsDeltas[k % plan.progression.setsDeltas.length] ?? 0 };
+    const phase = phaseOf(plan, week);
+    if (plan.progression.deloadWeeks.includes(week)) return { week, kind: "deload" as const, phase, k: 0 };
+    const k = seen.get(phase) ?? 0;
+    seen.set(phase, k + 1);
+    return { week, kind: "build" as const, phase, k };
   });
 }
 
-export const phaseOf = (plan: ReasonerPlan, week: number) => plan.progression.phases.find((p) => week >= p.weeks.min && week <= p.weeks.max) ?? null;
+/**
+ * Gate 4.0C-3C — THE weekly prescription for one exercise, computed from its
+ * listed values and the phase. Unclamped on purpose: expansion and
+ * validation use the same numbers, so a phase that would push a week outside
+ * the coach's ranges or a constraint-fit minimum is rejected, never silently
+ * corrected into something the phase text no longer describes.
+ */
+export function prescribedWeek(e: ReasonerExercise, w: PlannedWeek, method: ResistanceMethod): { sets: number; reps: { min: number; max: number }; rir: { min: number; max: number } | null; zone: RepZone } {
+  const rir = effectiveRir(e, method);
+  if (w.kind === "deload") {
+    const coachRir = method.effort.rir?.[e.role].value ?? null;
+    return { sets: method.sets[e.role].value.min, reps: { ...e.reps }, rir: rir ? { min: coachRir?.max ?? rir.max, max: coachRir?.max ?? rir.max } : null, zone: "as_prescribed" };
+  }
+  const rp = w.phase?.[e.role];
+  const z = rp ? rp.repZones[w.k % rp.repZones.length] : "as_prescribed";
+  return { sets: e.sets + (rp?.setsDelta ?? 0), reps: zone(e.reps, z), rir: rir ? { min: rir.min + (rp?.rirDelta ?? 0), max: rir.max + (rp?.rirDelta ?? 0) } : null, zone: z };
+}
+
+const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
+const ROLE_ZONE: Record<RepZone, string> = { as_prescribed: "listed rep ranges", lower_half: "heavier end of rep ranges", upper_half: "lighter end of rep ranges" };
+/** Week note rendered ONLY from the structure — it can't drift from the prescription. */
+export function weekNote(w: PlannedWeek): string {
+  if (w.kind === "deload") return `${w.phase ? `${w.phase.focus}. ` : ""}Deload week (coach-scheduled): coach's minimum sets, easiest effort.`;
+  if (!w.phase) return "Listed prescriptions.";
+  const role = (r: PhaseRolePlan) => `${ROLE_ZONE[r.repZones[w.k % r.repZones.length]]}, RIR ${signed(r.rirDelta)}, sets ${signed(r.setsDelta)}, progress: ${r.progress.replace(/_/g, " ")}`;
+  return `${w.phase.focus}. Mains: ${role(w.phase.main)}. Accessories: ${role(w.phase.accessory)}.`;
+}
 
 /** Gate 4.0C-3B — goal targets whose direct work is blocked: declared by the model or resolved by OPTIM from structured goal data. */
 export function blockedGoalTargets(plan: ReasonerPlan, reasoning: ReasoningInput): Array<{ target: string; exerciseId: string; blockedBy: string; interim: string | null }> {
@@ -66,9 +104,18 @@ export function blockedGoalTargets(plan: ReasonerPlan, reasoning: ReasoningInput
   return out;
 }
 
-const ZONE_NOTE: Record<RepZone, string> = { as_prescribed: "Prescribed rep ranges.", lower_half: "Heavier: lower half of each rep range.", upper_half: "Lighter: upper half of each rep range." };
+/** Gate 4.0C-3C — used exercises whose constraint fit is conditional or uncertain, with their exact conditions. */
+export function fitFindings(plan: ReasonerPlan, allowed: Pick<Allowed, "loadConditions">, knowledge: SynthesisInput["knowledge"]) {
+  const used = [...new Set(plan.sessions.flatMap((s) => s.exercises.map((e) => e.exerciseId)))];
+  return used.flatMap((id) => {
+    const conds = allowed.loadConditions.get(id);
+    if (!conds?.length) return [];
+    const c = conds.find((x) => x.certainty === "uncertain") ?? conds[0];
+    return [{ id, name: knowledge.getExercise(id)?.name ?? id, certainty: c.certainty, restriction: `${c.constraintId} (no ${c.demand.replace(/_/g, " ")} demand at ${c.limit} or above)`, conditions: c.conditions }];
+  });
+}
 
-export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: ReasoningInput; contextOnly: ContextOnlyConstraint[]; constraintIdMap: Record<string, string>; method: ResistanceMethod; input: SynthesisInput; model: ModelRef; nowIso: string }): PlanSpecification {
+export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: ReasoningInput; contextOnly: ContextOnlyConstraint[]; constraintIdMap: Record<string, string>; method: ResistanceMethod; input: SynthesisInput; model: ModelRef; nowIso: string; allowed?: Pick<Allowed, "loadConditions"> }): PlanSpecification {
   const { plan, method, input } = params;
   const usesRpe = method.effort.metrics.includes("rpe");
   const sessions: ResistanceSessionPlan[] = plan.sessions.map((s) => ({
@@ -81,19 +128,17 @@ export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: Reas
   const weeks: ResistanceWeekPlan[] = weekPlan(plan).map((w) => ({
     week: w.week,
     kind: w.kind,
-    note: `${phaseOf(plan, w.week) ? `${phaseOf(plan, w.week)!.focus}. ` : ""}${w.kind === "deload" ? "Deload week (coach-scheduled): coach's minimum sets, easiest effort." : `${ZONE_NOTE[w.repZone]}${w.setsDelta ? ` Sets ${w.setsDelta > 0 ? "+" : ""}${w.setsDelta}.` : ""}`}`,
+    note: weekNote(w),
     sessions: plan.sessions.map((s) =>
       s.exercises.map((e): ExercisePrescription => {
-        const range = method.sets[e.role].value;
-        const sets = w.kind === "deload" ? range.min : Math.min(range.max, Math.max(range.min, e.sets + w.setsDelta));
-        const rir = effectiveRir(e, method);
+        const pw = prescribedWeek(e, w, method);
         const coachRir = method.effort.rir?.[e.role].value ?? null;
-        const rirTarget = rir ? (w.kind === "deload" ? (coachRir?.max ?? rir.max) : rir.min) : null;
+        const rirTarget = pw.rir ? pw.rir.min : null;
         const rest = effectiveRestSeconds(e, method);
         return {
-          sets,
-          reps: zone(e.reps, w.repZone),
-          effort: rirTarget === null ? { metric: "plain", target: method.effort.plain?.value ?? "as prescribed", rirRange: null } : { metric: usesRpe ? "rpe" : "rir", target: usesRpe ? 10 - rirTarget : rirTarget, rirRange: coachRir ? { min: coachRir.min, max: coachRir.max } : rir },
+          sets: pw.sets,
+          reps: pw.reps,
+          effort: rirTarget === null ? { metric: "plain", target: method.effort.plain?.value ?? "as prescribed", rirRange: null } : { metric: usesRpe ? "rpe" : "rir", target: usesRpe ? 10 - rirTarget : rirTarget, rirRange: coachRir ? { min: coachRir.min, max: coachRir.max } : pw.rir },
           restMinutes: rest ? { min: rest.min / 60, max: rest.max / 60 } : null,
         };
       })
@@ -154,6 +199,9 @@ export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: Reas
         const by = params.constraintIdMap[g.blockedBy] ? `the coach-confirmed restriction ${g.blockedBy}` : g.blockedBy === "t_exercises_avoided" ? "the coach's avoided-exercise list" : g.blockedBy;
         return { fact: `coach_decision.resume_direct_work.${g.exerciseId}`, why: `The goal "${g.target}" still stands, but direct ${name} work is blocked by ${by}. ${g.interim ? `Interim: ${g.interim} ` : ""}Coach review is required before direct ${name} progression resumes.`, providedBy: "coach" as const };
       }),
+      ...(params.allowed ? fitFindings(plan, params.allowed, input.knowledge) : [])
+        .filter((f) => f.certainty === "uncertain")
+        .map((f) => ({ fact: `coach_decision.constraint_fit.${f.id}`, why: `OPTIM's knowledge can't establish that ${f.name} stays within ${f.restriction}, even with ${f.conditions.join(" and ")} — its bracing depends on load, setup, execution and the client. Confirm it fits before use, or swap it.`, providedBy: "coach" as const })),
       ...plan.unresolved,
     ],
     provenance: {
@@ -212,7 +260,7 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
       if (rir && !e.rir) errors.push(`${e.exerciseId}: give an rir — the coach's range is a boundary, not a prescription.`);
       if (allowed.submaximalOnly.has(e.exerciseId)) {
         const eff = effectiveRir(e, method);
-        if (e.reps.min < LOADED_DEMAND_CONDITION.minReps || (eff && eff.min < LOADED_DEMAND_CONDITION.minRir)) errors.push(`${e.exerciseId} is marked S (submaximal only): heavier or closer to failure would breach a confirmed restriction — use reps min ≥ ${LOADED_DEMAND_CONDITION.minReps} and rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}.`);
+        if (e.reps.min < LOADED_DEMAND_CONDITION.minReps || (eff && eff.min < LOADED_DEMAND_CONDITION.minRir)) errors.push(`${e.exerciseId} has conditional/uncertain constraint fit: heavier or closer to failure would breach a confirmed restriction — use reps min ≥ ${LOADED_DEMAND_CONDITION.minReps} and rir min ≥ ${LOADED_DEMAND_CONDITION.minRir} (necessary, not proof of fit).`);
       }
       const rest = method.rest?.[e.role].value;
       if (rest && e.restSeconds && (e.restSeconds.min < rest.min * 60 || e.restSeconds.max > rest.max * 60)) errors.push(`${e.exerciseId}: rest outside the coach's ${rest.min}–${rest.max} min.`);
@@ -258,6 +306,38 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
   }
   if (nextWeek - 1 !== plan.durationWeeks) errors.push(`Progression phases end at week ${nextWeek - 1}, but the program is ${plan.durationWeeks} weeks.`);
 
+  // Gate 4.0C-3C — phases ARE the prescription: their text carries no numbers, their methods are the coach's,
+  // and every computed week stays inside the coach's ranges and each exercise's constraint-fit minimums.
+  for (const ph of phases) {
+    const label = `Phase "${ph.focus}" (weeks ${ph.weeks.min}–${ph.weeks.max})`;
+    if (/\d/.test(`${ph.focus} ${ph.intent}`)) errors.push(`${label}: focus/intent must not contain numbers — reps, effort, sets and loads live in the phase structure, so the text can't contradict the prescription.`);
+    for (const role of ["main", "accessory"] as const) {
+      const allowedProgress = [...(method.progression[role].value as string[]), "hold"];
+      if (!allowedProgress.includes(ph[role].progress)) errors.push(`${label}: ${role} progress "${ph[role].progress}" isn't one of the coach's methods (${allowedProgress.join(", ")}).`);
+    }
+  }
+  if (/\d+\s*(?:[-–]\s*\d+\s*)?(?:reps?|rir|rpe|sets?)\b|\b(?:rir|rpe)\s*\d/i.test(`${plan.progression.model} ${plan.progression.rationale}`)) errors.push("progression model/why must not state reps, RIR/RPE or sets — those come from the phases.");
+  const weekIssues = new Set<string>();
+  for (const w of weekPlan(plan)) {
+    if (w.kind !== "build" || !w.phase) continue;
+    const label = `Phase "${w.phase.focus}" (weeks ${w.phase.weeks.min}–${w.phase.weeks.max})`;
+    for (const s of plan.sessions)
+      for (const e of s.exercises) {
+        const pw = prescribedWeek(e, w, method);
+        const sr = method.sets[e.role].value;
+        const rr = method.effort.rir?.[e.role].value;
+        if (pw.sets < sr.min || pw.sets > sr.max) weekIssues.add(`${label} gives ${e.exerciseId} ${pw.sets} sets, outside the coach's ${sr.min}–${sr.max}.`);
+        if (rr && pw.rir && (pw.rir.min < rr.min || pw.rir.max > rr.max)) weekIssues.add(`${label} takes ${e.exerciseId} to RIR ${pw.rir.min}–${pw.rir.max}, outside the coach's ${rr.min}–${rr.max}.`);
+        if (allowed.submaximalOnly.has(e.exerciseId) && (pw.reps.min < LOADED_DEMAND_CONDITION.minReps || (pw.rir && pw.rir.min < LOADED_DEMAND_CONDITION.minRir))) weekIssues.add(`${label} takes ${e.exerciseId} (constraint fit ${allowed.uncertain.has(e.exerciseId) ? "U" : "K"}) below its minimums (reps ≥ ${LOADED_DEMAND_CONDITION.minReps}, RIR ≥ ${LOADED_DEMAND_CONDITION.minRir}).`);
+      }
+  }
+  errors.push(...weekIssues);
+
+  for (const f of fitFindings(plan, allowed, input.knowledge)) quality.push(f.certainty === "uncertain" ? { code: "constraint_fit_uncertain", severity: "warning", message: `${f.name}: fit with ${f.restriction} is uncertain — knowledge can't establish it even when submaximal. Coach review required before use.` } : { code: "constraint_fit_conditional", severity: "info", message: `${f.name}: fits ${f.restriction} only under these conditions — ${f.conditions.join("; ")}.` });
+
+  // Gate 4.0C-3C — uncertain constraint fit: needs a rationale, and goes to coach review (never silently "safe").
+  for (const s of plan.sessions) for (const e of s.exercises) if (allowed.uncertain.has(e.exerciseId) && !e.note) errors.push(`${e.exerciseId} has uncertain constraint fit (U): say in its note why no compatible alternative serves this session.`);
+
   // Goal access: truthful about what is and isn't trainable.
   const usedIds = new Set(plan.sessions.flatMap((s) => s.exercises.map((e) => e.exerciseId)));
   for (const g of plan.goalAccess) {
@@ -274,7 +354,11 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
     if (!t.exercise || t.status === "unknown_exercise") continue;
     const g = plan.goalAccess.find((x) => x.exerciseId === t.exercise);
     const expected = t.status === "direct" ? "direct" : "blocked";
-    if (t.status === "direct" && !usedIds.has(t.exercise)) quality.push({ code: "goal_target_untrained", severity: "warning", message: `${t.target} is a stated priority and is eligible, but no session trains it.` });
+    if (t.status === "direct" && !usedIds.has(t.exercise)) {
+      if (t.source === "performance_target") errors.push(`The structured performance target "${t.target}" is trainable, but no session trains ${t.exercise}.`);
+      else quality.push({ code: "goal_target_untrained", severity: "warning", message: `${t.target} is a stated priority and is eligible, but no session trains it.` });
+    }
+    if (t.source === "performance_target" && t.status === "direct" && g?.status !== "direct") errors.push(`Record the structured performance target "${t.target}" in goalAccess as direct.`);
     if (t.status === "blocked" && (!g || g.status !== expected)) errors.push(`The priority "${t.target}" is blocked by ${t.blockedBy}; record it in goalAccess as blocked with its interim work.`);
   }
   for (const g of blockedGoalTargets(plan, reasoning)) quality.push({ code: "goal_direct_work_blocked", severity: "warning", message: `Goal "${g.target}": direct ${input.knowledge.getExercise(g.exerciseId)?.name ?? g.exerciseId} work is blocked (${g.blockedBy}); the plan is interim work${g.interim ? ` — ${g.interim}` : "."} Coach review before direct progression resumes.` });
@@ -302,7 +386,17 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
   // Quality (reviewable, not blocking).
   const byId = new Map<string, ReasonerExercise[]>();
   for (const s of plan.sessions) for (const e of s.exercises) byId.set(e.exerciseId, [...(byId.get(e.exerciseId) ?? []), e]);
-  for (const [id, uses] of byId) if (uses.length > 1 && !uses.some((u) => u.note)) quality.push({ code: "exercise_repeated", severity: "warning", message: `${input.knowledge.getExercise(id)?.name ?? id} appears ${uses.length}× without a stated reason.` });
+  // Gate 4.0C-3C — repeated exposure is normal programming. Flag only UNJUSTIFIED redundancy: identical prescriptions
+  // (role, reps, effort), no stated reason, while another eligible exercise for the same pattern and muscles existed.
+  for (const [id, uses] of byId) {
+    if (uses.length < 2 || uses.some((u) => u.note)) continue;
+    const sig = (u: ReasonerExercise) => `${u.role}|${u.reps.min}-${u.reps.max}|${u.rir ? `${u.rir.min}-${u.rir.max}` : "-"}`;
+    if (new Set(uses.map(sig)).size > 1) continue; // differentiated exposures (e.g. heavier and lighter days)
+    const ex = input.knowledge.getExercise(id);
+    const alternatives = ex ? [...allowed.exerciseIds].filter((other) => other !== id && !byId.has(other) && input.knowledge.getExercise(other)?.patterns[0] === ex.patterns[0] && input.knowledge.getExercise(other)!.primaryMuscles.some((m) => ex.primaryMuscles.includes(m))) : [];
+    if (!alternatives.length) continue; // the only eligible option for that pattern — repetition is necessary
+    quality.push({ code: "exercise_repeated_unjustified", severity: "warning", message: `${ex?.name ?? id} repeats ${uses.length}× with the same prescription and no stated reason, although ${alternatives.map((a) => input.knowledge.getExercise(a)?.name ?? a).slice(0, 3).join(", ")} could vary the stimulus.` });
+  }
   const wm = spec.resistance?.value.weeklyMuscleSets ?? {};
   const eligibleTargets = new Set(reasoning.exercises.flatMap((row) => row.split("|")[3].split(",")));
   for (const m of MAJOR_TARGETS) if (!(wm[m]?.direct > 0)) quality.push({ code: eligibleTargets.has(m) ? "target_omitted" : "target_excluded", severity: eligibleTargets.has(m) ? "warning" : "info", message: eligibleTargets.has(m) ? `${m.replace(/_/g, " ")} gets no direct work although eligible exercises exist.` : `${m.replace(/_/g, " ")} gets no direct work: no eligible exercise trains it.` });

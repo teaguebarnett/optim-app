@@ -13,7 +13,7 @@
 
 import { effectiveConstraints, type Constraint, type ConstraintSet } from "./constraints.ts";
 import { levelRank } from "./knowledge/taxonomy.ts";
-import { LOADED_DEMAND_CONDITION, type ExerciseEntry, type ExerciseFilter, type FitnessKnowledgeRegistry } from "./knowledge/types.ts";
+import { LOADED_DEMAND_CONDITION, type DemandCompatibility, type ExerciseEntry, type ExerciseFilter, type FitnessKnowledgeRegistry } from "./knowledge/types.ts";
 
 export interface EligibilityViolation {
   constraintId: string;
@@ -22,10 +22,15 @@ export interface EligibilityViolation {
   reason: string;
 }
 
-/** Gate 4.0C-3B — eligible only when kept submaximal: a demand restriction the
- * exercise meets at its base level but would breach when performed heavy or
- * close to failure (ExerciseEntry.loadedDemands). */
+/** Gate 4.0C-3B/3C — a demand restriction the exercise meets at its base level
+ * but would breach when performed heavy or close to failure
+ * (ExerciseEntry.loadedDemands). Staying submaximal is necessary, not proof:
+ * `certainty` says whether knowledge can rely on the stated conditions
+ * ("conditional") or can't establish compatibility ("uncertain" → coach review). */
 export interface LoadCondition {
+  certainty: "conditional" | "uncertain";
+  /** Execution/loading conditions, in coach language (necessary, not sufficient when uncertain). */
+  conditions: string[];
   constraintId: string;
   enforcement: Constraint["enforcement"];
   demand: string;
@@ -35,6 +40,14 @@ export interface LoadCondition {
   /** Prescriptions must allow at least this many reps and keep at least this many reps in reserve. */
   minReps: number;
   minRir: number;
+}
+
+/** The overall compatibility of an exercise with a constraint set (Gate 4.0C-3C). */
+export function demandCompatibility(e: ExerciseEligibility): DemandCompatibility {
+  if (!e.eligible) return "incompatible";
+  const hard = e.loadConditions.filter((c) => c.enforcement === "hard");
+  if (hard.some((c) => c.certainty === "uncertain")) return "uncertain";
+  return hard.length ? "conditional" : "compatible";
 }
 
 export interface ExerciseEligibility {
@@ -61,7 +74,11 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
           if (levelRank(exercise.demands[t.demand]) >= levelRank(t.atOrAbove)) v("metadata", `${t.demand} demand is ${exercise.demands[t.demand]} (limit: below ${t.atOrAbove})`);
           else {
             const loaded = exercise.loadedDemands?.[t.demand];
-            if (loaded && levelRank(loaded) >= levelRank(t.atOrAbove)) loadConditions.push({ constraintId: c.id, enforcement: c.enforcement, demand: t.demand, limit: t.atOrAbove, loadedLevel: loaded, ...LOADED_DEMAND_CONDITION });
+            if (loaded && levelRank(loaded) >= levelRank(t.atOrAbove)) {
+              const supported = exercise.trunkSupport !== "none";
+              const conditions = [`at least ${LOADED_DEMAND_CONDITION.minReps} reps per set`, `at least ${LOADED_DEMAND_CONDITION.minRir} reps in reserve`, ...(supported ? ["trunk kept against the pad or bench throughout"] : [])];
+              loadConditions.push({ certainty: supported ? "conditional" : "uncertain", conditions, constraintId: c.id, enforcement: c.enforcement, demand: t.demand, limit: t.atOrAbove, loadedLevel: loaded, ...LOADED_DEMAND_CONDITION });
+            }
           }
           break;
         case "avoid_position":

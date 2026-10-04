@@ -49,7 +49,7 @@ console.log("\nGate 4.0C-1B — resistance knowledge pack\n");
 
 check("1. Knowledge registry validates", () => {
   assert.deepEqual(validateKnowledge({ sources: ALL_SOURCES, entries: shippedEntries() }), []);
-  assert.equal(K.version, "0.3.0");
+  assert.equal(K.version, "0.4.0");
   assert.equal(K.byDomain("anatomy").length, Object.keys(MUSCLES).length);
   assert.ok(K.exercises().length >= 60, `${K.exercises().length} exercises`);
   assert.ok(K.concepts().length >= 12);

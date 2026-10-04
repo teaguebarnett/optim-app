@@ -8,7 +8,7 @@ import { answerAllRequired } from "../../../coach/calibration/fixtures.ts";
 import { buildMethodFromCalibration, type ConfirmedCoachMethod } from "../../../coach/coach-brain.ts";
 import type { HealthReviewRecord, OnboardingProgress } from "../../../coach/types.ts";
 import { deriveClientState } from "../../client-state.ts";
-import { withCoachConfirmedGoal, type GoalSpec } from "../../goal-contract.ts";
+import { withCoachConfirmedGoal, type GoalSpec, type PerformanceTargetValue } from "../../goal-contract.ts";
 import type { CoachStructuredRestriction } from "../../constraints.ts";
 import { FOUNDATION_KNOWLEDGE } from "../../knowledge/registry.ts";
 import { buildSynthesisInput, type SynthesisInput } from "../../synthesis-input.ts";
@@ -70,7 +70,7 @@ const BASE = {
 };
 export type Patch = Record<string, Record<string, unknown> | undefined>;
 
-export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMethod | null; restrictions?: CoachStructuredRestriction[]; healthReview?: HealthReviewRecord | null; coachConfirmedGoal?: GoalSpec; clientId?: string } = {}): SynthesisInput {
+export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMethod | null; restrictions?: CoachStructuredRestriction[]; healthReview?: HealthReviewRecord | null; coachConfirmedGoal?: GoalSpec; coachConfirmedTargets?: PerformanceTargetValue[]; clientId?: string } = {}): SynthesisInput {
   const id = opts.clientId ?? "client-eval";
   const answers = structuredClone(BASE) as Record<string, Record<string, unknown>>;
   for (const [step, values] of Object.entries(opts.patch ?? {})) {
@@ -80,7 +80,7 @@ export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMetho
   const onboarding = { clientId: id, workspaceId: WS, currentStepIndex: 6, answers, completedAtIso: NOW, updatedAtIso: NOW } as unknown as OnboardingProgress;
   const client = deriveClientState({ clientProfileId: id, workspaceId: WS, onboarding, healthReview: opts.healthReview ?? null });
   const input = buildSynthesisInput({ knowledge: FOUNDATION_KNOWLEDGE, coachMethod: opts.coach === undefined ? coachMethod() : opts.coach, client, coachStructuredRestrictions: opts.restrictions });
-  return opts.coachConfirmedGoal ? { ...input, goal: withCoachConfirmedGoal(input.goal, opts.coachConfirmedGoal) } : input;
+  return opts.coachConfirmedGoal ? { ...input, goal: withCoachConfirmedGoal(input.goal, opts.coachConfirmedGoal, opts.coachConfirmedTargets) } : input;
 }
 
 export const restrict = (tags: CoachStructuredRestriction["tags"], id = "eval"): CoachStructuredRestriction[] => [{ id, interprets: [], description: "Coach-confirmed restriction (eval)", tags, ref: "eval" }];
@@ -98,6 +98,8 @@ const rangeOf = (v: unknown) => {
 /** The v2 wire shape (what a model returns) — loose on purpose so tests can corrupt any field. */
 export interface WireExercise { id: string; role: string; sets: number; reps: number[]; rir?: number[]; rest?: number[]; note?: string }
 export interface WireSession { day: string; title: string; purpose: string; exercises: WireExercise[] }
+export interface WireRolePlan { zones: string[]; rir?: number; sets?: number; progress: string }
+export interface WirePhase { weeks: number[]; focus: string; intent: string; main: WireRolePlan; accessory: WireRolePlan }
 export interface WirePlan {
   domain: string;
   goalEmphasis: { primary: string; secondary: string | null; why: string };
@@ -106,7 +108,7 @@ export interface WirePlan {
   architecture: { split: string; name: string; why: string };
   sessions: WireSession[];
   weeks: number;
-  progression: { model: string; why: string; phases: Array<{ weeks: number[]; focus: string; intent: string }>; repZones: string[]; setsDeltas?: number[]; deloadWeeks: number[] };
+  progression: { model: string; why: string; phases: WirePhase[]; deloadWeeks: number[] };
   deviations?: Array<{ field: string; because: string; coach: string[]; client: string[] }>;
   goalAccess?: Array<{ target: string; exercise: string; status: string; blockedBy?: string; interim?: string }>;
   constraintsApplied: Array<{ id: string; how: string }>;
@@ -124,6 +126,7 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
   const every = /^fixed every (\d+)/.exec(deload)?.[1];
   const weeks = ri.anchors.weeks?.value ?? 8;
   const rirRule = (role: "main" | "accessory") => rule(ri, `RIR ${role}`);
+  const progressFor = (role: "main" | "accessory") => ((rule(ri, `progression order ${role}`) ?? rule(ri, "progression order main"))?.[2] as string[] | undefined)?.[0] ?? "hold";
   const rows = ri.exercises.map((r) => r.split("|"));
   let cursor = 0;
   const sessions = schedule.map((day, i) => ({
@@ -133,13 +136,13 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
     exercises: [0, 1, 2].map((k) => {
       const row = rows[cursor++ % rows.length];
       const role = k === 0 && row[5] === "C" ? "main" : "accessory";
-      const submax = row[11] === "S";
+      const submax = row[11] === "K" || row[11] === "U";
       const coachRir = rirRule(role) ? rangeOf(rirRule(role)![2]) : null;
       // Differentiated effort: mains near the hard end, accessories further from failure; S rows stay submaximal.
       const lo = coachRir ? Math.min(coachRir.max, Math.max(coachRir.min + (role === "accessory" ? 1 : 0), submax ? 2 : 0)) : 0;
       const rir = coachRir ? [lo, Math.max(lo, coachRir.max)] : undefined;
       const repMin = submax ? Math.min(reps[role].max, Math.max(reps[role].min, 6)) : reps[role].min;
-      return { id: row[0], role, sets: sets[role].min, reps: [repMin, reps[role].max], ...(rir ? { rir } : {}), note: "Scripted; repeats only when the pool is small." };
+      return { id: row[0], role, sets: sets[role].min, reps: [repMin, reps[role].max], ...(rir ? { rir } : {}), note: row[11] === "U" ? "Scripted: no compatible alternative in the pool for this slot." : "Scripted; repeats only when the pool is small." };
     }),
   }));
   const coachKey = ri.coach.rules[0][0];
@@ -154,7 +157,7 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
     sessions,
     weeks,
     goalAccess: ri.goal.targets.filter((t) => t.exercise && t.status !== "unknown_exercise").map((t) => (t.status === "direct" ? { target: t.target, exercise: t.exercise!, status: "direct" } : { target: t.target, exercise: t.exercise!, status: "blocked", ...(t.blockedBy ? { blockedBy: t.blockedBy } : {}), interim: "Scripted interim: trains the muscles involved." })),
-    progression: { model: "scripted", why: "Scripted.", phases: [{ weeks: [1, weeks], focus: "Scripted build", intent: "Scripted: one phase." }], repZones: ["as_prescribed"], deloadWeeks: every ? Array.from({ length: Math.floor(weeks / Number(every)) }, (_, i) => (i + 1) * Number(every)) : [] },
+    progression: { model: "scripted", why: "Scripted.", phases: [{ weeks: [1, weeks], focus: "Scripted build", intent: "Scripted: one phase.", main: { zones: ["as_prescribed"], rir: 0, sets: 0, progress: progressFor("main") }, accessory: { zones: ["as_prescribed"], rir: 0, sets: 0, progress: progressFor("accessory") } }], deloadWeeks: every ? Array.from({ length: Math.floor(weeks / Number(every)) }, (_, i) => (i + 1) * Number(every)) : [] },
     constraintsApplied: ri.constraints.map((c) => ({ id: c.id, how: "Respected (scripted)." })),
     decisions: (["frequency", "structure", "schedule", "exercise_selection", "prescription", "effort", "progression", "recovery", "duration"] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", coach: [coachKey], client: factRef ? [factRef] : [], evidence: claimRef ? [claimRef] : [] })),
   };

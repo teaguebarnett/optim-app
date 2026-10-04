@@ -16,15 +16,16 @@ import { effectiveConstraints, type Constraint, type ConstraintTag } from "../co
 import { FOUNDATION_KNOWLEDGE_VERSION } from "../knowledge/registry.ts";
 import { LOADED_DEMAND_CONDITION, type FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import type { PoolResult } from "../planners/resistance/planner.ts";
+import type { LoadCondition } from "../exercise-eligibility.ts";
 import type { SynthesisInput } from "../synthesis-input.ts";
 import { availableApparatus, availableEquipment, resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
 import type { ResistanceMethod } from "../planners/resistance/method.ts";
 import type { DomainRouting } from "./domains.ts";
 import type { EvidencePacket } from "./retrieval.ts";
 
-export const REASONER_VERSION = "fitness-reasoner-v1.2.0";
+export const REASONER_VERSION = "fitness-reasoner-v1.3.0";
 
-export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment|demands skill,stability,bracing,spine,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|ordering E/F/L|load S = submaximal only: heavier or closer to failure would breach a constraint, so reps min ≥ ${LOADED_DEMAND_CONDITION.minReps} and rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}`;
+export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment|demands skill,stability,bracing,spine,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir} and the trunk kept against the pad/bench); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review)`;
 
 export interface ReasoningInput {
   v: { reasoner: string; prompt: string; knowledge: string };
@@ -52,6 +53,10 @@ export interface GoalTarget {
   exercise: string | null;
   status: "direct" | "blocked" | "unavailable" | "unknown_exercise";
   blockedBy: string | null;
+  /** Gate 4.0C-3C — "performance_target" (structured GoalContract target, preferred) or "priority_lift". */
+  source: "performance_target" | "priority_lift";
+  /** The structured target itself, when it has one (e.g. load 405 lb × 1). */
+  metric?: { kind: string; value: number; unit: string; atReps: number | null; timeframe: { weeks?: number; byDateIso?: string } | null };
 }
 
 export interface Allowed {
@@ -60,8 +65,12 @@ export interface Allowed {
   knowledgeRefs: Set<string>;
   constraintIds: Set<string>;
   exerciseIds: Set<string>;
-  /** Eligible only when prescribed submaximally (LOADED_DEMAND_CONDITION). */
+  /** Eligible only when prescribed submaximally (LOADED_DEMAND_CONDITION) — conditional or uncertain. */
   submaximalOnly: Set<string>;
+  /** Compatibility knowledge can't establish (Gate 4.0C-3C): use needs a rationale and goes to coach review. */
+  uncertain: Set<string>;
+  /** Exercise id → its load conditions (constraint, demand, limit, stated conditions, certainty). */
+  loadConditions: Map<string, LoadCondition[]>;
   /** Exercise id → what blocks it (constraint alias or "t_exercises_avoided"). */
   blockedBy: Map<string, string>;
 }
@@ -69,6 +78,8 @@ export interface Allowed {
 /** Constraints the model never sees, with how OPTIM accounted for them. */
 export type ContextOnlyConstraint = { constraintId: string; how: string };
 
+/** Exercise-row constraint-fit code (Gate 4.0C-3C). */
+const fitCode = (conds: Array<{ certainty: "conditional" | "uncertain" }> | undefined) => (!conds?.length ? "-" : conds.some((c) => c.certainty === "uncertain") ? "U" : "K");
 const L = (l: string) => ({ none: "N", low: "L", moderate: "M", high: "H" })[l] ?? "?";
 const factRef = (f: Fact<unknown>) => (isKnown(f) ? f.source.ref : (f as { ref: string }).ref);
 
@@ -184,13 +195,20 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
   // Structured goal targets (strength priority lifts) resolved against knowledge — never from free text.
   const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const poolIds = new Set(params.pool.pool.map((e) => e.id));
-  const targets: GoalTarget[] = [input.goal.primary, ...input.goal.secondary].flatMap((g) => (g?.class === "strength" && isKnown(g.priorityLifts) ? g.priorityLifts.value : [])).map((lift) => {
-    const ex = input.knowledge.exercises().find((e) => [e.name, ...e.aliases].some((n) => norm(n) === norm(lift)));
-    if (!ex) return { target: lift, exercise: null, status: "unknown_exercise" as const, blockedBy: null };
-    if (poolIds.has(ex.id)) return { target: lift, exercise: ex.id, status: "direct" as const, blockedBy: null };
+  // Gate 4.0C-3C: structured performance targets first; priority lifts only for lifts they don't already cover.
+  const resolve = (name: string, source: GoalTarget["source"], target: string, metric?: GoalTarget["metric"]): GoalTarget => {
+    const ex = input.knowledge.getExercise(name) ?? input.knowledge.exercises().find((e) => [e.name, ...e.aliases].some((n) => norm(n) === norm(name)));
+    const base = { target, source, ...(metric ? { metric } : {}) };
+    if (!ex) return { ...base, exercise: null, status: "unknown_exercise", blockedBy: null };
+    if (poolIds.has(ex.id)) return { ...base, exercise: ex.id, status: "direct", blockedBy: null };
     const by = blockedBy.get(ex.id);
-    return { target: lift, exercise: ex.id, status: by ? ("blocked" as const) : ("unavailable" as const), blockedBy: by ?? null };
-  });
+    return { ...base, exercise: ex.id, status: by ? "blocked" : "unavailable", blockedBy: by ?? null };
+  };
+  const fromTargets = input.goal.performanceTargets.map((t) =>
+    resolve(t.exercise, "performance_target", `${t.exercise}: ${t.value} ${t.unit}${t.atReps ? ` × ${t.atReps}` : ""}${t.timeframe?.weeks ? ` in ${t.timeframe.weeks} weeks` : t.timeframe?.byDateIso ? ` by ${t.timeframe.byDateIso}` : ""}`, { kind: t.metric, value: t.value, unit: t.unit, atReps: t.atReps, timeframe: t.timeframe })
+  );
+  const fromLifts = [input.goal.primary, ...input.goal.secondary].flatMap((g) => (g?.class === "strength" && isKnown(g.priorityLifts) ? g.priorityLifts.value : [])).map((lift) => resolve(lift, "priority_lift", lift));
+  const targets: GoalTarget[] = [...fromTargets, ...fromLifts.filter((l) => !l.exercise || !fromTargets.some((t) => t.exercise === l.exercise))];
 
   // Anchors: the client's current habit inside the coach's range and availability; the coach's preferred (else shortest) block.
   const availCount = isKnown(c.schedule.availableDays) ? c.schedule.availableDays.value.length : b.max!;
@@ -217,7 +235,7 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
     evidence: params.evidence.claims.map((x) => ({ ref: x.ref, claim: x.statement, source: x.support, ...(x.parameters ? { params: x.parameters } : {}) })),
     exerciseLegend: EXERCISE_ROW_LEGEND,
     exercises: params.evidence.exercises.map((e) =>
-      [e.id, e.name, e.patterns.join(","), e.primary.join(","), e.secondary.join(","), e.mechanics === "compound" ? "C" : "I", e.laterality[0].toUpperCase(), e.equipment, [e.demands.skill, e.demands.stability, e.demands.bracing, e.demands.spinal_loading, e.demands.systemic_fatigue].map(L).join(""), [e.suitability.strength, e.suitability.hypertrophy, e.suitability.power].map(L).join(""), e.ordering[0].toUpperCase(), params.pool.loadConditions.has(e.id) ? "S" : "-"].join("|")
+      [e.id, e.name, e.patterns.join(","), e.primary.join(","), e.secondary.join(","), e.mechanics === "compound" ? "C" : "I", e.laterality[0].toUpperCase(), e.equipment, [e.demands.skill, e.demands.stability, e.demands.bracing, e.demands.spinal_loading, e.demands.systemic_fatigue].map(L).join(""), [e.suitability.strength, e.suitability.hypertrophy, e.suitability.power].map(L).join(""), e.ordering[0].toUpperCase(), fitCode(params.pool.loadConditions.get(e.id))].join("|")
     ),
     unresolved: params.unresolved,
   };
@@ -232,6 +250,8 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
       constraintIds: new Set(enforced.map((x) => x.id)),
       exerciseIds: new Set(params.evidence.exercises.map((e) => e.id)),
       submaximalOnly: new Set(params.evidence.exercises.map((e) => e.id).filter((id) => params.pool.loadConditions.has(id))),
+      loadConditions: new Map([...params.pool.loadConditions].map(([id, conds]) => [id, conds.map((c) => ({ ...c, constraintId: aliasOf.get(c.constraintId) ?? c.constraintId }))])),
+      uncertain: new Set(params.evidence.exercises.map((e) => e.id).filter((id) => fitCode(params.pool.loadConditions.get(id)) === "U")),
       blockedBy,
     },
   };
