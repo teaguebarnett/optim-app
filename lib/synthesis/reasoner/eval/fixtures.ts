@@ -106,21 +106,24 @@ export interface WirePlan {
   architecture: { split: string; name: string; why: string };
   sessions: WireSession[];
   weeks: number;
-  progression: { model: string; why: string; repZones: string[]; setsDeltas?: number[]; deloadWeeks: number[] };
+  progression: { model: string; why: string; phases: Array<{ weeks: number[]; focus: string; intent: string }>; repZones: string[]; setsDeltas?: number[]; deloadWeeks: number[] };
+  deviations?: Array<{ field: string; because: string; coach: string[]; client: string[] }>;
+  goalAccess?: Array<{ target: string; exercise: string; status: string; blockedBy?: string; interim?: string }>;
   constraintsApplied: Array<{ id: string; how: string }>;
   conflicts?: Array<{ rule: string; issue: string }>;
   decisions: Array<{ topic: string; decision: string; because: string; coach: string[]; client: string[]; evidence: string[] }>;
 }
 
 export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void): { status: "PLAN"; plan: WirePlan } {
-  const days = ri.bounds.days[0];
+  const days = ri.anchors.days.value;
   const schedule = ri.bounds.available.slice(0, days);
   const split = (rule(ri, `splits allowed at ${days} days`)?.[2] as string[] | undefined)?.[0] ?? "full_body";
   const sets = { main: rangeOf(rule(ri, "sets main")![2]), accessory: rangeOf(rule(ri, "sets accessory")![2]) };
   const reps = { main: rangeOf(rule(ri, "reps main")![2]), accessory: rangeOf(rule(ri, "reps accessory")![2]) };
   const deload = String(rule(ri, "deloads")![2]);
   const every = /^fixed every (\d+)/.exec(deload)?.[1];
-  const weeks = ri.bounds.weeks?.[0] ?? 8;
+  const weeks = ri.anchors.weeks?.value ?? 8;
+  const rirRule = (role: "main" | "accessory") => rule(ri, `RIR ${role}`);
   const rows = ri.exercises.map((r) => r.split("|"));
   let cursor = 0;
   const sessions = schedule.map((day, i) => ({
@@ -130,7 +133,13 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
     exercises: [0, 1, 2].map((k) => {
       const row = rows[cursor++ % rows.length];
       const role = k === 0 && row[5] === "C" ? "main" : "accessory";
-      return { id: row[0], role, sets: sets[role].min, reps: [reps[role].min, reps[role].max], note: "Scripted; repeats only when the pool is small." };
+      const submax = row[11] === "S";
+      const coachRir = rirRule(role) ? rangeOf(rirRule(role)![2]) : null;
+      // Differentiated effort: mains near the hard end, accessories further from failure; S rows stay submaximal.
+      const lo = coachRir ? Math.min(coachRir.max, Math.max(coachRir.min + (role === "accessory" ? 1 : 0), submax ? 2 : 0)) : 0;
+      const rir = coachRir ? [lo, Math.max(lo, coachRir.max)] : undefined;
+      const repMin = submax ? Math.min(reps[role].max, Math.max(reps[role].min, 6)) : reps[role].min;
+      return { id: row[0], role, sets: sets[role].min, reps: [repMin, reps[role].max], ...(rir ? { rir } : {}), note: "Scripted; repeats only when the pool is small." };
     }),
   }));
   const coachKey = ri.coach.rules[0][0];
@@ -144,9 +153,10 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
     architecture: { split, name: "Scripted", why: "Scripted." },
     sessions,
     weeks,
-    progression: { model: "scripted", why: "Scripted.", repZones: ["as_prescribed"], deloadWeeks: every ? Array.from({ length: Math.floor(weeks / Number(every)) }, (_, i) => (i + 1) * Number(every)) : [] },
+    goalAccess: ri.goal.targets.filter((t) => t.exercise && t.status !== "unknown_exercise").map((t) => (t.status === "direct" ? { target: t.target, exercise: t.exercise!, status: "direct" } : { target: t.target, exercise: t.exercise!, status: "blocked", ...(t.blockedBy ? { blockedBy: t.blockedBy } : {}), interim: "Scripted interim: trains the muscles involved." })),
+    progression: { model: "scripted", why: "Scripted.", phases: [{ weeks: [1, weeks], focus: "Scripted build", intent: "Scripted: one phase." }], repZones: ["as_prescribed"], deloadWeeks: every ? Array.from({ length: Math.floor(weeks / Number(every)) }, (_, i) => (i + 1) * Number(every)) : [] },
     constraintsApplied: ri.constraints.map((c) => ({ id: c.id, how: "Respected (scripted)." })),
-    decisions: (["frequency", "structure", "schedule", "exercise_selection", "prescription", "progression", "recovery"] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", coach: [coachKey], client: factRef ? [factRef] : [], evidence: claimRef ? [claimRef] : [] })),
+    decisions: (["frequency", "structure", "schedule", "exercise_selection", "prescription", "effort", "progression", "recovery", "duration"] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", coach: [coachKey], client: factRef ? [factRef] : [], evidence: claimRef ? [claimRef] : [] })),
   };
   tweak?.(plan);
   return { status: "PLAN", plan };

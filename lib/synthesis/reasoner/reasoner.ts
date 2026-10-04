@@ -111,7 +111,7 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     return finish({ status: "NEEDS_INPUT", source: "planning", missing, routing }, { missing, needsInputSource: "planning" });
   }
   const unresolved = [...pool.unknownApparatus.entries()].map(([a, ids]) => ({ fact: `client.apparatus.${a}`, why: `Unknown whether a ${a.replace(/_/g, " ")} is available; ${ids.length} exercise(s) needing it were left out.` }));
-  const { reasoning, allowed, contextOnly, constraintIdMap } = buildReasoningInput({ input, method, routing, secondary: emphasis?.secondary ?? null, evidence, promptVersion: REASONER_PROMPT_VERSION, unresolved });
+  const { reasoning, allowed, contextOnly, constraintIdMap } = buildReasoningInput({ input, method, routing, secondary: emphasis?.secondary ?? null, evidence, promptVersion: REASONER_PROMPT_VERSION, unresolved, pool });
   run.input = reasoning;
   run.hashes.input = sha256(reasoning);
 

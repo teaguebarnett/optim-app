@@ -54,14 +54,19 @@ export function reviewPage(params: { id: string; title: string; result: Reasoner
           const name = K.getExercise(e.exerciseId)?.name ?? e.exerciseId;
           const sp = r.spec.resistance?.value.weeks[0]?.sessions[p.sessions.indexOf(s)]?.[s.exercises.indexOf(e)];
           const rest = sp?.restMinutes ? `${fmtRange({ min: Math.round(sp.restMinutes.min * 60), max: Math.round(sp.restMinutes.max * 60) })}s` : "";
-          return `${e.role === "main" ? "**" : ""}${name}${e.role === "main" ? "**" : ""} ${e.sets}×${fmtRange(e.reps)}${sp && sp.effort.metric !== "plain" ? ` @ ${sp.effort.metric.toUpperCase()} ${sp.effort.target}` : ""}${rest ? `, ${rest}` : ""}${e.note ? ` _(${e.note})_` : ""}`;
+          // The exercise's own effort RANGE (Gate 4.0C-3B: a single hard-end number hid deliberate ranges).
+          const effort = e.rir ? (sp?.effort.metric === "rpe" ? ` @ RPE ${fmtRange({ min: 10 - e.rir.max, max: 10 - e.rir.min })}` : ` @ RIR ${fmtRange(e.rir)}`) : sp && sp.effort.metric !== "plain" ? ` @ ${sp.effort.metric.toUpperCase()} ${sp.effort.target}` : "";
+          return `${e.role === "main" ? "**" : ""}${name}${e.role === "main" ? "**" : ""} ${e.sets}×${fmtRange(e.reps)}${effort}${rest ? `, ${rest}` : ""}${e.note ? ` _(${e.note})_` : ""}`;
         })
         .join("<br>");
       lines.push(`| ${s.day.slice(0, 3)} | ${s.title} | ${s.purpose} | ${ex} |`);
     }
+    if (p.goalAccess.length) lines.splice(lines.indexOf("**Plan**") + 1, 0, "", "**Goal access**", "", ...p.goalAccess.map((g) => `- ${g.target}: ${K.getExercise(g.exerciseId)?.name ?? g.exerciseId} — ${g.status === "blocked" ? `**direct work blocked** (${g.blockedBy}). Interim: ${g.interim ?? "—"} Coach review required before direct progression resumes.` : "trained directly."}`));
+    if (input?.anchors) lines.push("", `- Anchors: ${input.anchors.days.value} days (${input.anchors.days.basis})${input.anchors.weeks ? `; ${input.anchors.weeks.value} weeks (${input.anchors.weeks.basis})` : ""}${p.deviations.length ? ` · **Deviations:** ${p.deviations.map((d) => `${d.field}: ${d.because}`).join("; ")}` : " · no deviations"}`);
     lines.push("", `- Progression: ${p.progression.model} — ${p.progression.rationale} (rep zones cycle: ${p.progression.repZones.join(" → ")}${p.progression.deloadWeeks.length ? `; deload weeks ${p.progression.deloadWeeks.join(", ")}` : ""})`);
+    for (const ph of p.progression.phases) lines.push(`  - Weeks ${fmtRange(ph.weeks)} — **${ph.focus}**: ${ph.intent}`);
     lines.push("", "**Why (major decisions and their provenance)**", "");
-    for (const d of p.decisions.slice(0, 6)) lines.push(`- **${d.decision}** — ${d.because} _[coach: ${d.coachRuleKeys.join(", ") || "—"}; client: ${d.clientFactRefs.map((x) => x.split(".").pop()).join(", ") || "—"}; evidence: ${d.knowledgeRefs.map((x) => x.split("#")[1]).join(", ") || "—"}]_`);
+    for (const d of p.decisions.slice(0, 8)) lines.push(`- **${d.decision}** — ${d.because} _[coach: ${d.coachRuleKeys.join(", ") || "—"}; client: ${d.clientFactRefs.map((x) => x.split(".").pop()).join(", ") || "—"}; evidence: ${d.knowledgeRefs.map((x) => x.split("#")[1]).join(", ") || "—"}]_`);
     lines.push("", "**Constraints applied**", "");
     for (const c of r.spec.constraintsApplied) lines.push(`- ${c.constraintId.split(":").slice(1).join(":") || c.constraintId}: ${c.how}`);
     const attention = [...p.conflicts.map((c) => `Tension with method (${c.coachRuleKey}): ${c.issue}`), ...p.assumptions.map((a) => `Assumption: ${a}`), ...p.unresolved.map((u) => `Open (${u.providedBy}): ${u.fact} — ${u.why}`), ...r.quality.filter((q) => q.severity === "warning").map((q) => `Validator warning: ${q.message}`)];

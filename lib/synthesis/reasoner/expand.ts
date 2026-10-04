@@ -22,6 +22,7 @@ import { MAJOR_TARGETS } from "../planners/resistance/templates.ts";
 import type { DecisionTopic, ReasonerExercise, ReasonerPlan, RepZone } from "./contract.ts";
 import type { Allowed, ContextOnlyConstraint, ReasoningInput } from "./input.ts";
 import { REASONER_VERSION } from "./input.ts";
+import { LOADED_DEMAND_CONDITION } from "../knowledge/types.ts";
 
 export interface ModelRef {
   provider: string;
@@ -56,6 +57,15 @@ export function weekPlan(plan: ReasonerPlan): Array<{ week: number; kind: "build
   });
 }
 
+export const phaseOf = (plan: ReasonerPlan, week: number) => plan.progression.phases.find((p) => week >= p.weeks.min && week <= p.weeks.max) ?? null;
+
+/** Gate 4.0C-3B — goal targets whose direct work is blocked: declared by the model or resolved by OPTIM from structured goal data. */
+export function blockedGoalTargets(plan: ReasonerPlan, reasoning: ReasoningInput): Array<{ target: string; exerciseId: string; blockedBy: string; interim: string | null }> {
+  const out = plan.goalAccess.filter((g) => g.status === "blocked").map((g) => ({ target: g.target, exerciseId: g.exerciseId, blockedBy: g.blockedBy ?? "unknown", interim: g.interim ? g.interim.replace(/[.\s]+$/, "") + "." : null }));
+  for (const t of reasoning.goal.targets) if (t.exercise && (t.status === "blocked" || t.status === "unavailable") && !out.some((o) => o.exerciseId === t.exercise)) out.push({ target: t.target, exerciseId: t.exercise, blockedBy: t.blockedBy ?? "equipment", interim: null });
+  return out;
+}
+
 const ZONE_NOTE: Record<RepZone, string> = { as_prescribed: "Prescribed rep ranges.", lower_half: "Heavier: lower half of each rep range.", upper_half: "Lighter: upper half of each rep range." };
 
 export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: ReasoningInput; contextOnly: ContextOnlyConstraint[]; constraintIdMap: Record<string, string>; method: ResistanceMethod; input: SynthesisInput; model: ModelRef; nowIso: string }): PlanSpecification {
@@ -71,7 +81,7 @@ export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: Reas
   const weeks: ResistanceWeekPlan[] = weekPlan(plan).map((w) => ({
     week: w.week,
     kind: w.kind,
-    note: w.kind === "deload" ? "Deload week (coach-scheduled): coach's minimum sets, easiest effort." : `${ZONE_NOTE[w.repZone]}${w.setsDelta ? ` Sets ${w.setsDelta > 0 ? "+" : ""}${w.setsDelta}.` : ""}`,
+    note: `${phaseOf(plan, w.week) ? `${phaseOf(plan, w.week)!.focus}. ` : ""}${w.kind === "deload" ? "Deload week (coach-scheduled): coach's minimum sets, easiest effort." : `${ZONE_NOTE[w.repZone]}${w.setsDelta ? ` Sets ${w.setsDelta > 0 ? "+" : ""}${w.setsDelta}.` : ""}`}`,
     sessions: plan.sessions.map((s) =>
       s.exercises.map((e): ExercisePrescription => {
         const range = method.sets[e.role].value;
@@ -120,7 +130,7 @@ export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: Reas
     durationWeeks: decided(plan.durationWeeks, ["duration"], `Program of ${plan.durationWeeks} weeks.`, "reasoner.duration"),
     volume: decided({ unit: "sets_per_muscle_per_week" as const, byTarget: Object.fromEntries(Object.entries(weeklyMuscleSets).map(([m, v]) => [m, { min: v.direct, max: v.direct }])) }, ["prescription", "exercise_selection"], "Weekly volume follows from the selected exercises and sets.", "reasoner.volume"),
     intensity: decided({ method: method.effort.rir ? (usesRpe ? ("rpe" as const) : ("rir" as const)) : ("plain_language" as const), range: method.effort.rir ? { min: method.effort.rir.main.value.min, max: method.effort.rir.main.value.max } : null }, ["prescription"], "Effort inside the coach's range.", "reasoner.prescription"),
-    progression: decided({ model: plan.progression.model, rule: plan.progression.rationale }, ["progression"], plan.progression.rationale, "reasoner.progression"),
+    progression: decided({ model: plan.progression.model, rule: `${plan.progression.rationale} Phases: ${plan.progression.phases.map((p) => `weeks ${p.weeks.min}–${p.weeks.max} ${p.focus} (${p.intent})`).join("; ")}` }, ["progression"], plan.progression.rationale, "reasoner.progression"),
     recovery: decided({ deloadEveryWeeks: null, approach: plan.progression.deloadWeeks.length ? `deload weeks ${plan.progression.deloadWeeks.join(", ")}` : deload.approach }, ["recovery"], `Deloads per the coach's method (${deload.approach}).`, "reasoner.recovery"),
     monitoring: decided({ metrics: monitoring, cadence: "every session" }, ["recovery", "progression"], "Monitoring per the coach's progression and deload rules.", "reasoner.monitoring"),
     resistance: decided(
@@ -138,7 +148,14 @@ export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: Reas
     quality: [],
     constraintsApplied: [...plan.constraintsApplied.map((c) => ({ constraintId: params.constraintIdMap[c.constraintId] ?? c.constraintId, how: c.how })), ...params.contextOnly],
     assumptions: plan.assumptions.map((statement) => ({ statement, basis: "planner_rule" as const })),
-    unresolved: plan.unresolved,
+    unresolved: [
+      ...blockedGoalTargets(plan, params.reasoning).map((g) => {
+        const name = input.knowledge.getExercise(g.exerciseId)?.name ?? g.exerciseId;
+        const by = params.constraintIdMap[g.blockedBy] ? `the coach-confirmed restriction ${g.blockedBy}` : g.blockedBy === "t_exercises_avoided" ? "the coach's avoided-exercise list" : g.blockedBy;
+        return { fact: `coach_decision.resume_direct_work.${g.exerciseId}`, why: `The goal "${g.target}" still stands, but direct ${name} work is blocked by ${by}. ${g.interim ? `Interim: ${g.interim} ` : ""}Coach review is required before direct ${name} progression resumes.`, providedBy: "coach" as const };
+      }),
+      ...plan.unresolved,
+    ],
     provenance: {
       knowledge: { version: input.knowledge.version, entries: [...citedKnowledge.map((r) => r.split("#")[0]), ...exerciseIds].filter((v, i, a) => a.indexOf(v) === i).map((id) => input.knowledge.ref(id)).filter((r): r is NonNullable<typeof r> => !!r) },
       coachBrain: input.coach ? { versionId: input.coach.versionId, version: input.coach.version } : null,
@@ -192,6 +209,11 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
       if (e.sets < sr.min || e.sets > sr.max) errors.push(`${e.exerciseId}: ${e.sets} sets outside the coach's ${sr.min}–${sr.max}.`);
       const rir = method.effort.rir?.[e.role].value;
       if (rir && e.rir && (e.rir.min < rir.min || e.rir.max > rir.max)) errors.push(`${e.exerciseId}: effort outside the coach's RIR ${rir.min}–${rir.max}.`);
+      if (rir && !e.rir) errors.push(`${e.exerciseId}: give an rir — the coach's range is a boundary, not a prescription.`);
+      if (allowed.submaximalOnly.has(e.exerciseId)) {
+        const eff = effectiveRir(e, method);
+        if (e.reps.min < LOADED_DEMAND_CONDITION.minReps || (eff && eff.min < LOADED_DEMAND_CONDITION.minRir)) errors.push(`${e.exerciseId} is marked S (submaximal only): heavier or closer to failure would breach a confirmed restriction — use reps min ≥ ${LOADED_DEMAND_CONDITION.minReps} and rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}.`);
+      }
       const rest = method.rest?.[e.role].value;
       if (rest && e.restSeconds && (e.restSeconds.min < rest.min * 60 || e.restSeconds.max > rest.max * 60)) errors.push(`${e.exerciseId}: rest outside the coach's ${rest.min}–${rest.max} min.`);
     }
@@ -211,6 +233,51 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
     if (plan.durationWeeks >= d.every.min && !deloads.length) errors.push(`The coach schedules a deload every ${d.every.min}–${d.every.max} weeks; the plan has none.`);
     if (gaps.some((g) => g < d.every!.min || g > d.every!.max)) errors.push(`Deload spacing doesn't match the coach's every ${d.every.min}–${d.every.max} weeks.`);
   }
+
+  // Structural anchors: a departure needs a client- or coach-specific reason.
+  const anchorFor = { days: reasoning.anchors.days.value, weeks: reasoning.anchors.weeks?.value ?? null };
+  const actual = { days: plan.frequency.daysPerWeek, weeks: plan.durationWeeks };
+  for (const field of ["days", "weeks"] as const) {
+    const anchor = anchorFor[field];
+    if (anchor === null || actual[field] === anchor) continue;
+    const dev = plan.deviations.find((d) => d.field === field);
+    if (!dev) errors.push(`${field === "days" ? "Frequency" : "Program length"} ${actual[field]} departs from OPTIM's anchor (${anchor}) without a "deviations" entry.`);
+    else {
+      if (!dev.coachRuleKeys.length && !dev.clientFactRefs.length) errors.push(`The ${field} deviation cites no client fact or coach rule; general guidance alone doesn't justify departing from the anchor.`);
+      for (const k of dev.coachRuleKeys) if (!allowed.coachRuleKeys.has(k)) errors.push(`Cites coach rule "${k}", which wasn't provided.`);
+      for (const r of dev.clientFactRefs) if (!allowed.clientFactRefs.has(r)) errors.push(`Cites client fact "${r}", which wasn't provided.`);
+    }
+  }
+
+  // Progression block: phases cover the whole program contiguously.
+  const phases = [...plan.progression.phases].sort((a, b) => a.weeks.min - b.weeks.min);
+  let nextWeek = 1;
+  for (const ph of phases) {
+    if (ph.weeks.min !== nextWeek) errors.push(`Progression phases must be contiguous from week 1 (expected a phase starting at week ${nextWeek}).`);
+    nextWeek = ph.weeks.max + 1;
+  }
+  if (nextWeek - 1 !== plan.durationWeeks) errors.push(`Progression phases end at week ${nextWeek - 1}, but the program is ${plan.durationWeeks} weeks.`);
+
+  // Goal access: truthful about what is and isn't trainable.
+  const usedIds = new Set(plan.sessions.flatMap((s) => s.exercises.map((e) => e.exerciseId)));
+  for (const g of plan.goalAccess) {
+    if (!input.knowledge.getExercise(g.exerciseId)) errors.push(`goalAccess names unknown exercise ${g.exerciseId}.`);
+    else if (g.status === "direct" && !usedIds.has(g.exerciseId)) errors.push(`goalAccess says ${g.exerciseId} is trained directly, but no session includes it.`);
+    else if (g.status === "blocked") {
+      const by = allowed.blockedBy.get(g.exerciseId);
+      if (!by) errors.push(`goalAccess says ${g.exerciseId} is blocked, but it isn't in "blocked".`);
+      else if (g.blockedBy !== by) errors.push(`goalAccess: ${g.exerciseId} is blocked by ${by}, not ${g.blockedBy ?? "nothing"}.`);
+      if (!g.interim) errors.push(`goalAccess: say what the interim work preserves or develops while ${g.exerciseId} is blocked.`);
+    }
+  }
+  for (const t of reasoning.goal.targets) {
+    if (!t.exercise || t.status === "unknown_exercise") continue;
+    const g = plan.goalAccess.find((x) => x.exerciseId === t.exercise);
+    const expected = t.status === "direct" ? "direct" : "blocked";
+    if (t.status === "direct" && !usedIds.has(t.exercise)) quality.push({ code: "goal_target_untrained", severity: "warning", message: `${t.target} is a stated priority and is eligible, but no session trains it.` });
+    if (t.status === "blocked" && (!g || g.status !== expected)) errors.push(`The priority "${t.target}" is blocked by ${t.blockedBy}; record it in goalAccess as blocked with its interim work.`);
+  }
+  for (const g of blockedGoalTargets(plan, reasoning)) quality.push({ code: "goal_direct_work_blocked", severity: "warning", message: `Goal "${g.target}": direct ${input.knowledge.getExercise(g.exerciseId)?.name ?? g.exerciseId} work is blocked (${g.blockedBy}); the plan is interim work${g.interim ? ` — ${g.interim}` : "."} Coach review before direct progression resumes.` });
 
   // Citations: only what was supplied.
   for (const dec of plan.decisions) {
@@ -244,5 +311,20 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
   const pull = pat(["horizontal_pull", "vertical_pull"]);
   if (push + pull > 0 && (Math.max(push, pull) / Math.max(1, Math.min(push, pull)) > 1.5 || Math.min(push, pull) === 0)) quality.push({ code: "push_pull_balance", severity: "warning", message: `Weekly pushing sets ${push} vs pulling sets ${pull}.` });
   for (const c of plan.conflicts) quality.push({ code: "coach_method_conflict", severity: "warning", message: `Coach method tension (${c.coachRuleKey}): ${c.issue}` });
+
+  // Effort distribution (reviewable): a coach range used as one blanket setting.
+  const efforts = plan.sessions.flatMap((s) => s.exercises.map((e) => ({ e, rir: effectiveRir(e, method), coachMin: method.effort.rir?.[e.role].value.min ?? null })));
+  const withRir = efforts.filter((x) => x.rir);
+  if (withRir.length >= 6) {
+    const counts = new Map<string, number>();
+    for (const x of withRir) counts.set(`${x.rir!.min}-${x.rir!.max}`, (counts.get(`${x.rir!.min}-${x.rir!.max}`) ?? 0) + 1);
+    const [mode, n] = [...counts].sort((a, b) => b[1] - a[1])[0];
+    if (n / withRir.length >= 0.8) quality.push({ code: "effort_uniform", severity: "warning", message: `${n} of ${withRir.length} exercises share the same effort (RIR ${mode}); effort isn't differentiated by role, fatigue cost or priority.` });
+    // Near failure = within 1 rep of failure, or the hardest end the coach allows if that is easier.
+    const hard = withRir.filter((x) => x.rir!.min <= Math.max(1, x.coachMin ?? 0)).length;
+    if (hard / withRir.length >= 0.75) quality.push({ code: "effort_hard_end", severity: "warning", message: `${hard} of ${withRir.length} exercises are taken to within one rep of failure (or the coach's hardest allowed effort).` });
+  }
+  if (!plan.decisions.some((d) => d.topic === "effort")) quality.push({ code: "effort_unexplained", severity: "warning", message: "No decision explains how effort is distributed across the week." });
+  if (reasoning.bounds.weeks && reasoning.bounds.preferredWeeks === null) quality.push({ code: "coach_no_preferred_length", severity: "info", message: `The coach's method has no preferred program length; OPTIM anchored the block at ${reasoning.anchors.weeks?.value} weeks (the shortest allowed).` });
   return { ok: errors.length === 0, errors: [...new Set(errors)], quality };
 }

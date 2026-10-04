@@ -14,31 +14,44 @@
 import { isKnown, type Fact } from "../facts.ts";
 import { effectiveConstraints, type Constraint, type ConstraintTag } from "../constraints.ts";
 import { FOUNDATION_KNOWLEDGE_VERSION } from "../knowledge/registry.ts";
-import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
+import { LOADED_DEMAND_CONDITION, type FitnessKnowledgeRegistry } from "../knowledge/types.ts";
+import type { PoolResult } from "../planners/resistance/planner.ts";
 import type { SynthesisInput } from "../synthesis-input.ts";
 import { availableApparatus, availableEquipment, resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
 import type { ResistanceMethod } from "../planners/resistance/method.ts";
 import type { DomainRouting } from "./domains.ts";
 import type { EvidencePacket } from "./retrieval.ts";
 
-export const REASONER_VERSION = "fitness-reasoner-v1.1.0";
+export const REASONER_VERSION = "fitness-reasoner-v1.2.0";
 
-export const EXERCISE_ROW_LEGEND = "id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment|demands skill,stability,bracing,spine,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|ordering E/F/L";
+export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment|demands skill,stability,bracing,spine,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|ordering E/F/L|load S = submaximal only: heavier or closer to failure would breach a constraint, so reps min ≥ ${LOADED_DEMAND_CONDITION.minReps} and rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}`;
 
 export interface ReasoningInput {
   v: { reasoner: string; prompt: string; knowledge: string };
   domain: { primary: string; supporting: string[]; emphasis: string | null; secondary: string | null };
   coach: { method: string; rules: Array<[key: string, label: string, value: unknown]> };
   client: { facts: Record<string, unknown>; missing: string[] };
-  goal: { primary: string | null; secondary: string[]; success: string | null };
+  goal: { primary: string | null; secondary: string[]; success: string | null; targets: GoalTarget[] };
   /** The complete client-specific boundary the model must enforce. */
   constraints: Array<{ id: string; rules: string[] }>;
   bounds: { days: [number, number]; available: string[]; minutes: number | null; weeks: [number, number] | null; preferredWeeks: number | null };
+  /** Gate 4.0C-3B — OPTIM's deterministic defaults for the major structural decisions; deviating needs a client- or coach-specific reason. */
+  anchors: { days: { value: number; basis: string }; weeks: { value: number; basis: string } | null };
+  /** Gate 4.0C-3B — exercises excluded ONLY by a constraint (alias) or the coach's avoided list: shows what a goal may be blocked from. */
+  blocked: Record<string, string[]>;
   equipment: { available: string[]; apparatus: string[]; apparatusUnknown: string[] };
   evidence: Array<{ ref: string; claim: string; source: string; params?: unknown }>;
   exerciseLegend: string;
   exercises: string[];
   unresolved: Array<{ fact: string; why: string }>;
+}
+
+/** A goal-specific exercise OPTIM resolved from structured goal data (e.g. strength priority lifts). */
+export interface GoalTarget {
+  target: string;
+  exercise: string | null;
+  status: "direct" | "blocked" | "unavailable" | "unknown_exercise";
+  blockedBy: string | null;
 }
 
 export interface Allowed {
@@ -47,6 +60,10 @@ export interface Allowed {
   knowledgeRefs: Set<string>;
   constraintIds: Set<string>;
   exerciseIds: Set<string>;
+  /** Eligible only when prescribed submaximally (LOADED_DEMAND_CONDITION). */
+  submaximalOnly: Set<string>;
+  /** Exercise id → what blocks it (constraint alias or "t_exercises_avoided"). */
+  blockedBy: Map<string, string>;
 }
 
 /** Constraints the model never sees, with how OPTIM accounted for them. */
@@ -93,7 +110,7 @@ function reviewedHow(c: Constraint): string {
   return "no exercise-level effect";
 }
 
-export function buildReasoningInput(params: { input: SynthesisInput; method: ResistanceMethod; routing: Extract<DomainRouting, { status: "ROUTED" }>; secondary: "strength" | "hypertrophy" | null; evidence: EvidencePacket; promptVersion: string; unresolved: Array<{ fact: string; why: string }> }): { reasoning: ReasoningInput; allowed: Allowed; contextOnly: ContextOnlyConstraint[]; constraintIdMap: Record<string, string> } {
+export function buildReasoningInput(params: { input: SynthesisInput; method: ResistanceMethod; routing: Extract<DomainRouting, { status: "ROUTED" }>; secondary: "strength" | "hypertrophy" | null; evidence: EvidencePacket; promptVersion: string; unresolved: Array<{ fact: string; why: string }>; pool: PoolResult }): { reasoning: ReasoningInput; allowed: Allowed; contextOnly: ContextOnlyConstraint[]; constraintIdMap: Record<string, string> } {
   const { input, method } = params;
   const c = input.client;
   const rules: ReasoningInput["coach"]["rules"] = [];
@@ -154,19 +171,53 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
   const cap = sessionLen ? (sessionLen.openEnded ? (coachLen?.max ?? sessionLen.minutes) : Math.min(sessionLen.minutes, coachLen?.max ?? Infinity)) : (coachLen?.max ?? null);
   const pw = method.programLengthWeeks?.value;
 
+  // What a constraint (or the coach's avoided list) alone removes — anything also failing equipment/apparatus is just unavailable.
+  const aliasOf = new Map(Object.entries(constraintIdMap).map(([alias, id]) => [id, alias]));
+  const blockedBy = new Map<string, string>();
+  for (const x of params.pool.excluded) {
+    const by = x.reasons.map((r) => (r.startsWith("coach avoids") ? "t_exercises_avoided" : (aliasOf.get(r.slice(0, r.indexOf(": "))) ?? null)));
+    if (by.every((b): b is string => !!b)) blockedBy.set(x.exerciseId, by[0]);
+  }
+  const blocked: Record<string, string[]> = {};
+  for (const [id, by] of [...blockedBy].sort(([a], [b]) => a.localeCompare(b))) (blocked[by] ??= []).push(id);
+
+  // Structured goal targets (strength priority lifts) resolved against knowledge — never from free text.
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const poolIds = new Set(params.pool.pool.map((e) => e.id));
+  const targets: GoalTarget[] = [input.goal.primary, ...input.goal.secondary].flatMap((g) => (g?.class === "strength" && isKnown(g.priorityLifts) ? g.priorityLifts.value : [])).map((lift) => {
+    const ex = input.knowledge.exercises().find((e) => [e.name, ...e.aliases].some((n) => norm(n) === norm(lift)));
+    if (!ex) return { target: lift, exercise: null, status: "unknown_exercise" as const, blockedBy: null };
+    if (poolIds.has(ex.id)) return { target: lift, exercise: ex.id, status: "direct" as const, blockedBy: null };
+    const by = blockedBy.get(ex.id);
+    return { target: lift, exercise: ex.id, status: by ? ("blocked" as const) : ("unavailable" as const), blockedBy: by ?? null };
+  });
+
+  // Anchors: the client's current habit inside the coach's range and availability; the coach's preferred (else shortest) block.
+  const availCount = isKnown(c.schedule.availableDays) ? c.schedule.availableDays.value.length : b.max!;
+  const hiDays = Math.min(b.max!, availCount);
+  const current = isKnown(c.training.currentSessionsPerWeek) ? Number(c.training.currentSessionsPerWeek.value) : null;
+  const anchorDays = Math.max(b.min!, Math.min(hiDays, current ?? b.min!));
+  const daysBasis = current === null ? "no current training frequency known: the coach's minimum" : current === anchorDays ? "the client's current weekly frequency, inside the coach's range and availability" : `the client's current ${current}×/week, brought inside the coach's ${b.min}–${hiDays} days`;
+  const anchors: ReasoningInput["anchors"] = {
+    days: { value: anchorDays, basis: daysBasis },
+    weeks: pw ? { value: pw.preferred ?? pw.min, basis: pw.preferred ? "the coach's preferred program length" : "the coach set no preferred length: the shortest allowed block, so progress is reviewed soonest" } : null,
+  };
+
   const reasoning: ReasoningInput = {
     v: { reasoner: REASONER_VERSION, prompt: params.promptVersion, knowledge: FOUNDATION_KNOWLEDGE_VERSION },
     domain: { primary: params.routing.primary, supporting: params.routing.supporting, emphasis: params.routing.resistanceEmphasis, secondary: params.secondary },
     coach: { method: `v${method.version}`, rules },
     client: { facts, missing },
-    goal: { primary: input.goal.primary?.class ?? null, secondary: input.goal.secondary.map((g) => g.class), success: isKnown(input.goal.successDefinition) ? input.goal.successDefinition.value : null },
+    goal: { primary: input.goal.primary?.class ?? null, secondary: input.goal.secondary.map((g) => g.class), success: isKnown(input.goal.successDefinition) ? input.goal.successDefinition.value : null, targets },
     constraints: enforced,
     bounds: { days: [b.min!, b.max!], available: isKnown(c.schedule.availableDays) ? c.schedule.availableDays.value : [], minutes: cap, weeks: pw ? [pw.min, pw.max] : null, preferredWeeks: pw?.preferred ?? null },
+    anchors,
+    blocked,
     equipment: { available: access ? availableEquipment(access) : [], apparatus: access ? availableApparatus(access) : [], apparatusUnknown: access ? Object.entries(access.apparatus).filter(([, s]) => s === "unknown").map(([a]) => a) : [] },
     evidence: params.evidence.claims.map((x) => ({ ref: x.ref, claim: x.statement, source: x.support, ...(x.parameters ? { params: x.parameters } : {}) })),
     exerciseLegend: EXERCISE_ROW_LEGEND,
     exercises: params.evidence.exercises.map((e) =>
-      [e.id, e.name, e.patterns.join(","), e.primary.join(","), e.secondary.join(","), e.mechanics === "compound" ? "C" : "I", e.laterality[0].toUpperCase(), e.equipment, [e.demands.skill, e.demands.stability, e.demands.bracing, e.demands.spinal_loading, e.demands.systemic_fatigue].map(L).join(""), [e.suitability.strength, e.suitability.hypertrophy, e.suitability.power].map(L).join(""), e.ordering[0].toUpperCase()].join("|")
+      [e.id, e.name, e.patterns.join(","), e.primary.join(","), e.secondary.join(","), e.mechanics === "compound" ? "C" : "I", e.laterality[0].toUpperCase(), e.equipment, [e.demands.skill, e.demands.stability, e.demands.bracing, e.demands.spinal_loading, e.demands.systemic_fatigue].map(L).join(""), [e.suitability.strength, e.suitability.hypertrophy, e.suitability.power].map(L).join(""), e.ordering[0].toUpperCase(), params.pool.loadConditions.has(e.id) ? "S" : "-"].join("|")
     ),
     unresolved: params.unresolved,
   };
@@ -180,6 +231,8 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
       knowledgeRefs: new Set(params.evidence.claims.map((x) => x.ref)),
       constraintIds: new Set(enforced.map((x) => x.id)),
       exerciseIds: new Set(params.evidence.exercises.map((e) => e.id)),
+      submaximalOnly: new Set(params.evidence.exercises.map((e) => e.id).filter((id) => params.pool.loadConditions.has(id))),
+      blockedBy,
     },
   };
 }

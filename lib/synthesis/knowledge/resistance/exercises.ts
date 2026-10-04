@@ -77,7 +77,23 @@ function ex(id: string, s: Spec): ExerciseEntry {
     progressionModes: s.progression,
     ordering: s.ordering,
     harderVariants: s.harder ?? [],
+    loadedDemands: loadedDemands(s),
   };
+}
+
+/**
+ * Gate 4.0C-3B — load-sensitive bracing (internal curation, pending
+ * qualified review). Taking a compound lift with meaningful loading
+ * potential heavy or close to failure requires at least moderate trunk
+ * bracing, even when its typical submaximal demand is low — unless the
+ * trunk is externally supported by a chest pad (prone). Isolation work and
+ * low-loading compounds keep their base level. A general rule over
+ * metadata, never a per-exercise exception.
+ */
+function loadedDemands(s: Spec): ExerciseEntry["loadedDemands"] {
+  const bracing = s.demands[2];
+  const rises = s.mechanics === "compound" && (s.loading === M || s.loading === H) && !s.positions.includes("prone") && (bracing === N || bracing === L);
+  return rises ? { bracing: M } : {};
 }
 
 const LOAD: ProgressionMode[] = ["load", "reps", "sets", "tempo"];

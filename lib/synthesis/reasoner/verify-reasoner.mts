@@ -10,10 +10,14 @@ import { FOUNDATION_KNOWLEDGE } from "../knowledge/registry.ts";
 import { buildConfirmation } from "../limitations/confirm.ts";
 import { runFitnessReasoner, replayRun, PROVIDER_FAILED_MESSAGE, type ReasonerResult } from "./reasoner.ts";
 import { routeDomains } from "./domains.ts";
-import { parseReasonerOutput } from "./contract.ts";
+import { parseReasonerOutput, REASONER_SYSTEM_PROMPT } from "./contract.ts";
 import { reasonerReviewView } from "./view.ts";
 import { canonicalJson, parseRun, runHash, serializeRun } from "./run.ts";
-import { coachMethod, fakeModel, layer, NOW, range, restrict, scenarioInput, scriptedOutput } from "./eval/fixtures.ts";
+import { coachMethod, fakeModel, layer, NOW, range, restrict, scenarioInput, scriptedOutput, type WirePlan } from "./eval/fixtures.ts";
+import { known, missing } from "../facts.ts";
+import { exerciseEligibility } from "../exercise-eligibility.ts";
+import { LOADED_DEMAND_CONDITION } from "../knowledge/types.ts";
+import { levelRank } from "../knowledge/taxonomy.ts";
 
 let passed = 0;
 let failed = 0;
@@ -214,10 +218,11 @@ await check("14. Only normalized synthesis data reaches the model; output defaul
   assert.ok(!m.lastUserMessage.includes("retrievedRefs"), "no duplicated reference list");
   assert.equal(r.status, "PLANNED");
   if (r.status === "PLANNED") {
-    // The scripted output omits rir/rest → the coach's ranges are applied deterministically.
+    // The scripted output omits rest → the coach's range is applied deterministically. Effort is never
+    // defaulted (Gate 4.0C-3B): the scripted accessory chose RIR 2–3 and that choice is what's prescribed.
     const p = r.spec.resistance!.value.weeks[0].sessions[0][1];
     assert.ok(p.restMinutes && p.restMinutes.min === 1 && p.restMinutes.max === 3, "coach rest range by default");
-    assert.ok(p.effort.metric === "rir" && p.effort.target === 1, "coach RIR range by default (hard end)");
+    assert.ok(p.effort.metric === "rir" && p.effort.target === 2, "the exercise's own RIR choice (hard end of it)");
   }
 });
 
@@ -236,6 +241,118 @@ await check("15. A truncated (max_tokens) attempt is repaired once and its consu
   assert.deepEqual(r.run.attempts[0].usage, { inputTokens: 7000, outputTokens: 16000 });
   assert.equal(r.run.totals.inputTokens, 14100);
   assert.equal(r.run.totals.outputTokens, 25000, "truncated attempt's output tokens are counted");
+});
+
+
+// ---------------------------------------------------------------------------
+// Gate 4.0C-3B — targeted regressions for the human-review findings.
+// ---------------------------------------------------------------------------
+
+const bracingModerate = () => restrict([{ kind: "avoid_demand", demand: "bracing", atOrAbove: "moderate" }]);
+const every = (p: WirePlan, f: (e: WirePlan["sessions"][number]["exercises"][number]) => void) => p.sessions.forEach((s) => s.exercises.forEach(f));
+/** Puts `id` into the first session (replacing its last exercise) with the given prescription. */
+const place = (id: string, reps: number[], rir: number[]) => (p: WirePlan) => {
+  const ex = p.sessions[0].exercises;
+  ex[ex.length - 1] = { id, role: "accessory", sets: 2, reps, rir, note: "placed by test" };
+};
+
+await check("16. Bracing is load-sensitive: a generic knowledge rule, enforced as a submaximal cap (no exercise exceptions)", async () => {
+  // Knowledge: one rule over metadata — every loaded, non-chest-supported compound with low base bracing rises to moderate when heavy.
+  for (const e of FOUNDATION_KNOWLEDGE.exercises()) {
+    const expected = e.mechanics === "compound" && levelRank(e.loadingPotential) >= levelRank("moderate") && !e.positions.includes("prone") && levelRank(e.demands.bracing) <= levelRank("low");
+    assert.equal(e.loadedDemands.bracing === "moderate", expected, `${e.id}: loaded bracing doesn't follow the rule`);
+  }
+  const K = FOUNDATION_KNOWLEDGE;
+  const tags = { avoid_moderate: bracingModerate(), avoid_high: restrict([{ kind: "avoid_demand", demand: "bracing", atOrAbove: "high" }]) };
+  const elig = (id: string, t: keyof typeof tags) => exerciseEligibility(K.getExercise(id)!, scenarioInput({ restrictions: tags[t] }).constraints);
+  const pulldown = elig("exercise.lat_pulldown", "avoid_moderate");
+  assert.ok(pulldown.eligible && pulldown.loadConditions.length === 1 && pulldown.loadConditions[0].minRir === LOADED_DEMAND_CONDITION.minRir, "eligible only submaximally");
+  assert.ok(elig("exercise.chest_supported_row", "avoid_moderate").loadConditions.length === 0, "chest support: no load condition");
+  assert.ok(elig("exercise.cable_triceps_pushdown", "avoid_moderate").loadConditions.length === 0, "isolation keeps its base level");
+  assert.ok(!elig("exercise.barbell_bench_press", "avoid_moderate").eligible, "base moderate bracing stays excluded");
+  assert.ok(elig("exercise.lat_pulldown", "avoid_high").loadConditions.length === 0, "a high-bracing restriction doesn't cap a loaded-moderate lift");
+  // Reasoner: the row is marked S; heavy or near-failure prescriptions are rejected, submaximal ones pass.
+  const m = ok();
+  await run(scenarioInput({ restrictions: bracingModerate() }), m);
+  assert.ok(m.lastInput!.exercises.find((x) => x.startsWith("exercise.lat_pulldown|"))!.endsWith("|S"));
+  assert.ok(m.lastInput!.exercises.find((x) => x.startsWith("exercise.chest_supported_row|"))!.endsWith("|-"));
+  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [4, 6], [2, 3]))), /lat_pulldown is marked S/);
+  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [1, 2]))), /lat_pulldown is marked S/);
+  const fine = await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [2, 3])));
+  assert.equal(fine.status, "PLANNED", fine.status === "REJECTED" ? fine.errors.join("; ") : "");
+  // Without a bracing restriction nothing is capped.
+  const free = ok();
+  await run(scenarioInput(), free);
+  assert.ok(free.lastInput!.exercises.every((x) => x.endsWith("|-")));
+  assert.ok(!/pulldown/i.test(REASONER_SYSTEM_PROMPT), "no exercise-specific rule in the prompt");
+});
+
+const strengthGoal = (lifts: string[]) => ({ class: "strength" as const, priorityLifts: known(lifts, "coach_confirmed", { kind: "coach_brain", ref: "goal_contract.coach_confirmation" }), baselines: missing<Record<string, number>>("goal.strengthBaselines") });
+
+await check("17. A temporarily blocked goal lift is explicit: goal stands, direct work paused, interim + coach review", async () => {
+  const input = () => scenarioInput({ restrictions: bracingModerate(), coachConfirmedGoal: strengthGoal(["Barbell Bench Press"]), patch: { what_you_want: { primaryGoal: "get_stronger", secondaryGoals: [] } } });
+  const m = ok();
+  const r = await run(input(), m);
+  const t = m.lastInput!.goal.targets[0];
+  assert.deepEqual([t.exercise, t.status, t.blockedBy], ["exercise.barbell_bench_press", "blocked", "C1"]);
+  assert.ok(m.lastInput!.blocked.C1.includes("exercise.barbell_bench_press"), "the model sees what is blocked and by what");
+  assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : "");
+  if (r.status === "PLANNED") {
+    assert.ok(r.spec.unresolved.some((u) => u.fact === "coach_decision.resume_direct_work.exercise.barbell_bench_press" && u.providedBy === "coach" && /still stands/.test(u.why)));
+    assert.ok(r.quality.some((q) => q.code === "goal_direct_work_blocked"));
+  }
+  rejectedWith(await run(input(), ok((p) => (p.goalAccess = []))), /priority "Barbell Bench Press" is blocked by C1/);
+  rejectedWith(await run(input(), ok((p) => (p.goalAccess = [{ target: "Bench 405", exercise: "exercise.barbell_bench_press", status: "direct" }]))), /no session includes it/);
+  rejectedWith(await run(input(), ok((p) => (p.goalAccess![0].interim = undefined))), /say what the interim work preserves/);
+  // Free-text goals: what the model declares must be true.
+  const free = () => scenarioInput({ restrictions: bracingModerate() });
+  rejectedWith(await run(free(), ok((p) => (p.goalAccess = [{ target: "x", exercise: "exercise.lat_pulldown", status: "blocked", blockedBy: "C1", interim: "y" }]))), /isn't in "blocked"/);
+  rejectedWith(await run(free(), ok((p) => (p.goalAccess = [{ target: "x", exercise: "exercise.barbell_bench_press", status: "blocked", blockedBy: "t_exercises_avoided", interim: "y" }]))), /blocked by C1, not t_exercises_avoided/);
+  const declared = await run(free(), ok((p) => (p.goalAccess = [{ target: "Bench 405", exercise: "exercise.barbell_bench_press", status: "blocked", blockedBy: "C1", interim: "Chest, triceps and pressing strength with eligible presses." }])));
+  assert.ok(declared.status === "PLANNED" && declared.spec.unresolved.some((u) => u.fact.endsWith("barbell_bench_press")));
+  // An eligible priority lift is direct.
+  const direct = ok();
+  await run(scenarioInput({ coachConfirmedGoal: strengthGoal(["Barbell Bench Press"]), patch: { what_you_want: { primaryGoal: "get_stronger", secondaryGoals: [] } } }), direct);
+  assert.equal(direct.lastInput!.goal.targets[0].status, "direct");
+});
+
+await check("18. Effort is a deliberate per-exercise choice: required, never defaulted to the hard end, uniformity flagged", async () => {
+  rejectedWith(await run(scenarioInput(), ok((p) => every(p, (e) => delete e.rir))), /give an rir/);
+  const uniform = await run(scenarioInput(), ok((p) => every(p, (e) => (e.rir = [1, 1]))));
+  assert.equal(uniform.status, "PLANNED");
+  assert.ok(uniform.status === "PLANNED" && uniform.quality.some((q) => q.code === "effort_uniform") && uniform.quality.some((q) => q.code === "effort_hard_end"));
+  const varied = await run(scenarioInput(), ok());
+  assert.ok(varied.status === "PLANNED" && !varied.quality.some((q) => q.code === "effort_uniform" || q.code === "effort_unexplained"));
+  const unexplained = await run(scenarioInput(), ok((p) => (p.decisions = p.decisions.filter((d) => d.topic !== "effort"))));
+  assert.ok(unexplained.status === "PLANNED" && unexplained.quality.some((q) => q.code === "effort_unexplained"));
+});
+
+await check("19. Major structural decisions are anchored; departures need a client/coach reason; progression is a phased block", async () => {
+  const m = ok();
+  await run(scenarioInput({ patch: { starting_point: { trainingExperience: "comfortable_common", recentConsistency: "very_consistent", weeklyFrequency: 6 } }, coach: coachMethod({ t_days: layer(range(3, 4, "days/week")) }) }), m);
+  assert.equal(m.lastInput!.anchors.days.value, 4, "current 6×/week brought inside the coach's 3–4");
+  assert.deepEqual([m.lastInput!.anchors.weeks!.value, m.lastInput!.bounds.preferredWeeks], [8, null], "no preferred length → shortest allowed");
+  const a = ok();
+  await run(scenarioInput(), a);
+  assert.equal(a.lastInput!.anchors.days.value, 4, "the client's current 4×/week");
+  // Identical input → identical anchors (deterministic).
+  const b = ok();
+  await run(scenarioInput(), b);
+  assert.deepEqual(b.lastInput!.anchors, a.lastInput!.anchors);
+  const moreDays = (p: WirePlan) => {
+    p.frequency.days = 5;
+    p.schedule.days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    p.sessions.push({ ...structuredClone(p.sessions[0]), day: "Friday" });
+  };
+  rejectedWith(await run(scenarioInput(), ok(moreDays)), /Frequency 5 departs from OPTIM's anchor \(4\) without a "deviations" entry/);
+  rejectedWith(await run(scenarioInput(), ok((p) => { moreDays(p); p.deviations = [{ field: "days", because: "Advanced lifters often train 4–5 days.", coach: [], client: [] }]; })), /cites no client fact or coach rule/);
+  const reasoned = await run(scenarioInput(), ok((p) => { moreDays(p); p.deviations = [{ field: "days", because: "Client sleeps 7–8 h and is very consistent.", coach: [], client: [Object.keys(a.lastInput!.client.facts)[0]] }]; }));
+  assert.equal(reasoned.status, "PLANNED", reasoned.status === "REJECTED" ? reasoned.errors.join("; ") : "");
+  rejectedWith(await run(scenarioInput(), ok((p) => { p.weeks = 10; })), /Program length 10 departs from OPTIM's anchor \(8\)/);
+  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [{ weeks: [1, 3], focus: "a", intent: "b" }, { weeks: [5, 8], focus: "c", intent: "d" }]))), /contiguous from week 1/);
+  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [{ weeks: [1, 6], focus: "a", intent: "b" }]))), /end at week 6, but the program is 8 weeks/);
+  const phased = await run(scenarioInput(), ok((p) => (p.progression.phases = [{ weeks: [1, 4], focus: "Accumulate", intent: "Build volume at moderate effort." }, { weeks: [5, 8], focus: "Intensify", intent: "Heavier mains, accessories hold." }])));
+  assert.ok(phased.status === "PLANNED" && phased.spec.resistance!.value.weeks[4].note.startsWith("Intensify."), "phase focus carried into week notes");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

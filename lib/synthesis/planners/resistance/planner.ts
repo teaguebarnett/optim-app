@@ -7,7 +7,7 @@
 // method; anything the planner can't decide honestly becomes NEEDS_INPUT.
 
 import { constraintsNeedingStructure, effectiveConstraints, hardConstraints, type Constraint } from "../../constraints.ts";
-import { exerciseEligibility } from "../../exercise-eligibility.ts";
+import { exerciseEligibility, type LoadCondition } from "../../exercise-eligibility.ts";
 import { isKnown } from "../../facts.ts";
 import type { ExerciseEntry } from "../../knowledge/types.ts";
 import type { ApparatusId, MuscleId } from "../../knowledge/taxonomy.ts";
@@ -105,6 +105,8 @@ export interface PoolResult {
   excluded: Array<{ exerciseId: string; reasons: string[] }>;
   unknownApparatus: Map<ApparatusId, string[]>;
   byConstraint: Map<string, string[]>;
+  /** Gate 4.0C-3B — eligible exercises that must stay submaximal under a hard demand restriction. */
+  loadConditions: Map<string, LoadCondition[]>;
 }
 
 export function buildPool(input: SynthesisInput, method: ResistanceMethod): PoolResult | null {
@@ -117,6 +119,7 @@ export function buildPool(input: SynthesisInput, method: ResistanceMethod): Pool
   const excluded: PoolResult["excluded"] = [];
   const unknownApparatus = new Map<ApparatusId, string[]>();
   const byConstraint = new Map<string, string[]>();
+  const loadConditions = new Map<string, LoadCondition[]>();
   for (const e of input.knowledge.exercises()) {
     const reasons: string[] = [];
     if (!equipment.has(e.equipment)) reasons.push(`needs ${e.equipment}`);
@@ -134,9 +137,13 @@ export function buildPool(input: SynthesisInput, method: ResistanceMethod): Pool
     if ([e.name, ...e.aliases].some((n) => avoided.includes(words(n)))) reasons.push("coach avoids this exercise (t_exercises_avoided)");
     if (!e.prescription.includes("reps")) reasons.push(`prescribed by ${e.prescription.join("/")}, which the coach's method doesn't define`);
     if (reasons.length) excluded.push({ exerciseId: e.id, reasons });
-    else pool.push(e);
+    else {
+      pool.push(e);
+      const conds = elig.loadConditions.filter((x) => x.enforcement === "hard");
+      if (conds.length) loadConditions.set(e.id, conds);
+    }
   }
-  return { pool, excluded, unknownApparatus, byConstraint };
+  return { pool, excluded, unknownApparatus, byConstraint, loadConditions };
 }
 
 function plan(input: SynthesisInput, ctx: { nowIso: string }): PlanSpecification | { status: "NEEDS_INPUT"; missing: MissingInput[] } {

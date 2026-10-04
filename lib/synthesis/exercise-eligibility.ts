@@ -13,7 +13,7 @@
 
 import { effectiveConstraints, type Constraint, type ConstraintSet } from "./constraints.ts";
 import { levelRank } from "./knowledge/taxonomy.ts";
-import type { ExerciseEntry, ExerciseFilter, FitnessKnowledgeRegistry } from "./knowledge/types.ts";
+import { LOADED_DEMAND_CONDITION, type ExerciseEntry, type ExerciseFilter, type FitnessKnowledgeRegistry } from "./knowledge/types.ts";
 
 export interface EligibilityViolation {
   constraintId: string;
@@ -22,16 +22,34 @@ export interface EligibilityViolation {
   reason: string;
 }
 
+/** Gate 4.0C-3B — eligible only when kept submaximal: a demand restriction the
+ * exercise meets at its base level but would breach when performed heavy or
+ * close to failure (ExerciseEntry.loadedDemands). */
+export interface LoadCondition {
+  constraintId: string;
+  enforcement: Constraint["enforcement"];
+  demand: string;
+  /** The restricted level (restriction: below this). */
+  limit: string;
+  loadedLevel: string;
+  /** Prescriptions must allow at least this many reps and keep at least this many reps in reserve. */
+  minReps: number;
+  minRir: number;
+}
+
 export interface ExerciseEligibility {
   eligible: boolean;
   /** Hard violations make an exercise ineligible; soft ones are reported. */
   violations: EligibilityViolation[];
+  /** Restrictions satisfied only while the exercise stays submaximal. */
+  loadConditions: LoadCondition[];
 }
 
 const words = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
 
 export function exerciseEligibility(exercise: ExerciseEntry, constraints: ConstraintSet): ExerciseEligibility {
   const violations: EligibilityViolation[] = [];
+  const loadConditions: LoadCondition[] = [];
   for (const c of effectiveConstraints(constraints)) {
     const v = (basis: EligibilityViolation["basis"], reason: string) => violations.push({ constraintId: c.id, enforcement: c.enforcement, basis, reason });
     for (const t of c.tags) {
@@ -41,6 +59,10 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
           break;
         case "avoid_demand":
           if (levelRank(exercise.demands[t.demand]) >= levelRank(t.atOrAbove)) v("metadata", `${t.demand} demand is ${exercise.demands[t.demand]} (limit: below ${t.atOrAbove})`);
+          else {
+            const loaded = exercise.loadedDemands?.[t.demand];
+            if (loaded && levelRank(loaded) >= levelRank(t.atOrAbove)) loadConditions.push({ constraintId: c.id, enforcement: c.enforcement, demand: t.demand, limit: t.atOrAbove, loadedLevel: loaded, ...LOADED_DEMAND_CONDITION });
+          }
           break;
         case "avoid_position":
           if (exercise.positions.includes(t.position)) v("metadata", `position ${t.position}`);
@@ -66,7 +88,7 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
       }
     }
   }
-  return { eligible: !violations.some((x) => x.enforcement === "hard"), violations };
+  return { eligible: !violations.some((x) => x.enforcement === "hard"), violations, loadConditions };
 }
 
 export interface ConstraintCompatibility {

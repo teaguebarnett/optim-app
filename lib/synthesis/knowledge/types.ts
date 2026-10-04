@@ -138,7 +138,24 @@ export interface ExerciseEntry extends KnowledgeEntryBase {
   ordering: "early" | "flexible" | "late";
   /** Harder variants (exercise ids). Easier variants are derived. */
   harderVariants: string[];
+  /**
+   * Demands as they rise when the exercise is performed HEAVY or CLOSE TO
+   * FAILURE (see LOADED_DEMAND_CONDITION). `demands` describes typical
+   * submaximal work; real trunk bracing depends on load, effort, setup and
+   * support, so a static level understates it under heavy loading. Only
+   * dimensions that rise are listed. Internal curation (rule in
+   * resistance/exercises.ts), pending qualified review.
+   */
+  loadedDemands: Partial<Record<Demand, Level>>;
 }
+
+/**
+ * Gate 4.0C-3B — when an exercise counts as performed heavy / close to
+ * failure, so its `loadedDemands` apply: any prescription allowing fewer
+ * than `minReps` reps or fewer than `minRir` reps in reserve. Staying at or
+ * above both keeps the exercise at its base `demands`. Internal curation.
+ */
+export const LOADED_DEMAND_CONDITION = { minReps: 6, minRir: 2 } as const;
 
 // ---------------------------------------------------------------------------
 // Concepts — resistance-training ideas a planner reasons with, each made of
