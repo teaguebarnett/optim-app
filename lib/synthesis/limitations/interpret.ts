@@ -83,7 +83,8 @@ ${options}
 ${exercises}
 - Every item must include "quote": the exact words from the coach's text it comes from (copied verbatim).
 - Never add a restriction the coach's words don't support. Never loosen what the coach wrote. Never infer medical permission or clearance.
-- If words are vague (e.g. "heavy", "hard", "be careful") or could mean several restrictions, return a clarification instead of guessing.
+- When the words state several independent facts (e.g. a demand limit AND a specifically named exercise), return EACH as its own restriction — never merge them or make them compete.
+- If words are vague (e.g. "heavy", "hard", "be careful") or could mean several restrictions, return a clarification instead of guessing. A clarification's choices may span several independent dimensions; the coach can confirm more than one.
 - If words describe something that isn't an exercise restriction (e.g. effort level, scheduling, "check in weekly"), list them under "unsupported".
 
 Respond with ONLY one JSON object, no prose:

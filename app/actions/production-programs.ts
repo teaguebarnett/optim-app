@@ -675,7 +675,16 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     inputsVerified: !!pending.content.adjustmentProvenance || hasVerifiedGenerationInputs(pending.content),
     methodStaleMessage: staleness.stale ? staleness.message : null,
     methodologyConflictedRuleProvenance,
-    reasonerReview: pending.content.reasonerProvenance ? reasonerReviewModel({ content: pending.content, run: await getReasonerRunForJob(params.workspaceId, pending.content.reasonerProvenance.jobId), knowledge: FOUNDATION_KNOWLEDGE, original: original?.content ?? null }) : null,
+    reasonerReview: pending.content.reasonerProvenance
+      ? reasonerReviewModel({
+          content: pending.content,
+          run: await getReasonerRunForJob(params.workspaceId, pending.content.reasonerProvenance.jobId),
+          knowledge: FOUNDATION_KNOWLEDGE,
+          original: original?.content ?? null,
+          // A read failure shows the draft against its own snapshot; approval re-loads and fails closed.
+          currentConstraints: await currentConstraintsFor(params.clientProfileId).catch(() => null),
+        })
+      : null,
     repairReasoningEnabled: !!pending.content.reasonerProvenance && isRepairReasoningEnabled(),
   };
 }
@@ -904,9 +913,12 @@ export async function resolveReasonerFitDecisionAction(params: { workspaceId: st
   if (!pending || pending.versionId !== current.versionId) throw new Error("This proposal changed since you opened it — refresh and try again.");
   const rp = current.content.reasonerProvenance;
   if (!rp) throw new Error("resolveReasonerFitDecisionAction: not a Reasoner proposal");
-  const review = reasonerReviewModel({ content: current.content, run: await getReasonerRunForJob(params.workspaceId, rp.jobId), knowledge: FOUNDATION_KNOWLEDGE });
+  const review = reasonerReviewModel({ content: current.content, run: await getReasonerRunForJob(params.workspaceId, rp.jobId), knowledge: FOUNDATION_KNOWLEDGE, currentConstraints: await currentConstraintsFor(params.clientProfileId) });
   const decision = review.decisions.find((d) => d.key === params.decisionKey);
   if (!decision || decision.status !== "unresolved") throw new Error("That decision is already resolved.");
+  // Confirmed restrictions are authoritative: an exercise that conflicts with them can't be kept — remove or replace it
+  // (or change the confirmed restrictions themselves).
+  if (params.resolution === "accept" && decision.fit === "incompatible") throw new Error(`${decision.exerciseName} conflicts with the client's confirmed restrictions — remove or replace it.`);
   let next = current.content;
   if (params.resolution === "remove") {
     const removed = removeExerciseEverywhere(next, decision.exerciseName);
@@ -916,11 +928,17 @@ export async function resolveReasonerFitDecisionAction(params: { workspaceId: st
   const nowIso = new Date().toISOString();
   next = {
     ...next,
-    reasonerProvenance: { ...next.reasonerProvenance!, decisionResolutions: [...(rp.decisionResolutions ?? []), { key: decision.key, exerciseId: decision.exerciseId, exerciseName: decision.exerciseName, resolution: params.resolution === "remove" ? "removed" : "accepted_with_conditions", conditions: params.resolution === "accept" ? decision.conditions : [], resolvedBy: ctx.userId, resolvedAtIso: nowIso }] },
+    reasonerProvenance: { ...next.reasonerProvenance!, decisionResolutions: [...(rp.decisionResolutions ?? []), { key: decision.key, exerciseId: decision.exerciseId, exerciseName: decision.exerciseName, resolution: params.resolution === "remove" ? "removed" : "accepted_with_conditions", conditions: params.resolution === "accept" ? decision.conditions : [], ...(params.resolution === "accept" ? { fitBasis: decision.fitBasis } : {}), resolvedBy: ctx.userId, resolvedAtIso: nowIso }] },
     updatedAtIso: nowIso,
   };
   const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: current.programId, content: current.content, versionId: current.versionId }, nextContent: next });
   return { versionId: saved.versionId };
+}
+
+/** Gate 4.0C-4 — the CURRENT authoritative ConstraintSet for a client (re-derived from the confirmed record now,
+ * never from the draft's generation snapshot). */
+async function currentConstraintsFor(clientProfileId: string) {
+  return (await loadSynthesisInputForClient(clientProfileId)).constraints;
 }
 
 /** Loads everything post-edit reasoning needs for the CURRENT pending Reasoner draft, refusing stale views. */
@@ -931,7 +949,7 @@ async function loadIntegrityContext(params: { workspaceId: string; clientProfile
   const rp = current.content.reasonerProvenance;
   if (!rp) throw new Error("programIntegrity: not a Reasoner proposal");
   const run = await getReasonerRunForJob(params.workspaceId, rp.jobId);
-  const review = reasonerReviewModel({ content: current.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content });
+  const review = reasonerReviewModel({ content: current.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content, currentConstraints: await currentConstraintsFor(params.clientProfileId) });
   const integrity = review.integrity;
   if (!run || !integrity || integrity.key !== params.decisionKey) throw new Error("That decision no longer applies — refresh to see the current state.");
   if (integrity.status !== "unresolved") throw new Error("That decision is already resolved.");
@@ -1060,7 +1078,13 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   let publishVersionId = params.versionId;
   if (approved.content.reasonerProvenance) {
     const run = await getReasonerRunForJob(params.workspaceId, approved.content.reasonerProvenance.jobId);
-    const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content });
+    let currentConstraints;
+    try {
+      currentConstraints = await currentConstraintsFor(params.clientProfileId);
+    } catch {
+      throw new Error("OPTIM couldn't load the client's current confirmed restrictions, so it can't confirm this plan still fits them. Try again.");
+    }
+    const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content, currentConstraints });
     if (review.approvalBlockedReason) throw new Error(review.approvalBlockedReason);
     const clientContent = clientFacingProgramContent({ content: approved.content, reviewedVersionId: approved.versionId, knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(run), nowIso: new Date().toISOString() });
     if (findClientCopyLeaks(clientContent).length) throw new Error("Some session names still contain internal planning notes. Rename those sessions, then approve.");

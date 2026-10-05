@@ -19,6 +19,8 @@ export interface LimitationOptionView {
   group: "movements" | "demands" | "positions" | "equipment" | "exercises";
   label: string;
   help: string;
+  /** Gate 4.0C-4 — options sharing a dimension are alternatives (single select); others are independent facts. */
+  dimension: { key: string; label: string };
 }
 
 const GROUP_LABEL: Record<LimitationOptionView["group"], string> = { movements: "Movements", demands: "Exercise demands", positions: "Positions", equipment: "Equipment", exercises: "A specific exercise" };
@@ -29,7 +31,9 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
   const [proposal, setProposal] = useState<InterpretationProposal | null>(null);
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  // quote → selected option ids, or ["none"]. Independent facts are separate checkboxes;
+  // only alternative levels of ONE dimension are single-select (clarificationDimensions).
+  const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [noRestrictions, setNoRestrictions] = useState(false);
   const [addGroup, setAddGroup] = useState<LimitationOptionView["group"]>("movements");
   const [addId, setAddId] = useState("");
@@ -39,6 +43,18 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
   if (state.status === "no_limitation") return null;
 
   const label = (id: string) => byId.get(id)?.label ?? id;
+  /** A clarification's choices grouped by dimension: >1 option in a dimension = pick one; otherwise an independent fact. */
+  const dimensionsFor = (choices: string[]) => {
+    const dims = new Map<string, { key: string; label: string; options: string[]; exclusive: boolean }>();
+    for (const id of choices) {
+      const d = byId.get(id)?.dimension ?? { key: `option:${id}`, label: label(id) };
+      const cur = dims.get(d.key) ?? { key: d.key, label: d.label, options: [], exclusive: false };
+      if (!cur.options.includes(id)) cur.options.push(id);
+      cur.exclusive = cur.options.length > 1;
+      dims.set(d.key, cur);
+    }
+    return [...dims.values()];
+  };
 
   function interpret() {
     setErrors([]);
@@ -140,12 +156,31 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
               <p className="text-sm text-off-white">“{c.quote}”</p>
               {c.why ? <p className="text-meta text-neutral">{c.why}</p> : null}
               <p className="text-sm text-off-white">{c.question}</p>
-              {[...c.choices, "none"].map((choice) => (
-                <label key={choice} className="flex items-center gap-2.5 text-sm text-off-white">
-                  <input type="radio" name={`clarify-${c.quote}`} className="h-4 w-4 accent-[var(--pc-accent)]" checked={answers[c.quote] === choice} onChange={() => setAnswers((a) => ({ ...a, [c.quote]: choice }))} />
-                  {choice === "none" ? "Not an exercise restriction" : label(choice)}
-                </label>
-              ))}
+              <p className="text-meta text-neutral">Confirm everything that&apos;s true — these can be separate facts.</p>
+              {dimensionsFor(c.choices).map((d) => {
+                const picked = (answers[c.quote] ?? []).filter((x) => x !== "none");
+                const set = (next: string[]) => setAnswers((a) => ({ ...a, [c.quote]: next }));
+                return d.exclusive ? (
+                  <div key={d.key} role="radiogroup" aria-label={d.label} className="space-y-1.5 rounded-[var(--radius-sm)] bg-surface-raised px-2.5 py-2">
+                    <p className="text-meta text-neutral">{d.label} — pick one</p>
+                    {[...d.options, ""].map((choice) => (
+                      <label key={choice || "none"} className="flex items-center gap-2.5 text-sm text-off-white">
+                        <input type="radio" name={`clarify-${c.quote}-${d.key}`} className="h-4 w-4 accent-[var(--pc-accent)]" checked={choice ? picked.includes(choice) : !d.options.some((o) => picked.includes(o))} onChange={() => set([...picked.filter((x) => !d.options.includes(x)), ...(choice ? [choice] : [])])} />
+                        {choice ? label(choice) : "None of these"}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <label key={d.key} className="flex items-center gap-2.5 text-sm text-off-white">
+                    <input type="checkbox" className="h-4 w-4 accent-[var(--pc-accent)]" checked={picked.includes(d.options[0])} onChange={() => set(picked.includes(d.options[0]) ? picked.filter((x) => x !== d.options[0]) : [...picked, d.options[0]])} />
+                    {label(d.options[0])}
+                  </label>
+                );
+              })}
+              <label className="flex items-center gap-2.5 text-sm text-off-white">
+                <input type="checkbox" className="h-4 w-4 accent-[var(--pc-accent)]" checked={(answers[c.quote] ?? []).includes("none")} onChange={(e) => setAnswers((a) => ({ ...a, [c.quote]: e.target.checked ? ["none"] : [] }))} />
+                Not an exercise restriction
+              </label>
             </fieldset>
           ))}
 

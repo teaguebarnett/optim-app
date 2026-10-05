@@ -186,6 +186,11 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
   return (
     <div className="mb-3 space-y-2">
       <p className="text-xs text-neutral">Prepared by OPTIM&apos;s Fitness Reasoner · {review.headline}</p>
+      {review.constraintsChanged ? (
+        <p className="rounded border border-border-strong bg-surface-raised px-3 py-2 text-xs text-off-white">
+          The client&apos;s confirmed restrictions changed after OPTIM prepared this. Every exercise in every week was rechecked against the current ones; anything that no longer fits is listed below.
+        </p>
+      ) : null}
       {review.decisions.length > 0 || review.integrity ? (
         <div className={`rounded border px-3 py-2 ${review.unresolvedCount ? "border-warning bg-warning-soft/40" : "border-border-strong bg-surface-raised"}`}>
           <p className={`text-xs font-medium ${review.unresolvedCount ? "text-warning-strong" : "text-off-white"}`}>
@@ -195,17 +200,24 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
             {review.decisions.map((d) => (
               <li key={d.key}>
                 <p className="text-off-white">
-                  <span className="font-medium">{d.exerciseName}</span> — OPTIM couldn&apos;t confirm it fits {d.restriction}, even kept to {d.conditions.join(" and ")}. It depends on load, setup and execution.
+                  <span className="font-medium">{d.exerciseName}</span> —{" "}
+                  {d.fit === "incompatible"
+                    ? `conflicts with ${d.restriction}. Confirmed restrictions are authoritative, so it can't stay as is.`
+                    : d.fit === "unverifiable"
+                      ? `OPTIM can't check it against ${d.restriction}.`
+                      : `OPTIM couldn't confirm it fits ${d.restriction}, even kept to ${d.conditions.join(" and ")}. It depends on load, setup and execution.`}
                 </p>
                 {d.status === "unresolved" ? (
                   <div className="mt-1.5 flex flex-wrap gap-2">
-                    <form action={resolveAction}>
-                      <input type="hidden" name="decisionKey" value={d.key} />
-                      <input type="hidden" name="resolution" value="accept" />
-                      <Button type="submit" variant="secondary" size="sm">
-                        Keep it — I confirm it fits under these conditions
-                      </Button>
-                    </form>
+                    {d.fit !== "incompatible" ? (
+                      <form action={resolveAction}>
+                        <input type="hidden" name="decisionKey" value={d.key} />
+                        <input type="hidden" name="resolution" value="accept" />
+                        <Button type="submit" variant="secondary" size="sm">
+                          {d.fit === "unverifiable" ? "Keep it — I confirm it fits the restrictions" : "Keep it — I confirm it fits under these conditions"}
+                        </Button>
+                      </form>
+                    ) : null}
                     <form action={resolveAction}>
                       <input type="hidden" name="decisionKey" value={d.key} />
                       <input type="hidden" name="resolution" value="remove" />

@@ -89,3 +89,49 @@ export function resolveRestrictionOption(id: string, knowledge: FitnessKnowledge
 export function allRestrictionOptions(knowledge: FitnessKnowledgeRegistry): RestrictionOption[] {
   return [...RESTRICTION_OPTIONS, ...knowledge.exercises().map((e) => resolveRestrictionOption(`exercise:${e.id}`, knowledge)!)];
 }
+
+/**
+ * Gate 4.0C-4 — which DIMENSION an option belongs to. Options in the same
+ * dimension are alternative answers to one question (levels of one demand:
+ * "hard bracing" vs "moderate or hard bracing") and are mutually exclusive;
+ * options in different dimensions are independent facts that can all be true
+ * at once (a bracing limit AND a specific exercise AND a movement pattern).
+ */
+export function dimensionOf(optionId: string, knowledge: FitnessKnowledgeRegistry): { key: string; label: string } {
+  const opt = resolveRestrictionOption(optionId, knowledge);
+  const tag = opt?.tags[0];
+  if (opt && opt.tags.length === 1 && tag?.kind === "avoid_demand") return { key: `demand:${tag.demand}`, label: `${tag.demand.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())} limit` };
+  return { key: `option:${optionId}`, label: opt?.label ?? optionId };
+}
+
+export interface ClarificationDimension {
+  key: string;
+  label: string;
+  options: string[];
+  /** More than one option = pick at most one (single select); one option = an independent yes/no fact. */
+  exclusive: boolean;
+}
+
+/** Groups a clarification's choices into dimensions (single select only within a dimension). */
+export function clarificationDimensions(choices: string[], knowledge: FitnessKnowledgeRegistry): ClarificationDimension[] {
+  const dims = new Map<string, ClarificationDimension>();
+  for (const id of choices) {
+    const d = dimensionOf(id, knowledge);
+    const cur = dims.get(d.key) ?? { key: d.key, label: d.label, options: [], exclusive: false };
+    if (!cur.options.includes(id)) cur.options.push(id);
+    cur.exclusive = cur.options.length > 1;
+    dims.set(d.key, cur);
+  }
+  return [...dims.values()];
+}
+
+const LEVEL_RANK: Record<string, number> = { none: 0, low: 1, moderate: 2, high: 3 };
+/** True when every tag of `a` is implied by `b` (e.g. "hard bracing" is implied by "moderate or hard bracing"). */
+export function subsumes(b: ConstraintTag[], a: ConstraintTag[]): boolean {
+  return a.every((t) =>
+    b.some((u) => {
+      if (t.kind === "avoid_demand" && u.kind === "avoid_demand") return t.demand === u.demand && LEVEL_RANK[u.atOrAbove] <= LEVEL_RANK[t.atOrAbove];
+      return JSON.stringify(t) === JSON.stringify(u);
+    })
+  );
+}

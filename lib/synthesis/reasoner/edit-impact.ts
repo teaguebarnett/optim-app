@@ -122,7 +122,7 @@ const buildWeeks = (run: ReasonerRun, content: UniversalTrainingProgramContent) 
   return content.weeks.map((w) => w.weekNumber).filter((n) => !deloads.has(n));
 };
 
-export function analyzeProgramIntegrity(params: { original: UniversalTrainingProgramContent; current: UniversalTrainingProgramContent; run: ReasonerRun; knowledge: FitnessKnowledgeRegistry }): IntegrityAnalysis {
+export function analyzeProgramIntegrity(params: { original: UniversalTrainingProgramContent; current: UniversalTrainingProgramContent; run: ReasonerRun; knowledge: FitnessKnowledgeRegistry; /** Current authoritative restrictions (default: the run's snapshot). */ constraints?: ConstraintSet }): IntegrityAnalysis {
   const { original, current, run, knowledge } = params;
   const before = coverage(original, knowledge);
   const after = coverage(current, knowledge);
@@ -164,7 +164,7 @@ export function analyzeProgramIntegrity(params: { original: UniversalTrainingPro
     });
 
   const key = `program_integrity:${createHash("sha256").update(deficiencies.map((d) => dimKey(d.dimension)).join("|")).digest("hex").slice(0, 16)}`;
-  return { key, deficiencies, causes, candidates: feasibleCandidates({ run, knowledge, deficiencies, current }) };
+  return { key, deficiencies, causes, candidates: feasibleCandidates({ run, knowledge, deficiencies, current, constraints: params.constraints }) };
 }
 
 /**
@@ -174,9 +174,9 @@ export function analyzeProgramIntegrity(params: { original: UniversalTrainingPro
  * current Fitness Knowledge, ranked by how much of the lost function each
  * restores. Feasibility only — the best-fit judgment is the Reasoner's.
  */
-export function feasibleCandidates(params: { run: ReasonerRun; knowledge: FitnessKnowledgeRegistry; deficiencies: Deficiency[]; current: UniversalTrainingProgramContent }): FeasibleCandidate[] {
+export function feasibleCandidates(params: { run: ReasonerRun; knowledge: FitnessKnowledgeRegistry; deficiencies: Deficiency[]; current: UniversalTrainingProgramContent; constraints?: ConstraintSet }): FeasibleCandidate[] {
   const { run, knowledge, deficiencies } = params;
-  const constraints = run.snapshots.constraintSet as ConstraintSet;
+  const constraints = params.constraints ?? (run.snapshots.constraintSet as ConstraintSet);
   const present = setsByExercise(params.current);
   const out: FeasibleCandidate[] = [];
   for (const row of run.input?.exercises ?? []) {

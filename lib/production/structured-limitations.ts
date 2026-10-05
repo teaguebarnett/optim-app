@@ -90,7 +90,8 @@ export interface ConfirmLimitationsInput {
   sourceText: string;
   proposal: InterpretationProposal | null;
   selectedOptionIds: string[];
-  clarificationAnswers: Record<string, string>;
+  /** quote → one option id, "none", or several independent option ids (Gate 4.0C-4). */
+  clarificationAnswers: Record<string, string | string[]>;
   noExerciseRestrictions: boolean;
 }
 

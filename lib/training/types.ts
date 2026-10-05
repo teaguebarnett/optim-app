@@ -596,6 +596,9 @@ export interface DecisionResolution {
   exerciseName: string;
   /** accepted_replacement / accepted_tradeoff resolve PROGRAM-INTEGRITY decisions (post-edit). */
   resolution: "accepted_with_conditions" | "removed" | "accepted_replacement" | "accepted_tradeoff";
+  /** accepted_with_conditions: the exercise's eligibility fingerprint under the restrictions in force when the
+   * coach accepted it — the acceptance is stale (reopens) if the confirmed restrictions change it. */
+  fitBasis?: string;
   /** accepted_tradeoff: the deficiency the coach consciously accepted (weekly sets) — invalidated if it gets worse. */
   tradeoff?: Array<{ dimension: string; label: string; before: number; after: number; minAfter: number }>;
   /** accepted_replacement: what was added, where, and whether it came from OPTIM's recommendation. */

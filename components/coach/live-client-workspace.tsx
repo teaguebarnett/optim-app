@@ -43,7 +43,7 @@ import { StructuredLimitationsCard } from "@/components/coach/structured-limitat
 import { ResistancePlannerPreview } from "@/components/coach/resistance-planner-preview";
 import { previewResistancePlanAction } from "@/app/actions/structured-limitations";
 import { getLimitationsState } from "@/lib/production/structured-limitations";
-import { allRestrictionOptions } from "@/lib/synthesis/limitations/vocabulary";
+import { allRestrictionOptions, dimensionOf } from "@/lib/synthesis/limitations/vocabulary";
 import { FOUNDATION_KNOWLEDGE } from "@/lib/synthesis/knowledge/registry";
 import { formatHeightFromAnswers, describePrimaryGoal, formatFieldValue, NOT_PROVIDED } from "@/lib/coach/onboarding-format";
 import type { OnboardingStepAnswers, OnboardingStepId } from "@/lib/coach/types";
@@ -96,7 +96,7 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
   const [limitationsState, plannerView] = onboardingComplete
     ? await Promise.all([soft("limitations state", () => getLimitationsState({ workspaceId: detail.workspaceId, clientProfileId: clientId })), soft("planner preview", () => previewResistancePlanAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }))])
     : [null, null];
-  const limitationOptions = allRestrictionOptions(FOUNDATION_KNOWLEDGE).map((o) => ({ id: o.id, group: o.group, label: o.label, help: o.help }));
+  const limitationOptions = allRestrictionOptions(FOUNDATION_KNOWLEDGE).map((o) => ({ id: o.id, group: o.group, label: o.label, help: o.help, dimension: dimensionOf(o.id, FOUNDATION_KNOWLEDGE) }));
   const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
   // lib/client-state/presentation.ts) — eagerly resolving each one's own

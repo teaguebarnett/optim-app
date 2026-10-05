@@ -23,6 +23,20 @@ import { MUSCLES } from "../knowledge/taxonomy.ts";
 import type { ReasonerRun } from "./run.ts";
 import type { DecisionResolution, ReasonerProvenance, RepairRecommendationRecord, UniversalTrainingProgramContent } from "../../training/types.ts";
 import { analyzeProgramIntegrity, type IntegrityAnalysis } from "./edit-impact.ts";
+import { demandCompatibility, exerciseEligibility, type ExerciseEligibility } from "../exercise-eligibility.ts";
+import { effectiveConstraints, type ConstraintSet } from "../constraints.ts";
+import { canonicalJson, sha256 } from "./run.ts";
+
+/** The restriction facts in force (effective hard constraints' categories and tags), independent of ids/timestamps. */
+export function constraintFingerprint(cs: ConstraintSet): string {
+  return sha256(effectiveConstraints(cs).filter((c) => c.enforcement === "hard").map((c) => `${c.category}:${c.confirmation}:${c.tags.map((t) => canonicalJson(t)).sort().join(",")}`).sort());
+}
+
+/** Stable fingerprint of an exercise's eligibility (what blocks it, under which conditions). */
+export function eligibilityBasis(e: ExerciseEligibility): string {
+  return sha256({ v: e.violations.filter((x) => x.enforcement === "hard").map((x) => x.reason).sort(), l: e.loadConditions.filter((x) => x.enforcement === "hard").map((x) => `${x.demand}:${x.limit}:${x.certainty}`).sort() });
+}
+const plainReason = (r: string) => r.replace(/^movement pattern (\w+)$/, (_m, p: string) => `${p.replace(/_/g, " ")} pattern`).replace(/ \(limit: below (\w+)\)$/, (_m, l: string) => ` — limit is below ${l}`).replace(/_/g, " ");
 import { describeConfirmedRestrictions, plainLanguage } from "./to-program.ts";
 export { describeConfirmedRestrictions };
 
@@ -33,6 +47,12 @@ export interface FitDecision {
   key: string;
   exerciseId: string;
   exerciseName: string;
+  /** Against the CURRENT confirmed restrictions: uncertain (keep-under-conditions or remove), incompatible
+   * (remove/replace only — confirmed restrictions are authoritative), unverifiable (not in Fitness Knowledge). */
+  fit: "uncertain" | "incompatible" | "unverifiable";
+  /** Fingerprint of this exercise's eligibility under the current restrictions; an acceptance recorded under a
+   * different basis is stale and reopens. */
+  fitBasis: string;
   /** The confirmed restriction it may not fit, in plain language. */
   restriction: string;
   /** What staying submaximal requires — necessary, not proof of fit. */
@@ -61,6 +81,8 @@ export interface ReasonerReviewModel {
   headline: string;
   /** False when the run record couldn't be loaded — approval then fails closed. */
   available: boolean;
+  /** The confirmed restrictions changed since OPTIM prepared the draft — it was revalidated against the current ones. */
+  constraintsChanged: boolean;
   decisions: FitDecision[];
   /** Post-edit consequence of the coach's changes vs the generated plan (null when nothing meaningful was lost). */
   integrity: IntegrityDecision | null;
@@ -84,12 +106,23 @@ function namesInContent(content: UniversalTrainingProgramContent): Set<string> {
   return names;
 }
 
-export function reasonerReviewModel(params: { content: UniversalTrainingProgramContent; run: ReasonerRun | null; knowledge: FitnessKnowledgeRegistry; /** The generated version 1 (immutable). Absent/identical = no edits yet. */ original?: UniversalTrainingProgramContent | null }): ReasonerReviewModel {
+export function reasonerReviewModel(params: {
+  content: UniversalTrainingProgramContent;
+  run: ReasonerRun | null;
+  knowledge: FitnessKnowledgeRegistry;
+  /** The generated version 1 (immutable). Absent/identical = no edits yet. */
+  original?: UniversalTrainingProgramContent | null;
+  /** The CURRENT authoritative ConstraintSet (Gate 4.0C-4). The whole draft — every exercise, every week — is
+   * revalidated against it. Absent = the run's own snapshot (no change known). */
+  currentConstraints?: ConstraintSet | null;
+}): ReasonerReviewModel {
   const rp = params.content.reasonerProvenance!;
   const reference = { runId: rp.runId, reasonerVersion: rp.reasonerVersion, promptVersion: rp.promptVersion, knowledgeVersion: rp.knowledgeVersion };
   const clean = (s: string) => plainLanguage(s).trim();
-  if (!params.run?.input || !params.run.result.plan) {
-    return { headline: rp.headline, available: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
+  // Never evaluate one client's draft against another client's restrictions (fail closed).
+  const wrongClient = !!params.currentConstraints && !!params.run && params.currentConstraints.clientProfileId !== (params.run.snapshots.constraintSet as ConstraintSet).clientProfileId;
+  if (!params.run?.input || !params.run.result.plan || wrongClient) {
+    return { headline: rp.headline, available: false, constraintsChanged: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
   }
   const run = params.run;
   const plan = run.result.plan!;
@@ -97,28 +130,81 @@ export function reasonerReviewModel(params: { content: UniversalTrainingProgramC
   const planned = new Set(plan.sessions.flatMap((s) => s.exercises.map((e) => e.exerciseId)));
   const present = namesInContent(params.content);
   const resolutions = rp.decisionResolutions ?? [];
-  const demandRule = input.constraints.flatMap((c) => c.rules.filter((r) => / demand at /.test(r)).map((r) => `${c.id}: ${r}`))[0] ?? "";
-  const restriction = describeConfirmedRestrictions(demandRule ? [demandRule.split(": ")[1]] : []).replace(/^Your confirmed restrictions were applied exactly as confirmed — /, "your confirmed restriction (").replace(/\.$/, ")");
+  const snapshot = run.snapshots.constraintSet as ConstraintSet;
+  const constraints = params.currentConstraints ?? snapshot;
+  // Changed = the restriction FACTS differ (re-confirming the same facts later isn't a change).
+  const constraintsChanged = !!params.currentConstraints && constraintFingerprint(params.currentConstraints) !== constraintFingerprint(snapshot);
+  const hasStructured = effectiveConstraints(constraints).some((c) => c.enforcement === "hard" && c.confirmation === "coach_confirmed" && c.tags.length > 0);
+  const structuredBasis = sha256(effectiveConstraints(constraints).filter((c) => c.confirmation === "coach_confirmed").map((c) => c.tags));
 
-  // One decision per uncertain-fit exercise in the plan (dedupes every mention of it).
-  const decisions: FitDecision[] = input.exercises
-    .filter((row) => fitCodeOf(row) === "U" && planned.has(row.split("|")[0]))
-    .map((row) => {
-      const exerciseId = row.split("|")[0];
-      const exerciseName = params.knowledge.getExercise(exerciseId)?.name ?? row.split("|")[1];
-      const key = `constraint_fit:${exerciseId}`;
-      const resolution = [...resolutions].reverse().find((r) => r.key === key && (r.resolution === "accepted_with_conditions" || r.resolution === "removed")) ?? null;
-      const status: FitDecisionStatus = resolution ? (resolution.resolution as "accepted_with_conditions" | "removed") : present.has(exerciseName.toLowerCase()) ? "unresolved" : "removed_by_edit";
-      return { kind: "BLOCKING_COACH_DECISION" as const, key, exerciseId, exerciseName, restriction, conditions: [`at least ${LOADED_DEMAND_CONDITION.minReps} reps per set`, `at least ${LOADED_DEMAND_CONDITION.minRir} reps in reserve`], status, resolution };
-    });
-  // An accepted exercise that was later removed is simply gone; a removed one that was re-added needs a decision again.
-  for (const d of decisions) if (d.status === "removed" && present.has(d.exerciseName.toLowerCase())) d.status = "unresolved";
+  // FULL revalidation: every exercise in the current draft (all weeks/sessions — names dedupe repeats) against
+  // the CURRENT restrictions, plus planned uncertain exercises the coach has since removed (kept for the record).
+  const byName = new Map(params.knowledge.exercises().map((e) => [e.name.toLowerCase(), e]));
+  const candidates = new Map<string, { id: string | null; name: string }>();
+  for (const name of present) {
+    const ex = byName.get(name);
+    candidates.set(ex ? ex.id : `custom:${name}`, { id: ex?.id ?? null, name: ex?.name ?? name });
+  }
+  for (const row of input.exercises) {
+    const id = row.split("|")[0];
+    if (fitCodeOf(row) === "U" && planned.has(id) && !candidates.has(id)) candidates.set(id, { id, name: params.knowledge.getExercise(id)?.name ?? row.split("|")[1] });
+  }
+  // Exercises the coach already decided on stay visible (provenance), even once removed.
+  for (const r of resolutions) {
+    if (!r.key.startsWith("constraint_fit:")) continue;
+    const id = r.key.slice("constraint_fit:".length);
+    if (!candidates.has(id)) candidates.set(id, { id: id.startsWith("custom:") ? null : id, name: r.exerciseName });
+  }
+  const decidedKeys = new Set(resolutions.filter((r) => r.key.startsWith("constraint_fit:")).map((r) => r.key));
+  const decisions: FitDecision[] = [];
+  for (const [keyId, c] of candidates) {
+    const isPresent = present.has(c.name.toLowerCase());
+    const ex = c.id ? params.knowledge.getExercise(c.id) : undefined;
+    let fit: FitDecision["fit"] | null = null;
+    let restriction = "";
+    let conditions: string[] = [];
+    let fitBasis = "";
+    if (ex) {
+      const elig = exerciseEligibility(ex, constraints);
+      const compat = demandCompatibility(elig);
+      fitBasis = eligibilityBasis(elig);
+      if (compat === "incompatible") {
+        fit = "incompatible";
+        restriction = `the client's confirmed restrictions (${[...new Set(elig.violations.filter((v) => v.enforcement === "hard").map((v) => plainReason(v.reason)))].join("; ")})`;
+      } else if (compat === "uncertain") {
+        fit = "uncertain";
+        const lc = elig.loadConditions.find((l) => l.enforcement === "hard" && l.certainty === "uncertain")!;
+        restriction = `your confirmed restriction (nothing needing ${lc.demand.replace(/_/g, " ")} at ${lc.limit} or above)`;
+        conditions = lc.conditions;
+      } else if (!isPresent && (fitCodeOf(input.exercises.find((r) => r.startsWith(`${keyId}|`)) ?? "") === "U" || decidedKeys.has(`constraint_fit:${keyId}`))) {
+        // Removed earlier after a fit decision; under the current restrictions it would fit — keep the history row.
+        fit = "uncertain";
+        restriction = "your confirmed restriction";
+        conditions = [`at least ${LOADED_DEMAND_CONDITION.minReps} reps per set`, `at least ${LOADED_DEMAND_CONDITION.minRir} reps in reserve`];
+      }
+    } else if (hasStructured && isPresent) {
+      fit = "unverifiable";
+      fitBasis = structuredBasis;
+      restriction = "the client's confirmed restrictions (it isn't in OPTIM's exercise knowledge, so OPTIM can't check it)";
+    }
+    if (!fit) continue;
+    const key = `constraint_fit:${keyId}`;
+    const recorded = [...resolutions].reverse().find((r) => r.key === key && (r.resolution === "accepted_with_conditions" || r.resolution === "removed")) ?? null;
+    let status: FitDecisionStatus;
+    if (!isPresent) status = recorded?.resolution === "removed" ? "removed" : "removed_by_edit";
+    else if (recorded?.resolution === "accepted_with_conditions" && fit !== "incompatible") {
+      // Valid only under the same eligibility basis it was accepted under (legacy records: the run's snapshot basis).
+      const acceptedBasis = recorded.fitBasis ?? (ex ? eligibilityBasis(exerciseEligibility(ex, snapshot)) : "");
+      status = acceptedBasis === fitBasis ? "accepted_with_conditions" : "unresolved";
+    } else status = "unresolved"; // never resolved, removed-then-re-added, or now incompatible
+    decisions.push({ kind: "BLOCKING_COACH_DECISION", key, exerciseId: c.id ?? keyId, exerciseName: c.name, fit, fitBasis, restriction, conditions, status, resolution: status === "unresolved" ? null : recorded });
+  }
   const unresolved = decisions.filter((d) => d.status === "unresolved");
 
   // Post-edit program integrity: what the coach's changes removed from the generated plan's intent.
   let integrity: IntegrityDecision | null = null;
   if (params.original && params.original !== params.content) {
-    const analysis = analyzeProgramIntegrity({ original: params.original, current: params.content, run, knowledge: params.knowledge });
+    const analysis = analyzeProgramIntegrity({ original: params.original, current: params.content, run, knowledge: params.knowledge, constraints });
     if (analysis.key) {
       const tradeoff = [...resolutions].reverse().find((r) => r.key === analysis.key && r.resolution === "accepted_tradeoff") ?? null;
       // A conscious tradeoff stays valid only while the program is no worse than when it was accepted.
@@ -140,13 +226,14 @@ export function reasonerReviewModel(params: { content: UniversalTrainingProgramC
   return {
     headline: rp.headline,
     available: true,
+    constraintsChanged,
     decisions,
     integrity,
     history: resolutions,
     unresolvedCount: unresolved.length + (integrityOpen ? 1 : 0),
     approvalBlockedReason:
       [
-        unresolved.length ? `Decide first: ${unresolved.map((d) => d.exerciseName).join(", ")} — OPTIM couldn't confirm ${unresolved.length === 1 ? "it fits" : "they fit"} the client's confirmed restrictions.` : "",
+        unresolved.length ? `Decide first: ${unresolved.map((d) => d.exerciseName).join(", ")} — ${unresolved.some((d) => d.fit === "incompatible") ? "conflicts with or can't be confirmed against" : "OPTIM couldn't confirm it fits"} the client's confirmed restrictions.` : "",
         integrityOpen ? `Your changes left ${integrity!.analysis.deficiencies.map((d) => d.label.toLowerCase()).join(", ")} underrepresented — choose a replacement or accept the reduced stimulus.` : "",
       ]
         .filter(Boolean)
