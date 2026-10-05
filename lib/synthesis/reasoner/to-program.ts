@@ -12,6 +12,7 @@ import type { DayOfWeek, RpeValue } from "../../types.ts";
 import type { Block, GenerationInputs, Prescription, ReasonerProvenance, Session, TrainingItemInstance, UniversalProgramDay, UniversalTrainingProgramContent } from "../../training/types.ts";
 import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import type { ExercisePrescription } from "../plan-spec.ts";
+import { MOVEMENT_PATTERNS } from "../knowledge/taxonomy.ts";
 import type { ReasonerResult } from "./reasoner.ts";
 
 type Planned = Extract<ReasonerResult, { status: "PLANNED" }>;
@@ -36,9 +37,31 @@ export function plainLanguage(text: string): string {
     .replace(/\(([KU])\)/g, (_m, code: string) => (code === "K" ? "(conditional fit)" : "(uncertain fit)"))
     .replace(/\b(U|K) and repeated\b/g, (_m, code: string) => `${code === "U" ? "Uncertain fit" : "Conditional fit"} and repeated`)
     .replace(/\bS-marked\b/g, "submaximal-only")
+    .replace(/\bconstraint fit ([KU])\b/g, (_m, code: string) => (code === "K" ? "conditional fit" : "uncertain fit"))
+    .replace(/\bsingle ([KU]) exercise/g, (_m, code: string) => `single ${code === "K" ? "conditional-fit" : "uncertain-fit"} exercise`)
+    .replace(/\b([KU]) (variations?|exercises?|lifts?|selections?|work)\b/g, (_m, code: string, noun: string) => `${code === "K" ? "conditional-fit" : "uncertain-fit"} ${noun}`)
     .replace(/\(?\b([KU]) constraint fit\)?/g, (_m, code: string) => (code === "K" ? "(conditional fit)" : "(uncertain fit)"))
     .replace(/\bCoach method tension \(t_[a-z0-9_.]+\)/gi, "Tension with your method")
     .replace(/\s*\(t_[a-z0-9_.]+\)/g, "");
+}
+
+/** "no single leg pattern" → plain, exact wording from the taxonomy (never broader than the rule). */
+export function describeConfirmedRestrictions(rules: string[]): string {
+  const patterns: string[] = [];
+  const other: string[] = [];
+  for (const r of rules) {
+    const p = /^no (.+) pattern$/.exec(r);
+    if (p) {
+      const id = p[1].replace(/ /g, "_") as keyof typeof MOVEMENT_PATTERNS;
+      patterns.push((MOVEMENT_PATTERNS[id]?.name ?? p[1]).replace(/^./, (c) => c.toLowerCase()));
+      continue;
+    }
+    const d = /^no (.+) demand at (\w+) or above$/.exec(r);
+    if (d) other.push(`nothing needing ${d[1]} at ${d[2]} or above`);
+    else other.push(r);
+  }
+  const parts = [patterns.length ? `none of these movement patterns: ${patterns.join("; ")}` : "", ...other].filter(Boolean);
+  return `Your confirmed restrictions were applied exactly as confirmed — ${parts.join("; ")}.`;
 }
 
 /** Coach-facing review context, grouped the OPTIM way. Every line is plain language. */
@@ -67,7 +90,8 @@ export function reviewContext(result: Planned): Pick<ReasonerProvenance, "headli
   add(handled, `Training days: ${plan.frequency.daysPerWeek} per week (${r.anchors.days.basis}).`);
   if (r.anchors.weeks) add(handled, `Program length: ${plan.durationWeeks} weeks (${plan.durationWeeks === r.anchors.weeks.value ? r.anchors.weeks.basis : "departs from the anchor — reason recorded"}).`);
   for (const d of plan.deviations) add(handled, `Departed from OPTIM's default ${d.field}: ${d.because}`);
-  for (const c of plan.constraintsApplied) add(handled, `Your confirmed restrictions: ${c.how}`);
+  // The structured rules themselves — never the model's paraphrase, which can overstate them.
+  if (r.constraints.length) add(handled, describeConfirmedRestrictions(r.constraints.flatMap((c) => c.rules)));
   add(handled, "Availability, session length and equipment were applied as hard limits.");
   add(handled, "Every week stays inside your set, rep, effort and rest ranges (checked deterministically).");
   for (const g of plan.goalAccess.filter((x) => x.status === "direct")) add(handled, `${g.target}: trained directly.`);

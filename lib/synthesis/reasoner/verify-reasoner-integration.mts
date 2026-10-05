@@ -8,6 +8,8 @@ import { FOUNDATION_KNOWLEDGE } from "../knowledge/registry.ts";
 import { runFitnessReasoner, type ReasonerModel, type ReasonerResult } from "./reasoner.ts";
 import { executeReasonerJob, isStale, outcomeForResult, parseEnabledClients, auditColumns, MESSAGES, STALE_AFTER_MS, type JobFinish } from "./proposal-job.ts";
 import { plainLanguage, reasonerResultToProgramContent, reviewContext } from "./to-program.ts";
+import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, removeExerciseEverywhere, supportedSetupNames } from "./review-gate.ts";
+import type { WirePlan } from "./eval/fixtures.ts";
 import { fakeModel, NOW, restrict, scenarioInput, scriptedOutput } from "./eval/fixtures.ts";
 import { validateUniversalTrainingProgramContent } from "../../production/validation.ts";
 import { hasVerifiedGenerationInputs } from "../../coach/generation-prerequisites.ts";
@@ -37,7 +39,7 @@ const planned = async (input = scenarioInput()) => {
   return r as Extract<ReasonerResult, { status: "PLANNED" }>;
 };
 const inputs: GenerationInputs = { version: 1, recordedAtIso: NOW, coachMethod: { methodVersionId: "mv-eval-7", playbookVersion: 7, operatingModelVersion: 1, confirmedAtIso: NOW, summary: [] }, clientIntake: { source: "client_onboarding", completedAtIso: NOW, healthReview: "not_required", summary: [], assumptions: [] } };
-const convert = (r: Extract<ReasonerResult, { status: "PLANNED" }>) => reasonerResultToProgramContent({ result: r, knowledge: FOUNDATION_KNOWLEDGE, programId: "reasoner-job-1", workspaceId: "ws-eval", clientProfileId: "client-eval", coachId: "coach-eval", title: "Training program", jobId: "job-1", generationInputs: inputs, nowIso: NOW });
+const convert = (r: Extract<ReasonerResult, { status: "PLANNED" }>) => reasonerResultToProgramContent({ result: r, knowledge: FOUNDATION_KNOWLEDGE, programId: "reasoner-job-1" /* legacy id prefix on the existing prod draft */, workspaceId: "ws-eval", clientProfileId: "client-eval", coachId: "coach-eval", title: "Training program", jobId: "job-1", generationInputs: inputs, nowIso: NOW });
 
 /** Runs the job body with recording fakes. */
 async function job(opts: { input?: ReturnType<typeof scenarioInput>; model?: ReasonerModel | null; save?: (r: unknown) => Promise<{ versionId: string } | { superseded: true } | { notSaved: string }>; loadThrows?: boolean }) {
@@ -209,6 +211,102 @@ await check("13. Coach-facing text never shows internal codes (constraint aliase
   const r = await planned(scenarioInput({ restrictions: bracing }));
   const text = JSON.stringify(convert(r).reasonerProvenance) + JSON.stringify(convert(r).weeks[0]);
   assert.ok(!/\bC\d+\b|U-rated|K-rated|"[KU]:|\(t_[a-z]/.test(text), text.match(/\bC\d+\b|U-rated|K-rated|"[KU]:|\(t_[a-z]/)?.[0]);
+});
+
+// ---------------------------------------------------------------------------
+// Gate 4.0C-4 dogfood fixes — approval gate + client-facing copy.
+// ---------------------------------------------------------------------------
+const bracingOnly = () => restrict([{ kind: "avoid_demand", demand: "bracing", atOrAbove: "moderate" }]);
+/** A plan with Lat Pulldown (uncertain fit under a moderate-bracing restriction) on two days. */
+async function withUncertain() {
+  const put = (p: WirePlan) => {
+    for (const i of [0, 1]) p.sessions[i].exercises[2] = { id: "exercise.lat_pulldown", role: "accessory", sets: 2, reps: [8, 12], rir: [2, 3], note: "Only vertical pull; U, flagged for coach review." };
+  };
+  const r = await runFitnessReasoner({ input: scenarioInput({ restrictions: bracingOnly() }), model: fakeModel((ri) => scriptedOutput(ri, put)), nowIso: NOW, runId: "job-1" });
+  assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : r.status);
+  return r as Extract<ReasonerResult, { status: "PLANNED" }>;
+}
+const resolution = (key: string, name: string, kind: "accepted_with_conditions" | "removed" = "accepted_with_conditions") => ({ key, exerciseId: key.split(":")[1], exerciseName: name, resolution: kind, conditions: ["x"], resolvedBy: "coach-eval", resolvedAtIso: NOW });
+/** Accept every decision except `except` (by exercise name). */
+const acceptAll = (c: ReturnType<typeof convert>, run: ReasonerResult["run"], except: string[] = []) => {
+  const m = reasonerReviewModel({ content: c, run, knowledge: FOUNDATION_KNOWLEDGE });
+  return { ...c, reasonerProvenance: { ...c.reasonerProvenance!, decisionResolutions: m.decisions.filter((d) => !except.includes(d.exerciseName)).map((d) => resolution(d.key, d.exerciseName)) } };
+};
+
+await check("14. Approval gate: an unresolved uncertain-fit exercise blocks; one decision however often it is mentioned", async () => {
+  const r = await withUncertain();
+  const c = convert(r);
+  const m = reasonerReviewModel({ content: c, run: r.run, knowledge: FOUNDATION_KNOWLEDGE });
+  const uncertainInPlan = new Set(r.plan.sessions.flatMap((x) => x.exercises.map((e) => e.exerciseId)).filter((id) => r.reasoning.exercises.some((row) => row.startsWith(`${id}|`) && row.endsWith("|U"))));
+  assert.equal(m.decisions.length, uncertainInPlan.size, "one decision per uncertain-fit exercise");
+  assert.equal(new Set(m.decisions.map((d) => d.key)).size, m.decisions.length, "no duplicate decisions");
+  const lat = m.decisions.find((d) => d.exerciseId === "exercise.lat_pulldown")!;
+  assert.deepEqual([lat.status, lat.kind], ["unresolved", "BLOCKING_COACH_DECISION"]);
+  assert.equal(m.unresolvedCount, m.decisions.length);
+  assert.ok(m.approvalBlockedReason && /Lat Pulldown/.test(m.approvalBlockedReason));
+  assert.ok(c.reasonerProvenance!.needsYou.some((t) => /Lat Pulldown/.test(t)), "the raw Needs-you list mentions it");
+  assert.ok(!m.needsYou.some((n) => /Lat Pulldown/i.test(n.text)), "…but the review shows it once, as the decision");
+});
+
+await check("15. Explicit resolution clears the gate (accept / remove everywhere / replaced by edit); re-adding re-opens it; missing run fails closed", async () => {
+  const r = await withUncertain();
+  const c = convert(r);
+  const key = "constraint_fit:exercise.lat_pulldown";
+  const lat = (content: typeof c) => reasonerReviewModel({ content, run: r.run, knowledge: FOUNDATION_KNOWLEDGE }).decisions.find((d) => d.key === key)!;
+  assert.ok(reasonerReviewModel({ content: acceptAll(c, r.run, ["Lat Pulldown"]), run: r.run, knowledge: FOUNDATION_KNOWLEDGE }).approvalBlockedReason, "still blocked while one decision is open");
+  assert.equal(reasonerReviewModel({ content: acceptAll(c, r.run), run: r.run, knowledge: FOUNDATION_KNOWLEDGE }).approvalBlockedReason, null, "all accepted under conditions → clear");
+  const others = acceptAll(c, r.run, ["Lat Pulldown"]);
+  const removed = removeExerciseEverywhere(others, "Lat Pulldown");
+  assert.ok(removed.ok);
+  if (removed.ok) {
+    assert.deepEqual([reasonerReviewModel({ content: removed.content, run: r.run, knowledge: FOUNDATION_KNOWLEDGE }).approvalBlockedReason, lat(removed.content).status], [null, "removed_by_edit"]);
+    const recorded = { ...removed.content, reasonerProvenance: { ...removed.content.reasonerProvenance!, decisionResolutions: [...removed.content.reasonerProvenance!.decisionResolutions!, resolution(key, "Lat Pulldown", "removed")] } };
+    assert.equal(lat(recorded).status, "removed");
+    assert.equal(lat({ ...c, reasonerProvenance: recorded.reasonerProvenance }).status, "unresolved", "removed then re-added → decide again");
+  }
+  const closed = reasonerReviewModel({ content: c, run: null, knowledge: FOUNDATION_KNOWLEDGE });
+  assert.ok(!closed.available && closed.approvalBlockedReason, "no run record → approval refused");
+});
+
+await check("16. Informational Needs-you items never block approval", async () => {
+  const r = await planned(scenarioInput({ coach: undefined }));
+  const c = convert(r);
+  const withNotes = { ...c, reasonerProvenance: { ...c.reasonerProvenance!, needsYou: ["Tension with your method: main sets capped.", "The goal \"Bench\" still stands, but direct work is blocked."] } };
+  const m = reasonerReviewModel({ content: withNotes, run: r.run, knowledge: FOUNDATION_KNOWLEDGE });
+  assert.equal(m.decisions.length, 0);
+  assert.equal(m.approvalBlockedReason, null);
+  assert.deepEqual(m.needsYou.map((n) => n.kind), ["method_tension", "acknowledgement"]);
+});
+
+await check("17. Client-facing version: same training, execution guidance only; coach copy keeps the reasoning", async () => {
+  const r = await withUncertain();
+  const coach = acceptAll(convert(r), r.run);
+  assert.ok(findClientCopyLeaks(coach).length > 0, "the coach draft carries reasoning (review only)");
+  const client = clientFacingProgramContent({ content: coach, reviewedVersionId: "ver-reviewed", knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(r.run), nowIso: NOW });
+  validateUniversalTrainingProgramContent(client);
+  assert.deepEqual(findClientCopyLeaks(client), [], "no internal language in names, focus, notes or cues");
+  assert.ok(!("reasonerProvenance" in client) && !client.generationRationale && !client.generationInputs?.rationale && !client.generationInputs?.whyThisPlan);
+  assert.deepEqual(client.clientFacingFrom, { reviewedVersionId: "ver-reviewed", jobId: "job-1" });
+  assert.ok(!/reasoner|coach review|uncertain|constraint|provenance|needsYou/i.test(JSON.stringify({ ...client, clientFacingFrom: undefined, generationInputs: undefined })), "nothing internal anywhere in the client-readable payload");
+  assert.ok(hasVerifiedGenerationInputs(client));
+  const presc = (x: typeof client) => x.weeks.map((w) => w.days.map((d) => (d.sessions ?? []).map((s) => s.blocks.map((b) => [b.items[0].name, b.items[0].prescription]))));
+  assert.deepEqual(presc(client), presc(coach), "identical training");
+  assert.ok(coach.reasonerProvenance!.needsYou.length > 0 && coach.reasonerProvenance!.decisions.length > 0, "coach-facing context preserved on the reviewed draft");
+  const cue = client.weeks[0].days.flatMap((d) => d.sessions ?? []).flatMap((s) => s.blocks).map((b) => b.items[0]).find((i) => i.name === "Lat Pulldown")!.coachCue!;
+  assert.ok(/left in the tank/.test(cue) && !/review|fit|flag/i.test(cue), cue);
+});
+
+await check("18. Approval path (source): gate before publish, client copy published, client copies never approvable, legacy unchanged", () => {
+  const a = readFileSync(new URL("../../../app/actions/production-programs.ts", import.meta.url), "utf8");
+  const approve = a.slice(a.indexOf("export async function approveProgramProposalAction"), a.indexOf("export async function rejectProgramProposalAction"));
+  const gateAt = approve.indexOf("review.approvalBlockedReason");
+  assert.ok(gateAt > 0 && gateAt < approve.indexOf("publishProgramVersion("), "gate runs before anything is published");
+  assert.ok(/clientFacingFrom\) throw/.test(approve), "a client copy is never approvable");
+  assert.ok(/let publishVersionId = params\.versionId;\s*if \(approved\.content\.reasonerProvenance\)/.test(approve), "non-Reasoner drafts publish exactly the approved version (legacy unchanged)");
+  assert.ok(/findClientCopyLeaks\(clientContent\)\.length\) throw/.test(approve), "fails closed on any leak");
+  const resolve = a.slice(a.indexOf("export async function resolveReasonerFitDecisionAction"), a.indexOf("export async function approveProgramProposalAction"));
+  assert.ok(resolve.length > 300 && !/publishProgramVersion|assignProgramVersionToClient/.test(resolve), "resolving never publishes or assigns");
+  assert.ok(/resolvedBy: ctx\.userId/.test(resolve) && /saveProposalDraft/.test(resolve), "persisted as a new draft version with who/when");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -16,7 +16,7 @@ import "server-only";
 import { resolveStructuredJsonProvider } from "../ai/resolve.ts";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import type { ReasonerModel, ReasonerResult } from "../synthesis/reasoner/reasoner.ts";
-import { serializeRun } from "../synthesis/reasoner/run.ts";
+import { serializeRun, type ReasonerRun } from "../synthesis/reasoner/run.ts";
 import { auditColumns, executeReasonerJob, isStale, MESSAGES, parseEnabledClients, type FailureCategory, type JobFinish, type JobOutcome, type JobStatus, type ReasonerJobView } from "../synthesis/reasoner/proposal-job.ts";
 import type { SynthesisInput } from "../synthesis/synthesis-input.ts";
 
@@ -86,6 +86,14 @@ async function closeIfStale(row: JobRow): Promise<JobRow> {
   const patch = { status: "failed", failure_category: "timed_out", outcome: { message: MESSAGES.timed_out }, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   const { data } = await supabase.from("reasoner_generation_jobs").update(patch).eq("id", row.id).eq("status", "preparing").select(COLUMNS).maybeSingle();
   return (data as JobRow | null) ?? { ...row, ...(patch as Partial<JobRow>) };
+}
+
+/** The persisted ReasonerRun for a job (staff-only RLS), or null when it can't be read. */
+export async function getReasonerRunForJob(workspaceId: string, jobId: string): Promise<ReasonerRun | null> {
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase.from("reasoner_generation_jobs").select("run").eq("workspace_id", workspaceId).eq("id", jobId).maybeSingle();
+  if (error || !data?.run) return null;
+  return data.run as ReasonerRun;
 }
 
 export async function getLatestReasonerJob(workspaceId: string, clientProfileId: string): Promise<ReasonerJobView | null> {

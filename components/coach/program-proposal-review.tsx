@@ -25,11 +25,13 @@ import {
   renameProgramProposalSessionAction,
   convertProgramProposalDayToRestAction,
   approveProgramProposalAction,
+  resolveReasonerFitDecisionAction,
   rejectProgramProposalAction,
   type ProgramProposalReviewView,
 } from "@/app/actions/production-programs";
 import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, BlockPatch } from "@/lib/training/program-proposal-editing";
-import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, ReasonerProvenance, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
+import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
+import type { ReasonerReviewModel } from "@/lib/synthesis/reasoner/review-gate";
 import { ProposalScheduleNavigator } from "@/components/coach/proposal-schedule-navigator";
 import { ProposalApproveForm } from "@/components/coach/proposal-approve-form";
 import { ProposalRejectForm } from "@/components/coach/proposal-reject-form";
@@ -71,10 +73,12 @@ function formatShortDate(iso: string): string {
 /** Exactly what this proposal was built from — recorded at generation time
  * (lib/coach/generation-prerequisites.ts), never recomputed from today's
  * state. */
-/** Gate 4.0C-4 — what OPTIM's Fitness Reasoner wants the coach to know, grouped
- * NEEDS YOU (open by default) / WORTH KNOWING / HANDLED, plus the main decisions
- * and the evidence each rests on. Plain language only — never the run JSON. */
-function ReasonerContextSection({ rp }: { rp: ReasonerProvenance }) {
+/** Gate 4.0C-4 — what OPTIM's Fitness Reasoner wants the coach to know.
+ * DECISIONS (blocking, one per underlying issue, each with an explicit
+ * persisted resolution) come first; then NEEDS YOU (acknowledgements and
+ * method tensions — visible, never blocking), WORTH KNOWING, HANDLED, and the
+ * main decisions with their evidence. Plain language only — never run JSON. */
+function ReasonerContextSection({ review, resolveAction }: { review: ReasonerReviewModel; resolveAction: (formData: FormData) => Promise<void> }) {
   const list = (items: string[]) => (
     <ul className="mt-1.5 space-y-1 text-xs">
       {items.map((line) => (
@@ -84,32 +88,82 @@ function ReasonerContextSection({ rp }: { rp: ReasonerProvenance }) {
       ))}
     </ul>
   );
+  const KIND: Record<string, string> = { acknowledgement: "Acknowledge", method_tension: "Method tension", information: "For you" };
   return (
     <div className="mb-3 space-y-2">
-      <p className="text-xs text-neutral">Prepared by OPTIM&apos;s Fitness Reasoner · {rp.headline}</p>
-      {rp.needsYou.length > 0 ? (
-        <details open className="rounded border border-warning bg-warning-soft/40 px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-warning-strong">Needs you · {rp.needsYou.length}</summary>
-          {list(rp.needsYou)}
+      <p className="text-xs text-neutral">Prepared by OPTIM&apos;s Fitness Reasoner · {review.headline}</p>
+      {review.decisions.length > 0 ? (
+        <div className={`rounded border px-3 py-2 ${review.unresolvedCount ? "border-warning bg-warning-soft/40" : "border-border-strong bg-surface-raised"}`}>
+          <p className={`text-xs font-medium ${review.unresolvedCount ? "text-warning-strong" : "text-off-white"}`}>
+            {review.unresolvedCount ? `Decide before approving · ${review.unresolvedCount}` : "Decisions · all resolved"}
+          </p>
+          <ul className="mt-1.5 space-y-2.5 text-xs">
+            {review.decisions.map((d) => (
+              <li key={d.key}>
+                <p className="text-off-white">
+                  <span className="font-medium">{d.exerciseName}</span> — OPTIM couldn&apos;t confirm it fits {d.restriction}, even kept to {d.conditions.join(" and ")}. It depends on load, setup and execution.
+                </p>
+                {d.status === "unresolved" ? (
+                  <div className="mt-1.5 flex flex-wrap gap-2">
+                    <form action={resolveAction}>
+                      <input type="hidden" name="decisionKey" value={d.key} />
+                      <input type="hidden" name="resolution" value="accept" />
+                      <Button type="submit" variant="secondary" size="sm">
+                        Keep it — I confirm it fits under these conditions
+                      </Button>
+                    </form>
+                    <form action={resolveAction}>
+                      <input type="hidden" name="decisionKey" value={d.key} />
+                      <input type="hidden" name="resolution" value="remove" />
+                      <Button type="submit" variant="ghost" size="sm">
+                        Remove it from every week
+                      </Button>
+                    </form>
+                    <span className="self-center text-neutral">or replace it session by session below.</span>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-success">
+                    {d.status === "accepted_with_conditions"
+                      ? `Kept — you confirmed it fits under these conditions${d.resolution ? ` (${formatShortDate(d.resolution.resolvedAtIso)})` : ""}.`
+                      : d.status === "removed"
+                        ? `Removed from every week${d.resolution ? ` (${formatShortDate(d.resolution.resolvedAtIso)})` : ""}.`
+                        : "Removed or replaced in your edits."}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {review.needsYou.length > 0 ? (
+        <details open className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Needs you · {review.needsYou.length} · doesn&apos;t block approval</summary>
+          <ul className="mt-1.5 space-y-1 text-xs">
+            {review.needsYou.map((n) => (
+              <li key={n.text} className="text-off-white">
+                • <span className="text-neutral">{KIND[n.kind]}:</span> {n.text}
+              </li>
+            ))}
+          </ul>
         </details>
       ) : null}
-      {rp.worthKnowing.length > 0 ? (
+      {review.worthKnowing.length > 0 ? (
         <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-off-white">Worth knowing · {rp.worthKnowing.length}</summary>
-          {list(rp.worthKnowing)}
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Worth knowing · {review.worthKnowing.length}</summary>
+          {list(review.worthKnowing)}
         </details>
       ) : null}
-      {rp.handled.length > 0 ? (
+      {review.handled.length > 0 ? (
         <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-off-white">Handled · {rp.handled.length}</summary>
-          {list(rp.handled)}
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Handled · {review.handled.length}</summary>
+          {list(review.handled)}
         </details>
       ) : null}
-      {rp.decisions.length > 0 ? (
+      {review.why.length > 0 ? (
         <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-off-white">Why OPTIM decided this</summary>
           <ul className="mt-1.5 space-y-1.5 text-xs">
-            {rp.decisions.map((d) => (
+            {review.why.map((d) => (
               <li key={d.decision}>
                 <span className="text-off-white">{d.decision}</span> <span className="text-neutral">— {d.because}</span>
                 {d.evidence.length > 0 ? <span className="block text-neutral">Evidence: {d.evidence.join("; ")}</span> : null}
@@ -117,10 +171,11 @@ function ReasonerContextSection({ rp }: { rp: ReasonerProvenance }) {
             ))}
           </ul>
           <p className="mt-2 text-[11px] text-neutral">
-            Run {rp.runId.slice(0, 8)} · {rp.reasonerVersion} · prompt {rp.promptVersion} · knowledge {rp.knowledgeVersion}
+            Run {review.reference.runId.slice(0, 8)} · {review.reference.reasonerVersion} · prompt {review.reference.promptVersion} · knowledge {review.reference.knowledgeVersion}
           </p>
         </details>
       ) : null}
+      <p className="text-[11px] text-neutral">Your client sees the workouts with plain exercise instructions only — none of these review notes.</p>
     </div>
   );
 }
@@ -182,6 +237,15 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     }
     await revalidate();
     return { ok: true, message: "Approved and assigned." };
+  }
+
+  // Gate 4.0C-4 — explicit, persisted resolution of a blocking Reasoner review decision.
+  async function resolveDecisionAction(formData: FormData): Promise<void> {
+    "use server";
+    const decisionKey = String(formData.get("decisionKey") ?? "");
+    const resolution = formData.get("resolution") === "remove" ? "remove" : "accept";
+    await resolveReasonerFitDecisionAction({ workspaceId, clientProfileId, versionId, decisionKey, resolution });
+    await revalidate();
   }
 
   // No prerequisites here: rejecting only clears the proposal away. On
@@ -731,11 +795,11 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
           <p className="mt-0.5 text-xs text-neutral">{describeSchedule(proposal.content)}</p>
           {inputs?.rationale ? <p className="mt-2 text-sm text-off-white">{inputs.rationale}</p> : null}
         </div>
-        <ProposalApproveForm action={approveAction} blockedReason={null} />
+        <ProposalApproveForm action={approveAction} blockedReason={proposal.reasonerReview?.approvalBlockedReason ?? null} />
       </div>
 
       {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
-      {proposal.content.reasonerProvenance ? <ReasonerContextSection rp={proposal.content.reasonerProvenance} /> : null}
+      {proposal.reasonerReview ? <ReasonerContextSection review={proposal.reasonerReview} resolveAction={resolveDecisionAction} /> : null}
       {whyThisPlan.length > 0 ? (
         <details className="mb-2 rounded border border-border-strong bg-surface-raised px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-off-white">Why this plan</summary>

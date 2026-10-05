@@ -534,6 +534,11 @@ export interface UniversalTrainingProgramContent {
    * ReasonerRun for audit. Additive jsonb field (no column migration), same
    * posture as adjustmentProvenance; nothing in execution reads it. */
   reasonerProvenance?: ReasonerProvenance;
+  /** Gate 4.0C-4 dogfood fix — set ONLY on the client-facing version created at
+   * approval from a reviewed Reasoner draft (client-safe copy, identical
+   * training). Points back to the reviewed draft; such a version is never
+   * itself approvable. */
+  clientFacingFrom?: { reviewedVersionId: string; jobId: string };
   status: "draft" | "assigned";
   createdAtIso: string;
   updatedAtIso: string;
@@ -560,6 +565,22 @@ export interface ReasonerProvenance {
   handled: string[];
   /** The main decisions and the evidence each rests on (plain language). */
   decisions: Array<{ decision: string; because: string; evidence: string[] }>;
+  /** Explicit coach resolutions of blocking review decisions (Gate 4.0C-4
+   * dogfood fix). Appended on a NEW draft version each time — never edited in
+   * place — so the version history is the audit trail. */
+  decisionResolutions?: DecisionResolution[];
+}
+
+/** A coach's explicit resolution of one blocking review decision. */
+export interface DecisionResolution {
+  key: string;
+  exerciseId: string;
+  exerciseName: string;
+  resolution: "accepted_with_conditions" | "removed";
+  /** The conditions the coach accepted (accept) — shown back in review. */
+  conditions: string[];
+  resolvedBy: string;
+  resolvedAtIso: string;
 }
 
 export interface AdjustmentProvenanceChange {

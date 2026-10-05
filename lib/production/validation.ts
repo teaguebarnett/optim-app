@@ -410,6 +410,10 @@ export function validateUniversalTrainingProgramContent(raw: unknown): Universal
   if (raw.appliedLearnedRuleIds !== undefined) requireArray(raw.appliedLearnedRuleIds, "appliedLearnedRuleIds", what).forEach((id, i) => requireString(id, `appliedLearnedRuleIds[${i}]`, what));
   if (raw.methodologyConflictedLearnedRuleIds !== undefined) requireArray(raw.methodologyConflictedLearnedRuleIds, "methodologyConflictedLearnedRuleIds", what).forEach((id, i) => requireString(id, `methodologyConflictedLearnedRuleIds[${i}]`, what));
   if (raw.adjustmentProvenance !== undefined && !isRecord(raw.adjustmentProvenance)) fail(what, `"adjustmentProvenance" must be an object`);
+  if (raw.clientFacingFrom !== undefined) {
+    if (!isRecord(raw.clientFacingFrom)) fail(what, `"clientFacingFrom" must be an object`);
+    requireString(raw.clientFacingFrom.reviewedVersionId, "clientFacingFrom.reviewedVersionId", what);
+  }
   if (raw.reasonerProvenance !== undefined) {
     if (!isRecord(raw.reasonerProvenance)) fail(what, `"reasonerProvenance" must be an object`);
     const rp = raw.reasonerProvenance;

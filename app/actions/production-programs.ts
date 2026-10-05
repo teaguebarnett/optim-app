@@ -89,7 +89,8 @@ import { summarizeLegacyProposal, type LegacyProposalSummary } from "../../lib/c
 import type { DayOfWeek } from "../../lib/types";
 import { after } from "next/server";
 import { loadSynthesisInputForClient } from "../../lib/production/synthesis";
-import { getLatestReasonerJob, isReasonerProposalEnabled, runReasonerJob, startReasonerJob } from "../../lib/production/reasoner-proposals";
+import { getLatestReasonerJob, getReasonerRunForJob, isReasonerProposalEnabled, runReasonerJob, startReasonerJob } from "../../lib/production/reasoner-proposals";
+import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, removeExerciseEverywhere, supportedSetupNames, type ReasonerReviewModel } from "../../lib/synthesis/reasoner/review-gate";
 import { reasonerResultToProgramContent } from "../../lib/synthesis/reasoner/to-program";
 import { FOUNDATION_KNOWLEDGE } from "../../lib/synthesis/knowledge/registry";
 import type { ReasonerJobView } from "../../lib/synthesis/reasoner/proposal-job";
@@ -581,7 +582,7 @@ async function saveReasonerDraft(params: { workspaceId: string; clientProfileId:
     rationale: plan.goalEmphasis.rationale,
     whyThisPlan: [plan.frequency.rationale, plan.architecture.rationale, plan.progression.rationale].filter(Boolean),
   });
-  const content = reasonerResultToProgramContent({ result: params.result, knowledge: FOUNDATION_KNOWLEDGE, programId: `reasoner-${params.jobId}`, workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: params.coachId, title: params.title, jobId: params.jobId, generationInputs, nowIso });
+  const content = reasonerResultToProgramContent({ result: params.result, knowledge: FOUNDATION_KNOWLEDGE, programId: `program-${params.jobId}`, workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: params.coachId, title: params.title, jobId: params.jobId, generationInputs, nowIso });
   validateUniversalTrainingProgramContent(content);
   const { versionId } = await createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content, proposedForClientProfileId: params.clientProfileId });
   return { versionId };
@@ -627,6 +628,8 @@ export interface ProgramProposalReviewView {
    * isn't the client's primary coach's active one (or before Gate 3). Such
    * a draft can't be approved; it must be rejected and regenerated. */
   methodStaleMessage: string | null;
+  /** Gate 4.0C-4 — review model + approval gate for a Reasoner-prepared draft (null otherwise). */
+  reasonerReview: ReasonerReviewModel | null;
 }
 
 /** Step 2: the coach's review surface reads this. Returns null when there
@@ -668,6 +671,7 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     inputsVerified: !!pending.content.adjustmentProvenance || hasVerifiedGenerationInputs(pending.content),
     methodStaleMessage: staleness.stale ? staleness.message : null,
     methodologyConflictedRuleProvenance,
+    reasonerReview: pending.content.reasonerProvenance ? reasonerReviewModel({ content: pending.content, run: await getReasonerRunForJob(params.workspaceId, pending.content.reasonerProvenance.jobId), knowledge: FOUNDATION_KNOWLEDGE }) : null,
   };
 }
 
@@ -884,6 +888,36 @@ export async function convertProgramProposalDayToRestAction(params: { workspaceI
  * lifecycle every prior phase already relies on. Records exactly one
  * program-level decision-evidence entry, keyed to the ORIGINAL proposal's
  * identity so a retry never duplicates it. */
+/** Gate 4.0C-4 — the coach's explicit resolution of one BLOCKING review decision on a Reasoner
+ * draft: keep the exercise under the stated conditions, or remove it from every week. Persisted
+ * as a NEW draft version carrying the resolution record (who, when, what) — version history is
+ * the audit trail. Never publishes or approves anything. */
+export async function resolveReasonerFitDecisionAction(params: { workspaceId: string; clientProfileId: string; versionId: string; decisionKey: string; resolution: "accept" | "remove" }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "resolveReasonerFitDecisionAction");
+  const pending = await getPendingProgramProposal(params.workspaceId, params.clientProfileId);
+  if (!pending || pending.versionId !== current.versionId) throw new Error("This proposal changed since you opened it — refresh and try again.");
+  const rp = current.content.reasonerProvenance;
+  if (!rp) throw new Error("resolveReasonerFitDecisionAction: not a Reasoner proposal");
+  const review = reasonerReviewModel({ content: current.content, run: await getReasonerRunForJob(params.workspaceId, rp.jobId), knowledge: FOUNDATION_KNOWLEDGE });
+  const decision = review.decisions.find((d) => d.key === params.decisionKey);
+  if (!decision || decision.status !== "unresolved") throw new Error("That decision is already resolved.");
+  let next = current.content;
+  if (params.resolution === "remove") {
+    const removed = removeExerciseEverywhere(next, decision.exerciseName);
+    if (!removed.ok) throw new Error(removed.message);
+    next = removed.content;
+  }
+  const nowIso = new Date().toISOString();
+  next = {
+    ...next,
+    reasonerProvenance: { ...next.reasonerProvenance!, decisionResolutions: [...(rp.decisionResolutions ?? []), { key: decision.key, exerciseId: decision.exerciseId, exerciseName: decision.exerciseName, resolution: params.resolution === "remove" ? "removed" : "accepted_with_conditions", conditions: params.resolution === "accept" ? decision.conditions : [], resolvedBy: ctx.userId, resolvedAtIso: nowIso }] },
+    updatedAtIso: nowIso,
+  };
+  const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: current.programId, content: current.content, versionId: current.versionId }, nextContent: next });
+  return { versionId: saved.versionId };
+}
+
 export async function approveProgramProposalAction(params: { workspaceId: string; clientProfileId: string; versionId: string }): Promise<{ assignmentId: string }> {
   const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   const approved = await getProgramProposalVersion(params.workspaceId, params.versionId);
@@ -922,11 +956,34 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   const staleness = methodDraftStaleness(draftMethodVersionIdOf(approved.content), method?.versionId ?? null);
   if (staleness.stale) throw new Error(staleness.message);
 
-  await publishProgramVersion({ workspaceId: params.workspaceId, versionId: params.versionId });
-  const assignmentId = await assignProgramVersionToClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, versionId: params.versionId });
+  // Gate 4.0C-4 — a client-facing copy made at approval is never itself approvable.
+  if (approved.content.clientFacingFrom) throw new Error("approveProgramProposalAction: approve the reviewed proposal, not its client copy.");
+  // Gate 4.0C-4 — Reasoner drafts: every BLOCKING coach decision must have an explicit, persisted
+  // resolution (approval is never an implicit one), and the client receives a client-facing version:
+  // identical training, execution guidance only — no reasoning, review language or provenance.
+  let publishVersionId = params.versionId;
+  if (approved.content.reasonerProvenance) {
+    const run = await getReasonerRunForJob(params.workspaceId, approved.content.reasonerProvenance.jobId);
+    const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE });
+    if (review.approvalBlockedReason) throw new Error(review.approvalBlockedReason);
+    const clientContent = clientFacingProgramContent({ content: approved.content, reviewedVersionId: approved.versionId, knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(run), nowIso: new Date().toISOString() });
+    if (findClientCopyLeaks(clientContent).length) throw new Error("Some session names still contain internal planning notes. Rename those sessions, then approve.");
+    const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: approved.programId, content: approved.content, versionId: approved.versionId }, nextContent: clientContent });
+    publishVersionId = saved.versionId;
+  }
+
+  let assignmentId: string;
+  try {
+    await publishProgramVersion({ workspaceId: params.workspaceId, versionId: publishVersionId });
+    assignmentId = await assignProgramVersionToClient({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, versionId: publishVersionId });
+  } catch (err) {
+    // Never leave an orphaned client copy pending as "the proposal".
+    if (publishVersionId !== params.versionId) await rejectProgramProposalVersion({ workspaceId: params.workspaceId, versionId: publishVersionId }).catch(() => undefined);
+    throw err;
+  }
 
   try {
-    await archiveSiblingDraftVersions({ workspaceId: params.workspaceId, programId: approved.programId, resolvedVersionId: params.versionId });
+    await archiveSiblingDraftVersions({ workspaceId: params.workspaceId, programId: approved.programId, resolvedVersionId: publishVersionId });
   } catch (cleanupError) {
     console.error(`approveProgramProposalAction: sibling draft cleanup failed (canonical approval already succeeded): ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
   }
