@@ -89,7 +89,9 @@ import { summarizeLegacyProposal, type LegacyProposalSummary } from "../../lib/c
 import type { DayOfWeek } from "../../lib/types";
 import { after } from "next/server";
 import { loadSynthesisInputForClient } from "../../lib/production/synthesis";
-import { getLatestReasonerJob, getReasonerRunForJob, isReasonerProposalEnabled, runReasonerJob, startReasonerJob } from "../../lib/production/reasoner-proposals";
+import { getLatestReasonerJob, getReasonerRunForJob, isReasonerProposalEnabled, isRepairReasoningEnabled, productionRepairModel, runReasonerJob, startReasonerJob } from "../../lib/production/reasoner-proposals";
+import { applyReplacement, checkReplacement, defaultReplacement, parseRepairOutput, REPAIR_PROMPT_VERSION, REPAIR_SYSTEM_PROMPT, repairInput, validateRepair, type Replacement } from "../../lib/synthesis/reasoner/edit-impact";
+import { methodFor } from "../../lib/synthesis/planners/resistance/planner";
 import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, removeExerciseEverywhere, supportedSetupNames, type ReasonerReviewModel } from "../../lib/synthesis/reasoner/review-gate";
 import { reasonerResultToProgramContent } from "../../lib/synthesis/reasoner/to-program";
 import { FOUNDATION_KNOWLEDGE } from "../../lib/synthesis/knowledge/registry";
@@ -630,6 +632,8 @@ export interface ProgramProposalReviewView {
   methodStaleMessage: string | null;
   /** Gate 4.0C-4 — review model + approval gate for a Reasoner-prepared draft (null otherwise). */
   reasonerReview: ReasonerReviewModel | null;
+  /** Whether OPTIM may make a (paid) repair-reasoning call for this draft — off unless enabled server-side. */
+  repairReasoningEnabled: boolean;
 }
 
 /** Step 2: the coach's review surface reads this. Returns null when there
@@ -671,7 +675,8 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     inputsVerified: !!pending.content.adjustmentProvenance || hasVerifiedGenerationInputs(pending.content),
     methodStaleMessage: staleness.stale ? staleness.message : null,
     methodologyConflictedRuleProvenance,
-    reasonerReview: pending.content.reasonerProvenance ? reasonerReviewModel({ content: pending.content, run: await getReasonerRunForJob(params.workspaceId, pending.content.reasonerProvenance.jobId), knowledge: FOUNDATION_KNOWLEDGE }) : null,
+    reasonerReview: pending.content.reasonerProvenance ? reasonerReviewModel({ content: pending.content, run: await getReasonerRunForJob(params.workspaceId, pending.content.reasonerProvenance.jobId), knowledge: FOUNDATION_KNOWLEDGE, original: original?.content ?? null }) : null,
+    repairReasoningEnabled: !!pending.content.reasonerProvenance && isRepairReasoningEnabled(),
   };
 }
 
@@ -918,6 +923,97 @@ export async function resolveReasonerFitDecisionAction(params: { workspaceId: st
   return { versionId: saved.versionId };
 }
 
+/** Loads everything post-edit reasoning needs for the CURRENT pending Reasoner draft, refusing stale views. */
+async function loadIntegrityContext(params: { workspaceId: string; clientProfileId: string; versionId: string; decisionKey: string }, needMethod: boolean) {
+  const { current, original } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "programIntegrity");
+  const pending = await getPendingProgramProposal(params.workspaceId, params.clientProfileId);
+  if (!pending || pending.versionId !== current.versionId) throw new Error("This proposal changed since you opened it — refresh and try again.");
+  const rp = current.content.reasonerProvenance;
+  if (!rp) throw new Error("programIntegrity: not a Reasoner proposal");
+  const run = await getReasonerRunForJob(params.workspaceId, rp.jobId);
+  const review = reasonerReviewModel({ content: current.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content });
+  const integrity = review.integrity;
+  if (!run || !integrity || integrity.key !== params.decisionKey) throw new Error("That decision no longer applies — refresh to see the current state.");
+  if (integrity.status !== "unresolved") throw new Error("That decision is already resolved.");
+  if (!needMethod) return { current, run, rp, integrity, method: null };
+  // Coach ranges come from the method the plan was prepared under (approval also enforces this).
+  const read = methodFor(await loadSynthesisInputForClient(params.clientProfileId));
+  if (!read || !read.ok) throw new Error("Your coaching method can't be read right now.");
+  if (run.versions.coachMethod?.versionId && read.method.versionId && run.versions.coachMethod.versionId !== read.method.versionId) throw new Error("Your coaching method changed since this proposal was prepared — reject it and prepare a new one.");
+  return { current, run, rp, integrity, method: read.method };
+}
+
+/** Gate 4.0C-4 — explicit coach resolution of a POST-EDIT program-integrity consequence:
+ *  "replace" adds a feasible alternative (OPTIM's recommendation or another feasible option) on its days in
+ *  every week — the program is then re-analysed, so the decision clears only if the function is restored;
+ *  "accept_tradeoff" records that the coach consciously accepts the reduced stimulus (with the exact
+ *  deficiency, invalidated if the program gets worse). Both persist as a NEW draft version. */
+export async function resolveProgramIntegrityAction(params: { workspaceId: string; clientProfileId: string; versionId: string; decisionKey: string; resolution: "replace" | "accept_tradeoff"; exerciseId?: string; fromRecommendation?: boolean }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current, run, rp, integrity, method } = await loadIntegrityContext(params, params.resolution === "replace");
+  const nowIso = new Date().toISOString();
+  let next = current.content;
+  let record: NonNullable<typeof rp.decisionResolutions>[number];
+  if (params.resolution === "replace") {
+    const candidate = integrity.analysis.candidates.find((c) => c.exerciseId === params.exerciseId);
+    if (!candidate) throw new Error("That exercise isn't a feasible option under the client's confirmed restrictions.");
+    const rec = integrity.recommendation?.recommendation;
+    const m = method!;
+    const replacement: Replacement = params.fromRecommendation && rec && rec.exerciseId === candidate.exerciseId ? { exerciseId: rec.exerciseId, days: rec.days as Replacement["days"], sets: rec.sets, reps: rec.reps, rir: rec.rir } : defaultReplacement({ analysis: integrity.analysis, candidate, run, method: m });
+    const errors = checkReplacement({ replacement, candidates: integrity.analysis.candidates, method: m, current: current.content });
+    if (errors.length) throw new Error(errors.join(" "));
+    next = applyReplacement({ content: next, replacement, run, method: m, knowledge: FOUNDATION_KNOWLEDGE });
+    record = { key: integrity.key, exerciseId: candidate.exerciseId, exerciseName: candidate.exerciseName, resolution: "accepted_replacement", conditions: candidate.conditions, replacement: { exerciseId: candidate.exerciseId, exerciseName: candidate.exerciseName, days: replacement.days, fromRecommendation: !!params.fromRecommendation }, resolvedBy: ctx.userId, resolvedAtIso: nowIso };
+  } else {
+    record = { key: integrity.key, exerciseId: "", exerciseName: integrity.analysis.causes.map((c) => c.exerciseName).join(", "), resolution: "accepted_tradeoff", conditions: [], tradeoff: integrity.analysis.deficiencies.map((d) => ({ dimension: `${d.dimension.kind}:${d.dimension.id}`, label: d.label, before: d.before, after: d.after, minAfter: d.minAfter })), resolvedBy: ctx.userId, resolvedAtIso: nowIso };
+  }
+  next = { ...next, reasonerProvenance: { ...next.reasonerProvenance!, decisionResolutions: [...(rp.decisionResolutions ?? []), record] }, updatedAtIso: nowIso };
+  const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: current.programId, content: current.content, versionId: current.versionId }, nextContent: next });
+  return { versionId: saved.versionId };
+}
+
+/** Gate 4.0C-4 — asks the Fitness Reasoner for a constrained repair recommendation for the current
+ * program-integrity consequence (ONE model call; disabled unless OPTIM_REASONER_REPAIR_ENABLED). The
+ * answer is validated deterministically and stored on a new draft version as a coach-reviewable
+ * recommendation — never applied, never a resolution. */
+export async function requestRepairRecommendationAction(params: { workspaceId: string; clientProfileId: string; versionId: string; decisionKey: string }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  if (!isRepairReasoningEnabled()) throw new Error("OPTIM's repair recommendations aren't enabled yet. Choose an option below or accept the reduced stimulus.");
+  const { current, run, rp, integrity, method: maybeMethod } = await loadIntegrityContext(params, true);
+  const method = maybeMethod!;
+  if (integrity.recommendation) throw new Error("OPTIM already prepared a recommendation for this.");
+  // Cost control: with no feasible option under the confirmed restrictions there is nothing to judge — no call.
+  if (!integrity.analysis.candidates.length) throw new Error("No exercise in OPTIM's knowledge restores this within the client's confirmed restrictions — choose to accept the reduced stimulus, or edit the plan.");
+  const model = await productionRepairModel();
+  if (!model) throw new Error("OPTIM's repair recommendations aren't available right now.");
+  const input = repairInput({ analysis: integrity.analysis, current: current.content, run, method, knowledge: FOUNDATION_KNOWLEDGE });
+  let res;
+  try {
+    res = await model.generate({ systemPrompt: REPAIR_SYSTEM_PROMPT, userMessage: JSON.stringify(input), maxOutputTokens: 6000 });
+  } catch {
+    throw new Error("OPTIM couldn't prepare a recommendation right now. Nothing was changed — choose an option below or try again later.");
+  }
+  const parsed = parseRepairOutput(res.json);
+  const checked = parsed.ok ? validateRepair({ output: parsed.output, analysis: integrity.analysis, method, current: current.content }) : { verdict: "no_confident_repair" as const, recommendation: null, rejected: [parsed.error] };
+  const rec = checked.recommendation;
+  const nowIso = new Date().toISOString();
+  const record = {
+    key: integrity.key,
+    verdict: checked.verdict,
+    rationale: parsed.ok ? parsed.output.rationale : "OPTIM's answer couldn't be used.",
+    recommendation: rec ? { exerciseId: rec.exerciseId, exerciseName: FOUNDATION_KNOWLEDGE.getExercise(rec.exerciseId)?.name ?? rec.exerciseId, days: rec.days, sets: rec.sets, reps: rec.reps, rir: rec.rir, why: rec.why } : null,
+    alternatives: parsed.ok ? parsed.output.alternatives.filter((a) => integrity.analysis.candidates.some((c) => c.exerciseId === a)) : [],
+    tradeoff: parsed.ok ? parsed.output.tradeoff : null,
+    rejected: checked.rejected,
+    model: { provider: model.provider, modelId: model.modelId, promptVersion: REPAIR_PROMPT_VERSION, inputTokens: res.usage?.inputTokens ?? null, outputTokens: res.usage?.outputTokens ?? null, latencyMs: res.latencyMs ?? null },
+    requestedBy: ctx.userId,
+    createdAtIso: nowIso,
+  };
+  const next = { ...current.content, reasonerProvenance: { ...rp, repairRecommendations: [...(rp.repairRecommendations ?? []), record] }, updatedAtIso: nowIso };
+  const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: current.programId, content: current.content, versionId: current.versionId }, nextContent: next });
+  return { versionId: saved.versionId };
+}
+
 export async function approveProgramProposalAction(params: { workspaceId: string; clientProfileId: string; versionId: string }): Promise<{ assignmentId: string }> {
   const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   const approved = await getProgramProposalVersion(params.workspaceId, params.versionId);
@@ -964,7 +1060,7 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   let publishVersionId = params.versionId;
   if (approved.content.reasonerProvenance) {
     const run = await getReasonerRunForJob(params.workspaceId, approved.content.reasonerProvenance.jobId);
-    const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE });
+    const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content });
     if (review.approvalBlockedReason) throw new Error(review.approvalBlockedReason);
     const clientContent = clientFacingProgramContent({ content: approved.content, reviewedVersionId: approved.versionId, knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(run), nowIso: new Date().toISOString() });
     if (findClientCopyLeaks(clientContent).length) throw new Error("Some session names still contain internal planning notes. Rename those sessions, then approve.");

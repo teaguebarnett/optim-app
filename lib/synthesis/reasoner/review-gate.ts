@@ -21,7 +21,8 @@
 import { LOADED_DEMAND_CONDITION, type FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import { MUSCLES } from "../knowledge/taxonomy.ts";
 import type { ReasonerRun } from "./run.ts";
-import type { DecisionResolution, ReasonerProvenance, UniversalTrainingProgramContent } from "../../training/types.ts";
+import type { DecisionResolution, ReasonerProvenance, RepairRecommendationRecord, UniversalTrainingProgramContent } from "../../training/types.ts";
+import { analyzeProgramIntegrity, type IntegrityAnalysis } from "./edit-impact.ts";
 import { describeConfirmedRestrictions, plainLanguage } from "./to-program.ts";
 export { describeConfirmedRestrictions };
 
@@ -40,6 +41,17 @@ export interface FitDecision {
   resolution: DecisionResolution | null;
 }
 
+/** A post-edit program-integrity consequence (one per distinct set of lost functions — deduplicated). */
+export interface IntegrityDecision {
+  kind: "BLOCKING_COACH_DECISION";
+  key: string;
+  analysis: IntegrityAnalysis;
+  /** OPTIM's latest repair recommendation for exactly this consequence (stale ones are ignored). */
+  recommendation: RepairRecommendationRecord | null;
+  status: "unresolved" | "accepted_tradeoff";
+  resolution: DecisionResolution | null;
+}
+
 export interface ReviewNote {
   kind: "acknowledgement" | "method_tension" | "information";
   text: string;
@@ -50,6 +62,10 @@ export interface ReasonerReviewModel {
   /** False when the run record couldn't be loaded — approval then fails closed. */
   available: boolean;
   decisions: FitDecision[];
+  /** Post-edit consequence of the coach's changes vs the generated plan (null when nothing meaningful was lost). */
+  integrity: IntegrityDecision | null;
+  /** Every explicit coach resolution so far, oldest first (provenance). */
+  history: DecisionResolution[];
   unresolvedCount: number;
   approvalBlockedReason: string | null;
   needsYou: ReviewNote[];
@@ -68,12 +84,12 @@ function namesInContent(content: UniversalTrainingProgramContent): Set<string> {
   return names;
 }
 
-export function reasonerReviewModel(params: { content: UniversalTrainingProgramContent; run: ReasonerRun | null; knowledge: FitnessKnowledgeRegistry }): ReasonerReviewModel {
+export function reasonerReviewModel(params: { content: UniversalTrainingProgramContent; run: ReasonerRun | null; knowledge: FitnessKnowledgeRegistry; /** The generated version 1 (immutable). Absent/identical = no edits yet. */ original?: UniversalTrainingProgramContent | null }): ReasonerReviewModel {
   const rp = params.content.reasonerProvenance!;
   const reference = { runId: rp.runId, reasonerVersion: rp.reasonerVersion, promptVersion: rp.promptVersion, knowledgeVersion: rp.knowledgeVersion };
   const clean = (s: string) => plainLanguage(s).trim();
   if (!params.run?.input || !params.run.result.plan) {
-    return { headline: rp.headline, available: false, decisions: [], unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
+    return { headline: rp.headline, available: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
   }
   const run = params.run;
   const plan = run.result.plan!;
@@ -91,13 +107,27 @@ export function reasonerReviewModel(params: { content: UniversalTrainingProgramC
       const exerciseId = row.split("|")[0];
       const exerciseName = params.knowledge.getExercise(exerciseId)?.name ?? row.split("|")[1];
       const key = `constraint_fit:${exerciseId}`;
-      const resolution = [...resolutions].reverse().find((r) => r.key === key) ?? null;
-      const status: FitDecisionStatus = resolution ? resolution.resolution : present.has(exerciseName.toLowerCase()) ? "unresolved" : "removed_by_edit";
+      const resolution = [...resolutions].reverse().find((r) => r.key === key && (r.resolution === "accepted_with_conditions" || r.resolution === "removed")) ?? null;
+      const status: FitDecisionStatus = resolution ? (resolution.resolution as "accepted_with_conditions" | "removed") : present.has(exerciseName.toLowerCase()) ? "unresolved" : "removed_by_edit";
       return { kind: "BLOCKING_COACH_DECISION" as const, key, exerciseId, exerciseName, restriction, conditions: [`at least ${LOADED_DEMAND_CONDITION.minReps} reps per set`, `at least ${LOADED_DEMAND_CONDITION.minRir} reps in reserve`], status, resolution };
     });
   // An accepted exercise that was later removed is simply gone; a removed one that was re-added needs a decision again.
   for (const d of decisions) if (d.status === "removed" && present.has(d.exerciseName.toLowerCase())) d.status = "unresolved";
   const unresolved = decisions.filter((d) => d.status === "unresolved");
+
+  // Post-edit program integrity: what the coach's changes removed from the generated plan's intent.
+  let integrity: IntegrityDecision | null = null;
+  if (params.original && params.original !== params.content) {
+    const analysis = analyzeProgramIntegrity({ original: params.original, current: params.content, run, knowledge: params.knowledge });
+    if (analysis.key) {
+      const tradeoff = [...resolutions].reverse().find((r) => r.key === analysis.key && r.resolution === "accepted_tradeoff") ?? null;
+      // A conscious tradeoff stays valid only while the program is no worse than when it was accepted.
+      const stillValid = !!tradeoff?.tradeoff && analysis.deficiencies.every((d) => (tradeoff.tradeoff!.find((t) => t.dimension === `${d.dimension.kind}:${d.dimension.id}`)?.minAfter ?? Infinity) <= d.minAfter);
+      const recommendation = [...(rp.repairRecommendations ?? [])].reverse().find((x) => x.key === analysis.key) ?? null;
+      integrity = { kind: "BLOCKING_COACH_DECISION", key: analysis.key, analysis, recommendation, status: stillValid ? "accepted_tradeoff" : "unresolved", resolution: stillValid ? tradeoff : null };
+    }
+  }
+  const integrityOpen = integrity?.status === "unresolved";
 
   const mentionsDecision = (t: string) => decisions.some((d) => t.toLowerCase().includes(d.exerciseName.toLowerCase()));
   const needsYou: ReviewNote[] = rp.needsYou
@@ -111,8 +141,16 @@ export function reasonerReviewModel(params: { content: UniversalTrainingProgramC
     headline: rp.headline,
     available: true,
     decisions,
-    unresolvedCount: unresolved.length,
-    approvalBlockedReason: unresolved.length ? `Decide first: ${unresolved.map((d) => d.exerciseName).join(", ")} — OPTIM couldn't confirm ${unresolved.length === 1 ? "it fits" : "they fit"} the client's confirmed restrictions.` : null,
+    integrity,
+    history: resolutions,
+    unresolvedCount: unresolved.length + (integrityOpen ? 1 : 0),
+    approvalBlockedReason:
+      [
+        unresolved.length ? `Decide first: ${unresolved.map((d) => d.exerciseName).join(", ")} — OPTIM couldn't confirm ${unresolved.length === 1 ? "it fits" : "they fit"} the client's confirmed restrictions.` : "",
+        integrityOpen ? `Your changes left ${integrity!.analysis.deficiencies.map((d) => d.label.toLowerCase()).join(", ")} underrepresented — choose a replacement or accept the reduced stimulus.` : "",
+      ]
+        .filter(Boolean)
+        .join(" ") || null,
     needsYou,
     worthKnowing: rp.worthKnowing.map(clean),
     handled,

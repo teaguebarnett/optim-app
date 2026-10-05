@@ -569,6 +569,24 @@ export interface ReasonerProvenance {
    * dogfood fix). Appended on a NEW draft version each time — never edited in
    * place — so the version history is the audit trail. */
   decisionResolutions?: DecisionResolution[];
+  /** Fitness Reasoner repair recommendations after a coach edit (Gate 4.0C-4),
+   * appended on a new draft version — coach-reviewable, never auto-applied. */
+  repairRecommendations?: RepairRecommendationRecord[];
+}
+
+export interface RepairRecommendationRecord {
+  /** The program-integrity decision key it answers (stale if the key changes). */
+  key: string;
+  verdict: "repair" | "no_confident_repair";
+  rationale: string;
+  recommendation: { exerciseId: string; exerciseName: string; days: string[]; sets: number; reps: { min: number; max: number }; rir: { min: number; max: number } | null; why: string } | null;
+  alternatives: string[];
+  tradeoff: string | null;
+  /** Deterministic reasons a model suggestion was rejected (never applied). */
+  rejected: string[];
+  model: { provider: string; modelId: string; promptVersion: string; inputTokens: number | null; outputTokens: number | null; latencyMs: number | null };
+  requestedBy: string;
+  createdAtIso: string;
 }
 
 /** A coach's explicit resolution of one blocking review decision. */
@@ -576,7 +594,12 @@ export interface DecisionResolution {
   key: string;
   exerciseId: string;
   exerciseName: string;
-  resolution: "accepted_with_conditions" | "removed";
+  /** accepted_replacement / accepted_tradeoff resolve PROGRAM-INTEGRITY decisions (post-edit). */
+  resolution: "accepted_with_conditions" | "removed" | "accepted_replacement" | "accepted_tradeoff";
+  /** accepted_tradeoff: the deficiency the coach consciously accepted (weekly sets) — invalidated if it gets worse. */
+  tradeoff?: Array<{ dimension: string; label: string; before: number; after: number; minAfter: number }>;
+  /** accepted_replacement: what was added, where, and whether it came from OPTIM's recommendation. */
+  replacement?: { exerciseId: string; exerciseName: string; days: string[]; fromRecommendation: boolean };
   /** The conditions the coach accepted (accept) — shown back in review. */
   conditions: string[];
   resolvedBy: string;

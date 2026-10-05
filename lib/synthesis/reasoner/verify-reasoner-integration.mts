@@ -309,5 +309,15 @@ await check("18. Approval path (source): gate before publish, client copy publis
   assert.ok(/resolvedBy: ctx\.userId/.test(resolve) && /saveProposalDraft/.test(resolve), "persisted as a new draft version with who/when");
 });
 
+await check("19. Post-edit repair path (source): no call without feasible candidates or when disabled; recommendations never resolve", () => {
+  const a = readFileSync(new URL("../../../app/actions/production-programs.ts", import.meta.url), "utf8");
+  const req = a.slice(a.indexOf("export async function requestRepairRecommendationAction"), a.indexOf("export async function approveProgramProposalAction"));
+  const callAt = req.indexOf("model.generate(");
+  assert.ok(callAt > 0 && req.indexOf("isRepairReasoningEnabled()") < callAt && req.indexOf("!integrity.analysis.candidates.length") < callAt, "gated before any model call");
+  assert.ok(!/decisionResolutions/.test(req) && /repairRecommendations/.test(req), "a recommendation is stored, never recorded as a resolution");
+  const env = readFileSync(new URL("../../production/reasoner-proposals.ts", import.meta.url), "utf8");
+  assert.ok(/OPTIM_REASONER_REPAIR_ENABLED === "1"/.test(env), "off unless explicitly enabled");
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

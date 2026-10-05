@@ -63,6 +63,21 @@ export async function productionReasonerModel(): Promise<ReasonerModel | null> {
   };
 }
 
+/** Gate 4.0C-4 — post-edit repair reasoning makes a model call; OFF unless explicitly enabled. */
+export function isRepairReasoningEnabled(): boolean {
+  return process.env.OPTIM_REASONER_REPAIR_ENABLED === "1" || (!!process.env.OPTIM_REASONER_TEST_PROVIDER && isLocalSupabase());
+}
+
+/** The repair model boundary (same provider/effort as proposals; local test double on a local stack). */
+export async function productionRepairModel(): Promise<ReasonerModel | null> {
+  if (process.env.OPTIM_REASONER_TEST_PROVIDER && isLocalSupabase()) {
+    const { scriptedRepair } = await import("../synthesis/reasoner/edit-impact.ts");
+    return { provider: "local-test", modelId: "local-test:repair", generate: async (req) => ({ json: scriptedRepair(JSON.parse(req.userMessage)), usage: { inputTokens: 0, outputTokens: 0 }, latencyMs: 0 }) };
+  }
+  if (!isRepairReasoningEnabled()) return null;
+  return productionReasonerModel();
+}
+
 interface JobRow {
   id: string;
   workspace_id: string;

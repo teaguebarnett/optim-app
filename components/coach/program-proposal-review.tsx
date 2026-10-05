@@ -26,12 +26,14 @@ import {
   convertProgramProposalDayToRestAction,
   approveProgramProposalAction,
   resolveReasonerFitDecisionAction,
+  resolveProgramIntegrityAction,
+  requestRepairRecommendationAction,
   rejectProgramProposalAction,
   type ProgramProposalReviewView,
 } from "@/app/actions/production-programs";
 import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, BlockPatch } from "@/lib/training/program-proposal-editing";
 import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
-import type { ReasonerReviewModel } from "@/lib/synthesis/reasoner/review-gate";
+import type { IntegrityDecision, ReasonerReviewModel } from "@/lib/synthesis/reasoner/review-gate";
 import { ProposalScheduleNavigator } from "@/components/coach/proposal-schedule-navigator";
 import { ProposalApproveForm } from "@/components/coach/proposal-approve-form";
 import { ProposalRejectForm } from "@/components/coach/proposal-reject-form";
@@ -78,7 +80,99 @@ function formatShortDate(iso: string): string {
  * persisted resolution) come first; then NEEDS YOU (acknowledgements and
  * method tensions — visible, never blocking), WORTH KNOWING, HANDLED, and the
  * main decisions with their evidence. Plain language only — never run JSON. */
-function ReasonerContextSection({ review, resolveAction }: { review: ReasonerReviewModel; resolveAction: (formData: FormData) => Promise<void> }) {
+/** Gate 4.0C-4 — the post-edit consequence of the coach's changes, prepared like an assistant coach:
+ * what training function the edit removed (facts), OPTIM's recommendation (if asked), feasible
+ * options under the same restrictions, or consciously accepting the reduced stimulus. */
+function IntegritySection({ d, repairEnabled, integrityAction, repairAction }: { d: IntegrityDecision; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void> }) {
+  const a = d.analysis;
+  const rec = d.recommendation;
+  const hidden = (extra: Record<string, string>) => (
+    <>
+      <input type="hidden" name="decisionKey" value={d.key} />
+      {Object.entries(extra).map(([k, v]) => (
+        <input key={k} type="hidden" name={k} value={v} />
+      ))}
+    </>
+  );
+  if (d.status === "accepted_tradeoff") {
+    return (
+      <li>
+        <p className="text-off-white">You accepted reduced {a.deficiencies.map((x) => x.label.toLowerCase()).join(", ")} after {a.causes.map((c) => c.exerciseName).join(", ") || "your edits"}.</p>
+        <p className="mt-1 text-success">Tradeoff accepted{d.resolution ? ` (${formatShortDate(d.resolution.resolvedAtIso)})` : ""} — it reopens if the plan loses more.</p>
+      </li>
+    );
+  }
+  return (
+    <li>
+      <p className="text-off-white">
+        Your changes{a.causes.length ? ` (${a.causes.map((c) => (c.setsAfter === 0 ? `removed ${c.exerciseName}` : `reduced ${c.exerciseName}`)).join(", ")})` : ""} left these underrepresented:
+      </p>
+      <ul className="mt-1 space-y-0.5 text-neutral">
+        {a.deficiencies.map((x) => (
+          <li key={x.label}>
+            – {x.label}: {x.before} → {x.after} sets a week, across {x.weeks.length} week{x.weeks.length === 1 ? "" : "s"}
+          </li>
+        ))}
+      </ul>
+      {rec ? (
+        <div className="mt-2 rounded border border-border-strong bg-surface-raised px-2.5 py-2">
+          {rec.verdict === "repair" && rec.recommendation ? (
+            <>
+              <p className="text-off-white">
+                <span className="font-medium">OPTIM recommends: {rec.recommendation.exerciseName}</span> — {rec.recommendation.sets} sets of {rec.recommendation.reps.min}–{rec.recommendation.reps.max} on {rec.recommendation.days.join(", ")}.
+              </p>
+              <p className="mt-0.5 text-neutral">{rec.recommendation.why} {rec.tradeoff ? `Still not preserved: ${rec.tradeoff}` : ""}</p>
+              <form action={integrityAction} className="mt-1.5">
+                {hidden({ resolution: "replace", exerciseId: rec.recommendation.exerciseId, fromRecommendation: "1" })}
+                <Button type="submit" variant="secondary" size="sm">
+                  Accept this replacement
+                </Button>
+              </form>
+            </>
+          ) : (
+            <p className="text-off-white">OPTIM couldn&apos;t find a confident replacement within the confirmed restrictions. {rec.rationale}</p>
+          )}
+        </div>
+      ) : repairEnabled && a.candidates.length ? (
+        <form action={repairAction} className="mt-2">
+          {hidden({})}
+          <Button type="submit" variant="secondary" size="sm">
+            Ask OPTIM for a replacement
+          </Button>
+        </form>
+      ) : null}
+      {a.candidates.length ? (
+        <div className="mt-2">
+          <p className="text-neutral">Options that fit the client&apos;s confirmed restrictions:</p>
+          <ul className="mt-1 space-y-1">
+            {a.candidates.map((c) => (
+              <li key={c.exerciseId} className="flex flex-wrap items-center gap-2">
+                <span className="text-off-white">{c.exerciseName}</span>
+                <span className="text-neutral">— restores {c.restores.join(", ").toLowerCase()}{c.fit === "conditional" ? `; only if ${c.conditions.join(", ")}` : ""}</span>
+                <form action={integrityAction}>
+                  {hidden({ resolution: "replace", exerciseId: c.exerciseId })}
+                  <Button type="submit" variant="ghost" size="sm">
+                    Use this
+                  </Button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="mt-2 text-neutral">No exercise in OPTIM&apos;s knowledge restores this within the client&apos;s confirmed restrictions.</p>
+      )}
+      <form action={integrityAction} className="mt-2">
+        {hidden({ resolution: "accept_tradeoff" })}
+        <Button type="submit" variant="ghost" size="sm">
+          Accept the reduced stimulus — no replacement
+        </Button>
+      </form>
+    </li>
+  );
+}
+
+function ReasonerContextSection({ review, resolveAction, repairEnabled, integrityAction, repairAction }: { review: ReasonerReviewModel; resolveAction: (formData: FormData) => Promise<void>; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void> }) {
   const list = (items: string[]) => (
     <ul className="mt-1.5 space-y-1 text-xs">
       {items.map((line) => (
@@ -92,7 +186,7 @@ function ReasonerContextSection({ review, resolveAction }: { review: ReasonerRev
   return (
     <div className="mb-3 space-y-2">
       <p className="text-xs text-neutral">Prepared by OPTIM&apos;s Fitness Reasoner · {review.headline}</p>
-      {review.decisions.length > 0 ? (
+      {review.decisions.length > 0 || review.integrity ? (
         <div className={`rounded border px-3 py-2 ${review.unresolvedCount ? "border-warning bg-warning-soft/40" : "border-border-strong bg-surface-raised"}`}>
           <p className={`text-xs font-medium ${review.unresolvedCount ? "text-warning-strong" : "text-off-white"}`}>
             {review.unresolvedCount ? `Decide before approving · ${review.unresolvedCount}` : "Decisions · all resolved"}
@@ -132,8 +226,22 @@ function ReasonerContextSection({ review, resolveAction }: { review: ReasonerRev
                 )}
               </li>
             ))}
+            {review.integrity ? <IntegritySection d={review.integrity} repairEnabled={repairEnabled} integrityAction={integrityAction} repairAction={repairAction} /> : null}
           </ul>
         </div>
+      ) : null}
+      {review.history.length > 0 ? (
+        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Your decisions · {review.history.length}</summary>
+          <ul className="mt-1.5 space-y-1 text-xs text-off-white">
+            {review.history.map((h) => (
+              <li key={`${h.key}-${h.resolvedAtIso}`}>
+                • {formatShortDate(h.resolvedAtIso)} —{" "}
+                {h.resolution === "accepted_with_conditions" ? `kept ${h.exerciseName} under its conditions` : h.resolution === "removed" ? `removed ${h.exerciseName} from every week` : h.resolution === "accepted_replacement" ? `added ${h.replacement?.exerciseName ?? h.exerciseName}${h.replacement?.fromRecommendation ? " (OPTIM's recommendation)" : ""} on ${h.replacement?.days.join(", ") ?? ""}` : `accepted reduced ${(h.tradeoff ?? []).map((t) => `${t.label.toLowerCase()} (${t.before} → ${t.after})`).join(", ")}`}
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       {review.needsYou.length > 0 ? (
         <details open className="rounded border border-border-strong bg-surface-raised px-3 py-2">
@@ -245,6 +353,20 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     const decisionKey = String(formData.get("decisionKey") ?? "");
     const resolution = formData.get("resolution") === "remove" ? "remove" : "accept";
     await resolveReasonerFitDecisionAction({ workspaceId, clientProfileId, versionId, decisionKey, resolution });
+    await revalidate();
+  }
+
+  // Gate 4.0C-4 — post-edit program-integrity resolution (replacement or conscious tradeoff).
+  async function resolveIntegrityAction(formData: FormData): Promise<void> {
+    "use server";
+    const decisionKey = String(formData.get("decisionKey") ?? "");
+    const resolution = formData.get("resolution") === "replace" ? "replace" : "accept_tradeoff";
+    await resolveProgramIntegrityAction({ workspaceId, clientProfileId, versionId, decisionKey, resolution, exerciseId: String(formData.get("exerciseId") ?? "") || undefined, fromRecommendation: formData.get("fromRecommendation") === "1" });
+    await revalidate();
+  }
+  async function requestRepairAction(formData: FormData): Promise<void> {
+    "use server";
+    await requestRepairRecommendationAction({ workspaceId, clientProfileId, versionId, decisionKey: String(formData.get("decisionKey") ?? "") });
     await revalidate();
   }
 
@@ -799,7 +921,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       </div>
 
       {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
-      {proposal.reasonerReview ? <ReasonerContextSection review={proposal.reasonerReview} resolveAction={resolveDecisionAction} /> : null}
+      {proposal.reasonerReview ? <ReasonerContextSection review={proposal.reasonerReview} resolveAction={resolveDecisionAction} repairEnabled={proposal.repairReasoningEnabled} integrityAction={resolveIntegrityAction} repairAction={requestRepairAction} /> : null}
       {whyThisPlan.length > 0 ? (
         <details className="mb-2 rounded border border-border-strong bg-surface-raised px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-off-white">Why this plan</summary>
