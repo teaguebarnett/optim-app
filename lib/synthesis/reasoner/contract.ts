@@ -18,7 +18,7 @@ import { DAY_ORDER } from "../client-state.ts";
 import { MUSCLES, type MuscleId } from "../knowledge/taxonomy.ts";
 import type { CoverageCause, CoverageStatus } from "./adequacy.ts";
 
-export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.4.0";
+export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.4.1";
 
 export const DECISION_TOPICS = ["frequency", "structure", "schedule", "exercise_selection", "prescription", "effort", "progression", "recovery", "duration", "other"] as const;
 export type DecisionTopic = (typeof DECISION_TOPICS)[number];
@@ -320,9 +320,9 @@ DESIGN PRINCIPLES
 - Decide the architecture before choosing exercises: days per week (available days are a ceiling, not a target), split, then each session's purpose and placement for recovery between sessions that load the same muscles.
 - Every session has one clear purpose. Repeat an exercise in the week only on purpose, and say why in its note.
 - Solve for the strongest program the CURRENT state allows: if the constraints remove the usual way to train something, rethink the whole week (split, session composition, exercise selection, volume distribution) rather than filling the gap with unrelated work.
-- COVERAGE: "functions.required" lists the muscles this plan is expected to train. Declare each exactly once in "coverage": "trained" (it gets direct sets), or "reduced"/"not_trained" with a "cause" — goal_priority or time (your deliberate choice), constraints or available_exercises (the current restrictions/eligible exercises prevent adequate work) — and a one-sentence "why". "functions.infeasible" lists targets no eligible exercise trains: declare them not_trained. Never declare something trained that isn't, and never hide a gap behind other work: the coach decides on every constraints/available_exercises limitation.
-- SESSION TARGETS: give each session the 1–4 muscles it primarily trains ("targets"). Those targets must receive at least half of the session's sets — a session whose main work is unavailable is rebuilt or relabelled honestly, never padded.
-- Balance weekly pushing and pulling sets (within 1.5×) unless the goal or the constraints justify otherwise — then declare the lower side (lats/mid_back for pulling, chest for pushing) "reduced" in coverage with its cause.
+- COVERAGE: report each muscle in "functions.considered" exactly once in "coverage": "trained" (it gets direct sets), or "reduced"/"not_trained" with a "cause" — goal_priority or time (your deliberate choice), constraints or available_exercises (the current restrictions/eligible exercises prevent adequate work) — and a one-sentence "why". "functions.required" are muscles the client's goal requires: train them, or say why you can't. "functions.unavailable" lists muscles no offered exercise trains: declare them not_trained. Which other muscles to train, and how much, is your judgment from the goal and the coach's method — but never declare something trained that isn't, and never hide a constraint-caused gap: the coach decides on every constraints/available_exercises limitation.
+- SESSION TARGETS: give each session the 1–4 muscles it primarily trains ("targets"); each must actually be trained in that session. A session whose usual main work is unavailable is rebuilt or relabelled honestly, never padded.
+- Balance weekly pushing and pulling unless the goal or the constraints justify otherwise — then say why in a decision.
 - Fit each session inside bounds.minutes, including rest and warm-up.
 - STRUCTURAL ANCHORS: use anchors.days and anchors.weeks unless a fact or coach rule specific to this client requires otherwise — general population guidance alone is not a reason to depart. Record any departure in "deviations" with the client/coach refs that require it.
 - GOAL ACCESS: every entry in goal.targets (structured — prefer these) and any specific lift or skill named only in the goal's free text goes in "goalAccess". If its exercise appears in "blocked", the goal still stands but direct progression toward it is paused: status "blocked", blockedBy = the key it is listed under, interim = the qualities the plan preserves or develops meanwhile. Never describe interim exercises as progressing the blocked lift itself; resuming direct work is the coach's call.
@@ -345,7 +345,7 @@ OUTPUT — one JSON object, no prose. Keep text short (one sentence per field; "
  "progression":{"model":str,"why":str,"phases":[{"weeks":[from,to],"focus":str,"intent":str,"main":{"zones":["as_prescribed"|"lower_half"|"upper_half",...],"rir":-1|0|1,"sets":-1|0|1,"progress":<coach method or "hold">},"accessory":{same}}],"deloadWeeks":[ints, only if the coach schedules deloads]},
  "monitoring":[≤4 str, optional — OPTIM adds the coach's deload triggers itself],
  "constraintsApplied":[{"id":<constraint id from "constraints">,"how":str}],
- "coverage":[{"target":<muscle id from functions.required>,"status":"trained"|"reduced"|"not_trained","cause":"goal_priority"|"time"|"constraints"|"available_exercises" (unless trained),"why":str (unless trained)}],
+ "coverage":[{"target":<muscle id from functions.considered>,"status":"trained"|"reduced"|"not_trained","cause":"goal_priority"|"time"|"constraints"|"available_exercises" (unless trained),"why":str (unless trained)}],
  "assumptions":[str],"unresolved":[{"fact":str,"why":str,"from":"client"|"coach"|"either"}],"conflicts":[{"rule":<coach key>,"issue":str}],
  "decisions":[≤12 {"topic":"frequency"|"structure"|"schedule"|"exercise_selection"|"prescription"|"effort"|"progression"|"recovery"|"duration"|"other","decision":str,"because":str,"coach":[keys],"client":[refs],"evidence":[refs]}]
 }}

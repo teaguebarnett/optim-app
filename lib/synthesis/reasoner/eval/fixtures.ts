@@ -188,8 +188,8 @@ export function finalizeDeclarations(ri: ReasoningInput, plan: WirePlan) {
   if (plan.coverage || !ri.functions) return;
   const sets = new Map<string, number>();
   for (const s of plan.sessions) for (const e of s.exercises) for (const m of primary(e.id)) sets.set(m, (sets.get(m) ?? 0) + e.sets);
-  const infeasible = new Set(ri.functions.infeasible.map((f) => f.target));
-  plan.coverage = ri.functions.required.map((t) => (infeasible.has(t) ? { target: t, status: "not_trained", cause: "available_exercises", why: "Scripted: no eligible exercise trains it." } : (sets.get(t) ?? 0) > 0 ? { target: t, status: "trained" } : { target: t, status: "not_trained", cause: "goal_priority", why: "Scripted: not selected this block." }));
+  const infeasible = new Set(ri.functions.unavailable.map((f) => f.target));
+  plan.coverage = ri.functions.considered.map((t) => (infeasible.has(t) ? { target: t, status: "not_trained", cause: "available_exercises", why: "Scripted: no eligible exercise trains it." } : (sets.get(t) ?? 0) > 0 ? { target: t, status: "trained" } : { target: t, status: "not_trained", cause: "goal_priority", why: "Scripted: not selected this block." }));
   const side = (ps: string[]) => plan.sessions.reduce((t, s) => t + s.exercises.reduce((u, e) => u + (patterns(e.id).some((p) => ps.includes(p)) ? e.sets : 0), 0), 0);
   const push = side(["horizontal_push", "vertical_push"]);
   const pull = side(["horizontal_pull", "vertical_pull"]);

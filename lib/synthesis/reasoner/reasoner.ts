@@ -27,7 +27,7 @@ import { buildReasoningInput, REASONER_VERSION, type ReasoningInput } from "./in
 import { parseReasonerOutput, REASONER_PROMPT_VERSION, REASONER_SYSTEM_PROMPT, type ReasonerPlan } from "./contract.ts";
 import { expandReasonerPlan, validateReasonerPlan } from "./expand.ts";
 import { REASONER_RUN_SCHEMA, sha256, type ReasonerAttempt, type ReasonerRun, type RunPreflight } from "./run.ts";
-import { evaluateAdequacy, fitOf, functionAvailability, PULL_PATTERNS, PUSH_PATTERNS, type AdequacyResult, type FunctionAvailability, type WeekSession } from "./adequacy.ts";
+import { evaluateAdequacy, fitOf, functionAvailability, goalRequiredTargets, type AdequacyResult, type FunctionAvailability, type WeekSession } from "./adequacy.ts";
 import { planningState } from "../planning-state.ts";
 
 /** The model boundary the reasoner needs (lib/ai's provider implements it). */
@@ -118,8 +118,10 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
   const preflight: RunPreflight = { policy: legacy ? "legacy_allow" : "withhold", functions: availability, withheld: withheld.map((e) => e.id), questions: [] };
   run.preflight = preflight;
   if (!legacy) {
+    // Only what the GOAL requires can block planning: a goal-priority muscle whose only options are uncertain.
+    const required = new Set<string>(goalRequiredTargets(input.goal));
     const ask = new Map<string, Set<string>>();
-    for (const f of availability) if (f.state === "uncertain_only") for (const id of f.uncertain) ask.set(id, (ask.get(id) ?? new Set()).add(f.target));
+    for (const f of availability) if (f.state === "uncertain_only" && required.has(f.target)) for (const id of f.uncertain) ask.set(id, (ask.get(id) ?? new Set()).add(f.target));
     // A structured goal target whose own exercise is uncertain: the goal names it, so the coach decides before planning.
     const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     for (const t of input.goal.performanceTargets) {
@@ -136,8 +138,12 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     }
   }
   const offered = pool.pool.filter((e) => !withheld.includes(e));
-  const functions = { required: availability.map((f) => f.target), infeasible: availability.filter((f) => f.state === "infeasible").map((f) => ({ target: f.target, why: "No eligible exercise trains it under the current restrictions and equipment." })) };
-  const pushPullFeasible = { push: offered.some((e) => e.patterns.some((p) => PUSH_PATTERNS.includes(p))), pull: offered.some((e) => e.patterns.some((p) => PULL_PATTERNS.includes(p))) };
+  const requiredTargets = goalRequiredTargets(input.goal);
+  const functions = {
+    considered: availability.map((f) => f.target),
+    required: requiredTargets,
+    unavailable: availability.filter((f) => f.state !== "available").map((f) => ({ target: f.target, why: f.state === "uncertain_only" ? "Only exercises whose fit with the restrictions is unconfirmed train it; they are withheld until the coach decides." : "No eligible exercise trains it under the current restrictions and equipment." })),
+  };
 
   // 4. Retrieval over the offered pool only.
   const emphasis = interpretGoal(input.goal);
@@ -208,7 +214,7 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     const v = validateReasonerPlan({ plan, spec, reasoning, allowed, method, input });
     // Gate 4.0C-5 — current-state adequacy: deficiencies are validator feedback while attempts remain; on the last
     // attempt they are recorded and block approval in review (never presented as review-ready).
-    const adequacy = v.ok ? evaluateAdequacy({ week: weekFromPlan(plan), knowledge: input.knowledge, functions: availability, declared: plan.coverage ?? null, checkSessions: true, pushPullFeasible }) : null;
+    const adequacy = v.ok ? evaluateAdequacy({ week: weekFromPlan(plan), knowledge: input.knowledge, functions: availability, required: requiredTargets, declared: plan.coverage ?? null, checkSessions: true }) : null;
     const deficiencies = adequacy?.findings.filter((f) => f.kind === "deficiency").map((f) => f.message) ?? [];
     if (v.ok && (!deficiencies.length || attempt === maxAttempts)) {
       const unattributed = (["frequency", "schedule", "weeklyStructure", "progression"] as const).filter((k) => spec[k]?.inputs.includes("reasoner:unattributed"));

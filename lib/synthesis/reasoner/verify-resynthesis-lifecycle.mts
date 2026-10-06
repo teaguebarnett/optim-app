@@ -15,6 +15,9 @@ import { decideGenerationAfterPreflight, decideRevision, type CurrentPlanningInp
 import { coachMethod, fakeModel, NOW, scenarioInput, scriptedOutput, type Patch, type WirePlan } from "./eval/fixtures.ts";
 import { SCENARIOS } from "./eval/scenarios.ts";
 import type { HealthReviewRecord } from "../../coach/types.ts";
+import { coachFact } from "../goal-contract.ts";
+import { evaluateAdequacy, functionAvailability } from "./adequacy.ts";
+import { buildPool, methodFor } from "../planners/resistance/planner.ts";
 import type { ConfirmedCoachMethod } from "../../coach/coach-brain.ts";
 import type { GenerationInputs, RevisionProvenance, UniversalTrainingProgramContent } from "../../training/types.ts";
 
@@ -45,7 +48,7 @@ function record(optionIds: string[], decisions: ExerciseFitDecisionRecord[] = []
 }
 const review = (rec: StoredStructuredLimitations, text = rec.sourceText): HealthReviewRecord => ({ clientId: "client-eval", workspaceId: "ws-eval", status: "proceed_with_limitations", reasons: ["x"], createdAtIso: NOW, updatedAtIso: NOW, documentedLimitations: text, decisionEscalationId: "esc-1", structuredLimitations: rec }) as HealthReviewRecord;
 const INJURY: Patch = { health_finish: { hasInjuryHistory: true, injuryBodyAreas: ["lower_back"], injuryRestrictions: "Heavy lifting.", safetyScreen: ["none"] } };
-const input = (rec: StoredStructuredLimitations, opts: { patch?: Patch; coach?: ConfirmedCoachMethod; clientId?: string } = {}) => scenarioInput({ healthReview: review(rec), patch: { ...INJURY, ...(opts.patch ?? {}) }, coach: opts.coach, clientId: opts.clientId });
+const input = (rec: StoredStructuredLimitations, opts: { patch?: Patch; coach?: ConfirmedCoachMethod; clientId?: string; priorityMuscles?: string[] } = {}) => scenarioInput({ healthReview: review(rec), patch: { ...INJURY, ...(opts.patch ?? {}) }, coach: opts.coach, clientId: opts.clientId, ...(opts.priorityMuscles ? { coachConfirmedGoal: { class: "hypertrophy" as const, priorityMuscles: coachFact(opts.priorityMuscles, "goal_contract.priority_muscles") } } : {}) });
 const cur = (i: ReturnType<typeof scenarioInput>): CurrentPlanningInputs => ({ client: i.client, goal: i.goal, constraints: i.constraints, coachMethodVersionId: i.coach?.versionId ?? null, knowledgeVersion: FOUNDATION_KNOWLEDGE_VERSION });
 const keyOf = (i: ReturnType<typeof scenarioInput>) => planningState({ client: i.client, goal: i.goal, constraints: i.constraints, coachMethodVersionId: i.coach?.versionId ?? null, knowledgeVersion: FOUNDATION_KNOWLEDGE_VERSION }).key;
 const decision = (exerciseId: string, verdict: "excluded" | "cleared", constraintsForBasis?: ReturnType<typeof scenarioInput>["constraints"], at = "2026-10-06T10:00:00.000Z"): ExerciseFitDecisionRecord => {
@@ -255,8 +258,13 @@ await check("9. Nothing is approved or published automatically (lifecycle + deci
   assert.ok(queueFns.every((f) => !/publishProgramVersion|assignProgramVersionToClient/.test(f)), "no queueing action publishes");
 });
 
-await check("10. Only-uncertain candidate space → stops BEFORE the paid Reasoner call and asks the coach about those exercises", async () => {
-  const i = input(record(BRACING, [decision("exercise.chest_supported_row", "excluded")]));
+await check("10. Only-uncertain options for a GOAL-required muscle → stops BEFORE the paid call and asks; otherwise withheld, never asked", async () => {
+  // Without a goal requirement, lats having only uncertain options is NOT a planning blocker: planning proceeds, the
+  // Reasoner is told lats is unavailable (pending the coach's fit decision), and the options are listed for the coach.
+  const noGoal = await solve(input(record(BRACING, [decision("exercise.chest_supported_row", "excluded")])));
+  assert.equal(noGoal.r.status, "PLANNED");
+  assert.ok(noGoal.r.run.input!.functions!.unavailable.some((u) => u.target === "lats" && /unconfirmed/.test(u.why)) && noGoal.r.run.input!.functions!.required.length === 0);
+  const i = input(record(BRACING, [decision("exercise.chest_supported_row", "excluded")]), { priorityMuscles: ["lats"] });
   const { r, model } = await solve(i);
   assert.equal(r.status, "NEEDS_INPUT");
   assert.equal(model.calls, 0, "no model call");
@@ -266,7 +274,7 @@ await check("10. Only-uncertain candidate space → stops BEFORE the paid Reason
   assert.ok(r.run.preflight!.questions.every((x) => x.serves.includes("lats") && x.conditions.length > 0));
   // The coach answers → the state changes → planning proceeds with exactly what the coach decided.
   const cs = i.constraints;
-  const answered = input(record(BRACING, [decision("exercise.chest_supported_row", "excluded"), decision("exercise.seated_cable_row", "cleared", cs), ...["exercise.lat_pulldown", "exercise.dumbbell_row", "exercise.assisted_pull_up"].map((x) => decision(x, "excluded"))]));
+  const answered = input(record(BRACING, [decision("exercise.chest_supported_row", "excluded"), decision("exercise.seated_cable_row", "cleared", cs), ...["exercise.lat_pulldown", "exercise.dumbbell_row", "exercise.assisted_pull_up"].map((x) => decision(x, "excluded"))]), { priorityMuscles: ["lats"] });
   const next = await solve(answered);
   const p = planned(next.r);
   assert.equal(fitCode(p, "exercise.seated_cable_row"), "K");
@@ -292,7 +300,7 @@ await check("11. Re-synthesis solves from the CURRENT state only — the old pro
   assert.ok(!/previousPlan|priorPlan|supersed/.test(reasonerSrc), "the Reasoner has no previous-plan parameter");
 });
 
-await check("12. Current-state adequacy blocks a structurally valid but materially inadequate plan (padded session, dishonest coverage)", async () => {
+await check("12. Adequacy blocks a structurally valid plan that makes false claims (a session labelled for muscles it doesn't train; dishonest coverage)", async () => {
   const i = input(record(BRACING));
   const padded = (p: WirePlan) => {
     p.sessions[1].targets = ["lats", "mid_back"];
@@ -311,26 +319,33 @@ await check("12. Current-state adequacy blocks a structurally valid but material
     pl.coverage = (i.goal ? ["chest", "lats", "mid_back", "side_delts", "biceps", "triceps", "quadriceps", "hamstrings", "glutes", "calves", "abdominals"] : []).map((t) => ({ target: t, status: "trained" }));
   });
   const d = planned(dishonest.r);
-  assert.ok(d.adequacy!.findings.some((f) => f.code === "coverage_dishonest" || f.code === "target_untrained"), JSON.stringify(d.adequacy!.findings.map((f) => f.code)));
+  assert.ok(d.adequacy!.findings.some((f) => f.code === "coverage_dishonest"), JSON.stringify(d.adequacy!.findings.map((f) => f.code)));
   // An adequate plan passes on the first attempt.
   const fine = await solve(i);
   assert.equal(fine.model.calls, 1);
 });
 
-await check("13. A genuinely infeasible function is declared honestly (limitation → coach decision), never padded or claimed", async () => {
-  const i = input(record(["avoid_horizontal_pull", "avoid_vertical_pull"]));
-  const honest = planned((await solve(i)).r);
-  assert.deepEqual(honest.reasoning.functions!.infeasible.map((f) => f.target).sort(), ["lats", "mid_back"]);
+await check("13. An infeasible function: honest declaration required; a coach decision ONLY when the goal requires it", async () => {
+  const restr = ["avoid_horizontal_pull", "avoid_vertical_pull"];
+  const plain = input(record(restr));
+  const honest = planned((await solve(plain)).r);
+  assert.deepEqual(honest.reasoning.functions!.unavailable.map((f) => f.target).sort(), ["lats", "mid_back"]);
   assert.ok(honest.plan.coverage!.filter((c) => ["lats", "mid_back"].includes(c.target)).every((c) => c.status === "not_trained"));
-  const m = reasonerReviewModel({ content: toContent(honest), run: honest.run, knowledge: K, current: cur(i) });
-  assert.ok(m.adequacy && m.adequacy.limitations.some((f) => f.target === "lats") && m.adequacy.status === "unresolved", "limitation is a blocking coach decision");
-  // The coach accepts this exact set explicitly → approvable; a change to the findings reopens it.
-  const accepted = { ...toContent(honest), reasonerProvenance: { ...toContent(honest).reasonerProvenance!, decisionResolutions: [{ key: m.adequacy!.key, exerciseId: "", exerciseName: "", resolution: "accepted_limitation" as const, adequacySignature: m.adequacy!.signature, conditions: [], resolvedBy: "coach-1", resolvedAtIso: NOW }] } };
-  assert.equal(reasonerReviewModel({ content: accepted, run: honest.run, knowledge: K, current: cur(i) }).approvalBlockedReason, null);
-  // Claiming the infeasible function, or labelling a session with it, is rejected as dishonest.
-  const claim = planned((await solve(i, (p) => (p.coverage = ["chest", "lats", "mid_back", "side_delts", "biceps", "triceps", "quadriceps", "hamstrings", "glutes", "calves", "abdominals"].map((t) => ({ target: t, status: "trained" }))))).r);
+  // Not a goal requirement → shown as information, never blocking (the coach's own restriction removed it).
+  const m0 = reasonerReviewModel({ content: toContent(honest), run: honest.run, knowledge: K, current: cur(plain) });
+  assert.equal(m0.adequacy, null, JSON.stringify(m0.adequacy));
+  assert.ok(m0.adequacyNotes.some((n) => /Lats isn't trained/.test(n)));
+  // The goal names lats as a priority → limitation = blocking coach decision; explicit acceptance of this exact set clears it.
+  const goal = input(record(restr), { priorityMuscles: ["lats"] });
+  const g = planned((await solve(goal)).r);
+  const m = reasonerReviewModel({ content: toContent(g), run: g.run, knowledge: K, current: cur(goal) });
+  assert.ok(m.adequacy && m.adequacy.limitations.some((f) => f.code === "goal_target_infeasible" && f.target === "lats") && m.adequacy.status === "unresolved", JSON.stringify(m.adequacy));
+  const accepted = { ...toContent(g), reasonerProvenance: { ...toContent(g).reasonerProvenance!, decisionResolutions: [{ key: m.adequacy!.key, exerciseId: "", exerciseName: "", resolution: "accepted_limitation" as const, adequacySignature: m.adequacy!.signature, conditions: [], resolvedBy: "coach-1", resolvedAtIso: NOW }] } };
+  assert.equal(reasonerReviewModel({ content: accepted, run: g.run, knowledge: K, current: cur(goal) }).approvalBlockedReason, null);
+  // Claiming the infeasible function, or labelling a session with it, is rejected as a false claim (A).
+  const claim = planned((await solve(plain, (p) => (p.coverage = ["chest", "lats", "mid_back", "side_delts", "biceps", "triceps", "quadriceps", "hamstrings", "glutes", "calves", "abdominals"].map((t) => ({ target: t, status: "trained" }))))).r);
   assert.ok(claim.adequacy!.findings.some((f) => f.code === "coverage_dishonest" && f.target === "lats"));
-  const pad = planned((await solve(i, (p) => (p.sessions[0].targets = ["lats"]))).r);
+  const pad = planned((await solve(plain, (p) => (p.sessions[0].targets = ["lats"]))).r);
   assert.ok(pad.adequacy!.findings.some((f) => f.code === "session_targets" && /nothing in it trains it/.test(f.message)));
 });
 
@@ -444,6 +459,53 @@ await check("21. Dogfood case (generic, not hardcoded): Lat Pulldown excluded �
     const src = readFileSync(new URL(`./${f}`, import.meta.url), "utf8");
     assert.ok(!/lat_pulldown|Lat Pulldown|pulldown/i.test(src), `${f}: no exercise-specific substitution`);
   }
+});
+
+await check("22. Regression: no muscle is required just because it exists in knowledge — Teague-like restrictions, no goal priorities → glutes/abdominals are information, not blockers", async () => {
+  const { stateB } = await dogfood();
+  assert.deepEqual(stateB.goal.primary?.class, "hypertrophy");
+  const B = planned((await solve(stateB, undefined, { runId: "job-B" })).r);
+  assert.deepEqual(B.reasoning.functions!.required, [], "the goal names no priority muscles");
+  assert.ok(["glutes", "abdominals"].every((t) => B.reasoning.functions!.unavailable.some((u) => u.target === t)));
+  const m = reasonerReviewModel({ content: toContent(B, "job-B"), run: B.run, knowledge: K, current: cur(stateB) });
+  assert.ok(!(m.adequacy?.limitations ?? []).some((f) => f.target === "glutes" || f.target === "abdominals"), JSON.stringify(m.adequacy?.limitations));
+  assert.ok(m.adequacyNotes.some((n) => /Glutes isn't trained/.test(n)) && m.adequacyNotes.some((n) => /Abdominals isn't trained/.test(n)));
+});
+
+await check("23. Adequacy boundary: no global number blocks — push/pull imbalance and a minority-share session target are information/judgment only", () => {
+  const i = input(record(BRACING));
+  const m = methodFor(i)!;
+  assert.ok(m.ok);
+  const pool = buildPool(i, (m as { method: Parameters<typeof buildPool>[1] }).method)!;
+  const functions = functionAvailability(pool.pool, pool.loadConditions).map((f) => (f.state === "uncertain_only" ? { ...f, state: "available" as const } : f));
+  const x = (id: string, sets: number) => ({ exerciseId: id, name: id, sets });
+  const week = [
+    { day: "mon", title: "Push", targets: ["chest"], items: [x("exercise.machine_chest_press", 4), x("exercise.incline_dumbbell_press", 4), x("exercise.cable_chest_fly", 4)] },
+    // "Pull" day: lats/mid-back trained (3 sets) but most sets are arms — a quality judgment, not a contradiction.
+    { day: "tue", title: "Pull", targets: ["lats", "mid_back"], items: [x("exercise.chest_supported_row", 3), x("exercise.dumbbell_bicep_curl", 4), x("exercise.hammer_curl", 4)] },
+  ];
+  const r = evaluateAdequacy({ week, knowledge: K, functions, required: [], declared: null, checkSessions: true });
+  assert.ok(r.findings.some((f) => f.code === "push_pull_note" && f.kind === "information"), "imbalance surfaced as information");
+  assert.equal(r.signature, null, `nothing blocks: ${JSON.stringify(r.findings.filter((f) => f.kind !== "information"))}`);
+  for (const f of r.findings) assert.ok(["A", "B", "C", "D"].includes(f.basis));
+  const src = readFileSync(new URL("./adequacy.ts", import.meta.url), "utf8");
+  assert.ok(!/\* 2 < total|onTarget/.test(src), "no session share threshold");
+});
+
+await check("24. One canonical exercise-level fact: 'Avoid Lat Pulldown' confirmed as a limitation ≡ an exclusion decision; a draft-only REMOVE resolves against it — no second confirmation", async () => {
+  const viaLimitation = input(record([...TEAGUE, "exercise:exercise.lat_pulldown"]));
+  const viaDecision = input(record(TEAGUE, [decision("exercise.lat_pulldown", "excluded")]));
+  const both = input(record([...TEAGUE, "exercise:exercise.lat_pulldown"], [decision("exercise.lat_pulldown", "excluded")]));
+  assert.equal(keyOf(viaLimitation), keyOf(viaDecision), "same fact → same planning state, whichever way it was confirmed");
+  assert.equal(keyOf(both), keyOf(viaDecision), "recorded twice = one fact");
+  const { A, v1, v2 } = await dogfood();
+  const m = reasonerReviewModel({ content: v2, run: A.run, knowledge: K, original: v1, current: cur(input(record([...TEAGUE, "exercise:exercise.lat_pulldown"]), { patch: (await dogfood()).patch })) });
+  const d = m.decisions.find((x) => x.exerciseId === "exercise.lat_pulldown")!;
+  assert.equal(d.status, "removed");
+  assert.equal(d.authoritative, true, "the confirmed limitation already makes the draft's REMOVE authoritative — no 'Confirm: exclude' button");
+  assert.equal(m.lifecycle?.status, "superseded", "the confirmed exclusion is the state change that supersedes the draft");
+  const limits = readFileSync(new URL("../../production/structured-limitations.ts", import.meta.url), "utf8");
+  assert.ok(/Already excluded by ANY confirmed fact[\s\S]{0,300}excluded by the coach/.test(limits), "recording an exclusion that already exists is a no-op");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

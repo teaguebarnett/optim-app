@@ -27,7 +27,7 @@ import { demandCompatibility, eligibilityBasis, exerciseEligibility } from "../e
 import { effectiveConstraints, type ConstraintSet } from "../constraints.ts";
 import { canonicalJson, sha256 } from "./run.ts";
 import { assessPlanningState, currentCandidatePool, type CurrentPlanningInputs, type LifecycleAssessment } from "./lifecycle.ts";
-import { evaluateAdequacy, functionAvailability, PULL_PATTERNS, PUSH_PATTERNS, weekFromContent, type AdequacyFinding } from "./adequacy.ts";
+import { evaluateAdequacy, functionAvailability, goalRequiredTargets, weekFromContent, type AdequacyFinding } from "./adequacy.ts";
 import type { RevisionProvenance } from "../../training/types.ts";
 
 /** The restriction facts in force (effective hard constraints' categories and tags), independent of ids/timestamps. */
@@ -255,12 +255,13 @@ export function reasonerReviewModel(params: {
     week: weekFromContent(params.content, params.knowledge, { deloadWeeks }),
     knowledge: params.knowledge,
     functions,
+    required: goalRequiredTargets(params.current?.goal ?? run.snapshots.goalContract),
     declared: plan.coverage ?? null,
     checkSessions: false,
-    pushPullFeasible: { push: poolNow.some((e) => e.patterns.some((p) => PUSH_PATTERNS.includes(p))), pull: poolNow.some((e) => e.patterns.some((p) => PULL_PATTERNS.includes(p))) },
+    checkClaims: false,
   });
   // The solve's own honesty problems that survived its repair attempt stay on the record.
-  const solveDeficiencies = (run.result.adequacy?.findings ?? []).filter((f) => f.kind === "deficiency" && (f.code === "session_targets" || f.code === "coverage_dishonest" || f.code === "coverage_missing"));
+  const solveDeficiencies = (run.result.adequacy?.findings ?? []).filter((f) => f.kind === "deficiency" && (f.code === "session_targets" || f.code === "session_empty" || f.code === "coverage_dishonest" || f.code === "coverage_missing"));
   const allFindings = [...contentAdequacy.findings, ...solveDeficiencies.filter((f) => !contentAdequacy.findings.some((g) => g.message === f.message))];
   const limitations = allFindings.filter((f) => f.kind === "limitation");
   const deficiencies = allFindings.filter((f) => f.kind === "deficiency");
@@ -309,9 +310,12 @@ export function reasonerReviewModel(params: {
     withheld,
     revision: rp.revision ?? null,
     unresolvedCount: unresolved.length + (integrityOpen ? 1 : 0) + (adequacyOpen ? 1 : 0) + (superseded ? 1 : 0),
-    approvalBlockedReason:
-      [
-        superseded ? `This proposal was prepared before the client's planning state changed (${lifecycle!.reasons.join(" ")}) — it is no longer the current solution. Review the revised proposal instead.` : "",
+    // A superseded draft is no longer the solution: its own decisions are moot (the revision replaces it), so the
+    // supersession is the ONLY blocker shown and its decision actions are refused server-side.
+    approvalBlockedReason: superseded
+      ? `This proposal was prepared before the client's planning state changed (${lifecycle!.reasons.join(" ")}) — it is no longer the current solution, so it can't be approved. A revised proposal replaces it.`
+      : [
+        "",
         unresolved.length ? `Decide first: ${unresolved.map((d) => d.exerciseName).join(", ")} — ${unresolved.some((d) => d.fit === "incompatible") ? "conflicts with or can't be confirmed against" : "OPTIM couldn't confirm it fits"} the client's confirmed restrictions.` : "",
         integrityOpen ? `Your changes left ${integrity!.analysis.deficiencies.map((d) => d.label.toLowerCase()).join(", ")} underrepresented — choose a replacement or accept the reduced stimulus.` : "",
         adequacyOpen ? `This program ${adequacy!.limitations.length ? `can't fully train ${[...new Set(adequacy!.limitations.map((f) => f.target).filter(Boolean))].map((t) => String(t).replace(/_/g, " ")).join(", ") || "everything the goal needs"} under the current restrictions` : ""}${adequacy!.limitations.length && adequacy!.deficiencies.length ? ", and " : ""}${adequacy!.deficiencies.length ? `has gaps OPTIM couldn't resolve (${adequacy!.deficiencies.length})` : ""} — fix them, or accept them explicitly.` : "",

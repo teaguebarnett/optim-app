@@ -89,10 +89,13 @@ export function planningState(src: PlanningStateSource): PlanningState {
   const restrictionFacts = hard
     .filter((c) => !["availability", "session_length", "equipment"].includes(c.category) && !isExerciseFitConstraint(c.id))
     // Wording a coach-confirmed structured restriction already expresses is history, not planning state.
-    .map((c) => `${c.category}:${c.confirmation}:${c.review.status === "open" ? "open" : "settled"}:${c.tags.filter((t) => !(c.interpretedBy && (t.kind === "free_text" || t.kind === "avoid_exercise_term"))).map((t) => canonical(t)).sort().join(",")}`)
+    // Exercise-level facts are counted once, in exerciseFit, however they were confirmed (below).
+    .map((c) => `${c.category}:${c.confirmation}:${c.review.status === "open" ? "open" : "settled"}:${c.tags.filter((t) => !EXERCISE_FIT_KINDS.has(t.kind) && !(c.interpretedBy && (t.kind === "free_text" || t.kind === "avoid_exercise_term"))).map((t) => canonical(t)).sort().join(",")}`)
     .sort();
-  const fitTags = hard.filter((c) => isExerciseFitConstraint(c.id)).flatMap((c) => c.tags.filter((t) => EXERCISE_FIT_KINDS.has(t.kind)));
-  const fit = fitTags.map((t) => (t.kind === "avoid_exercise" ? `excluded:${t.exerciseId}` : t.kind === "exercise_cleared" ? `cleared:${t.exerciseId}:${t.basis}:${[...t.conditions].sort().join("|")}` : "")).sort();
+  // ONE canonical exercise-level fact set: an exclusion confirmed as a limitation ("Avoid <exercise>") and the same
+  // exclusion recorded as a fit decision are the same fact (deduplicated); clearances come only from decisions.
+  const fitTags = hard.flatMap((c) => c.tags.filter((t) => t.kind === "avoid_exercise" || (t.kind === "exercise_cleared" && isExerciseFitConstraint(c.id))));
+  const fit = [...new Set(fitTags.map((t) => (t.kind === "avoid_exercise" ? `excluded:${t.exerciseId}` : t.kind === "exercise_cleared" ? `cleared:${t.exerciseId}:${t.basis}:${[...t.conditions].sort().join("|")}` : "")))].sort();
 
   const c = src.client;
   const access = resolveEquipmentAccess(c);
@@ -113,8 +116,8 @@ export function planningState(src: PlanningStateSource): PlanningState {
   const parts = Object.fromEntries(PLANNING_STATE_PARTS.map((p) => [p, hash(material[p])])) as Record<PlanningStatePart, string>;
 
   const summary: Record<PlanningStatePart, string[]> = {
-    restrictions: hard.filter((x) => !["availability", "session_length", "equipment"].includes(x.category) && !isExerciseFitConstraint(x.id)).flatMap((x) => x.tags.map((t) => tagSummary(t, name)).filter((s): s is string => !!s)),
-    exerciseFit: fitTags.map((t) => (t.kind === "avoid_exercise" ? `Not ${name(t.exerciseId)}` : t.kind === "exercise_cleared" ? `${name(t.exerciseId)} cleared under conditions` : "")).filter(Boolean),
+    restrictions: hard.filter((x) => !["availability", "session_length", "equipment"].includes(x.category) && !isExerciseFitConstraint(x.id)).flatMap((x) => x.tags.filter((t) => t.kind !== "avoid_exercise").map((t) => tagSummary(t, name)).filter((s): s is string => !!s)),
+    exerciseFit: [...new Set(fitTags.map((t) => (t.kind === "avoid_exercise" ? `Not ${name(t.exerciseId)}` : t.kind === "exercise_cleared" ? `${name(t.exerciseId)} cleared under conditions` : "")).filter(Boolean))],
     equipment: equipment ? [`Equipment: ${equipment.equipment.join(", ") || "none"}`] : ["Equipment unknown"],
     schedule: [days ? `${days.length} available days` : "Availability unknown", schedule.minutes !== null ? `${schedule.minutes} min sessions` : "Session length unknown"],
     goal: [g.primary ? `Primary goal: ${g.primary.class.replace(/_/g, " ")}` : "No primary goal", ...(g.secondary ?? []).map((s) => `Secondary: ${s.class.replace(/_/g, " ")}`), ...(g.performanceTargets ?? []).map((t) => `Target: ${t.exercise} ${t.value} ${t.unit}`)],

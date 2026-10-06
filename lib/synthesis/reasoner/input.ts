@@ -45,8 +45,9 @@ export interface ReasoningInput {
   exerciseLegend: string;
   exercises: string[];
   unresolved: Array<{ fact: string; why: string }>;
-  /** Gate 4.0C-5 — the targets this plan must declare in "coverage", and those no eligible exercise trains. */
-  functions?: { required: string[]; infeasible: Array<{ target: string; why: string }> };
+  /** Gate 4.0C-5 — targets the plan reports on in "coverage" (considered), those the GOAL requires, and those no
+   * offered exercise trains (unavailable). Nothing is required merely because it exists in knowledge. */
+  functions?: { considered: string[]; required: string[]; unavailable: Array<{ target: string; why: string }> };
 }
 
 /** A goal-specific exercise OPTIM resolved from structured goal data (e.g. strength priority lifts). */

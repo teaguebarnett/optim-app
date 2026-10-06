@@ -298,7 +298,7 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
           The client&apos;s confirmed restrictions changed after OPTIM prepared this. Every exercise in every week was rechecked against the current ones; anything that no longer fits is listed below.
         </p>
       ) : null}
-      {review.decisions.length > 0 || review.integrity || review.adequacy ? (
+      {review.lifecycle?.status !== "superseded" && (review.decisions.length > 0 || review.integrity || review.adequacy) ? (
         <div className={`rounded border px-3 py-2 ${review.unresolvedCount ? "border-warning bg-warning-soft/40" : "border-border-strong bg-surface-raised"}`}>
           <p className={`text-xs font-medium ${review.unresolvedCount ? "text-warning-strong" : "text-off-white"}`}>
             {review.unresolvedCount ? `Decide before approving · ${review.unresolvedCount}` : "Decisions · all resolved"}
@@ -362,7 +362,7 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
           </ul>
         </div>
       ) : null}
-      {review.withheld.length > 0 ? (
+      {review.lifecycle?.status !== "superseded" && review.withheld.length > 0 ? (
         <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-off-white">Not used — fit unconfirmed · {review.withheld.length}</summary>
           <p className="mt-1.5 text-xs text-neutral">OPTIM didn&apos;t plan with these because it can&apos;t confirm they fit the client&apos;s confirmed restrictions. Your decision is saved for this client and used by future proposals.</p>

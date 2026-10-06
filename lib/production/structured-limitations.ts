@@ -192,7 +192,9 @@ export async function recordExerciseFitDecisions(params: { workspaceId: string; 
       continue;
     }
     if (d.verdict === "excluded") {
-      if (current.some((x) => x.exerciseId === ex.id && x.verdict === "excluded")) continue; // already excluded — idempotent
+      // Already excluded by ANY confirmed fact (a decision, or an "Avoid <exercise>" limitation): the same truth is
+      // never recorded twice — the confirmed record is canonical.
+      if (exerciseEligibility(ex, constraints).violations.some((v) => v.enforcement === "hard" && v.reason === "excluded by the coach")) continue;
       recorded.push({ ...base, verdict: "excluded", conditions: [] });
       continue;
     }

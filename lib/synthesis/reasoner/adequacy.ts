@@ -1,39 +1,38 @@
-// Gate 4.0C-5 — CURRENT-STATE program adequacy: "is this program good
-// enough for this client now?", judged against the current goal, method,
-// confirmed restrictions and the eligible candidate space — never against
-// a previous proposal (edit-impact answers "what did this edit change?").
+// Gate 4.0C-5 — CURRENT-STATE program adequacy: checks the plan against the
+// current goal, confirmed restrictions and eligible candidate space — never
+// against a previous proposal (edit-impact answers "what did this edit change?").
 //
-// Deterministic where existing data supports it; the Reasoner's own
-// structured declarations where judgment is needed:
+// BOUNDARY. Deterministic code only catches contradictions, false claims and
+// unmet GOAL requirements; programming quality (volume distribution,
+// push/pull balance, how a session is composed, whether the program is
+// effective) is the Fitness Reasoner's judgment, surfaced to the coach — never
+// replaced by a global number. Every check is classified:
 //
-//   functions   — the major targets a resistance plan is expected to train
-//                 (MAJOR_TARGETS), each classified from the eligible pool:
-//                 available (a confirmed-compatible option exists),
-//                 uncertain_only (preflight asks the coach before any paid
-//                 call), infeasible (no option at all).
-//   coverage    — the Reasoner declares every required target: trained,
-//                 reduced or not_trained, with a cause (goal_priority, time,
-//                 constraints, available_exercises) and why. Declarations
-//                 are checked against the actual sets (a "trained" target
-//                 with no direct sets is rejected; an infeasible one can't
-//                 be "trained").
-//   sessions    — each session declares its primary targets; they must get
-//                 at least half its direct sets (what "primary" means), so a
-//                 "pull" day can't be curls and rear-delt work in disguise.
-//   push / pull — the existing balance rule (> 1.5×, or one side absent
-//                 while both are feasible) must be fixed or declared as a
-//                 reduced side.
+//   A  universal invariant (contradiction / false claim / structurally empty)
+//      - coverage_missing    the plan must report every considered target once (contract completeness)
+//      - coverage_dishonest  "trained" with no direct sets, or "trained" when no eligible exercise exists
+//      - session_targets     a session claims a primary target that nothing in it trains
+//      - session_empty       a session with no exercises
+//   B  Coach Brain / methodology — none: the confirmed method has no muscle-coverage or volume requirement,
+//      and none is invented here.
+//   C  goal-dependent — only muscles the GoalContract requires (hypertrophy priority muscles):
+//      - goal_target_untrained   required, trainable, gets no direct sets, no declared reason → deficiency
+//      - goal_target_infeasible  required, but no eligible exercise trains it → limitation (coach decision)
+//   D  Reasoner judgment, surfaced to the coach
+//      - target_declared_limited  the Reasoner itself declares a trainable target reduced / not trained
+//        because of the restrictions or the eligible exercises → limitation (coach decision)
+//      - target_reduced_by_choice / target_unavailable / push_pull_note → information only (never blocking)
 //
-// Results: LIMITATIONS (declared or infeasible functions the constraints /
-// knowledge prevent — a coach decision before approval), DEFICIENCIES
-// (undeclared shortfalls — validator feedback during generation, blocking
-// in review if they survive) and informational notes.
+// No muscle is required merely because it exists in Fitness Knowledge: MAJOR_TARGETS is only the list the
+// plan REPORTS on. Numbers: none block. The push/pull ratio (1.5×, the pre-existing expand.ts quality
+// heuristic) is shown as information only.
 
 import type { ExerciseEntry, FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import { MUSCLES, type MuscleId } from "../knowledge/taxonomy.ts";
 import { MAJOR_TARGETS } from "../planners/resistance/templates.ts";
 import type { LoadCondition } from "../exercise-eligibility.ts";
 import type { UniversalTrainingProgramContent } from "../../training/types.ts";
+import type { GoalContract } from "../goal-contract.ts";
 
 export type FunctionState = "available" | "uncertain_only" | "infeasible";
 export interface FunctionAvailability {
@@ -59,7 +58,21 @@ export const PULL_PATTERNS = ["horizontal_pull", "vertical_pull"];
 /** Muscles that stand for each side when a plan declares a reduced side. */
 export const PULL_SIDE: MuscleId[] = ["lats", "mid_back"];
 export const PUSH_SIDE: MuscleId[] = ["chest"];
-export const PUSH_PULL_RATIO = 1.5; // the existing push_pull_balance threshold (expand.ts), now enforced via declarations
+/** The pre-existing expand.ts quality heuristic — information only, never blocking (programming balance is judgment). */
+export const PUSH_PULL_RATIO = 1.5;
+
+/** Muscles the GoalContract itself requires (class C): hypertrophy priority muscles, when stated. Nothing else. */
+export function goalRequiredTargets(goal: GoalContract | null | undefined): MuscleId[] {
+  const out = new Set<MuscleId>();
+  for (const g of [goal?.primary, ...(goal?.secondary ?? [])]) {
+    if (g?.class !== "hypertrophy" || g.priorityMuscles.status !== "known") continue;
+    for (const m of g.priorityMuscles.value) {
+      const id = m.toLowerCase().trim().replace(/[^a-z]+/g, "_") as MuscleId;
+      if (MUSCLES[id]) out.add(id);
+    }
+  }
+  return [...out].sort();
+}
 
 export const muscleLabel = (m: string) => (MUSCLES[m as MuscleId]?.name ?? m.replace(/_/g, " ")).replace(/\s*\([^)]*\)/g, "");
 
@@ -108,7 +121,9 @@ const patternSets = (week: WeekSession[], knowledge: FitnessKnowledgeRegistry, p
 
 export interface AdequacyFinding {
   kind: "limitation" | "deficiency" | "information";
-  code: "target_infeasible" | "target_declared_limited" | "target_untrained" | "coverage_dishonest" | "coverage_missing" | "session_targets" | "push_pull_balance" | "target_reduced_by_choice";
+  /** A universal invariant, B methodology, C goal, D Reasoner judgment (see header). */
+  basis: "A" | "B" | "C" | "D";
+  code: "coverage_missing" | "coverage_dishonest" | "session_targets" | "session_empty" | "goal_target_untrained" | "goal_target_infeasible" | "target_declared_limited" | "target_reduced_by_choice" | "target_unavailable" | "push_pull_note";
   target: string | null;
   message: string;
 }
@@ -120,58 +135,60 @@ export interface AdequacyResult {
 }
 
 /**
- * Evaluates one normalized week against the CURRENT candidate space. `declared` = the plan's coverage
- * declarations (null for legacy plans that made none — then every shortfall is a deficiency).
+ * Evaluates one normalized week against the CURRENT candidate space. `functions` = availability of the targets the
+ * plan reports on; `required` = goal-required targets (class C); `declared` = the plan's coverage declarations (null
+ * for legacy plans that made none — then only goal requirements and session contents are checked).
  */
-export function evaluateAdequacy(params: { week: WeekSession[]; knowledge: FitnessKnowledgeRegistry; functions: FunctionAvailability[]; declared: CoverageDeclaration[] | null; checkSessions: boolean; pushPullFeasible?: { push: boolean; pull: boolean } }): AdequacyResult {
+export function evaluateAdequacy(params: { week: WeekSession[]; knowledge: FitnessKnowledgeRegistry; functions: FunctionAvailability[]; required: string[]; declared: CoverageDeclaration[] | null; checkSessions: boolean; /** Verify the plan's own claims (generation time only — after coach edits, what changed is edit-impact's job). */ checkClaims?: boolean }): AdequacyResult {
   const { week, knowledge, functions } = params;
   const findings: AdequacyFinding[] = [];
   const sets = directSets(week, knowledge);
   const decl = new Map((params.declared ?? []).map((d) => [d.target, d]));
+  const required = new Set(params.required);
   const label = muscleLabel;
+  const f = (x: AdequacyFinding) => findings.push(x);
 
-  if (params.declared) {
-    for (const f of functions) if (!decl.has(f.target)) findings.push({ kind: "deficiency", code: "coverage_missing", target: f.target, message: `coverage has no entry for ${f.target}: declare every target in functions.required.` });
-    for (const d of params.declared) if (!functions.some((f) => f.target === d.target)) findings.push({ kind: "deficiency", code: "coverage_missing", target: d.target, message: `coverage lists ${d.target}, which isn't in functions.required.` });
+  const claims = params.checkClaims !== false;
+  if (params.declared && claims) {
+    for (const fn of functions) if (!decl.has(fn.target)) f({ kind: "deficiency", basis: "A", code: "coverage_missing", target: fn.target, message: `coverage has no entry for ${fn.target}: report every target in functions.considered.` });
+    for (const d of params.declared) if (!functions.some((fn) => fn.target === d.target)) f({ kind: "deficiency", basis: "A", code: "coverage_missing", target: d.target, message: `coverage lists ${d.target}, which isn't in functions.considered.` });
   }
-  for (const f of functions) {
-    const n = sets.get(f.target) ?? 0;
-    const d = decl.get(f.target);
-    if (f.state === "infeasible") {
-      if (d && d.status === "trained") findings.push({ kind: "deficiency", code: "coverage_dishonest", target: f.target, message: `${f.target} is declared trained, but no eligible exercise trains it under the current restrictions and equipment — declare it not_trained (cause constraints or available_exercises).` });
-      findings.push({ kind: "limitation", code: "target_infeasible", target: f.target, message: `${label(f.target)}: no exercise in OPTIM's knowledge trains it within the client's confirmed restrictions and equipment, so this plan can't train it directly.` });
-      continue;
+  for (const fn of functions) {
+    const n = sets.get(fn.target) ?? 0;
+    const d = decl.get(fn.target);
+    const isRequired = required.has(fn.target);
+    const trainable = fn.state === "available";
+    // A — false claims.
+    if (claims && d?.status === "trained" && !trainable && fn.state === "infeasible") f({ kind: "deficiency", basis: "A", code: "coverage_dishonest", target: fn.target, message: `${fn.target} is declared trained, but no eligible exercise trains it under the current restrictions and equipment — declare it not_trained.` });
+    else if (claims && d?.status === "trained" && n === 0) f({ kind: "deficiency", basis: "A", code: "coverage_dishonest", target: fn.target, message: `${fn.target} is declared trained but gets no direct sets — train it, or declare it reduced/not_trained with a cause and why.` });
+    // C — goal requirements.
+    if (isRequired && !trainable) f({ kind: "limitation", basis: "C", code: "goal_target_infeasible", target: fn.target, message: `${label(fn.target)} is a goal priority, but ${fn.state === "uncertain_only" ? "the only exercises for it have unconfirmed fit" : "no exercise in OPTIM's knowledge trains it within the client's confirmed restrictions and equipment"} — this plan can't train it directly.` });
+    else if (isRequired && n === 0 && !(d && d.status !== "trained" && (d.cause === "constraints" || d.cause === "available_exercises"))) f({ kind: "deficiency", basis: "C", code: "goal_target_untrained", target: fn.target, message: `${label(fn.target)} is a goal priority and can be trained, but gets no direct sets.` });
+    // D — the Reasoner's own declarations, surfaced.
+    if (d && d.status !== "trained" && trainable) {
+      if (d.cause === "constraints" || d.cause === "available_exercises") f({ kind: "limitation", basis: "D", code: "target_declared_limited", target: fn.target, message: `${label(fn.target)}: ${d.status === "reduced" ? "reduced" : "not trained"} — ${d.why ?? (d.cause === "constraints" ? "the confirmed restrictions limit the options" : "too few eligible exercises")}.` });
+      else if (!isRequired) f({ kind: "information", basis: "D", code: "target_reduced_by_choice", target: fn.target, message: `${label(fn.target)} ${d.status === "reduced" ? "gets less volume" : "isn't trained"} by design (${d.cause === "time" ? "time" : "goal priority"})${d.why ? ` — ${d.why}` : ""}.` });
     }
-    if (d?.status === "trained" && n === 0) findings.push({ kind: "deficiency", code: "coverage_dishonest", target: f.target, message: `${f.target} is declared trained but gets no direct sets — train it, or declare it reduced/not_trained with a cause and why.` });
-    else if (!d && n === 0) findings.push({ kind: "deficiency", code: "target_untrained", target: f.target, message: `${label(f.target)} gets no direct work although ${f.state === "available" ? "eligible exercises exist" : "options exist pending your fit decision"}.` });
-    if (d && d.status !== "trained") {
-      if (d.cause === "constraints" || d.cause === "available_exercises") findings.push({ kind: "limitation", code: "target_declared_limited", target: f.target, message: `${label(f.target)}: ${d.status === "reduced" ? "reduced" : "not trained"} — ${d.why ?? (d.cause === "constraints" ? "the confirmed restrictions limit the options" : "too few eligible exercises")}.` });
-      else findings.push({ kind: "information", code: "target_reduced_by_choice", target: f.target, message: `${label(f.target)} ${d.status === "reduced" ? "gets less volume" : "isn't trained"} by design (${d.cause === "time" ? "time" : "goal priority"})${d.why ? ` — ${d.why}` : ""}.` });
-    }
+    if (!trainable && !isRequired) f({ kind: "information", basis: "D", code: "target_unavailable", target: fn.target, message: `${label(fn.target)} isn't trained: ${fn.state === "uncertain_only" ? "its only exercises have unconfirmed fit (you can clear them)" : "no eligible exercise trains it under the confirmed restrictions and equipment"}.` });
   }
 
-  // Sessions: declared primary targets must get at least half of the session's direct sets.
+  // A — sessions: structurally empty, or claiming a primary target nothing in them trains.
   if (params.checkSessions)
     for (const s of week) {
+      if (!s.items.length) {
+        f({ kind: "deficiency", basis: "A", code: "session_empty", target: null, message: `${s.day} "${s.title}" has no exercises.` });
+        continue;
+      }
       if (!s.targets?.length) continue;
-      const total = s.items.reduce((t, i) => t + i.sets, 0);
-      const onTarget = s.items.reduce((t, i) => t + ((i.exerciseId ? knowledge.getExercise(i.exerciseId)?.primaryMuscles.some((m) => s.targets!.includes(m)) : false) ? i.sets : 0), 0);
       const missing = s.targets.filter((t) => !s.items.some((i) => i.exerciseId && knowledge.getExercise(i.exerciseId)?.primaryMuscles.includes(t as MuscleId)));
-      if (missing.length) findings.push({ kind: "deficiency", code: "session_targets", target: null, message: `${s.day} "${s.title}" declares ${missing.join(", ")} as primary targets but nothing in it trains ${missing.length > 1 ? "them" : "it"} — fix the session or its targets.` });
-      else if (total > 0 && onTarget * 2 < total) findings.push({ kind: "deficiency", code: "session_targets", target: null, message: `${s.day} "${s.title}": its declared primary targets (${s.targets.join(", ")}) get ${onTarget} of ${total} sets — primary targets need at least half; rebuild the session around them or declare what it really trains.` });
+      if (missing.length) f({ kind: "deficiency", basis: "A", code: "session_targets", target: null, message: `${s.day} "${s.title}" declares ${missing.join(", ")} as primary targets but nothing in it trains ${missing.length > 1 ? "them" : "it"} — fix the session or its targets.` });
     }
 
-  // Push / pull balance.
+  // D — balance is judgment: shown, never blocking.
   const push = patternSets(week, knowledge, PUSH_PATTERNS);
   const pull = patternSets(week, knowledge, PULL_PATTERNS);
-  const feasible = params.pushPullFeasible ?? { push: true, pull: true };
-  if (push + pull > 0 && feasible.push && feasible.pull && (Math.max(push, pull) / Math.max(1, Math.min(push, pull)) > PUSH_PULL_RATIO || Math.min(push, pull) === 0)) {
-    const lower = pull < push ? "pull" : "push";
-    const side = lower === "pull" ? PULL_SIDE : PUSH_SIDE;
-    const declaredSide = side.some((m) => decl.get(m) && decl.get(m)!.status !== "trained");
-    if (!declaredSide) findings.push({ kind: "deficiency", code: "push_pull_balance", target: null, message: `Weekly pushing ${push} vs pulling ${pull} sets — balance them${params.declared ? `, or declare ${side.join("/")} reduced in coverage with its cause and why` : ""}.` });
-  }
+  if (push + pull > 0 && (Math.max(push, pull) / Math.max(1, Math.min(push, pull)) > PUSH_PULL_RATIO || Math.min(push, pull) === 0)) f({ kind: "information", basis: "D", code: "push_pull_note", target: null, message: `Weekly pushing ${push} vs pulling ${pull} sets.` });
 
-  const blocking = findings.filter((f) => f.kind !== "information");
-  return { findings, signature: blocking.length ? blocking.map((f) => `${f.code}:${f.target ?? f.message}`).sort().join("|") : null };
+  const blocking = findings.filter((x) => x.kind !== "information");
+  return { findings, signature: blocking.length ? blocking.map((x) => `${x.code}:${x.target ?? x.message}`).sort().join("|") : null };
 }
