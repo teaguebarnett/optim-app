@@ -23,19 +23,19 @@ import { MUSCLES } from "../knowledge/taxonomy.ts";
 import type { ReasonerRun } from "./run.ts";
 import type { DecisionResolution, ReasonerProvenance, RepairRecommendationRecord, UniversalTrainingProgramContent } from "../../training/types.ts";
 import { analyzeProgramIntegrity, type IntegrityAnalysis } from "./edit-impact.ts";
-import { demandCompatibility, exerciseEligibility, type ExerciseEligibility } from "../exercise-eligibility.ts";
+import { demandCompatibility, eligibilityBasis, exerciseEligibility } from "../exercise-eligibility.ts";
 import { effectiveConstraints, type ConstraintSet } from "../constraints.ts";
 import { canonicalJson, sha256 } from "./run.ts";
+import { assessPlanningState, currentCandidatePool, type CurrentPlanningInputs, type LifecycleAssessment } from "./lifecycle.ts";
+import { evaluateAdequacy, functionAvailability, PULL_PATTERNS, PUSH_PATTERNS, weekFromContent, type AdequacyFinding } from "./adequacy.ts";
+import type { RevisionProvenance } from "../../training/types.ts";
 
 /** The restriction facts in force (effective hard constraints' categories and tags), independent of ids/timestamps. */
 export function constraintFingerprint(cs: ConstraintSet): string {
   return sha256(effectiveConstraints(cs).filter((c) => c.enforcement === "hard").map((c) => `${c.category}:${c.confirmation}:${c.tags.map((t) => canonicalJson(t)).sort().join(",")}`).sort());
 }
 
-/** Stable fingerprint of an exercise's eligibility (what blocks it, under which conditions). */
-export function eligibilityBasis(e: ExerciseEligibility): string {
-  return sha256({ v: e.violations.filter((x) => x.enforcement === "hard").map((x) => x.reason).sort(), l: e.loadConditions.filter((x) => x.enforcement === "hard").map((x) => `${x.demand}:${x.limit}:${x.certainty}`).sort() });
-}
+export { eligibilityBasis };
 const plainReason = (r: string) => r.replace(/^movement pattern (\w+)$/, (_m, p: string) => `${p.replace(/_/g, " ")} pattern`).replace(/ \(limit: below (\w+)\)$/, (_m, l: string) => ` — limit is below ${l}`).replace(/_/g, " ");
 import { describeConfirmedRestrictions, plainLanguage } from "./to-program.ts";
 export { describeConfirmedRestrictions };
@@ -58,6 +58,21 @@ export interface FitDecision {
   /** What staying submaximal requires — necessary, not proof of fit. */
   conditions: string[];
   status: FitDecisionStatus;
+  resolution: DecisionResolution | null;
+  /** Gate 4.0C-5 — the coach's decision is authoritative planning state (an exclusion / clearance future Reasoner
+   * runs obey), not only a draft edit. False for pre-4.0C-5 draft-only decisions (the coach can confirm them). */
+  authoritative: boolean;
+}
+
+/** Gate 4.0C-5 — current-state adequacy of the draft: limitations (the restrictions/knowledge prevent a function)
+ * and deficiencies (undeclared shortfalls). Blocking until the coach fixes them or explicitly accepts this exact set. */
+export interface AdequacyDecision {
+  kind: "BLOCKING_COACH_DECISION";
+  key: string;
+  signature: string;
+  limitations: AdequacyFinding[];
+  deficiencies: AdequacyFinding[];
+  status: "unresolved" | "accepted_limitation";
   resolution: DecisionResolution | null;
 }
 
@@ -88,6 +103,16 @@ export interface ReasonerReviewModel {
   integrity: IntegrityDecision | null;
   /** Every explicit coach resolution so far, oldest first (provenance). */
   history: DecisionResolution[];
+  /** Gate 4.0C-5 — is this draft still the current solution for the client's authoritative state? */
+  lifecycle: LifecycleAssessment | null;
+  /** Gate 4.0C-5 — current-state adequacy (null when nothing blocking or informational was found). */
+  adequacy: AdequacyDecision | null;
+  /** Design-intent notes from adequacy (deliberate reductions) — informational. */
+  adequacyNotes: string[];
+  /** Gate 4.0C-5 — eligible exercises OPTIM withheld because their fit is unconfirmed (coach may clear/exclude). */
+  withheld: Array<{ exerciseId: string; exerciseName: string; restriction: string; conditions: string[] }>;
+  /** Gate 4.0C-5 — this draft is a revision of an earlier one (lineage). */
+  revision: RevisionProvenance | null;
   unresolvedCount: number;
   approvalBlockedReason: string | null;
   needsYou: ReviewNote[];
@@ -115,14 +140,18 @@ export function reasonerReviewModel(params: {
   /** The CURRENT authoritative ConstraintSet (Gate 4.0C-4). The whole draft — every exercise, every week — is
    * revalidated against it. Absent = the run's own snapshot (no change known). */
   currentConstraints?: ConstraintSet | null;
+  /** Gate 4.0C-5 — the CURRENT authoritative planning inputs (client, goal, constraints, method, knowledge version).
+   * Drives supersession and current-state adequacy. Absent = no lifecycle assessment (adequacy uses the snapshot). */
+  current?: CurrentPlanningInputs | null;
 }): ReasonerReviewModel {
   const rp = params.content.reasonerProvenance!;
   const reference = { runId: rp.runId, reasonerVersion: rp.reasonerVersion, promptVersion: rp.promptVersion, knowledgeVersion: rp.knowledgeVersion };
   const clean = (s: string) => plainLanguage(s).trim();
   // Never evaluate one client's draft against another client's restrictions (fail closed).
-  const wrongClient = !!params.currentConstraints && !!params.run && params.currentConstraints.clientProfileId !== (params.run.snapshots.constraintSet as ConstraintSet).clientProfileId;
+  if (params.current && !params.currentConstraints) params = { ...params, currentConstraints: params.current.constraints };
+  const wrongClient = !!params.run && ((!!params.currentConstraints && params.currentConstraints.clientProfileId !== (params.run.snapshots.constraintSet as ConstraintSet).clientProfileId) || (!!params.current && params.current.client.clientProfileId !== params.run.snapshots.clientState.clientProfileId));
   if (!params.run?.input || !params.run.result.plan || wrongClient) {
-    return { headline: rp.headline, available: false, constraintsChanged: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
+    return { headline: rp.headline, available: false, constraintsChanged: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], lifecycle: null, adequacy: null, adequacyNotes: [], withheld: [], revision: rp.revision ?? null, unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
   }
   const run = params.run;
   const plan = run.result.plan!;
@@ -197,7 +226,9 @@ export function reasonerReviewModel(params: {
       const acceptedBasis = recorded.fitBasis ?? (ex ? eligibilityBasis(exerciseEligibility(ex, snapshot)) : "");
       status = acceptedBasis === fitBasis ? "accepted_with_conditions" : "unresolved";
     } else status = "unresolved"; // never resolved, removed-then-re-added, or now incompatible
-    decisions.push({ kind: "BLOCKING_COACH_DECISION", key, exerciseId: c.id ?? keyId, exerciseName: c.name, fit, fitBasis, restriction, conditions, status, resolution: status === "unresolved" ? null : recorded });
+    // Authoritative = the CURRENT constraint set itself carries the coach's decision for this exercise.
+    const authoritative = !!ex && (status === "removed" ? exerciseEligibility(ex, constraints).violations.some((v) => v.reason === "excluded by the coach") : status === "accepted_with_conditions" ? !!exerciseEligibility(ex, constraints).clearedBy : false);
+    decisions.push({ kind: "BLOCKING_COACH_DECISION", key, exerciseId: c.id ?? keyId, exerciseName: c.name, fit, fitBasis, restriction, conditions, status, resolution: status === "unresolved" ? null : recorded, authoritative });
   }
   const unresolved = decisions.filter((d) => d.status === "unresolved");
 
@@ -215,6 +246,48 @@ export function reasonerReviewModel(params: {
   }
   const integrityOpen = integrity?.status === "unresolved";
 
+  // Gate 4.0C-5 — CURRENT-state adequacy (against the current candidate space, never against v1).
+  const clientNow = params.current?.client ?? run.snapshots.clientState;
+  const { pool: poolNow, loadConditions: loadNow } = currentCandidatePool(params.knowledge, constraints, clientNow);
+  const functions = functionAvailability(poolNow, loadNow).map((f) => (f.state === "uncertain_only" && run.preflight?.policy !== "withhold" ? { ...f, state: "available" as const } : f));
+  const deloadWeeks = (run.result.spec?.resistance?.value.weeks ?? []).filter((w) => w.kind === "deload").map((w) => w.week);
+  const contentAdequacy = evaluateAdequacy({
+    week: weekFromContent(params.content, params.knowledge, { deloadWeeks }),
+    knowledge: params.knowledge,
+    functions,
+    declared: plan.coverage ?? null,
+    checkSessions: false,
+    pushPullFeasible: { push: poolNow.some((e) => e.patterns.some((p) => PUSH_PATTERNS.includes(p))), pull: poolNow.some((e) => e.patterns.some((p) => PULL_PATTERNS.includes(p))) },
+  });
+  // The solve's own honesty problems that survived its repair attempt stay on the record.
+  const solveDeficiencies = (run.result.adequacy?.findings ?? []).filter((f) => f.kind === "deficiency" && (f.code === "session_targets" || f.code === "coverage_dishonest" || f.code === "coverage_missing"));
+  const allFindings = [...contentAdequacy.findings, ...solveDeficiencies.filter((f) => !contentAdequacy.findings.some((g) => g.message === f.message))];
+  const limitations = allFindings.filter((f) => f.kind === "limitation");
+  const deficiencies = allFindings.filter((f) => f.kind === "deficiency");
+  let adequacy: AdequacyDecision | null = null;
+  if (limitations.length || deficiencies.length) {
+    const signature = [...limitations, ...deficiencies].map((f) => `${f.code}:${f.target ?? f.message}`).sort().join("|");
+    const key = `plan_adequacy:${sha256(signature).slice(0, 16)}`;
+    const accepted = [...resolutions].reverse().find((r) => r.resolution === "accepted_limitation" && r.adequacySignature === signature) ?? null;
+    adequacy = { kind: "BLOCKING_COACH_DECISION", key, signature, limitations, deficiencies, status: accepted ? "accepted_limitation" : "unresolved", resolution: accepted };
+  }
+  const adequacyOpen = adequacy?.status === "unresolved";
+
+  // Gate 4.0C-5 — lifecycle: is this still the current solution for the client's authoritative state?
+  const lifecycle = params.current ? assessPlanningState({ run, content: params.content, current: params.current, knowledge: params.knowledge, openConsequence: integrityOpen || deficiencies.length > 0 }) : null;
+  const superseded = lifecycle?.status === "superseded";
+
+  // Withheld (fit unconfirmed) exercises the coach hasn't decided on yet.
+  const withheld = (run.preflight?.withheld ?? [])
+    .map((id) => params.knowledge.getExercise(id))
+    .filter((e): e is NonNullable<typeof e> => !!e)
+    .map((e) => ({ e, elig: exerciseEligibility(e, constraints) }))
+    .filter(({ elig }) => elig.eligible && !elig.clearedBy && elig.loadConditions.some((l) => l.certainty === "uncertain" && l.enforcement === "hard"))
+    .map(({ e, elig }) => {
+      const lc = elig.loadConditions.find((l) => l.certainty === "uncertain" && l.enforcement === "hard")!;
+      return { exerciseId: e.id, exerciseName: e.name, restriction: `nothing needing ${lc.demand.replace(/_/g, " ")} at ${lc.limit} or above`, conditions: lc.conditions };
+    });
+
   const mentionsDecision = (t: string) => decisions.some((d) => t.toLowerCase().includes(d.exerciseName.toLowerCase()));
   const needsYou: ReviewNote[] = rp.needsYou
     .filter((t) => !mentionsDecision(t)) // the decision card represents it once
@@ -230,11 +303,18 @@ export function reasonerReviewModel(params: {
     decisions,
     integrity,
     history: resolutions,
-    unresolvedCount: unresolved.length + (integrityOpen ? 1 : 0),
+    lifecycle,
+    adequacy,
+    adequacyNotes: allFindings.filter((f) => f.kind === "information").map((f) => f.message),
+    withheld,
+    revision: rp.revision ?? null,
+    unresolvedCount: unresolved.length + (integrityOpen ? 1 : 0) + (adequacyOpen ? 1 : 0) + (superseded ? 1 : 0),
     approvalBlockedReason:
       [
+        superseded ? `This proposal was prepared before the client's planning state changed (${lifecycle!.reasons.join(" ")}) — it is no longer the current solution. Review the revised proposal instead.` : "",
         unresolved.length ? `Decide first: ${unresolved.map((d) => d.exerciseName).join(", ")} — ${unresolved.some((d) => d.fit === "incompatible") ? "conflicts with or can't be confirmed against" : "OPTIM couldn't confirm it fits"} the client's confirmed restrictions.` : "",
         integrityOpen ? `Your changes left ${integrity!.analysis.deficiencies.map((d) => d.label.toLowerCase()).join(", ")} underrepresented — choose a replacement or accept the reduced stimulus.` : "",
+        adequacyOpen ? `This program ${adequacy!.limitations.length ? `can't fully train ${[...new Set(adequacy!.limitations.map((f) => f.target).filter(Boolean))].map((t) => String(t).replace(/_/g, " ")).join(", ") || "everything the goal needs"} under the current restrictions` : ""}${adequacy!.limitations.length && adequacy!.deficiencies.length ? ", and " : ""}${adequacy!.deficiencies.length ? `has gaps OPTIM couldn't resolve (${adequacy!.deficiencies.length})` : ""} — fix them, or accept them explicitly.` : "",
       ]
         .filter(Boolean)
         .join(" ") || null,
@@ -329,6 +409,7 @@ export function clientFacingProgramContent(params: { content: UniversalTrainingP
 }
 
 /** Exercise names whose conditional fit relies on the pad/bench (client setup cue). */
-export function supportedSetupNames(run: ReasonerRun | null): Set<string> {
-  return new Set((run?.input?.exercises ?? []).filter((row) => fitCodeOf(row) === "K").map((row) => row.split("|")[1].toLowerCase()));
+export function supportedSetupNames(run: ReasonerRun | null, knowledge?: FitnessKnowledgeRegistry): Set<string> {
+  // Gate 4.0C-5: a coach-cleared exercise is "K" too but may have no pad/bench — only supported exercises get the cue.
+  return new Set((run?.input?.exercises ?? []).filter((row) => fitCodeOf(row) === "K" && (!knowledge || knowledge.getExercise(row.split("|")[0])?.trunkSupport !== "none")).map((row) => row.split("|")[1].toLowerCase()));
 }

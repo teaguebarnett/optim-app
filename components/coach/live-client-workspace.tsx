@@ -272,7 +272,15 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
             </p>
           ) : null}
           {pendingProposal ? (
-            <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
+            <>
+              <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
+              {/* Gate 4.0C-5 — a revision of that proposal stopped at its preflight: the coach's fit decisions come first. */}
+              {reasonerAvailability.enabled && reasonerAvailability.job?.status === "needs_input" && reasonerAvailability.job.outcome.fitQuestions?.length && reasonerAvailability.job.outcome.intent?.supersedesJobId ? (
+                <div className="mt-3">
+                  <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={[]} revision />
+                </div>
+              ) : null}
+            </>
           ) : reasonerAvailability.enabled ? (
             <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
           ) : (

@@ -14,6 +14,7 @@ import type { DayOfWeek } from "../types.ts";
 import type { BodyPosition, Demand, EquipmentId, Level, MovementPatternId } from "./knowledge/taxonomy.ts";
 import { isKnown } from "./facts.ts";
 import type { ClientState } from "./client-state.ts";
+import { effectiveExerciseDecisions, type ExerciseFitDecisionRecord } from "./limitations/exercise-decisions.ts";
 
 export type ConstraintCategory = "availability" | "session_length" | "equipment" | "injury_or_pain" | "movement_restriction" | "medical_review" | "scope_of_practice";
 
@@ -31,6 +32,9 @@ export type ConstraintTag =
   /** A specific exercise, by Fitness Knowledge id (never by name). */
   | { kind: "avoid_exercise"; exerciseId: string }
   | { kind: "avoid_equipment"; equipment: EquipmentId }
+  /** Gate 4.0C-5 — the coach confirmed this exercise fits the client's restrictions, but ONLY under the stated
+   * conditions and ONLY while its eligibility basis (what made it uncertain) is unchanged. Never a broader rule. */
+  | { kind: "exercise_cleared"; exerciseId: string; conditions: string[]; basis: string }
   | { kind: "requires_coach_review" }
   | { kind: "free_text"; text: string; interpretation: "needs_coach_interpretation" };
 
@@ -215,7 +219,24 @@ export function deriveConstraintSet(state: ClientState): ConstraintSet {
       tags: structured.value.restrictions.flatMap((r) => r.tags),
       ref: `health_review.structuredLimitations@${structured.value.confirmedAtIso}`,
     },
+    // Gate 4.0C-5 — coach exercise-fit decisions: authoritative planning state, exercise-specific only.
+    ...exerciseFitRestriction(structured.value.exerciseDecisions),
   ]);
+}
+
+/** The coach's CURRENT per-exercise fit decisions (latest per exercise, revoked ones dropped) as one constraint. */
+function exerciseFitRestriction(decisions: ExerciseFitDecisionRecord[] | undefined): CoachStructuredRestriction[] {
+  const effective = effectiveExerciseDecisions(decisions);
+  if (!effective.length) return [];
+  return [
+    {
+      id: "exercise_fit",
+      interprets: [],
+      description: `Coach exercise decisions: ${effective.map((d) => `${d.exerciseName} ${d.verdict === "excluded" ? "excluded" : `cleared (${d.conditions.join("; ")})`}`).join("; ")}.`,
+      tags: effective.map((d): ConstraintTag => (d.verdict === "excluded" ? { kind: "avoid_exercise", exerciseId: d.exerciseId } : { kind: "exercise_cleared", exerciseId: d.exerciseId, conditions: d.conditions, basis: d.basis ?? "" })),
+      ref: `health_review.structuredLimitations.exerciseDecisions@${effective.map((d) => d.decidedAtIso).sort().at(-1)}`,
+    },
+  ];
 }
 
 /** A coach-confirmed movement restriction supersedes OPTIM's unconfirmed

@@ -6,12 +6,15 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  recordExerciseFitDecisions,
   confirmStructuredLimitations,
   previewResistancePlan,
   proposeStructuredLimitations,
   type ConfirmLimitationsInput,
 } from "../../lib/production/structured-limitations";
 import { MANUAL_FALLBACK_MESSAGE, type InterpretationProposal } from "../../lib/synthesis/limitations/interpret";
+import { getAuthenticatedContext } from "../../lib/production/auth";
+import { queueRevisionIfMaterial } from "../../lib/production/reasoner-lifecycle";
 
 /** Messages written by our own code that are safe to show as-is; anything else becomes a generic message. */
 const SAFE_MESSAGES = new Set(["There's no documented limitation to interpret."]);
@@ -26,7 +29,7 @@ export async function proposeStructuredLimitationsAction(params: { workspaceId: 
   }
 }
 
-export async function confirmStructuredLimitationsAction(input: ConfirmLimitationsInput): Promise<{ ok: true } | { ok: false; errors: string[] }> {
+export async function confirmStructuredLimitationsAction(input: ConfirmLimitationsInput): Promise<{ ok: true; revision: "queued" | "not_needed" } | { ok: false; errors: string[] }> {
   try {
     const result = await confirmStructuredLimitations(input);
     if (!result.ok) return result;
@@ -34,9 +37,40 @@ export async function confirmStructuredLimitationsAction(input: ConfirmLimitatio
     console.error(`confirmStructuredLimitationsAction failed: ${err instanceof Error ? err.name : "unknown"}`);
     return { ok: false, errors: ["Couldn't save the confirmation. Nothing was changed — try again."] };
   }
+  // Gate 4.0C-5 — the coach's confirmation authorizes ONE Reasoner revision when it supersedes the pending draft
+  // (idempotent per planning state; never approves or publishes). A queue problem never undoes the confirmation.
+  let revision: "queued" | "not_needed" = "not_needed";
+  try {
+    const ctx = await getAuthenticatedContext();
+    const r = await queueRevisionIfMaterial({ workspaceId: input.workspaceId, clientProfileId: input.clientProfileId, coachId: ctx.userId, trigger: "limitations_confirmed" });
+    if (r.queued) revision = "queued";
+  } catch (err) {
+    console.error(`confirmStructuredLimitationsAction: revision check failed (confirmation saved): ${err instanceof Error ? err.name : "unknown"}`);
+  }
   revalidatePath(`/coach/clients/${input.clientProfileId}`);
   revalidatePath(`/coach/clients/${input.clientProfileId}/planner-review`);
-  return { ok: true };
+  return { ok: true, revision };
+}
+
+/** Gate 4.0C-5 — the coach removes one of their exercise decisions (explicit). Revoking a clearance can make a planned
+ * exercise uncertain again; if that supersedes the pending draft, ONE revision is prepared. */
+export async function revokeExerciseFitDecisionAction(params: { workspaceId: string; clientProfileId: string; exerciseId: string }): Promise<{ ok: true; revision: "queued" | "not_needed" } | { ok: false; errors: string[] }> {
+  try {
+    const res = await recordExerciseFitDecisions({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, decisions: [{ exerciseId: params.exerciseId, verdict: "revoke", source: { kind: "limitations_card" } }] });
+    if (!res.ok) return res;
+  } catch (err) {
+    console.error(`revokeExerciseFitDecisionAction failed: ${err instanceof Error ? err.name : "unknown"}`);
+    return { ok: false, errors: ["Couldn't save that change. Nothing was changed — try again."] };
+  }
+  let revision: "queued" | "not_needed" = "not_needed";
+  try {
+    const ctx = await getAuthenticatedContext();
+    if ((await queueRevisionIfMaterial({ ...params, coachId: ctx.userId, trigger: "fit_decision" })).queued) revision = "queued";
+  } catch (err) {
+    console.error(`revokeExerciseFitDecisionAction: revision check failed (change saved): ${err instanceof Error ? err.name : "unknown"}`);
+  }
+  revalidatePath(`/coach/clients/${params.clientProfileId}`);
+  return { ok: true, revision };
 }
 
 export async function previewResistancePlanAction(params: { workspaceId: string; clientProfileId: string }) {

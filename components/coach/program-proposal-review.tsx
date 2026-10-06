@@ -26,6 +26,10 @@ import {
   convertProgramProposalDayToRestAction,
   approveProgramProposalAction,
   resolveReasonerFitDecisionAction,
+  confirmDraftFitDecisionAction,
+  recordExerciseFitDecisionsAction,
+  requestRevisionAction,
+  acceptPlanAdequacyAction,
   resolveProgramIntegrityAction,
   requestRepairRecommendationAction,
   rejectProgramProposalAction,
@@ -33,8 +37,11 @@ import {
 } from "@/app/actions/production-programs";
 import type { TrainingItemPath, SessionPath, BlockPath, TrainingItemPatch, BlockPatch } from "@/lib/training/program-proposal-editing";
 import type { TrainingItemInstance, UniversalTrainingProgramContent, AdjustmentProvenance, GenerationInputs, UniversalProgramDay, UniversalProgramWeek } from "@/lib/training/types";
-import type { IntegrityDecision, ReasonerReviewModel } from "@/lib/synthesis/reasoner/review-gate";
+import type { AdequacyDecision, IntegrityDecision, ReasonerReviewModel } from "@/lib/synthesis/reasoner/review-gate";
+import type { ReasonerJobView } from "@/lib/synthesis/reasoner/proposal-job";
+import { PART_LABEL, type PlanningStatePart } from "@/lib/synthesis/planning-state";
 import { ProposalScheduleNavigator } from "@/components/coach/proposal-schedule-navigator";
+import { RevisionPoller } from "@/components/coach/revision-poller";
 import { ProposalApproveForm } from "@/components/coach/proposal-approve-form";
 import { ProposalRejectForm } from "@/components/coach/proposal-reject-form";
 import { parseRejectionReason } from "@/lib/coach/proposal-rejection";
@@ -172,7 +179,106 @@ function IntegritySection({ d, repairEnabled, integrityAction, repairAction }: {
   );
 }
 
-function ReasonerContextSection({ review, resolveAction, repairEnabled, integrityAction, repairAction }: { review: ReasonerReviewModel; resolveAction: (formData: FormData) => Promise<void>; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void> }) {
+function RevisionButton({ label, action }: { label: string; action: (formData: FormData) => Promise<void> }) {
+  return (
+    <form action={action} className="mt-2">
+      <Button type="submit" variant="secondary" size="sm">
+        {label}
+      </Button>
+    </form>
+  );
+}
+
+/** Gate 4.0C-5 — is this draft still the current solution for the client's authoritative state? */
+function LifecycleSection({ review, revisionJob, revisionAction, workspaceId, clientProfileId }: { review: ReasonerReviewModel; revisionJob: ReasonerJobView | null; revisionAction: (formData: FormData) => Promise<void>; workspaceId: string; clientProfileId: string }) {
+  const l = review.lifecycle;
+  const changeLines = (changes: Array<{ part: string; added: string[]; removed: string[] }>) =>
+    changes.map((c) => `${PART_LABEL[c.part as PlanningStatePart] ?? c.part}${c.added.length ? `: now ${c.added.join("; ")}` : ""}${c.removed.length ? `${c.added.length ? " —" : ":"} was ${c.removed.join("; ")}` : ""}`);
+  const preparing = revisionJob?.status === "preparing";
+  return (
+    <>
+      {review.revision ? (
+        <div className="rounded border border-border-strong bg-surface-raised px-3 py-2 text-xs text-off-white">
+          <p className="font-medium">Revised proposal — prepared from the client&apos;s current state</p>
+          <p className="mt-1 text-neutral">
+            OPTIM re-solved the whole program after {review.revision.trigger === "limitations_confirmed" ? "you confirmed the client's limitations" : review.revision.trigger === "fit_decision" ? "your exercise decision" : review.revision.trigger === "preflight_answered" ? "you answered its fit questions" : "you asked for a revision"} ({formatShortDate(review.revision.requestedAtIso)}). The proposal it replaces is kept unchanged in this program&apos;s history.
+          </p>
+          {review.revision.changes.length ? <ul className="mt-1 space-y-0.5 text-neutral">{changeLines(review.revision.changes).map((x) => <li key={x}>• {x}</li>)}</ul> : null}
+        </div>
+      ) : null}
+      {l?.status === "superseded" ? (
+        <div role="status" className="rounded border border-warning bg-warning-soft/40 px-3 py-2 text-xs text-warning-strong">
+          <p className="font-medium">No longer the current plan for this client</p>
+          <p className="mt-1">The client&apos;s planning state changed since OPTIM prepared this, so it can&apos;t be approved:</p>
+          <ul className="mt-1 space-y-0.5">{l.reasons.map((r) => <li key={r}>• {r}</li>)}</ul>
+          {preparing ? (
+            <p className="mt-2">
+              OPTIM is preparing a revised proposal from the current state. It will replace this one here when it&apos;s ready — nothing is sent to the client.
+              <RevisionPoller workspaceId={workspaceId} clientProfileId={clientProfileId} jobId={revisionJob!.jobId} />
+            </p>
+          ) : revisionJob?.status === "needs_input" ? (
+            <p className="mt-2">OPTIM needs your input before it can revise this — see Training program above.</p>
+          ) : revisionJob?.status === "failed" || revisionJob?.status === "unsupported" ? (
+            <>
+              <p className="mt-2">{revisionJob.outcome.message ?? "The revision couldn't be prepared."}</p>
+              <RevisionButton label="Try the revision again" action={revisionAction} />
+            </>
+          ) : (
+            <RevisionButton label="Prepare a revised proposal" action={revisionAction} />
+          )}
+        </div>
+      ) : l?.status === "loosened" ? (
+        <div className="rounded border border-border-strong bg-surface-raised px-3 py-2 text-xs text-off-white">
+          <p className="font-medium">A better plan may now be possible</p>
+          <p className="mt-1 text-neutral">Since OPTIM prepared this, more exercises became usable for this client ({l.newlyAvailable.slice(0, 6).join(", ")}{l.newlyAvailable.length > 6 ? "…" : ""}). This plan still fits; a revision is optional.</p>
+          {preparing ? (
+            <p className="mt-1 text-neutral">
+              OPTIM is preparing a revised proposal…
+              <RevisionPoller workspaceId={workspaceId} clientProfileId={clientProfileId} jobId={revisionJob!.jobId} />
+            </p>
+          ) : (
+            <RevisionButton label="Prepare a revised proposal" action={revisionAction} />
+          )}
+        </div>
+      ) : l?.status === "unaffected" ? (
+        <p className="rounded border border-border-strong bg-surface-raised px-3 py-2 text-xs text-neutral">The client&apos;s planning state changed since OPTIM prepared this ({changeLines(l.changes).join("; ")}). OPTIM rechecked the plan: nothing in it is affected.</p>
+      ) : null}
+    </>
+  );
+}
+
+/** Gate 4.0C-5 — current-state adequacy: what this program can't do for the client now, and gaps it didn't resolve. */
+function AdequacySection({ a, acceptAction }: { a: AdequacyDecision; acceptAction: (formData: FormData) => Promise<void> }) {
+  return (
+    <li>
+      {a.limitations.length ? (
+        <>
+          <p className="font-medium text-off-white">What this program can&apos;t fully train right now</p>
+          <ul className="mt-1 space-y-0.5">{a.limitations.map((f) => <li key={f.message} className="text-off-white">• {f.message}</li>)}</ul>
+        </>
+      ) : null}
+      {a.deficiencies.length ? (
+        <>
+          <p className={`font-medium text-off-white ${a.limitations.length ? "mt-2" : ""}`}>Gaps OPTIM couldn&apos;t resolve</p>
+          <ul className="mt-1 space-y-0.5">{a.deficiencies.map((f) => <li key={f.message} className="text-off-white">• {f.message}</li>)}</ul>
+        </>
+      ) : null}
+      {a.status === "unresolved" ? (
+        <form action={acceptAction} className="mt-1.5 flex flex-wrap items-center gap-2">
+          <input type="hidden" name="decisionKey" value={a.key} />
+          <Button type="submit" variant="secondary" size="sm">
+            Accept these — I&apos;ll approve the program with them
+          </Button>
+          <span className="text-neutral">or edit the plan, change the client&apos;s exercise decisions, or prepare a revision.</span>
+        </form>
+      ) : (
+        <p className="mt-1 text-success">Accepted{a.resolution ? ` (${formatShortDate(a.resolution.resolvedAtIso)})` : ""} — reopens if these findings change.</p>
+      )}
+    </li>
+  );
+}
+
+function ReasonerContextSection({ review, resolveAction, repairEnabled, integrityAction, repairAction, revisionJob, revisionAction, adequacyAction, confirmDecisionAction, withheldAction, workspaceId, clientProfileId }: { workspaceId: string; clientProfileId: string; review: ReasonerReviewModel; resolveAction: (formData: FormData) => Promise<void>; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void>; revisionJob: ReasonerJobView | null; revisionAction: (formData: FormData) => Promise<void>; adequacyAction: (formData: FormData) => Promise<void>; confirmDecisionAction: (formData: FormData) => Promise<void>; withheldAction: (formData: FormData) => Promise<void> }) {
   const list = (items: string[]) => (
     <ul className="mt-1.5 space-y-1 text-xs">
       {items.map((line) => (
@@ -186,12 +292,13 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
   return (
     <div className="mb-3 space-y-2">
       <p className="text-xs text-neutral">Prepared by OPTIM&apos;s Fitness Reasoner · {review.headline}</p>
-      {review.constraintsChanged ? (
+      <LifecycleSection review={review} revisionJob={revisionJob} revisionAction={revisionAction} workspaceId={workspaceId} clientProfileId={clientProfileId} />
+      {review.constraintsChanged && !review.lifecycle ? (
         <p className="rounded border border-border-strong bg-surface-raised px-3 py-2 text-xs text-off-white">
           The client&apos;s confirmed restrictions changed after OPTIM prepared this. Every exercise in every week was rechecked against the current ones; anything that no longer fits is listed below.
         </p>
       ) : null}
-      {review.decisions.length > 0 || review.integrity ? (
+      {review.decisions.length > 0 || review.integrity || review.adequacy ? (
         <div className={`rounded border px-3 py-2 ${review.unresolvedCount ? "border-warning bg-warning-soft/40" : "border-border-strong bg-surface-raised"}`}>
           <p className={`text-xs font-medium ${review.unresolvedCount ? "text-warning-strong" : "text-off-white"}`}>
             {review.unresolvedCount ? `Decide before approving · ${review.unresolvedCount}` : "Decisions · all resolved"}
@@ -228,19 +335,69 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
                     <span className="self-center text-neutral">or replace it session by session below.</span>
                   </div>
                 ) : (
-                  <p className="mt-1 text-success">
-                    {d.status === "accepted_with_conditions"
-                      ? `Kept — you confirmed it fits under these conditions${d.resolution ? ` (${formatShortDate(d.resolution.resolvedAtIso)})` : ""}.`
-                      : d.status === "removed"
-                        ? `Removed from every week${d.resolution ? ` (${formatShortDate(d.resolution.resolvedAtIso)})` : ""}.`
-                        : "Removed or replaced in your edits."}
-                  </p>
+                  <>
+                    <p className="mt-1 text-success">
+                      {d.status === "accepted_with_conditions"
+                        ? `Kept — you confirmed it fits under these conditions${d.resolution ? ` (${formatShortDate(d.resolution.resolvedAtIso)})` : ""}.`
+                        : d.status === "removed"
+                          ? `Removed from every week${d.resolution ? ` (${formatShortDate(d.resolution.resolvedAtIso)})` : ""}.`
+                          : "Removed or replaced in your edits."}
+                      {d.authoritative ? " Saved as your decision for this client — future proposals follow it." : ""}
+                    </p>
+                    {!d.authoritative && (d.status === "removed" || d.status === "accepted_with_conditions") && d.fit !== "unverifiable" ? (
+                      <form action={confirmDecisionAction} className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <input type="hidden" name="decisionKey" value={d.key} />
+                        <Button type="submit" variant="secondary" size="sm">
+                          {d.status === "removed" ? `Confirm: exclude ${d.exerciseName} for this client` : `Confirm: ${d.exerciseName} fits under these conditions`}
+                        </Button>
+                        <span className="text-neutral">This decision only lives in this draft so far. Confirming it makes it part of the client&apos;s planning state{d.status === "removed" ? " — and if the plan depended on it, OPTIM prepares one revised proposal." : "."}</span>
+                      </form>
+                    ) : null}
+                  </>
                 )}
               </li>
             ))}
             {review.integrity ? <IntegritySection d={review.integrity} repairEnabled={repairEnabled} integrityAction={integrityAction} repairAction={repairAction} /> : null}
+            {review.adequacy ? <AdequacySection a={review.adequacy} acceptAction={adequacyAction} /> : null}
           </ul>
         </div>
+      ) : null}
+      {review.withheld.length > 0 ? (
+        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Not used — fit unconfirmed · {review.withheld.length}</summary>
+          <p className="mt-1.5 text-xs text-neutral">OPTIM didn&apos;t plan with these because it can&apos;t confirm they fit the client&apos;s confirmed restrictions. Your decision is saved for this client and used by future proposals.</p>
+          <ul className="mt-1.5 space-y-2 text-xs">
+            {review.withheld.map((w) => (
+              <li key={w.exerciseId}>
+                <p className="text-off-white">
+                  <span className="font-medium">{w.exerciseName}</span> — {w.restriction}; would need {w.conditions.join(" and ")}.
+                </p>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <form action={withheldAction}>
+                    <input type="hidden" name="exerciseId" value={w.exerciseId} />
+                    <input type="hidden" name="verdict" value="cleared" />
+                    <Button type="submit" variant="secondary" size="sm">
+                      It fits under these conditions
+                    </Button>
+                  </form>
+                  <form action={withheldAction}>
+                    <input type="hidden" name="exerciseId" value={w.exerciseId} />
+                    <input type="hidden" name="verdict" value="excluded" />
+                    <Button type="submit" variant="ghost" size="sm">
+                      Exclude it for this client
+                    </Button>
+                  </form>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {review.adequacyNotes.length > 0 ? (
+        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">By design · {review.adequacyNotes.length}</summary>
+          {list(review.adequacyNotes)}
+        </details>
       ) : null}
       {review.history.length > 0 ? (
         <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
@@ -249,7 +406,7 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
             {review.history.map((h) => (
               <li key={`${h.key}-${h.resolvedAtIso}`}>
                 • {formatShortDate(h.resolvedAtIso)} —{" "}
-                {h.resolution === "accepted_with_conditions" ? `kept ${h.exerciseName} under its conditions` : h.resolution === "removed" ? `removed ${h.exerciseName} from every week` : h.resolution === "accepted_replacement" ? `added ${h.replacement?.exerciseName ?? h.exerciseName}${h.replacement?.fromRecommendation ? " (OPTIM's recommendation)" : ""} on ${h.replacement?.days.join(", ") ?? ""}` : `accepted reduced ${(h.tradeoff ?? []).map((t) => `${t.label.toLowerCase()} (${t.before} → ${t.after})`).join(", ")}`}
+                {h.resolution === "accepted_limitation" ? `accepted the program's limitations (${(h.limitations ?? []).length})` : h.resolution === "accepted_with_conditions" ? `kept ${h.exerciseName} under its conditions` : h.resolution === "removed" ? `removed ${h.exerciseName} from every week` : h.resolution === "accepted_replacement" ? `added ${h.replacement?.exerciseName ?? h.exerciseName}${h.replacement?.fromRecommendation ? " (OPTIM's recommendation)" : ""} on ${h.replacement?.days.join(", ") ?? ""}` : `accepted reduced ${(h.tradeoff ?? []).map((t) => `${t.label.toLowerCase()} (${t.before} → ${t.after})`).join(", ")}`}
               </li>
             ))}
           </ul>
@@ -374,6 +531,28 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     const decisionKey = String(formData.get("decisionKey") ?? "");
     const resolution = formData.get("resolution") === "replace" ? "replace" : "accept_tradeoff";
     await resolveProgramIntegrityAction({ workspaceId, clientProfileId, versionId, decisionKey, resolution, exerciseId: String(formData.get("exerciseId") ?? "") || undefined, fromRecommendation: formData.get("fromRecommendation") === "1" });
+    await revalidate();
+  }
+  // Gate 4.0C-5 — lifecycle actions (all explicit coach actions; none approves or publishes).
+  async function revisionAction(): Promise<void> {
+    "use server";
+    await requestRevisionAction({ workspaceId, clientProfileId });
+    await revalidate();
+  }
+  async function adequacyAction(formData: FormData): Promise<void> {
+    "use server";
+    await acceptPlanAdequacyAction({ workspaceId, clientProfileId, versionId, decisionKey: String(formData.get("decisionKey") ?? "") });
+    await revalidate();
+  }
+  async function confirmDecisionAction(formData: FormData): Promise<void> {
+    "use server";
+    await confirmDraftFitDecisionAction({ workspaceId, clientProfileId, versionId, decisionKey: String(formData.get("decisionKey") ?? "") });
+    await revalidate();
+  }
+  async function withheldAction(formData: FormData): Promise<void> {
+    "use server";
+    const res = await recordExerciseFitDecisionsAction({ workspaceId, clientProfileId, context: "withheld", decisions: [{ exerciseId: String(formData.get("exerciseId") ?? ""), verdict: formData.get("verdict") === "excluded" ? "excluded" : "cleared" }] });
+    if (!res.ok) throw new Error(res.errors.join(" "));
     await revalidate();
   }
   async function requestRepairAction(formData: FormData): Promise<void> {
@@ -933,7 +1112,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       </div>
 
       {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
-      {proposal.reasonerReview ? <ReasonerContextSection review={proposal.reasonerReview} resolveAction={resolveDecisionAction} repairEnabled={proposal.repairReasoningEnabled} integrityAction={resolveIntegrityAction} repairAction={requestRepairAction} /> : null}
+      {proposal.reasonerReview ? <ReasonerContextSection review={proposal.reasonerReview} resolveAction={resolveDecisionAction} repairEnabled={proposal.repairReasoningEnabled} integrityAction={resolveIntegrityAction} repairAction={requestRepairAction} revisionJob={proposal.revisionJob} revisionAction={revisionAction} adequacyAction={adequacyAction} confirmDecisionAction={confirmDecisionAction} withheldAction={withheldAction} workspaceId={workspaceId} clientProfileId={clientProfileId} /> : null}
       {whyThisPlan.length > 0 ? (
         <details className="mb-2 rounded border border-border-strong bg-surface-raised px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-off-white">Why this plan</summary>

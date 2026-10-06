@@ -435,6 +435,25 @@ export async function getOriginalProposalVersion(workspaceId: string, programId:
   return rowToProposalVersion(data);
 }
 
+/** Gate 4.0C-5 — the version a Reasoner job GENERATED (the first version in the program carrying that job id).
+ * A revision is the next version of the same program, so for it this — not version 1 — is "the original" that
+ * coach edits are diffed against. Null when not found. */
+export async function getGeneratedVersionForJob(workspaceId: string, programId: string, jobId: string): Promise<ProgramProposalVersionRow | null> {
+  await requireCoachAuthority(workspaceId);
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("training_program_versions")
+    .select("id, program_id, version_number, status, content, created_at")
+    .eq("workspace_id", workspaceId)
+    .eq("program_id", programId)
+    .eq("content->reasonerProvenance->>jobId", jobId)
+    .order("version_number", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getGeneratedVersionForJob failed: ${error.message}`);
+  return data ? rowToProposalVersion(data) : null;
+}
+
 /** A coach's explicit rejection: the draft becomes 'archived' — a real,
  * already-defined terminal status (plan_version_status) that, before this
  * phase, no code path ever set — never published, never assignable, but

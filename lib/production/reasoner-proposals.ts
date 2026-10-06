@@ -17,7 +17,8 @@ import { resolveStructuredJsonProvider } from "../ai/resolve.ts";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import type { ReasonerModel, ReasonerResult } from "../synthesis/reasoner/reasoner.ts";
 import { serializeRun, type ReasonerRun } from "../synthesis/reasoner/run.ts";
-import { auditColumns, executeReasonerJob, isStale, MESSAGES, parseEnabledClients, type FailureCategory, type JobFinish, type JobOutcome, type JobStatus, type ReasonerJobView } from "../synthesis/reasoner/proposal-job.ts";
+import { auditColumns, executeReasonerJob, isStale, MESSAGES, parseEnabledClients, type FailureCategory, type JobFinish, type JobIntent, type JobOutcome, type JobStatus, type ReasonerJobView } from "../synthesis/reasoner/proposal-job.ts";
+import type { RevisionJobRecord } from "../synthesis/reasoner/lifecycle.ts";
 import type { SynthesisInput } from "../synthesis/synthesis-input.ts";
 
 export const REASONER_EFFORT = "medium" as const;
@@ -98,7 +99,7 @@ const COLUMNS = "id, workspace_id, client_profile_id, status, failure_category, 
 async function closeIfStale(row: JobRow): Promise<JobRow> {
   if (!isStale(row, Date.now())) return row;
   const supabase = await getSupabaseServerClient();
-  const patch = { status: "failed", failure_category: "timed_out", outcome: { message: MESSAGES.timed_out }, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  const patch = { status: "failed", failure_category: "timed_out", outcome: { message: MESSAGES.timed_out, ...(row.outcome?.intent ? { intent: row.outcome.intent } : {}) }, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   const { data } = await supabase.from("reasoner_generation_jobs").update(patch).eq("id", row.id).eq("status", "preparing").select(COLUMNS).maybeSingle();
   return (data as JobRow | null) ?? { ...row, ...(patch as Partial<JobRow>) };
 }
@@ -123,13 +124,13 @@ export async function getLatestReasonerJob(workspaceId: string, clientProfileId:
  * flight for this client (partial unique index) — returns that job and
  * started:false. Only a started job may run the Reasoner.
  */
-export async function startReasonerJob(params: { workspaceId: string; clientProfileId: string; requestedBy: string; title: string }): Promise<{ started: boolean; job: ReasonerJobView }> {
+export async function startReasonerJob(params: { workspaceId: string; clientProfileId: string; requestedBy: string; title: string; intent?: JobIntent }): Promise<{ started: boolean; job: ReasonerJobView }> {
   const supabase = await getSupabaseServerClient();
   const existing = await getLatestReasonerJob(params.workspaceId, params.clientProfileId);
   if (existing?.status === "preparing") return { started: false, job: existing };
   const { data, error } = await supabase
     .from("reasoner_generation_jobs")
-    .insert({ workspace_id: params.workspaceId, client_profile_id: params.clientProfileId, requested_by: params.requestedBy, title: params.title, status: "preparing" })
+    .insert({ workspace_id: params.workspaceId, client_profile_id: params.clientProfileId, requested_by: params.requestedBy, title: params.title, status: "preparing", ...(params.intent ? { outcome: { intent: params.intent } } : {}) })
     .select(COLUMNS)
     .single();
   if (error) {
@@ -141,6 +142,15 @@ export async function startReasonerJob(params: { workspaceId: string; clientProf
     throw new Error(`startReasonerJob failed: ${error.code ?? "insert_error"}`);
   }
   return { started: true, job: toView(data as JobRow) };
+}
+
+/** Gate 4.0C-5 — recent jobs for a client as revision records (idempotency: planning key + superseded draft). */
+export async function listRevisionJobs(workspaceId: string, clientProfileId: string): Promise<RevisionJobRecord[]> {
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase.from("reasoner_generation_jobs").select(COLUMNS).eq("workspace_id", workspaceId).eq("client_profile_id", clientProfileId).order("created_at", { ascending: false }).limit(50);
+  if (error) throw new Error(`listRevisionJobs failed: ${error.code ?? "query_error"}`);
+  const rows = await Promise.all(((data ?? []) as JobRow[]).map(closeIfStale));
+  return rows.map((r) => ({ jobId: r.id, status: r.status, planningKey: r.outcome?.intent?.planningKey ?? null, supersedesVersionId: r.outcome?.intent?.supersedesVersionId ?? null, supersedesJobId: r.outcome?.intent?.supersedesJobId ?? null }));
 }
 
 async function finishJob(jobId: string, patch: JobFinish) {
@@ -167,6 +177,8 @@ export async function runReasonerJob(params: {
   jobId: string;
   loadInput: () => Promise<SynthesisInput>;
   saveDraft: (result: Extract<ReasonerResult, { status: "PLANNED" }>) => Promise<{ versionId: string } | { superseded: true } | { notSaved: string }>;
+  /** Kept on the finished job's outcome (Gate 4.0C-5 idempotency). */
+  intent?: JobIntent;
 }): Promise<void> {
-  await executeReasonerJob({ jobId: params.jobId, nowIso: () => new Date().toISOString(), loadInput: params.loadInput, model: productionReasonerModel, saveDraft: params.saveDraft, finish: (f) => finishJob(params.jobId, f), log: (l) => console.error(l) });
+  await executeReasonerJob({ jobId: params.jobId, nowIso: () => new Date().toISOString(), loadInput: params.loadInput, model: productionReasonerModel, saveDraft: params.saveDraft, finish: (f) => finishJob(params.jobId, params.intent ? { ...f, outcome: { ...f.outcome, intent: params.intent } } : f), log: (l) => console.error(l) });
 }

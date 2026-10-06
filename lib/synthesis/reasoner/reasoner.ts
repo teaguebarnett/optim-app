@@ -26,7 +26,9 @@ import { retrieveEvidence, type EvidencePacket } from "./retrieval.ts";
 import { buildReasoningInput, REASONER_VERSION, type ReasoningInput } from "./input.ts";
 import { parseReasonerOutput, REASONER_PROMPT_VERSION, REASONER_SYSTEM_PROMPT, type ReasonerPlan } from "./contract.ts";
 import { expandReasonerPlan, validateReasonerPlan } from "./expand.ts";
-import { REASONER_RUN_SCHEMA, sha256, type ReasonerAttempt, type ReasonerRun } from "./run.ts";
+import { REASONER_RUN_SCHEMA, sha256, type ReasonerAttempt, type ReasonerRun, type RunPreflight } from "./run.ts";
+import { evaluateAdequacy, fitOf, functionAvailability, PULL_PATTERNS, PUSH_PATTERNS, type AdequacyResult, type FunctionAvailability, type WeekSession } from "./adequacy.ts";
+import { planningState } from "../planning-state.ts";
 
 /** The model boundary the reasoner needs (lib/ai's provider implements it). */
 export interface ReasonerModel {
@@ -37,10 +39,10 @@ export interface ReasonerModel {
 
 export type ReasonerResult = { run: ReasonerRun } & (
   | { status: "DOMAIN_NOT_YET_SUPPORTED"; routing: Extract<DomainRouting, { status: "ROUTED" }>; message: string }
-  | { status: "NEEDS_INPUT"; source: "routing" | "readiness" | "planning" | "model"; missing: MissingInput[]; routing?: DomainRouting; summary?: string }
+  | { status: "NEEDS_INPUT"; source: "routing" | "readiness" | "planning" | "model" | "preflight"; missing: MissingInput[]; routing?: DomainRouting; summary?: string }
   | { status: "PROVIDER_FAILED"; message: string; attempts: number }
   | { status: "REJECTED"; errors: string[]; attempts: number; evidence: EvidencePacket }
-  | { status: "PLANNED"; spec: PlanSpecification; plan: ReasonerPlan; quality: QualityFinding[]; evidence: EvidencePacket; reasoning: ReasoningInput; attempts: number; modelId: string }
+  | { status: "PLANNED"; spec: PlanSpecification; plan: ReasonerPlan; quality: QualityFinding[]; evidence: EvidencePacket; reasoning: ReasoningInput; attempts: number; modelId: string; adequacy?: AdequacyResult }
 );
 
 type ResultBody = ReasonerResult extends infer R ? (R extends unknown ? Omit<R, "run"> : never) : never;
@@ -48,7 +50,13 @@ type ResultBody = ReasonerResult extends infer R ? (R extends unknown ? Omit<R, 
 export const PROVIDER_FAILED_MESSAGE = "OPTIM's reasoner couldn't produce a plan right now. Nothing was changed — try again, or review the deterministic planner's proposal.";
 export const MAX_OUTPUT_TOKENS = 16000;
 
-export async function runFitnessReasoner(params: { input: SynthesisInput; model: ReasonerModel | null; nowIso: string; maxAttempts?: number; runId?: string; onDiagnostic?: (d: { stage: string; detail: string }) => void }): Promise<ReasonerResult> {
+/**
+ * uncertainFit (Gate 4.0C-5): "withhold" (default) — exercises whose constraint fit OPTIM can't establish never enter
+ * synthesis; if one is the ONLY way to train a required target (or is a goal target's exercise), the run stops BEFORE
+ * any model call and asks the coach (preflight). "legacy_allow" reproduces pre-4.0C-5 runs (U offered, coach decides
+ * after generation) — tests and replays of historical drafts only.
+ */
+export async function runFitnessReasoner(params: { input: SynthesisInput; model: ReasonerModel | null; nowIso: string; maxAttempts?: number; runId?: string; uncertainFit?: "withhold" | "legacy_allow"; onDiagnostic?: (d: { stage: string; detail: string }) => void }): Promise<ReasonerResult> {
   const { input } = params;
   const run: ReasonerRun = {
     schema: REASONER_RUN_SCHEMA,
@@ -65,6 +73,7 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     attempts: [],
     result: {},
     totals: { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 },
+    planningState: planningState({ client: input.client, goal: input.goal, constraints: input.constraints, coachMethodVersionId: input.coach?.versionId ?? null, knowledgeVersion: FOUNDATION_KNOWLEDGE_VERSION, exerciseName: (id) => input.knowledge.getExercise(id)?.name ?? id }),
   };
   const finish = (r: ResultBody, result: ReasonerRun["result"]): ReasonerResult => {
     run.status = r.status;
@@ -100,10 +109,39 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     return finish({ status: "NEEDS_INPUT", source: "readiness", missing, routing }, { missing, needsInputSource: "readiness" });
   }
 
-  // 3. Retrieval over the eligible pool only.
+  // 3. Material-uncertainty preflight (Gate 4.0C-5) — deterministic, before any paid call.
   const pool = buildPool(input, method)!;
+  const legacy = params.uncertainFit === "legacy_allow";
+  const fit = (id: string) => fitOf(pool.loadConditions.get(id));
+  const availability: FunctionAvailability[] = functionAvailability(pool.pool, pool.loadConditions).map((f) => (legacy && f.state === "uncertain_only" ? { ...f, state: "available" } : f));
+  const withheld = legacy ? [] : pool.pool.filter((e) => fit(e.id) === "U");
+  const preflight: RunPreflight = { policy: legacy ? "legacy_allow" : "withhold", functions: availability, withheld: withheld.map((e) => e.id), questions: [] };
+  run.preflight = preflight;
+  if (!legacy) {
+    const ask = new Map<string, Set<string>>();
+    for (const f of availability) if (f.state === "uncertain_only") for (const id of f.uncertain) ask.set(id, (ask.get(id) ?? new Set()).add(f.target));
+    // A structured goal target whose own exercise is uncertain: the goal names it, so the coach decides before planning.
+    const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    for (const t of input.goal.performanceTargets) {
+      const ex = input.knowledge.getExercise(t.exercise) ?? input.knowledge.exercises().find((e) => [e.name, ...e.aliases].some((n) => norm(n) === norm(t.exercise)));
+      if (ex && pool.pool.some((p) => p.id === ex.id) && fit(ex.id) === "U") ask.set(ex.id, (ask.get(ex.id) ?? new Set()).add(`goal target ${t.exercise}`));
+    }
+    if (ask.size) {
+      preflight.questions = [...ask].map(([id, serves]) => {
+        const lc = pool.loadConditions.get(id)!.find((c) => c.certainty === "uncertain")!;
+        return { exerciseId: id, exerciseName: input.knowledge.getExercise(id)?.name ?? id, serves: [...serves], restriction: `nothing needing ${lc.demand.replace(/_/g, " ")} at ${lc.limit} or above`, conditions: lc.conditions };
+      });
+      const missing: MissingInput[] = preflight.questions.map((q) => ({ fact: `exercise_fit.${q.exerciseId}`, why: `OPTIM can't confirm ${q.exerciseName} stays within the client's confirmed restriction (${q.restriction}), and it's the only way left to train ${q.serves.map((x) => x.replace(/_/g, " ")).join(", ")}. Decide whether it fits under these conditions — ${q.conditions.join("; ")} — or exclude it.`, blockedDecision: `Exercise selection for ${q.serves.map((x) => x.replace(/_/g, " ")).join(", ")}.`, providedBy: "coach" }));
+      return finish({ status: "NEEDS_INPUT", source: "preflight", missing, routing, summary: "Before OPTIM plans, confirm whether these exercises fit the client's restrictions." }, { missing, needsInputSource: "preflight" });
+    }
+  }
+  const offered = pool.pool.filter((e) => !withheld.includes(e));
+  const functions = { required: availability.map((f) => f.target), infeasible: availability.filter((f) => f.state === "infeasible").map((f) => ({ target: f.target, why: "No eligible exercise trains it under the current restrictions and equipment." })) };
+  const pushPullFeasible = { push: offered.some((e) => e.patterns.some((p) => PUSH_PATTERNS.includes(p))), pull: offered.some((e) => e.patterns.some((p) => PULL_PATTERNS.includes(p))) };
+
+  // 4. Retrieval over the offered pool only.
   const emphasis = interpretGoal(input.goal);
-  const evidence = retrieveEvidence({ knowledge: input.knowledge, domain: routing.primary, emphasis: routing.resistanceEmphasis ?? "general", secondary: emphasis?.secondary ?? null, candidates: pool.pool });
+  const evidence = retrieveEvidence({ knowledge: input.knowledge, domain: routing.primary, emphasis: routing.resistanceEmphasis ?? "general", secondary: emphasis?.secondary ?? null, candidates: offered });
   run.evidence = evidence;
   run.retrievedKnowledge = evidence.retrievedRefs.map((ref) => ({ ref, version: input.knowledge.ref(ref.split("#")[0])?.version ?? null }));
   if (evidence.exercises.length < 2) {
@@ -111,11 +149,11 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     return finish({ status: "NEEDS_INPUT", source: "planning", missing, routing }, { missing, needsInputSource: "planning" });
   }
   const unresolved = [...pool.unknownApparatus.entries()].map(([a, ids]) => ({ fact: `client.apparatus.${a}`, why: `Unknown whether a ${a.replace(/_/g, " ")} is available; ${ids.length} exercise(s) needing it were left out.` }));
-  const { reasoning, allowed, contextOnly, constraintIdMap } = buildReasoningInput({ input, method, routing, secondary: emphasis?.secondary ?? null, evidence, promptVersion: REASONER_PROMPT_VERSION, unresolved, pool });
+  const { reasoning, allowed, contextOnly, constraintIdMap } = buildReasoningInput({ input, method, routing, secondary: emphasis?.secondary ?? null, evidence, promptVersion: REASONER_PROMPT_VERSION, unresolved, pool, functions });
   run.input = reasoning;
   run.hashes.input = sha256(reasoning);
 
-  // 4. Model + 5. deterministic validation (one repair attempt).
+  // 5. Model + 6. deterministic validation and current-state adequacy (one repair attempt).
   if (!params.model) return finish({ status: "PROVIDER_FAILED", message: PROVIDER_FAILED_MESSAGE, attempts: 0 }, { message: PROVIDER_FAILED_MESSAGE });
   const maxAttempts = params.maxAttempts ?? 2;
   let feedback: string[] = [];
@@ -168,17 +206,27 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     const plan = parsed.output.plan;
     const spec = expandReasonerPlan({ plan, reasoning, contextOnly, constraintIdMap, method, input, model: { provider: params.model.provider, modelId: params.model.modelId, promptVersion: REASONER_PROMPT_VERSION, attempts: attempt }, nowIso: params.nowIso, allowed });
     const v = validateReasonerPlan({ plan, spec, reasoning, allowed, method, input });
-    if (v.ok) {
+    // Gate 4.0C-5 — current-state adequacy: deficiencies are validator feedback while attempts remain; on the last
+    // attempt they are recorded and block approval in review (never presented as review-ready).
+    const adequacy = v.ok ? evaluateAdequacy({ week: weekFromPlan(plan), knowledge: input.knowledge, functions: availability, declared: plan.coverage ?? null, checkSessions: true, pushPullFeasible }) : null;
+    const deficiencies = adequacy?.findings.filter((f) => f.kind === "deficiency").map((f) => f.message) ?? [];
+    if (v.ok && (!deficiencies.length || attempt === maxAttempts)) {
       const unattributed = (["frequency", "schedule", "weeklyStructure", "progression"] as const).filter((k) => spec[k]?.inputs.includes("reasoner:unattributed"));
       const quality = [...v.quality, ...unattributed.map((k): QualityFinding => ({ code: "unattributed_decision", severity: "warning", message: `The ${k} decision didn't cite the coach rules, client facts or evidence it used.` }))];
       spec.quality = quality;
-      return finish({ status: "PLANNED", spec, plan, quality, evidence, reasoning, attempts: attempt, modelId: params.model.modelId }, { plan, spec, quality });
+      if (deficiencies.length) rec.validationErrors = deficiencies;
+      return finish({ status: "PLANNED", spec, plan, quality, evidence, reasoning, attempts: attempt, modelId: params.model.modelId, adequacy: adequacy! }, { plan, spec, quality, adequacy: adequacy! });
     }
-    rec.validationErrors = v.errors;
-    feedback = v.errors;
+    rec.validationErrors = v.ok ? deficiencies : v.errors;
+    feedback = v.ok ? deficiencies : v.errors;
     params.onDiagnostic?.({ stage: "validation", detail: v.errors.join("; ").slice(0, 300) });
   }
   return finish({ status: "REJECTED", errors: feedback, attempts: maxAttempts, evidence }, { errors: feedback });
+}
+
+/** One training week as planned (listed sets), for adequacy. */
+function weekFromPlan(plan: ReasonerPlan): WeekSession[] {
+  return plan.sessions.map((s) => ({ day: s.day, title: s.title, targets: s.targets ?? null, items: s.exercises.map((e) => ({ exerciseId: e.exerciseId, name: e.exerciseId, sets: e.sets })) }));
 }
 
 /** Re-renders a saved run exactly as reviewed — never calls a model. */
@@ -186,9 +234,9 @@ export function replayRun(run: ReasonerRun): ReasonerResult {
   const r = run.result;
   switch (run.status) {
     case "PLANNED":
-      return { run, status: "PLANNED", spec: r.spec!, plan: r.plan!, quality: r.quality ?? [], evidence: run.evidence!, reasoning: run.input!, attempts: run.attempts.length, modelId: run.versions.model?.modelId ?? "" };
+      return { run, status: "PLANNED", spec: r.spec!, plan: r.plan!, quality: r.quality ?? [], evidence: run.evidence!, reasoning: run.input!, attempts: run.attempts.length, modelId: run.versions.model?.modelId ?? "", ...(r.adequacy ? { adequacy: r.adequacy } : {}) };
     case "NEEDS_INPUT":
-      return { run, status: "NEEDS_INPUT", source: (r.needsInputSource as "routing" | "readiness" | "planning" | "model") ?? "readiness", missing: r.missing ?? [], routing: run.routing, summary: r.summary };
+      return { run, status: "NEEDS_INPUT", source: (r.needsInputSource as "routing" | "readiness" | "planning" | "model" | "preflight") ?? "readiness", missing: r.missing ?? [], routing: run.routing, summary: r.summary };
     case "DOMAIN_NOT_YET_SUPPORTED":
       return { run, status: "DOMAIN_NOT_YET_SUPPORTED", routing: run.routing as Extract<DomainRouting, { status: "ROUTED" }>, message: r.message ?? "" };
     case "REJECTED":

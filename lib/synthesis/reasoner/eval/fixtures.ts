@@ -97,7 +97,8 @@ const rangeOf = (v: unknown) => {
 
 /** The v2 wire shape (what a model returns) — loose on purpose so tests can corrupt any field. */
 export interface WireExercise { id: string; role: string; sets: number; reps: number[]; rir?: number[]; rest?: number[]; note?: string }
-export interface WireSession { day: string; title: string; purpose: string; exercises: WireExercise[] }
+export interface WireSession { day: string; title: string; purpose: string; targets?: string[]; exercises: WireExercise[] }
+export interface WireCoverage { target: string; status: string; cause?: string; why?: string }
 export interface WireRolePlan { zones: string[]; rir?: number; sets?: number; progress: string }
 export interface WirePhase { weeks: number[]; focus: string; intent: string; main: WireRolePlan; accessory: WireRolePlan }
 export interface WirePlan {
@@ -114,6 +115,7 @@ export interface WirePlan {
   constraintsApplied: Array<{ id: string; how: string }>;
   conflicts?: Array<{ rule: string; issue: string }>;
   decisions: Array<{ topic: string; decision: string; because: string; coach: string[]; client: string[]; evidence: string[] }>;
+  coverage?: WireCoverage[];
 }
 
 export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void): { status: "PLAN"; plan: WirePlan } {
@@ -162,7 +164,43 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
     decisions: (["frequency", "structure", "schedule", "exercise_selection", "prescription", "effort", "progression", "recovery", "duration"] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", coach: [coachKey], client: factRef ? [factRef] : [], evidence: claimRef ? [claimRef] : [] })),
   };
   tweak?.(plan);
+  finalizeDeclarations(ri, plan);
   return { status: "PLAN", plan };
+}
+
+/**
+ * Gate 4.0C-5 — fills session targets and coverage HONESTLY from the plan's actual exercises (after any tweak),
+ * unless a test set them explicitly: targets = the session's most-trained primary muscles; coverage = trained when
+ * a target gets direct sets, otherwise not_trained (infeasible → available_exercises); an unbalanced push/pull week
+ * declares its lower side reduced.
+ */
+export function finalizeDeclarations(ri: ReasoningInput, plan: WirePlan) {
+  const rows = new Map(ri.exercises.map((r) => r.split("|")).map((r) => [r[0], r]));
+  const primary = (id: string) => (rows.get(id)?.[3] ?? "").split(",").filter(Boolean);
+  const patterns = (id: string) => (rows.get(id)?.[2] ?? "").split(",").filter(Boolean);
+  for (const s of plan.sessions) {
+    if (s.targets) continue;
+    const by = new Map<string, number>();
+    for (const e of s.exercises) for (const m of primary(e.id)) by.set(m, (by.get(m) ?? 0) + e.sets);
+    s.targets = [...by].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 4).map(([m]) => m);
+    if (!s.targets.length) s.targets = ["chest"];
+  }
+  if (plan.coverage || !ri.functions) return;
+  const sets = new Map<string, number>();
+  for (const s of plan.sessions) for (const e of s.exercises) for (const m of primary(e.id)) sets.set(m, (sets.get(m) ?? 0) + e.sets);
+  const infeasible = new Set(ri.functions.infeasible.map((f) => f.target));
+  plan.coverage = ri.functions.required.map((t) => (infeasible.has(t) ? { target: t, status: "not_trained", cause: "available_exercises", why: "Scripted: no eligible exercise trains it." } : (sets.get(t) ?? 0) > 0 ? { target: t, status: "trained" } : { target: t, status: "not_trained", cause: "goal_priority", why: "Scripted: not selected this block." }));
+  const side = (ps: string[]) => plan.sessions.reduce((t, s) => t + s.exercises.reduce((u, e) => u + (patterns(e.id).some((p) => ps.includes(p)) ? e.sets : 0), 0), 0);
+  const push = side(["horizontal_push", "vertical_push"]);
+  const pull = side(["horizontal_pull", "vertical_pull"]);
+  if (push + pull > 0 && (Math.max(push, pull) / Math.max(1, Math.min(push, pull)) > 1.5 || Math.min(push, pull) === 0)) {
+    const lower = pull < push ? ["lats", "mid_back"] : ["chest"];
+    for (const c of plan.coverage) if (lower.includes(c.target) && c.status === "trained") Object.assign(c, { status: "reduced", cause: "goal_priority", why: "Scripted: lower side of the push/pull balance this block." });
+    if (!plan.coverage.some((c) => lower.includes(c.target) && c.status !== "trained")) {
+      const c = plan.coverage.find((x) => lower.includes(x.target));
+      if (c) Object.assign(c, { status: "reduced", cause: "goal_priority", why: "Scripted: lower side of the push/pull balance this block." });
+    }
+  }
 }
 
 /** A fake model (ReasonerModel): calls `respond` with the parsed reasoning input; counts calls. */

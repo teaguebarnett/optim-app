@@ -9,6 +9,7 @@ import type { ConstraintTag } from "../constraints.ts";
 import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import type { InterpretationProposal } from "./interpret.ts";
 import { dimensionOf, resolveRestrictionOption, subsumes } from "./vocabulary.ts";
+import { isExerciseFitDecisionRecord, type ExerciseFitDecisionRecord } from "./exercise-decisions.ts";
 
 export interface ConfirmedRestriction {
   optionId: string;
@@ -38,6 +39,9 @@ export interface StoredStructuredLimitations {
   };
   confirmedAtIso: string;
   confirmedBy: string;
+  /** Gate 4.0C-5 — the coach's per-exercise fit decisions (exercise-decisions.ts), append-only. Carried forward
+   * unchanged when the limitation is re-confirmed — re-confirming never silently drops one. */
+  exerciseDecisions?: ExerciseFitDecisionRecord[];
 }
 
 export interface ConfirmationInput {
@@ -51,6 +55,8 @@ export interface ConfirmationInput {
   noExerciseRestrictions: boolean;
   coachUserId: string;
   nowIso: string;
+  /** Exercise decisions from the record being replaced (carried forward verbatim). */
+  carriedExerciseDecisions?: ExerciseFitDecisionRecord[];
 }
 
 export type ConfirmationResult = { ok: true; record: StoredStructuredLimitations } | { ok: false; errors: string[] };
@@ -122,6 +128,7 @@ export function buildConfirmation(input: ConfirmationInput, knowledge: FitnessKn
       },
       confirmedAtIso: input.nowIso,
       confirmedBy: input.coachUserId,
+      ...(input.carriedExerciseDecisions?.length ? { exerciseDecisions: input.carriedExerciseDecisions } : {}),
     },
   };
 }
@@ -138,6 +145,10 @@ export function parseStoredLimitations(raw: unknown, knowledge: FitnessKnowledge
     if (!opt || JSON.stringify(opt.tags) !== JSON.stringify(x.tags)) return null;
   }
   if (!r.noExerciseRestrictions && r.restrictions.length === 0) return null;
+  if (r.exerciseDecisions !== undefined) {
+    if (!Array.isArray(r.exerciseDecisions)) return null;
+    for (const d of r.exerciseDecisions) if (!isExerciseFitDecisionRecord(d) || !knowledge.getExercise(d.exerciseId)) return null;
+  }
   return r as StoredStructuredLimitations;
 }
 

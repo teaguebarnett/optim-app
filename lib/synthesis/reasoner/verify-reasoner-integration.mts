@@ -222,7 +222,7 @@ async function withUncertain() {
   const put = (p: WirePlan) => {
     for (const i of [0, 1]) p.sessions[i].exercises[2] = { id: "exercise.lat_pulldown", role: "accessory", sets: 2, reps: [8, 12], rir: [2, 3], note: "Only vertical pull; U, flagged for coach review." };
   };
-  const r = await runFitnessReasoner({ input: scenarioInput({ restrictions: bracingOnly() }), model: fakeModel((ri) => scriptedOutput(ri, put)), nowIso: NOW, runId: "job-1" });
+  const r = await runFitnessReasoner({ input: scenarioInput({ restrictions: bracingOnly() }), model: fakeModel((ri) => scriptedOutput(ri, put)), nowIso: NOW, runId: "job-1", uncertainFit: "legacy_allow" });
   assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : r.status);
   return r as Extract<ReasonerResult, { status: "PLANNED" }>;
 }

@@ -30,6 +30,7 @@ import {
   getPendingProgramProposal,
   getProgramProposalVersion,
   getOriginalProposalVersion,
+  getGeneratedVersionForJob,
   rejectProgramProposalVersion,
   archiveSiblingDraftVersions,
   createDraftNutritionVersion,
@@ -45,7 +46,7 @@ import { extractClientProgrammingProfile } from "../../lib/coach/programming-pro
 import { resolveCoachIntelligenceForClient } from "../../lib/production/coach-brain";
 import { draftMethodVersionIdOf, methodDraftStaleness } from "../../lib/coach/coach-brain";
 import { resolveProgramLengthHint } from "../../lib/coach/method-resolution";
-import { evaluateGenerationPrerequisites, buildGenerationInputs, hasVerifiedGenerationInputs, checkProposalApproval, isUnverifiedFreshProposal, GenerationPrerequisitesError, type MissingPrerequisite } from "../../lib/coach/generation-prerequisites";
+import { buildGenerationInputs, hasVerifiedGenerationInputs, checkProposalApproval, isUnverifiedFreshProposal, GenerationPrerequisitesError, type MissingPrerequisite } from "../../lib/coach/generation-prerequisites";
 import { resolveHealthReviewRecordForClient } from "../../lib/production/pain-safety";
 import { resolveApplicableCoachRules, getLearnedRuleProvenance, type LearnedRuleProvenance } from "../../lib/production/rule-resolution";
 import { analyzeClientStateForClient, resolveEvidenceDetails } from "../../lib/production/client-state-evidence";
@@ -87,13 +88,13 @@ import type { ClientAssignedProgram } from "../../lib/types";
 import type { UniversalTrainingProgramContent } from "../../lib/training/types";
 import { summarizeLegacyProposal, type LegacyProposalSummary } from "../../lib/coach/legacy-proposal-summary";
 import type { DayOfWeek } from "../../lib/types";
-import { after } from "next/server";
 import { loadSynthesisInputForClient } from "../../lib/production/synthesis";
-import { getLatestReasonerJob, getReasonerRunForJob, isReasonerProposalEnabled, isRepairReasoningEnabled, productionRepairModel, runReasonerJob, startReasonerJob } from "../../lib/production/reasoner-proposals";
+import { getLatestReasonerJob, getReasonerRunForJob, isReasonerProposalEnabled, isRepairReasoningEnabled, productionRepairModel } from "../../lib/production/reasoner-proposals";
+import { planningContextFor, queueAfterPreflightAnswers, queueRevisionIfMaterial, resolveGenerationContext, startReasonerGeneration, type RevisionQueueResult } from "../../lib/production/reasoner-lifecycle";
+import { recordExerciseFitDecisions, type ExerciseFitDecisionInput } from "../../lib/production/structured-limitations";
 import { applyReplacement, checkReplacement, defaultReplacement, parseRepairOutput, REPAIR_PROMPT_VERSION, REPAIR_SYSTEM_PROMPT, repairInput, validateRepair, type Replacement } from "../../lib/synthesis/reasoner/edit-impact";
 import { methodFor } from "../../lib/synthesis/planners/resistance/planner";
 import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, removeExerciseEverywhere, supportedSetupNames, type ReasonerReviewModel } from "../../lib/synthesis/reasoner/review-gate";
-import { reasonerResultToProgramContent } from "../../lib/synthesis/reasoner/to-program";
 import { FOUNDATION_KNOWLEDGE } from "../../lib/synthesis/knowledge/registry";
 import type { ReasonerJobView } from "../../lib/synthesis/reasoner/proposal-job";
 
@@ -331,22 +332,7 @@ async function requireAssignedCoachAuthority(workspaceId: string, clientProfileI
  * workspace playbook and never the acting coach's own method. No confirmed
  * Brain → no method → generation is refused. Callers authorize the client
  * first (requireAssignedCoachAuthority). */
-async function resolveGenerationContext(workspaceId: string, clientProfileId: string) {
-  const [intelligence, onboarding, healthReview] = await Promise.all([
-    resolveCoachIntelligenceForClient({ workspaceId, clientProfileId }),
-    getOnboardingProgressForClient(clientProfileId),
-    resolveHealthReviewRecordForClient(clientProfileId, workspaceId),
-  ]);
-  const method = intelligence.method;
-  const intake = extractClientProgrammingProfile(onboarding, healthReview);
-  const prerequisites = evaluateGenerationPrerequisites({
-    playbook: method ? { version: method.version, operatingModel: method.operatingModel } : null,
-    onboarding,
-    intake,
-    clientProfileId,
-  });
-  return { intelligence, method, onboarding, prerequisites };
-}
+// resolveGenerationContext lives in lib/production/reasoner-lifecycle.ts (shared with the revision lifecycle).
 
 /**
  * Phase 5/6B's real generation pipeline (Coach Playbook + real onboarding +
@@ -490,9 +476,20 @@ async function saveProposalDraft(params: { workspaceId: string; clientProfileId:
 async function loadDraftAndOriginal(workspaceId: string, versionId: string, actionName: string) {
   const current = await getProgramProposalVersion(workspaceId, versionId);
   if (!current || current.status !== "draft") throw new Error(`${actionName}: no pending draft proposal at that version`);
-  const original = await getOriginalProposalVersion(workspaceId, current.programId);
+  const original = await originalForDraft(workspaceId, current);
   if (!original) throw new Error(`${actionName}: original proposal version missing`);
   return { current, original };
+}
+
+/** The immutable "as generated" version a draft's edits are measured from: for a Reasoner draft the version its
+ * own job generated (a revision is a later version of the same program); otherwise version 1. */
+async function originalForDraft(workspaceId: string, draft: { programId: string; content: UniversalTrainingProgramContent }) {
+  const jobId = draft.content.reasonerProvenance?.jobId;
+  if (jobId && !draft.content.clientFacingFrom) {
+    const generated = await getGeneratedVersionForJob(workspaceId, draft.programId, jobId);
+    if (generated) return generated;
+  }
+  return getOriginalProposalVersion(workspaceId, draft.programId);
 }
 
 /** Step 1 of the Phase 8C lifecycle: GENERATE a real, reviewable proposal.
@@ -548,46 +545,10 @@ export async function requestReasonerProposalAction(params: { workspaceId: strin
   if (!prerequisites.ready) return { ok: false, reason: "prerequisites", message: "Before OPTIM can prepare a proposal:", missing: prerequisites.missing };
   if (await getPendingProgramProposal(params.workspaceId, params.clientProfileId)) return { ok: false, reason: "pending_proposal", message: "This client already has a pending proposal. Approve or reject it before preparing another." };
 
-  const { started, job } = await startReasonerJob({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, requestedBy: ctx.userId, title });
-  if (started) {
-    // Runs after the response is sent (the coach never waits ~100 s on a request);
-    // bounded by this route's maxDuration. A run that dies is closed as timed out on the next read.
-    after(() =>
-      runReasonerJob({
-        jobId: job.jobId,
-        loadInput: () => loadSynthesisInputForClient(params.clientProfileId),
-        saveDraft: (result) => saveReasonerDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, title, jobId: job.jobId, result }),
-      })
-    );
-  }
+  // Gate 4.0C-5 — the job records the planning state it was started for (a result solved under another state is never saved).
+  const { state } = await planningContextFor(params.clientProfileId);
+  const { started, job } = await startReasonerGeneration({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, title, intent: { planningKey: state.key, trigger: "initial" } });
   return { ok: true, started, job };
-}
-
-/** Persists a PLANNED Reasoner result as a DRAFT through the existing lifecycle, re-checking
- * everything that could have changed while the Reasoner ran. Never publishes or assigns. */
-async function saveReasonerDraft(params: { workspaceId: string; clientProfileId: string; coachId: string; title: string; jobId: string; result: Parameters<typeof reasonerResultToProgramContent>[0]["result"] }): Promise<{ versionId: string } | { superseded: true } | { notSaved: string }> {
-  if (await getPendingProgramProposal(params.workspaceId, params.clientProfileId)) return { superseded: true };
-  const { method, onboarding, prerequisites } = await resolveGenerationContext(params.workspaceId, params.clientProfileId);
-  if (!prerequisites.ready) return { notSaved: `The proposal wasn't saved because something changed while OPTIM was working: ${prerequisites.missing.map((m) => m.message).join(" ")}` };
-  // The Reasoner must have planned under the method that is active right now.
-  if (params.result.run.versions.coachMethod?.versionId !== method!.versionId) return { notSaved: "The proposal wasn't saved because your coaching method changed while OPTIM was working. Prepare a new one." };
-  const nowIso = new Date().toISOString();
-  const plan = params.result.plan;
-  const generationInputs = buildGenerationInputs({
-    playbookVersion: method!.version,
-    methodVersionId: method!.versionId,
-    operatingModel: method!.operatingModel,
-    onboarding: onboarding!,
-    profile: prerequisites.profile,
-    assumptions: prerequisites.assumptions,
-    nowIso,
-    rationale: plan.goalEmphasis.rationale,
-    whyThisPlan: [plan.frequency.rationale, plan.architecture.rationale, plan.progression.rationale].filter(Boolean),
-  });
-  const content = reasonerResultToProgramContent({ result: params.result, knowledge: FOUNDATION_KNOWLEDGE, programId: `program-${params.jobId}`, workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: params.coachId, title: params.title, jobId: params.jobId, generationInputs, nowIso });
-  validateUniversalTrainingProgramContent(content);
-  const { versionId } = await createDraftProgramVersion({ workspaceId: params.workspaceId, title: params.title, content, proposedForClientProfileId: params.clientProfileId });
-  return { versionId };
 }
 
 export interface ProgramProposalReviewView {
@@ -634,6 +595,9 @@ export interface ProgramProposalReviewView {
   reasonerReview: ReasonerReviewModel | null;
   /** Whether OPTIM may make a (paid) repair-reasoning call for this draft — off unless enabled server-side. */
   repairReasoningEnabled: boolean;
+  /** Gate 4.0C-5 — the latest Reasoner job when it concerns this draft's lineage (a revision preparing / failed /
+   * needing input), so the review can show it. */
+  revisionJob: ReasonerJobView | null;
 }
 
 /** Step 2: the coach's review surface reads this. Returns null when there
@@ -651,8 +615,12 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
   const avoidedTerms = profile && methodModel ? avoidedTermsForProfile(profile, methodModel) : methodModel ? [...methodModel.programArchitecture.exercisesAvoided] : [];
   const staleness = methodDraftStaleness(draftMethodVersionIdOf(pending.content), intelligence.method?.versionId ?? null);
 
-  const original = pending.versionNumber > 1 ? await getOriginalProposalVersion(params.workspaceId, pending.programId) : pending;
+  // Gate 4.0C-5 — a revision is the next version of the same program: "the original" is the version ITS job generated.
+  const original = await originalForDraft(params.workspaceId, pending);
   const changesSummary = original ? diffProgramProposal(original.content, pending.content).map(describeProgramDiffEntry) : [];
+  const rp = pending.content.reasonerProvenance;
+  const latestJob = rp ? await getLatestReasonerJob(params.workspaceId, params.clientProfileId).catch(() => null) : null;
+  const revisionJob = latestJob && latestJob.outcome.intent?.supersedesJobId === rp?.jobId && latestJob.programVersionId === null ? latestJob : null;
 
   // Phase 10A — resolved from THIS proposal's own frozen ids, never
   // re-derived from current rule state (spec section 18/41). A failure
@@ -667,7 +635,7 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
     versionId: pending.versionId,
     programId: pending.programId,
     versionNumber: pending.versionNumber,
-    wasEdited: pending.versionNumber > 1,
+    wasEdited: !!original && original.versionId !== pending.versionId,
     content: pending.content,
     restrictionWarnings: findRestrictionConflicts(pending.content, avoidedTerms),
     changesSummary,
@@ -682,10 +650,11 @@ export async function getProgramProposalForReviewAction(params: { workspaceId: s
           knowledge: FOUNDATION_KNOWLEDGE,
           original: original?.content ?? null,
           // A read failure shows the draft against its own snapshot; approval re-loads and fails closed.
-          currentConstraints: await currentConstraintsFor(params.clientProfileId).catch(() => null),
+          current: await planningContextFor(params.clientProfileId).then((c) => c.current).catch(() => null),
         })
       : null,
     repairReasoningEnabled: !!pending.content.reasonerProvenance && isRepairReasoningEnabled(),
+    revisionJob,
   };
 }
 
@@ -913,7 +882,7 @@ export async function resolveReasonerFitDecisionAction(params: { workspaceId: st
   if (!pending || pending.versionId !== current.versionId) throw new Error("This proposal changed since you opened it — refresh and try again.");
   const rp = current.content.reasonerProvenance;
   if (!rp) throw new Error("resolveReasonerFitDecisionAction: not a Reasoner proposal");
-  const review = reasonerReviewModel({ content: current.content, run: await getReasonerRunForJob(params.workspaceId, rp.jobId), knowledge: FOUNDATION_KNOWLEDGE, currentConstraints: await currentConstraintsFor(params.clientProfileId) });
+  const review = reasonerReviewModel({ content: current.content, run: await getReasonerRunForJob(params.workspaceId, rp.jobId), knowledge: FOUNDATION_KNOWLEDGE, current: (await planningContextFor(params.clientProfileId)).current });
   const decision = review.decisions.find((d) => d.key === params.decisionKey);
   if (!decision || decision.status !== "unresolved") throw new Error("That decision is already resolved.");
   // Confirmed restrictions are authoritative: an exercise that conflicts with them can't be kept — remove or replace it
@@ -925,6 +894,12 @@ export async function resolveReasonerFitDecisionAction(params: { workspaceId: st
     if (!removed.ok) throw new Error(removed.message);
     next = removed.content;
   }
+  // Gate 4.0C-5 — the decision is AUTHORITATIVE planning state first (an exclusion, or a clearance under exactly
+  // these conditions), so no future proposal re-decides it; custom exercises (not in knowledge) stay draft-level.
+  if (decision.fit !== "unverifiable") {
+    const recorded = await recordExerciseFitDecisions({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, decisions: [{ exerciseId: decision.exerciseId, verdict: params.resolution === "remove" ? "excluded" : "cleared", source: { kind: "proposal_review", jobId: rp.jobId, versionId: current.versionId, decisionKey: decision.key } }] });
+    if (!recorded.ok) throw new Error(recorded.errors.join(" "));
+  }
   const nowIso = new Date().toISOString();
   next = {
     ...next,
@@ -932,14 +907,87 @@ export async function resolveReasonerFitDecisionAction(params: { workspaceId: st
     updatedAtIso: nowIso,
   };
   const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: current.programId, content: current.content, versionId: current.versionId }, nextContent: next });
+  // The coach's explicit decision authorizes ONE revision if it supersedes the draft (e.g. removing an exercise the
+  // plan was built around left it short). A removal the plan absorbs stays a local edit.
+  if (params.resolution === "remove") await queueRevisionQuietly({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, trigger: "fit_decision" });
   return { versionId: saved.versionId };
 }
 
-/** Gate 4.0C-4 — the CURRENT authoritative ConstraintSet for a client (re-derived from the confirmed record now,
- * never from the draft's generation snapshot). */
-async function currentConstraintsFor(clientProfileId: string) {
-  return (await loadSynthesisInputForClient(clientProfileId)).constraints;
+/** Never lets a revision-queue problem undo the coach's (already saved) decision. */
+async function queueRevisionQuietly(p: Parameters<typeof queueRevisionIfMaterial>[0]): Promise<RevisionQueueResult | null> {
+  try {
+    return await queueRevisionIfMaterial(p);
+  } catch (err) {
+    console.error(`queueRevisionIfMaterial failed (decision already saved): ${err instanceof Error ? err.name : "unknown"}`);
+    return null;
+  }
 }
+
+/** Gate 4.0C-5 — confirms a draft-only (pre-4.0C-5) fit decision as authoritative planning state: "removed" becomes
+ * a confirmed exclusion, "kept under conditions" a clearance. An explicit coach confirmation — if it supersedes the
+ * draft, ONE revision is prepared from the current state. Nothing is approved or published. */
+export async function confirmDraftFitDecisionAction(params: { workspaceId: string; clientProfileId: string; versionId: string; decisionKey: string }): Promise<{ revision: "queued" | "not_needed" | "already_prepared" | "in_flight" | "unavailable" }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "confirmDraftFitDecisionAction");
+  const pending = await getPendingProgramProposal(params.workspaceId, params.clientProfileId);
+  if (!pending || pending.versionId !== current.versionId) throw new Error("This proposal changed since you opened it — refresh and try again.");
+  const rp = current.content.reasonerProvenance;
+  if (!rp) throw new Error("confirmDraftFitDecisionAction: not a Reasoner proposal");
+  const review = reasonerReviewModel({ content: current.content, run: await getReasonerRunForJob(params.workspaceId, rp.jobId), knowledge: FOUNDATION_KNOWLEDGE, current: (await planningContextFor(params.clientProfileId)).current });
+  const decision = review.decisions.find((d) => d.key === params.decisionKey);
+  if (!decision || decision.authoritative || (decision.status !== "removed" && decision.status !== "accepted_with_conditions") || decision.fit === "unverifiable") throw new Error("That decision doesn't need confirming.");
+  const recorded = await recordExerciseFitDecisions({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, decisions: [{ exerciseId: decision.exerciseId, verdict: decision.status === "removed" ? "excluded" : "cleared", source: { kind: "legacy_draft_decision", jobId: rp.jobId, versionId: current.versionId, decisionKey: decision.key } }] });
+  if (!recorded.ok) throw new Error(recorded.errors.join(" "));
+  return { revision: revisionOutcome(await queueRevisionQuietly({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, trigger: "fit_decision" })) };
+}
+
+const revisionOutcome = (r: RevisionQueueResult | null): "queued" | "not_needed" | "already_prepared" | "in_flight" | "unavailable" => (!r ? "unavailable" : r.queued ? "queued" : r.reason === "already_prepared" || r.reason === "already_attempted" ? "already_prepared" : r.reason === "in_flight" ? "in_flight" : r.reason === "not_material" ? "not_needed" : "unavailable");
+
+/** Gate 4.0C-5 — the coach's explicit fit decisions about specific exercises (preflight questions, or exercises
+ * OPTIM withheld as uncertain). Answering a preflight authorizes ONE proposal for the new state; clearing a withheld
+ * exercise only makes a better plan possible (the coach asks for the revision explicitly). */
+export async function recordExerciseFitDecisionsAction(params: { workspaceId: string; clientProfileId: string; context: "preflight" | "withheld"; decisions: Array<{ exerciseId: string; verdict: "excluded" | "cleared" }> }): Promise<{ ok: true; generation: "queued" | "not_needed" } | { ok: false; errors: string[] }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const decisions: ExerciseFitDecisionInput[] = params.decisions.map((d) => ({ exerciseId: d.exerciseId, verdict: d.verdict === "excluded" ? "excluded" : "cleared", source: { kind: params.context === "preflight" ? "preflight" : "proposal_review" } }));
+  const recorded = await recordExerciseFitDecisions({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, decisions });
+  if (!recorded.ok) return recorded;
+  if (params.context !== "preflight") return { ok: true, generation: "not_needed" };
+  try {
+    const q = await queueAfterPreflightAnswers({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId });
+    return { ok: true, generation: q.queued ? "queued" : "not_needed" };
+  } catch (err) {
+    console.error(`queueAfterPreflightAnswers failed (decisions already saved): ${err instanceof Error ? err.name : "unknown"}`);
+    return { ok: true, generation: "not_needed" };
+  }
+}
+
+/** Gate 4.0C-5 — the coach explicitly asks for a revision of a superseded (or improvable) draft: ONE Reasoner call
+ * from the current state. Never repeats while one is preparing or after one is ready for this state. */
+export async function requestRevisionAction(params: { workspaceId: string; clientProfileId: string }): Promise<{ revision: "queued" | "not_needed" | "already_prepared" | "in_flight" | "unavailable" }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  return { revision: revisionOutcome(await queueRevisionIfMaterial({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, trigger: "coach_requested" })) };
+}
+
+/** Gate 4.0C-5 — the coach explicitly accepts the program's current-state limitations/gaps (the exact set shown).
+ * Persisted on a new draft version; reopens if the findings change. */
+export async function acceptPlanAdequacyAction(params: { workspaceId: string; clientProfileId: string; versionId: string; decisionKey: string }): Promise<{ versionId: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const { current, original } = await loadDraftAndOriginal(params.workspaceId, params.versionId, "acceptPlanAdequacyAction");
+  const pending = await getPendingProgramProposal(params.workspaceId, params.clientProfileId);
+  if (!pending || pending.versionId !== current.versionId) throw new Error("This proposal changed since you opened it — refresh and try again.");
+  const rp = current.content.reasonerProvenance;
+  if (!rp) throw new Error("acceptPlanAdequacyAction: not a Reasoner proposal");
+  const review = reasonerReviewModel({ content: current.content, run: await getReasonerRunForJob(params.workspaceId, rp.jobId), knowledge: FOUNDATION_KNOWLEDGE, original: original.content, current: (await planningContextFor(params.clientProfileId)).current });
+  const a = review.adequacy;
+  if (!a || a.key !== params.decisionKey) throw new Error("That decision no longer applies — refresh to see the current state.");
+  if (a.status !== "unresolved") throw new Error("That decision is already resolved.");
+  if (review.lifecycle?.status === "superseded") throw new Error("This proposal is superseded by the client's current state — review the revision instead.");
+  const nowIso = new Date().toISOString();
+  const next = { ...current.content, reasonerProvenance: { ...rp, decisionResolutions: [...(rp.decisionResolutions ?? []), { key: a.key, exerciseId: "", exerciseName: "", resolution: "accepted_limitation" as const, adequacySignature: a.signature, limitations: [...a.limitations, ...a.deficiencies].map((f) => f.message), conditions: [], resolvedBy: ctx.userId, resolvedAtIso: nowIso }] }, updatedAtIso: nowIso };
+  const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: current.programId, content: current.content, versionId: current.versionId }, nextContent: next });
+  return { versionId: saved.versionId };
+}
+
 
 /** Loads everything post-edit reasoning needs for the CURRENT pending Reasoner draft, refusing stale views. */
 async function loadIntegrityContext(params: { workspaceId: string; clientProfileId: string; versionId: string; decisionKey: string }, needMethod: boolean) {
@@ -949,7 +997,8 @@ async function loadIntegrityContext(params: { workspaceId: string; clientProfile
   const rp = current.content.reasonerProvenance;
   if (!rp) throw new Error("programIntegrity: not a Reasoner proposal");
   const run = await getReasonerRunForJob(params.workspaceId, rp.jobId);
-  const review = reasonerReviewModel({ content: current.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content, currentConstraints: await currentConstraintsFor(params.clientProfileId) });
+  const review = reasonerReviewModel({ content: current.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content, current: (await planningContextFor(params.clientProfileId)).current });
+  if (review.lifecycle?.status === "superseded") throw new Error("This proposal is superseded by the client's current state — review the revision instead.");
   const integrity = review.integrity;
   if (!run || !integrity || integrity.key !== params.decisionKey) throw new Error("That decision no longer applies — refresh to see the current state.");
   if (integrity.status !== "unresolved") throw new Error("That decision is already resolved.");
@@ -1036,7 +1085,7 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   const approved = await getProgramProposalVersion(params.workspaceId, params.versionId);
   if (!approved || approved.status !== "draft") throw new Error("approveProgramProposalAction: no pending draft proposal at that version");
-  const original = await getOriginalProposalVersion(params.workspaceId, approved.programId);
+  const original = await originalForDraft(params.workspaceId, approved);
   if (!original) throw new Error("approveProgramProposalAction: original proposal version missing");
 
   // Phase 10B — an adjustment proposal (spec section 17/29) was built
@@ -1078,15 +1127,16 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   let publishVersionId = params.versionId;
   if (approved.content.reasonerProvenance) {
     const run = await getReasonerRunForJob(params.workspaceId, approved.content.reasonerProvenance.jobId);
-    let currentConstraints;
+    let current;
     try {
-      currentConstraints = await currentConstraintsFor(params.clientProfileId);
+      current = (await planningContextFor(params.clientProfileId)).current;
     } catch {
-      throw new Error("OPTIM couldn't load the client's current confirmed restrictions, so it can't confirm this plan still fits them. Try again.");
+      throw new Error("OPTIM couldn't load the client's current planning state, so it can't confirm this plan still fits it. Try again.");
     }
-    const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content, currentConstraints });
+    // Gate 4.0C-5 — fails closed on a superseded draft, open fit / integrity / adequacy decisions, or a missing run.
+    const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content, current });
     if (review.approvalBlockedReason) throw new Error(review.approvalBlockedReason);
-    const clientContent = clientFacingProgramContent({ content: approved.content, reviewedVersionId: approved.versionId, knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(run), nowIso: new Date().toISOString() });
+    const clientContent = clientFacingProgramContent({ content: approved.content, reviewedVersionId: approved.versionId, knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(run, FOUNDATION_KNOWLEDGE), nowIso: new Date().toISOString() });
     if (findClientCopyLeaks(clientContent).length) throw new Error("Some session names still contain internal planning notes. Rename those sessions, then approve.");
     const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: approved.programId, content: approved.content, versionId: approved.versionId }, nextContent: clientContent });
     publishVersionId = saved.versionId;
@@ -1118,7 +1168,7 @@ export async function approveProgramProposalAction(params: { workspaceId: string
         programAssignmentId: assignmentId,
         proposedSummary: proposalSummaryFrom(original.content),
         chosenSummary: proposalSummaryFrom(approved.content),
-        wasEdited: approved.versionNumber > 1,
+        wasEdited: approved.versionId !== original.versionId,
         decidedAtIso: new Date().toISOString(),
       })
     );

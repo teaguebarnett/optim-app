@@ -37,7 +37,8 @@ const U_NOTE = "Only option for this pattern; uncertain fit.";
 /** A fully explicit 4-day plan (fixture anchors: 4 days, 8 weeks, deload weeks 4 & 8). */
 async function plan(sessions: WireExercise[][]): Promise<Planned> {
   const put = (p: WirePlan) => p.sessions.forEach((s, i) => (s.exercises = sessions[i] ?? sessions[0]));
-  const r = await runFitnessReasoner({ input: input(), model: fakeModel((ri) => scriptedOutput(ri, put)), nowIso: NOW, runId: "job-1" });
+  // Pre-4.0C-5 policy: these fixtures model drafts generated with uncertain-fit exercises (the coach decides after generation).
+  const r = await runFitnessReasoner({ input: input(), model: fakeModel((ri) => scriptedOutput(ri, put)), nowIso: NOW, runId: "job-1", uncertainFit: "legacy_allow" });
   assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : r.status);
   return r as Planned;
 }
@@ -82,7 +83,10 @@ await check("2. Removing it creates a real program hole: the fit decision resolv
   assert.ok(labels.some((l) => /lats/i.test(l)), labels.join("; "));
   assert.deepEqual(m.integrity!.analysis.causes.map((c) => [c.exerciseName, c.setsAfter]), [["Lat Pulldown", 0]]);
   assert.ok(m.approvalBlockedReason && /underrepresented/.test(m.approvalBlockedReason));
-  assert.equal(m.unresolvedCount, 1, "one decision for the whole consequence (deduplicated)");
+  // One integrity decision for the whole consequence (deduplicated); Gate 4.0C-5 current-state adequacy also flags
+  // the now-unbalanced week independently of v1 (edit-impact is not the quality standard).
+  assert.equal(m.unresolvedCount - (m.adequacy?.status === "unresolved" ? 1 : 0), 1, "one integrity decision for the whole consequence (deduplicated)");
+  assert.ok(m.adequacy?.status === "unresolved", "current-state adequacy flags the week too");
 });
 
 await check("3. Feasible alternatives are constraint-checked; a Reasoner recommendation is coach-reviewable and NOT applied", async () => {
@@ -166,7 +170,10 @@ await check("6. Coach consciously accepts the reduced stimulus: recorded with th
   const m = review(r, v1, withResolutions(withResolutions(v2, [fitRemoved("exercise.lat_pulldown", "Lat Pulldown")]), [tradeoff]));
   assert.equal(m.integrity?.status, "accepted_tradeoff");
   assert.ok(m.integrity!.analysis.deficiencies.length > 0, "the deficiency is still reported");
-  assert.equal(m.approvalBlockedReason, null);
+  // Gate 4.0C-5: accepting the edit's tradeoff doesn't accept the program's current-state adequacy — that's its own explicit decision.
+  assert.ok(m.adequacy?.status === "unresolved" && /fix them, or accept them explicitly/.test(m.approvalBlockedReason ?? ""), m.approvalBlockedReason ?? "");
+  const both = review(r, v1, withResolutions(withResolutions(withResolutions(v2, [fitRemoved("exercise.lat_pulldown", "Lat Pulldown")]), [tradeoff]), [{ key: m.adequacy!.key, exerciseId: "", exerciseName: "", resolution: "accepted_limitation", adequacySignature: m.adequacy!.signature, conditions: [], resolvedBy: "coach", resolvedAtIso: NOW }]));
+  assert.equal(both.approvalBlockedReason, null);
   assert.ok(m.history.some((h) => h.resolution === "accepted_tradeoff" && (h.tradeoff ?? []).length > 0), "provenance of the conscious tradeoff");
 });
 

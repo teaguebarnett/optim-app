@@ -360,7 +360,9 @@ check("14. Invite/onboarding flow is unchanged", () => {
     // Gate 4.0C-4 — coach-side Reasoner proposals (flag-gated); still never onboarding/auth/client app.
     "app/actions/production-programs.ts", "lib/production/reasoner-proposals.ts", "components/coach/reasoner-proposal-panel.tsx",
     // Gate 4.0C-4 dogfood fix — the coach review card renders the Reasoner review model (coach-side only).
-    "components/coach/program-proposal-review.tsx"];
+    "components/coach/program-proposal-review.tsx",
+    // Gate 4.0C-5 — coach-side re-synthesis lifecycle (server-only orchestration); still never onboarding/auth/client app.
+    "lib/production/reasoner-lifecycle.ts"];
   const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => !/verify-[^/]*\.mts$/.test(f) && /from ["'][^"']*\/synthesis\//.test(readFileSync(f, "utf8")));
   const unexpected = importers.filter((f) => !ALLOWED.some((a) => f.endsWith(a)));
   assert.deepEqual(unexpected, [], `unexpected importers: ${unexpected.join(", ")}`);

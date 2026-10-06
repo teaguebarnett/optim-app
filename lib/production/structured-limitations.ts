@@ -24,6 +24,8 @@ import { loadSynthesisInputForClient } from "./synthesis.ts";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import { FOUNDATION_KNOWLEDGE } from "../synthesis/knowledge/registry.ts";
 import { buildConfirmation, isCurrentFor, parseStoredLimitations, type StoredStructuredLimitations } from "../synthesis/limitations/confirm.ts";
+import { effectiveExerciseDecisions, type ExerciseFitDecisionRecord } from "../synthesis/limitations/exercise-decisions.ts";
+import { demandCompatibility, eligibilityBasis, exerciseEligibility } from "../synthesis/exercise-eligibility.ts";
 import { interpretLimitationText, type InterpretationProposal } from "../synthesis/limitations/interpret.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES } from "../coach/types.ts";
 import { runPlanner } from "../synthesis/planner.ts";
@@ -101,7 +103,8 @@ export async function confirmStructuredLimitations(input: ConfirmLimitationsInpu
   if (!state.documentedText || state.escalationId !== input.escalationId) return { ok: false, errors: ["This limitation changed or was replaced — reload and review it again."] };
   if (state.documentedText !== input.sourceText.trim()) return { ok: false, errors: ["The documented limitation changed since you opened it — reload and review it again."] };
   const nowIso = new Date().toISOString();
-  const built = buildConfirmation({ sourceText: state.documentedText, proposal: input.proposal, selectedOptionIds: input.selectedOptionIds, clarificationAnswers: input.clarificationAnswers, noExerciseRestrictions: input.noExerciseRestrictions, coachUserId: ctx.userId, nowIso }, FOUNDATION_KNOWLEDGE);
+  // Gate 4.0C-5 — the coach's exercise decisions are carried forward verbatim (re-confirming never drops one).
+  const built = buildConfirmation({ sourceText: state.documentedText, proposal: input.proposal, selectedOptionIds: input.selectedOptionIds, clarificationAnswers: input.clarificationAnswers, noExerciseRestrictions: input.noExerciseRestrictions, coachUserId: ctx.userId, nowIso, carriedExerciseDecisions: state.confirmed?.exerciseDecisions }, FOUNDATION_KNOWLEDGE);
   if (!built.ok) return built;
 
   const supabase = await getSupabaseServerClient();
@@ -146,4 +149,93 @@ export async function previewResistancePlan(params: { workspaceId: string; clien
   await requireClientCoachAuthority(params.workspaceId, params.clientProfileId);
   const input = await loadSynthesisInputForClient(params.clientProfileId);
   return plannerReviewView(runPlanner(RESISTANCE_PLANNER, input, { nowIso: new Date().toISOString() }), FOUNDATION_KNOWLEDGE);
+}
+
+// ---------------------------------------------------------------------------
+// Gate 4.0C-5 — authoritative exercise-fit decisions
+// ---------------------------------------------------------------------------
+
+export interface ExerciseFitDecisionInput {
+  exerciseId: string;
+  /** excluded: never program it for this client. cleared: it fits under the current conditions. revoke: drop the decision. */
+  verdict: "excluded" | "cleared" | "revoke";
+  source: ExerciseFitDecisionRecord["source"];
+}
+
+/**
+ * The coach's explicit decision(s) about specific exercises, written as AUTHORITATIVE planning state onto the
+ * confirmed structured-limitations record (append-only; the record must be current). Conditions and the eligibility
+ * basis of a clearance are computed HERE from the current confirmed restrictions — never trusted from the client.
+ * A clearance is accepted only for an exercise whose fit is currently uncertain; nothing else changes.
+ */
+export async function recordExerciseFitDecisions(params: { workspaceId: string; clientProfileId: string; decisions: ExerciseFitDecisionInput[] }): Promise<{ ok: true; recorded: ExerciseFitDecisionRecord[] } | { ok: false; errors: string[] }> {
+  const ctx = await requireClientCoachAuthority(params.workspaceId, params.clientProfileId);
+  if (!params.decisions.length) return { ok: false, errors: ["Choose a decision for at least one exercise."] };
+  const state = await getLimitationsState(params);
+  if (state.status !== "confirmed" || !state.confirmed || !state.escalationId) return { ok: false, errors: ["Confirm the client's training limitations first — exercise decisions are recorded with them."] };
+  const constraints = (await loadSynthesisInputForClient(params.clientProfileId)).constraints;
+  const nowIso = new Date().toISOString();
+  const current = effectiveExerciseDecisions(state.confirmed.exerciseDecisions);
+  const errors: string[] = [];
+  const recorded: ExerciseFitDecisionRecord[] = [];
+  for (const d of params.decisions) {
+    const ex = FOUNDATION_KNOWLEDGE.getExercise(d.exerciseId);
+    if (!ex) {
+      errors.push("That exercise isn't in OPTIM's exercise knowledge.");
+      continue;
+    }
+    const base = { exerciseId: ex.id, exerciseName: ex.name, source: d.source, decidedBy: ctx.userId, decidedAtIso: nowIso };
+    if (d.verdict === "revoke") {
+      const existing = current.find((x) => x.exerciseId === ex.id);
+      if (!existing) continue; // nothing to revoke — idempotent
+      recorded.push({ ...base, verdict: existing.verdict, conditions: existing.conditions, ...(existing.basis ? { basis: existing.basis } : {}), revoked: true });
+      continue;
+    }
+    if (d.verdict === "excluded") {
+      if (current.some((x) => x.exerciseId === ex.id && x.verdict === "excluded")) continue; // already excluded — idempotent
+      recorded.push({ ...base, verdict: "excluded", conditions: [] });
+      continue;
+    }
+    const elig = exerciseEligibility(ex, constraints);
+    if (demandCompatibility(elig) !== "uncertain") {
+      if (elig.clearedBy) continue; // already cleared under this basis — idempotent
+      errors.push(`${ex.name}'s fit isn't uncertain under the client's current restrictions, so there's nothing to clear.`);
+      continue;
+    }
+    const lc = elig.loadConditions.find((l) => l.certainty === "uncertain" && l.enforcement === "hard")!;
+    recorded.push({ ...base, verdict: "cleared", conditions: lc.conditions, basis: eligibilityBasis(elig) });
+  }
+  if (errors.length) return { ok: false, errors };
+  if (!recorded.length) return { ok: true, recorded: [] };
+
+  const supabase = await getSupabaseServerClient();
+  const { data: row, error: readError } = await supabase.from("escalations").select("structured_limitations, updated_at").eq("id", state.escalationId).eq("workspace_id", params.workspaceId).eq("client_profile_id", params.clientProfileId).maybeSingle();
+  if (readError || !row) throw new Error(`recordExerciseFitDecisions: health-review record unavailable (${readError?.code ?? "not_found"})`);
+  const stored = parseStoredLimitations(row.structured_limitations, FOUNDATION_KNOWLEDGE);
+  if (!stored || !isCurrentFor(stored, state.documentedText)) return { ok: false, errors: ["The client's confirmed limitations changed — reload and try again."] };
+  const next: StoredStructuredLimitations = { ...stored, exerciseDecisions: [...(stored.exerciseDecisions ?? []), ...recorded] };
+  // Optimistic concurrency: a concurrent confirmation/decision must not be overwritten.
+  const { data, error } = await supabase.from("escalations").update({ structured_limitations: next, updated_at: nowIso }).eq("id", state.escalationId).eq("updated_at", row.updated_at as string).select("id");
+  if (error) throw new Error(`recordExerciseFitDecisions failed: ${error.message}`);
+  if (!data || data.length === 0) return { ok: false, errors: ["Someone else changed this client's limitations at the same time — reload and try again."] };
+
+  // History (best-effort, after the canonical write): one entry per decision batch, in the confirmation schema.
+  try {
+    await recordDecisionEvidence({
+      workspaceId: params.workspaceId,
+      coachUserId: ctx.userId,
+      clientProfileId: params.clientProfileId,
+      decisionDomain: "safety",
+      decisionType: "structured_limitations_confirmation",
+      outcome: "selected",
+      proposedValue: null,
+      chosenValue: { optionIds: recorded.map((r) => `${r.revoked ? "revoked" : r.verdict}:${r.exerciseId}`), sourceText: state.documentedText, exerciseFitDecisions: recorded.map((r) => ({ exerciseId: r.exerciseId, verdict: r.verdict, revoked: !!r.revoked, conditions: r.conditions, source: r.source })) },
+      escalationId: state.escalationId,
+      sourceRef: `exercise-fit:${state.escalationId}:${nowIso}`,
+      decidedAtIso: nowIso,
+    });
+  } catch (err) {
+    console.error(`recordExerciseFitDecisions: decision evidence failed (decision already saved): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return { ok: true, recorded };
 }

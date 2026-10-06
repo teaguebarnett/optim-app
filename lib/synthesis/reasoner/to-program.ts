@@ -8,6 +8,7 @@
 // is grouped NEEDS YOU / WORTH KNOWING / HANDLED; no raw model JSON or
 // provider internals are copied into the content.
 
+import type { RevisionProvenance } from "../../training/types.ts";
 import type { DayOfWeek, RpeValue } from "../../types.ts";
 import type { Block, GenerationInputs, Prescription, ReasonerProvenance, Session, TrainingItemInstance, UniversalProgramDay, UniversalTrainingProgramContent } from "../../training/types.ts";
 import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
@@ -128,6 +129,8 @@ export function reasonerResultToProgramContent(params: {
   jobId: string;
   generationInputs: GenerationInputs;
   nowIso: string;
+  /** Gate 4.0C-5 — set when this content is a revision superseding an earlier draft. */
+  revision?: RevisionProvenance;
 }): UniversalTrainingProgramContent {
   const { result, knowledge } = params;
   const { plan, spec } = result;
@@ -165,6 +168,8 @@ export function reasonerResultToProgramContent(params: {
     inputHash: run.hashes.input ?? "",
     generatedAtIso: params.nowIso,
     ...reviewContext(result),
+    ...(run.planningState ? { planningKey: run.planningState.key } : {}),
+    ...(params.revision ? { revision: params.revision } : {}),
   };
   return {
     schemaVersion: 2,

@@ -34,6 +34,8 @@ async function check(name: string, fn: () => void | Promise<void>) {
   }
 }
 const run = (input: ReturnType<typeof scenarioInput>, model: Parameters<typeof runFitnessReasoner>[0]["model"]) => runFitnessReasoner({ input, model, nowIso: NOW, runId: "run-test" });
+/** Pre-4.0C-5 policy (uncertain-fit exercises offered): the U-row rules still govern replays of historical runs. */
+const runLegacy = (input: ReturnType<typeof scenarioInput>, model: Parameters<typeof runFitnessReasoner>[0]["model"]) => runFitnessReasoner({ input, model, nowIso: NOW, runId: "run-test", uncertainFit: "legacy_allow" });
 const rejectedWith = (r: ReasonerResult, re: RegExp) => {
   assert.equal(r.status, "REJECTED", `expected REJECTED, got ${r.status}`);
   assert.ok(r.status === "REJECTED" && r.errors.some((e) => re.test(e)), `expected an error matching ${re}: ${r.status === "REJECTED" ? r.errors.join(" | ") : ""}`);
@@ -62,7 +64,8 @@ await check("1. Confirmed structured constraints are the boundary; raw wording n
   assert.deepEqual(enforced[0].rules.sort(), ["no anti extension pattern", "no anti lateral flexion pattern", "no anti rotation pattern", "no bracing demand at moderate or above", "no squat pattern", "no trunk flexion pattern", "no trunk rotation pattern"].sort());
   // Lat pulldown / triceps pushdown are LOW bracing → eligible under the confirmed structure.
   const ids = m.lastInput!.exercises.map((x) => x.split("|")[0]);
-  assert.ok(ids.includes("exercise.lat_pulldown") && ids.includes("exercise.cable_triceps_pushdown"), "the raw text can't silently ban what the coach didn't confirm");
+  // Gate 4.0C-5: Lat Pulldown's fit is uncertain under the bracing limit, so it is withheld pending the coach — not banned by the raw text.
+  assert.ok(ids.includes("exercise.cable_triceps_pushdown") && (ids.includes("exercise.lat_pulldown") || r.run.preflight!.withheld.includes("exercise.lat_pulldown")), "the raw text can't silently ban what the coach didn't confirm");
   // Context-only constraints are accounted for deterministically.
   if (r.status === "PLANNED") {
     const applied = r.spec.constraintsApplied.map((c) => c.constraintId);
@@ -282,16 +285,16 @@ await check("16. Bracing is load-sensitive: a generic knowledge rule, enforced a
   assert.ok(elig("exercise.lat_pulldown", "avoid_high").loadConditions.length === 0, "a high-bracing restriction doesn't cap a loaded-moderate lift");
   // Reasoner: the row carries its constraint fit (U: cable pulldown, no trunk support); heavy or near-failure prescriptions are rejected.
   const m = ok();
-  await run(scenarioInput({ restrictions: bracingModerate() }), m);
+  await runLegacy(scenarioInput({ restrictions: bracingModerate() }), m);
   assert.ok(m.lastInput!.exercises.find((x) => x.startsWith("exercise.lat_pulldown|"))!.endsWith("|U"));
   assert.ok(m.lastInput!.exercises.find((x) => x.startsWith("exercise.chest_supported_row|"))!.endsWith("|-"));
-  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [4, 6], [2, 3]))), /lat_pulldown has conditional\/uncertain constraint fit/);
-  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [1, 2]))), /lat_pulldown has conditional\/uncertain constraint fit/);
-  const fine = await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [2, 3])));
+  rejectedWith(await runLegacy(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [4, 6], [2, 3]))), /lat_pulldown has conditional\/uncertain constraint fit/);
+  rejectedWith(await runLegacy(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [1, 2]))), /lat_pulldown has conditional\/uncertain constraint fit/);
+  const fine = await runLegacy(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [2, 3])));
   assert.equal(fine.status, "PLANNED", fine.status === "REJECTED" ? fine.errors.join("; ") : "");
   // Without a bracing restriction nothing is capped.
   const free = ok();
-  await run(scenarioInput(), free);
+  await runLegacy(scenarioInput(), free);
   assert.ok(free.lastInput!.exercises.every((x) => x.endsWith("|-")));
   assert.ok(!/pulldown/i.test(REASONER_SYSTEM_PROMPT), "no exercise-specific rule in the prompt");
 });
@@ -371,7 +374,7 @@ await check("19. Major structural decisions are anchored; departures need a clie
 await check("20. Phases drive the actual weekly prescription; contradictions are rejected", async () => {
   // Coach (fixture): RIR 1–3, sets main 3–4 / accessory 2–3, progression double_progression.
   const two = (main: Partial<WireRolePlan>, acc: Partial<WireRolePlan>) => (p: WirePlan) => (p.progression.phases = [ph([1, 4], "Accumulate", "Build tolerance with listed prescriptions."), ph([5, 8], "Intensify", "Heavier ranges for accessories.", main, acc)]);
-  const good = await run(scenarioInput(), ok(two({ progress: "double_progression" }, { zones: ["lower_half"], sets: 1, progress: "double_progression" })));
+  const good = await runLegacy(scenarioInput(), ok(two({ progress: "double_progression" }, { zones: ["lower_half"], sets: 1, progress: "double_progression" })));
   assert.equal(good.status, "PLANNED", good.status === "REJECTED" ? good.errors.join("; ") : "");
   if (good.status === "PLANNED") {
     const w = good.spec.resistance!.value.weeks;
@@ -382,15 +385,15 @@ await check("20. Phases drive the actual weekly prescription; contradictions are
     assert.ok(w5.reps.min === listed.reps.min && w5.reps.max < listed.reps.max, "phase 2 uses the heavier end of the listed range");
     assert.ok(w[4].note.includes("Accessories: heavier end of rep ranges, RIR 0, sets +1"), "week note rendered from the structure");
   }
-  rejectedWith(await run(scenarioInput(), ok(two({ rir: -1 }, {}))), /takes exercise\.[a-z_]+ to RIR 0–2, outside the coach's 1–3/);
+  rejectedWith(await runLegacy(scenarioInput(), ok(two({ rir: -1 }, {}))), /takes exercise\.[a-z_]+ to RIR 0–2, outside the coach's 1–3/);
   // Listed sets outside the coach's range are still rejected (a set shift never rescues or creates one — see test 24).
-  rejectedWith(await run(scenarioInput(), ok((p) => every(p, (e) => { if (e.role === "accessory") e.sets = 4; }))), /4 sets outside the coach's 2–3/);
-  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.phases = [ph([1, 8], "Accumulate", "Mains in the 8–12 zone at RIR 2–3.")]))), /must not contain numbers/);
-  rejectedWith(await run(scenarioInput(), ok(two({ progress: "add_sets_weekly" }, {}))), /main progress "add_sets_weekly" isn't one of the coach's methods/);
-  rejectedWith(await run(scenarioInput(), ok((p) => (p.progression.model = "Double progression in 8–12 reps"))), /must not state reps, RIR\/RPE or sets/);
+  rejectedWith(await runLegacy(scenarioInput(), ok((p) => every(p, (e) => { if (e.role === "accessory") e.sets = 4; }))), /4 sets outside the coach's 2–3/);
+  rejectedWith(await runLegacy(scenarioInput(), ok((p) => (p.progression.phases = [ph([1, 8], "Accumulate", "Mains in the 8–12 zone at RIR 2–3.")]))), /must not contain numbers/);
+  rejectedWith(await runLegacy(scenarioInput(), ok(two({ progress: "add_sets_weekly" }, {}))), /main progress "add_sets_weekly" isn't one of the coach's methods/);
+  rejectedWith(await runLegacy(scenarioInput(), ok((p) => (p.progression.model = "Double progression in 8–12 reps"))), /must not state reps, RIR\/RPE or sets/);
   // Constraint-fit minimums hold in EVERY week, not just the listed one.
   const pulldownThenHarder = (p: WirePlan) => { place("exercise.lat_pulldown", [8, 12], [2, 3])(p); two({}, { rir: -1 })(p); };
-  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok(pulldownThenHarder)), /takes exercise\.lat_pulldown \(constraint fit U\) below its minimums/);
+  rejectedWith(await runLegacy(scenarioInput({ restrictions: bracingModerate() }), ok(pulldownThenHarder)), /takes exercise\.lat_pulldown \(constraint fit U\) below its minimums/);
 });
 
 await check("21. Bracing fit is graded honestly: compatible / conditional / uncertain / incompatible — submaximal is never proof", async () => {
@@ -409,18 +412,18 @@ await check("21. Bracing fit is graded honestly: compatible / conditional / unce
     assert.ok(c.loadConditions[0].conditions.some((x) => /reps in reserve/.test(x)));
   }
   // Uncertain use: needs a rationale; then goes to coach review. Conditional use: conditions exposed, no review item.
-  rejectedWith(await run(scenarioInput({ restrictions: bracingModerate() }), ok((p) => { place("exercise.lat_pulldown", [8, 12], [2, 3])(p); delete p.sessions[0].exercises.at(-1)!.note; })), /uncertain constraint fit \(U\): say in its note why/);
-  const u = await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [2, 3])));
+  rejectedWith(await runLegacy(scenarioInput({ restrictions: bracingModerate() }), ok((p) => { place("exercise.lat_pulldown", [8, 12], [2, 3])(p); delete p.sessions[0].exercises.at(-1)!.note; })), /uncertain constraint fit \(U\): say in its note why/);
+  const u = await runLegacy(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.lat_pulldown", [8, 12], [2, 3])));
   assert.ok(u.status === "PLANNED", u.status === "REJECTED" ? u.errors.join("; ") : "");
   if (u.status === "PLANNED") {
     assert.ok(u.spec.unresolved.some((x) => x.fact === "coach_decision.constraint_fit.exercise.lat_pulldown" && x.providedBy === "coach" && /can't establish/.test(x.why)));
     assert.ok(u.quality.some((q) => q.code === "constraint_fit_uncertain" && /Coach review required/.test(q.message)));
     assert.ok(!JSON.stringify([u.quality, u.spec.unresolved]).match(/\bsafe(ly)?\b/i), "never claims safety");
   }
-  const k = await run(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.machine_chest_press", [8, 12], [2, 3])));
+  const k = await runLegacy(scenarioInput({ restrictions: bracingModerate() }), ok(place("exercise.machine_chest_press", [8, 12], [2, 3])));
   assert.ok(k.status === "PLANNED" && k.quality.some((q) => q.code === "constraint_fit_conditional" && /trunk kept against the pad or bench/.test(q.message)) && !k.spec.unresolved.some((x) => x.fact.endsWith("machine_chest_press")));
   const m = ok();
-  await run(scenarioInput({ restrictions: bracingModerate() }), m);
+  await runLegacy(scenarioInput({ restrictions: bracingModerate() }), m);
   const code = (id: string) => m.lastInput!.exercises.find((x) => x.startsWith(`${id}|`))!.split("|").at(-1);
   assert.deepEqual([code("exercise.chest_supported_row"), code("exercise.machine_chest_press"), code("exercise.lat_pulldown")], ["-", "K", "U"]);
 });

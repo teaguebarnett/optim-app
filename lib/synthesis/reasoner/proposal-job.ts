@@ -20,6 +20,19 @@ export interface JobOutcome {
   message?: string;
   /** NEEDS_INPUT: what is missing and who provides it. */
   missing?: Array<{ fact: string; why: string; providedBy: "client" | "coach" | "either" }>;
+  /** Gate 4.0C-5 — NEEDS_INPUT from the preflight: the exercises the coach must decide on before planning. */
+  fitQuestions?: Array<{ exerciseId: string; exerciseName: string; serves: string[]; restriction: string; conditions: string[] }>;
+  /** Gate 4.0C-5 — what this job was started for: the planning-state key, and the draft a revision supersedes.
+   * Written at insert, kept on finish (idempotency: one revision per state per superseded draft). */
+  intent?: JobIntent;
+}
+
+export interface JobIntent {
+  planningKey: string;
+  trigger: "initial" | "limitations_confirmed" | "fit_decision" | "preflight_answered" | "coach_requested";
+  supersedesVersionId?: string;
+  supersedesJobId?: string;
+  programId?: string;
 }
 
 /** Comma/whitespace-separated client profile ids. Anything that isn't a UUID is ignored. */
@@ -47,7 +60,7 @@ export function outcomeForResult(result: ReasonerResult): { status: Exclude<JobS
     case "PLANNED":
       return { status: "ready_for_review", failureCategory: null, outcome: {} };
     case "NEEDS_INPUT":
-      return { status: "needs_input", failureCategory: null, outcome: { message: result.summary ?? "OPTIM needs more information before it can prepare a proposal.", missing: result.missing.map((m) => ({ fact: m.fact, why: m.why, providedBy: m.providedBy })) } };
+      return { status: "needs_input", failureCategory: null, outcome: { message: result.summary ?? "OPTIM needs more information before it can prepare a proposal.", missing: result.missing.map((m) => ({ fact: m.fact, why: m.why, providedBy: m.providedBy })), ...(result.source === "preflight" && result.run.preflight?.questions.length ? { fitQuestions: result.run.preflight.questions } : {}) } };
     case "DOMAIN_NOT_YET_SUPPORTED":
       return { status: "unsupported", failureCategory: null, outcome: { message: MESSAGES.unsupported } };
     case "REJECTED":

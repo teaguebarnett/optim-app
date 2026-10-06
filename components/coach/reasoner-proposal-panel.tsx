@@ -10,14 +10,15 @@ import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { getReasonerJobAction, requestReasonerProposalAction } from "@/app/actions/production-programs";
+import { getReasonerJobAction, recordExerciseFitDecisionsAction, requestReasonerProposalAction } from "@/app/actions/production-programs";
 import type { MissingPrerequisite } from "@/lib/coach/generation-prerequisites";
 import type { ReasonerJobView } from "@/lib/synthesis/reasoner/proposal-job";
 
 const POLL_MS = 5000;
 const WHO: Record<string, string> = { client: "the client", coach: "you", either: "you or the client" };
 
-export function ReasonerProposalPanel({ workspaceId, clientProfileId, initialJob, missing }: { workspaceId: string; clientProfileId: string; initialJob: ReasonerJobView | null; missing: MissingPrerequisite[] }) {
+/** `revision`: shown next to a pending draft — only the revision's preflight questions / progress, no new-proposal form. */
+export function ReasonerProposalPanel({ workspaceId, clientProfileId, initialJob, missing, revision = false }: { workspaceId: string; clientProfileId: string; initialJob: ReasonerJobView | null; missing: MissingPrerequisite[]; revision?: boolean }) {
   const router = useRouter();
   const [job, setJob] = useState<ReasonerJobView | null>(initialJob);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +29,7 @@ export function ReasonerProposalPanel({ workspaceId, clientProfileId, initialJob
   const refreshed = useRef<string | null>(null);
   // Synchronous re-entry guard: rapid clicks in one tick must send ONE request (the server is single-flight too).
   const submitting = useRef(false);
+  const [fit, setFit] = useState<Record<string, "cleared" | "excluded">>({});
 
   // Poll while preparing; refresh the page once into whatever the job produced.
   useEffect(() => {
@@ -68,6 +70,29 @@ export function ReasonerProposalPanel({ workspaceId, clientProfileId, initialJob
     });
   }
 
+  // Gate 4.0C-5 — preflight: the coach's fit decisions are the authorization for ONE proposal for the new state.
+  function confirmFit() {
+    const questions = job?.outcome.fitQuestions ?? [];
+    if (submitting.current || questions.some((q) => !fit[q.exerciseId])) return;
+    submitting.current = true;
+    setError(null);
+    startTransition(async () => {
+      try {
+        const res = await recordExerciseFitDecisionsAction({ workspaceId, clientProfileId, context: "preflight", decisions: questions.map((q) => ({ exerciseId: q.exerciseId, verdict: fit[q.exerciseId] })) });
+        if (!res.ok) setError(res.errors.join(" "));
+        else {
+          const next = await getReasonerJobAction({ workspaceId, clientProfileId });
+          if (next) setJob(next);
+          if (res.generation !== "queued") router.refresh();
+        }
+      } catch {
+        setError("Couldn't save your decisions. Nothing was changed — try again.");
+      } finally {
+        submitting.current = false;
+      }
+    });
+  }
+
   if (job?.status === "preparing") {
     const seconds = Math.max(0, Math.round((now - Date.parse(job.createdAtIso)) / 1000));
     return (
@@ -80,9 +105,42 @@ export function ReasonerProposalPanel({ workspaceId, clientProfileId, initialJob
   }
 
   const blocked = blockers.length > 0;
+  const fitQuestions = job?.status === "needs_input" ? (job.outcome.fitQuestions ?? []) : [];
+  const fitForm =
+    fitQuestions.length > 0 ? (
+      <div className="rounded-[var(--radius-sm)] border border-warning bg-warning-soft/40 px-3 py-2.5">
+        <p className="text-sm font-medium text-warning-strong">Before OPTIM plans, decide whether these exercises fit the client&apos;s restrictions.</p>
+        <p className="mt-1 text-sm text-warning-strong">Each is the only way left to train something the plan needs, and OPTIM can&apos;t confirm it stays within the confirmed restrictions. No proposal was prepared, and no model call was spent.</p>
+        <ul className="mt-2 space-y-2.5">
+          {fitQuestions.map((q) => (
+            <li key={q.exerciseId} className="text-sm text-off-white">
+              <p>
+                <span className="font-medium">{q.exerciseName}</span> — trains {q.serves.map((x) => x.replace(/_/g, " ")).join(", ")}; restriction: {q.restriction}.
+              </p>
+              <div className="mt-1 flex flex-wrap gap-3 text-sm">
+                <label className="flex items-center gap-1.5">
+                  <input type="radio" name={`fit-${q.exerciseId}`} checked={fit[q.exerciseId] === "cleared"} onChange={() => setFit((f) => ({ ...f, [q.exerciseId]: "cleared" }))} />
+                  It fits with {q.conditions.join(" and ")}
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input type="radio" name={`fit-${q.exerciseId}`} checked={fit[q.exerciseId] === "excluded"} onChange={() => setFit((f) => ({ ...f, [q.exerciseId]: "excluded" }))} />
+                  Exclude it for this client
+                </label>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <Button type="button" variant="primary" size="sm" className="mt-3" loading={pending} disabled={pending || fitQuestions.some((q) => !fit[q.exerciseId])} onClick={confirmFit}>
+          {revision ? "Confirm — OPTIM revises the proposal" : "Confirm — OPTIM prepares the proposal"}
+        </Button>
+        <p className="mt-1 text-xs text-warning-strong">Saved as your decisions for this client. Nothing is sent to the client.</p>
+      </div>
+    ) : null;
+  if (revision) return <div className="space-y-3">{fitForm}{error ? <p role="status" className="text-sm text-error">{error}</p> : null}</div>;
   return (
     <div className="space-y-3">
-      {job?.status === "needs_input" ? (
+      {fitForm}
+      {job?.status === "needs_input" && !fitQuestions.length ? (
         <div className="rounded-[var(--radius-sm)] border border-warning bg-warning-soft/40 px-3 py-2.5">
           <p className="text-sm font-medium text-warning-strong">OPTIM needs more information before it can prepare a proposal.</p>
           <ul className="mt-1.5 space-y-1 text-sm text-warning-strong">

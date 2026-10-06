@@ -10,7 +10,8 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SelectMenu } from "@/components/ui/select-menu";
-import { confirmStructuredLimitationsAction, proposeStructuredLimitationsAction } from "@/app/actions/structured-limitations";
+import { confirmStructuredLimitationsAction, proposeStructuredLimitationsAction, revokeExerciseFitDecisionAction } from "@/app/actions/structured-limitations";
+import { effectiveExerciseDecisions } from "@/lib/synthesis/limitations/exercise-decisions";
 import type { InterpretationProposal } from "@/lib/synthesis/limitations/interpret";
 import type { LimitationsState } from "@/lib/production/structured-limitations";
 
@@ -39,6 +40,7 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
   const [addId, setAddId] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [pending, startTransition] = useTransition();
+  const [notice, setNotice] = useState<string | null>(null);
 
   if (state.status === "no_limitation") return null;
 
@@ -77,6 +79,19 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
       if (!res.ok) return setErrors(res.errors);
       setEditing(false);
       setProposal(null);
+      // Gate 4.0C-5 — a material change supersedes the pending draft; OPTIM prepares ONE revision (never sent or approved).
+      setNotice(res.revision === "queued" ? "Saved. These facts change the plan's assumptions, so OPTIM is preparing a revised proposal from them. Nothing is sent to the client — you'll review it in Training program." : null);
+      router.refresh();
+    });
+  }
+
+  function revoke(exerciseId: string) {
+    setErrors([]);
+    setNotice(null);
+    startTransition(async () => {
+      const res = await revokeExerciseFitDecisionAction({ workspaceId, clientProfileId, exerciseId });
+      if (!res.ok) return setErrors(res.errors);
+      setNotice(res.revision === "queued" ? "Removed. That changes the plan's assumptions, so OPTIM is preparing a revised proposal. Nothing is sent to the client." : null);
       router.refresh();
     });
   }
@@ -117,8 +132,32 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
             </ul>
           )}
           <p className="text-meta text-neutral">Confirmed {new Date(state.confirmed.confirmedAtIso).toLocaleString()}.</p>
+          {effectiveExerciseDecisions(state.confirmed.exerciseDecisions).length ? (
+            <div className="space-y-1 pt-1">
+              <p className="text-label text-neutral">Your exercise decisions</p>
+              <ul className="space-y-1">
+                {effectiveExerciseDecisions(state.confirmed.exerciseDecisions).map((d) => (
+                  <li key={d.exerciseId} className="flex flex-wrap items-center justify-between gap-2 text-sm text-off-white">
+                    <span>
+                      {d.verdict === "excluded" ? `✕ Not ${d.exerciseName}` : `✓ ${d.exerciseName} — fits only with ${d.conditions.join("; ")}`}
+                      <span className="ml-1 text-meta text-neutral">({new Date(d.decidedAtIso).toLocaleDateString()})</span>
+                    </span>
+                    <Button variant="secondary" size="sm" disabled={pending} onClick={() => revoke(d.exerciseId)}>
+                      Undo
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-meta text-neutral">These apply to this client only and are kept when you review the limitation again.</p>
+            </div>
+          ) : null}
           <Button variant="secondary" size="sm" onClick={interpret} loading={pending}>Review again</Button>
         </div>
+      ) : null}
+      {notice ? (
+        <p role="status" className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-3 py-2 text-sm text-off-white">
+          {notice}
+        </p>
       ) : null}
 
       {(state.status === "needs_confirmation" || state.status === "stale") && !editing ? (

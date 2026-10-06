@@ -572,6 +572,24 @@ export interface ReasonerProvenance {
   /** Fitness Reasoner repair recommendations after a coach edit (Gate 4.0C-4),
    * appended on a new draft version — coach-reviewable, never auto-applied. */
   repairRecommendations?: RepairRecommendationRecord[];
+  /** Gate 4.0C-5 — the material planning-state key this draft was solved under (run.planningState.key). */
+  planningKey?: string;
+  /** Gate 4.0C-5 — set when this draft is a Reasoner REVISION of an earlier draft in the same program. */
+  revision?: RevisionProvenance;
+}
+
+/** Gate 4.0C-5 — why and from what a revision was prepared (the superseded draft stays archived, unchanged). */
+export interface RevisionProvenance {
+  supersedesVersionId: string;
+  supersedesJobId: string;
+  trigger: "limitations_confirmed" | "fit_decision" | "preflight_answered" | "coach_requested";
+  previousPlanningKey: string | null;
+  planningKey: string;
+  /** What changed in the authoritative state (plain language lines per part). */
+  changes: Array<{ part: string; added: string[]; removed: string[] }>;
+  reasons: string[];
+  requestedBy: string;
+  requestedAtIso: string;
 }
 
 export interface RepairRecommendationRecord {
@@ -595,7 +613,11 @@ export interface DecisionResolution {
   exerciseId: string;
   exerciseName: string;
   /** accepted_replacement / accepted_tradeoff resolve PROGRAM-INTEGRITY decisions (post-edit). */
-  resolution: "accepted_with_conditions" | "removed" | "accepted_replacement" | "accepted_tradeoff";
+  resolution: "accepted_with_conditions" | "removed" | "accepted_replacement" | "accepted_tradeoff" | "accepted_limitation";
+  /** accepted_limitation (Gate 4.0C-5): the exact adequacy findings the coach accepted — reopens if they change. */
+  adequacySignature?: string;
+  /** accepted_limitation: the accepted findings in plain language (shown back in review). */
+  limitations?: string[];
   /** accepted_with_conditions: the exercise's eligibility fingerprint under the restrictions in force when the
    * coach accepted it — the acceptance is stale (reopens) if the confirmed restrictions change it. */
   fitBasis?: string;

@@ -11,6 +11,7 @@
 // semantics), is reported separately as `name_search`, and is superseded
 // once a coach documents the limitation. No free-text interpretation here.
 
+import { createHash } from "node:crypto";
 import { effectiveConstraints, type Constraint, type ConstraintSet } from "./constraints.ts";
 import { levelRank } from "./knowledge/taxonomy.ts";
 import { LOADED_DEMAND_CONDITION, type DemandCompatibility, type ExerciseEntry, type ExerciseFilter, type FitnessKnowledgeRegistry } from "./knowledge/types.ts";
@@ -40,6 +41,8 @@ export interface LoadCondition {
   /** Prescriptions must allow at least this many reps and keep at least this many reps in reserve. */
   minReps: number;
   minRir: number;
+  /** Gate 4.0C-5 — "uncertain" before a coach clearance made it conditional (kept for the basis and the record). */
+  originalCertainty?: "uncertain";
 }
 
 /** The overall compatibility of an exercise with a constraint set (Gate 4.0C-3C). */
@@ -56,6 +59,17 @@ export interface ExerciseEligibility {
   violations: EligibilityViolation[];
   /** Restrictions satisfied only while the exercise stays submaximal. */
   loadConditions: LoadCondition[];
+  /** Gate 4.0C-5 — set when an uncertain fit was made conditional by the coach's exercise clearance
+   * (exercise_cleared, matching basis): the conditions the coach accepted. */
+  clearedBy?: { constraintId: string; conditions: string[] };
+}
+
+/** Stable fingerprint of an exercise's eligibility (what blocks it, under which conditions) — EXCLUDING any coach
+ * clearance, so a clearance can be checked against the basis it was granted under. */
+export function eligibilityBasis(e: ExerciseEligibility): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ l: e.loadConditions.filter((x) => x.enforcement === "hard").map((x) => `${x.demand}:${x.limit}:${x.originalCertainty ?? x.certainty}`).sort(), v: e.violations.filter((x) => x.enforcement === "hard").map((x) => x.reason).sort() }))
+    .digest("hex");
 }
 
 const words = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
@@ -105,7 +119,20 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
       }
     }
   }
-  return { eligible: !violations.some((x) => x.enforcement === "hard"), violations, loadConditions };
+  const result: ExerciseEligibility = { eligible: !violations.some((x) => x.enforcement === "hard"), violations, loadConditions };
+  // Gate 4.0C-5 — a coach clearance turns THIS exercise's uncertain fit into conditional fit, only under the basis it
+  // was granted against (a stricter or different restriction makes it inert) and never for an ineligible exercise.
+  if (result.eligible && loadConditions.some((l) => l.certainty === "uncertain" && l.enforcement === "hard")) {
+    const basis = eligibilityBasis(result);
+    for (const c of effectiveConstraints(constraints))
+      for (const t of c.tags)
+        if (t.kind === "exercise_cleared" && t.exerciseId === exercise.id && t.basis === basis) {
+          result.loadConditions = loadConditions.map((l) => (l.certainty === "uncertain" ? { ...l, certainty: "conditional", originalCertainty: "uncertain", conditions: t.conditions.length ? t.conditions : l.conditions } : l));
+          result.clearedBy = { constraintId: c.id, conditions: t.conditions };
+          return result;
+        }
+  }
+  return result;
 }
 
 export interface ConstraintCompatibility {

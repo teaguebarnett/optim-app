@@ -23,9 +23,9 @@ import type { ResistanceMethod } from "../planners/resistance/method.ts";
 import type { DomainRouting } from "./domains.ts";
 import type { EvidencePacket } from "./retrieval.ts";
 
-export const REASONER_VERSION = "fitness-reasoner-v1.3.0";
+export const REASONER_VERSION = "fitness-reasoner-v1.4.0";
 
-export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment|demands skill,stability,bracing,spine,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir} and the trunk kept against the pad/bench); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review)`;
+export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment|demands skill,stability,bracing,spine,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}, and where the exercise has a pad/bench the trunk kept against it — or as the coach cleared it); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review)`;
 
 export interface ReasoningInput {
   v: { reasoner: string; prompt: string; knowledge: string };
@@ -45,6 +45,8 @@ export interface ReasoningInput {
   exerciseLegend: string;
   exercises: string[];
   unresolved: Array<{ fact: string; why: string }>;
+  /** Gate 4.0C-5 — the targets this plan must declare in "coverage", and those no eligible exercise trains. */
+  functions?: { required: string[]; infeasible: Array<{ target: string; why: string }> };
 }
 
 /** A goal-specific exercise OPTIM resolved from structured goal data (e.g. strength priority lifts). */
@@ -121,7 +123,7 @@ function reviewedHow(c: Constraint): string {
   return "no exercise-level effect";
 }
 
-export function buildReasoningInput(params: { input: SynthesisInput; method: ResistanceMethod; routing: Extract<DomainRouting, { status: "ROUTED" }>; secondary: "strength" | "hypertrophy" | null; evidence: EvidencePacket; promptVersion: string; unresolved: Array<{ fact: string; why: string }>; pool: PoolResult }): { reasoning: ReasoningInput; allowed: Allowed; contextOnly: ContextOnlyConstraint[]; constraintIdMap: Record<string, string> } {
+export function buildReasoningInput(params: { input: SynthesisInput; method: ResistanceMethod; routing: Extract<DomainRouting, { status: "ROUTED" }>; secondary: "strength" | "hypertrophy" | null; evidence: EvidencePacket; promptVersion: string; unresolved: Array<{ fact: string; why: string }>; pool: PoolResult; functions?: ReasoningInput["functions"] }): { reasoning: ReasoningInput; allowed: Allowed; contextOnly: ContextOnlyConstraint[]; constraintIdMap: Record<string, string> } {
   const { input, method } = params;
   const c = input.client;
   const rules: ReasoningInput["coach"]["rules"] = [];
@@ -238,6 +240,7 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
       [e.id, e.name, e.patterns.join(","), e.primary.join(","), e.secondary.join(","), e.mechanics === "compound" ? "C" : "I", e.laterality[0].toUpperCase(), e.equipment, [e.demands.skill, e.demands.stability, e.demands.bracing, e.demands.spinal_loading, e.demands.systemic_fatigue].map(L).join(""), [e.suitability.strength, e.suitability.hypertrophy, e.suitability.power].map(L).join(""), e.ordering[0].toUpperCase(), fitCode(params.pool.loadConditions.get(e.id))].join("|")
     ),
     unresolved: params.unresolved,
+    ...(params.functions ? { functions: params.functions } : {}),
   };
   return {
     reasoning,

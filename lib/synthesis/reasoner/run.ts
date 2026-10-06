@@ -16,6 +16,18 @@ import type { DomainRouting } from "./domains.ts";
 import type { ReasonerPlan } from "./contract.ts";
 import type { ReasoningInput } from "./input.ts";
 import type { EvidencePacket } from "./retrieval.ts";
+import type { PlanningState } from "../planning-state.ts";
+import type { AdequacyResult, FunctionAvailability } from "./adequacy.ts";
+
+/** Gate 4.0C-5 — what the deterministic preflight found before any model call. */
+export interface RunPreflight {
+  policy: "withhold" | "legacy_allow";
+  functions: FunctionAvailability[];
+  /** Eligible exercises withheld because OPTIM can't establish their fit (the coach can clear or exclude them). */
+  withheld: string[];
+  /** Exercises the coach must decide on before planning (only way to train a required target / a goal target). */
+  questions: Array<{ exerciseId: string; exerciseName: string; serves: string[]; restriction: string; conditions: string[] }>;
+}
 
 export const REASONER_RUN_SCHEMA = "optim.reasoner-run.v1";
 
@@ -54,8 +66,13 @@ export interface ReasonerRun {
     summary?: string;
     message?: string;
     errors?: string[];
+    /** Gate 4.0C-5 — current-state adequacy of the planned program (absent on older runs). */
+    adequacy?: AdequacyResult;
   };
   totals: { calls: number; inputTokens: number; outputTokens: number; latencyMs: number };
+  /** Gate 4.0C-5 — the material planning state this run solved under (absent on older runs: derive from snapshots). */
+  planningState?: PlanningState;
+  preflight?: RunPreflight;
 }
 
 /** Canonical JSON: object keys sorted recursively, undefined dropped, Sets/Maps rejected. */
