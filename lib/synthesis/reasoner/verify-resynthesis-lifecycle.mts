@@ -261,28 +261,38 @@ await check("9. Nothing is approved or published automatically (lifecycle + deci
 await check("10. Only-uncertain options for a GOAL-required muscle → stops BEFORE the paid call and asks; otherwise withheld, never asked", async () => {
   // Without a goal requirement, lats having only uncertain options is NOT a planning blocker: planning proceeds, the
   // Reasoner is told lats is unavailable (pending the coach's fit decision), and the options are listed for the coach.
-  const noGoal = await solve(input(record(BRACING, [decision("exercise.chest_supported_row", "excluded")])));
+  // Build "lats can only be trained by uncertain-fit exercises" from METADATA: exclude every confirmed-compatible /
+  // conditional lats option the pool offers under the bracing restriction (whatever Fitness Knowledge contains).
+  const base = input(record(BRACING));
+  const bm = methodFor(base)!;
+  const bp = buildPool(base, (bm as { method: Parameters<typeof buildPool>[1] }).method)!;
+  const certainLats = functionAvailability(bp.pool, bp.loadConditions).find((f) => f.target === "lats")!.certain;
+  const uncertainLats = functionAvailability(bp.pool, bp.loadConditions).find((f) => f.target === "lats")!.uncertain;
+  assert.ok(certainLats.length > 1 && uncertainLats.length > 0, "fixture premise");
+  const exclusions = () => certainLats.map((id) => decision(id, "excluded"));
+  const noGoal = await solve(input(record(BRACING, exclusions())));
   assert.equal(noGoal.r.status, "PLANNED");
   assert.ok(noGoal.r.run.input!.functions!.unavailable.some((u) => u.target === "lats" && /unconfirmed/.test(u.why)) && noGoal.r.run.input!.functions!.required.length === 0);
-  const i = input(record(BRACING, [decision("exercise.chest_supported_row", "excluded")]), { priorityMuscles: ["lats"] });
+  const i = input(record(BRACING, exclusions()), { priorityMuscles: ["lats"] });
   const { r, model } = await solve(i);
   assert.equal(r.status, "NEEDS_INPUT");
   assert.equal(model.calls, 0, "no model call");
   assert.ok(r.status === "NEEDS_INPUT" && r.source === "preflight");
   const q = r.run.preflight!.questions.map((x) => x.exerciseId).sort();
-  assert.deepEqual(q, ["exercise.assisted_pull_up", "exercise.dumbbell_row", "exercise.lat_pulldown", "exercise.seated_cable_row"]);
+  assert.deepEqual(q, [...uncertainLats].sort(), "asks about exactly the uncertain lats options");
   assert.ok(r.run.preflight!.questions.every((x) => x.serves.includes("lats") && x.conditions.length > 0));
   // The coach answers → the state changes → planning proceeds with exactly what the coach decided.
   const cs = i.constraints;
-  const answered = input(record(BRACING, [decision("exercise.chest_supported_row", "excluded"), decision("exercise.seated_cable_row", "cleared", cs), ...["exercise.lat_pulldown", "exercise.dumbbell_row", "exercise.assisted_pull_up"].map((x) => decision(x, "excluded"))]), { priorityMuscles: ["lats"] });
+  const [clear, ...rest] = [...uncertainLats].sort();
+  const answered = input(record(BRACING, [...exclusions(), decision(clear, "cleared", cs), ...rest.map((x) => decision(x, "excluded"))]), { priorityMuscles: ["lats"] });
   const next = await solve(answered);
   const p = planned(next.r);
-  assert.equal(fitCode(p, "exercise.seated_cable_row"), "K");
-  assert.ok(!ids(p).some((x) => ["exercise.lat_pulldown", "exercise.dumbbell_row", "exercise.assisted_pull_up", "exercise.chest_supported_row"].includes(x)));
+  assert.equal(fitCode(p, clear), "K");
+  assert.ok(!ids(p).some((x) => [...rest, ...certainLats].includes(x)));
   // When a compatible option exists, uncertain ones are WITHHELD (never planned and deferred to coach review).
   const { r: plain } = await solve(input(record(BRACING)));
   assert.equal(plain.status, "PLANNED");
-  assert.deepEqual([...plain.run.preflight!.withheld].sort(), ["exercise.assisted_pull_up", "exercise.dumbbell_row", "exercise.dumbbell_split_squat", "exercise.hack_squat", "exercise.lat_pulldown", "exercise.seated_cable_row"]);
+  assert.ok(plain.run.preflight!.withheld.length > 0 && plain.run.preflight!.withheld.every((id) => fitCode(planned(plain), id) === undefined), "uncertain options are withheld, not offered");
   assert.ok(!(plain.run.input?.exercises ?? []).some((x) => x.endsWith("|U")), "no U row reaches the model");
 });
 
@@ -326,8 +336,12 @@ await check("12. Adequacy blocks a structurally valid plan that makes false clai
 });
 
 await check("13. An infeasible function: honest declaration required; a coach decision ONLY when the goal requires it", async () => {
+  // Make lats + mid-back genuinely untrainable from METADATA: no rows / pulldowns, and exclude whatever else in
+  // Fitness Knowledge still trains them (e.g. pullovers) — the premise holds however large the registry is.
   const restr = ["avoid_horizontal_pull", "avoid_vertical_pull"];
-  const plain = input(record(restr));
+  const others = K.exercises().filter((e) => e.primaryMuscles.some((m) => m === "lats" || m === "mid_back") && !e.patterns.some((p) => p === "horizontal_pull" || p === "vertical_pull")).map((e) => decision(e.id, "excluded"));
+  const rec13 = (opts: Parameters<typeof input>[1] = {}) => input(record(restr, others), opts);
+  const plain = rec13();
   const honest = planned((await solve(plain)).r);
   assert.deepEqual(honest.reasoning.functions!.unavailable.map((f) => f.target).sort(), ["lats", "mid_back"]);
   assert.ok(honest.plan.coverage!.filter((c) => ["lats", "mid_back"].includes(c.target)).every((c) => c.status === "not_trained"));
@@ -336,7 +350,7 @@ await check("13. An infeasible function: honest declaration required; a coach de
   assert.equal(m0.adequacy, null, JSON.stringify(m0.adequacy));
   assert.ok(m0.adequacyNotes.some((n) => /Lats isn't trained/.test(n)));
   // The goal names lats as a priority → limitation = blocking coach decision; explicit acceptance of this exact set clears it.
-  const goal = input(record(restr), { priorityMuscles: ["lats"] });
+  const goal = rec13({ priorityMuscles: ["lats"] });
   const g = planned((await solve(goal)).r);
   const m = reasonerReviewModel({ content: toContent(g), run: g.run, knowledge: K, current: cur(goal) });
   assert.ok(m.adequacy && m.adequacy.limitations.some((f) => f.code === "goal_target_infeasible" && f.target === "lats") && m.adequacy.status === "unresolved", JSON.stringify(m.adequacy));
@@ -461,15 +475,18 @@ await check("21. Dogfood case (generic, not hardcoded): Lat Pulldown excluded �
   }
 });
 
-await check("22. Regression: no muscle is required just because it exists in knowledge — Teague-like restrictions, no goal priorities → glutes/abdominals are information, not blockers", async () => {
+await check("22. Regression: no muscle is required just because it exists in knowledge — Teague-like restrictions, no goal priorities → untrainable muscles are information, not blockers", async () => {
   const { stateB } = await dogfood();
   assert.deepEqual(stateB.goal.primary?.class, "hypertrophy");
   const B = planned((await solve(stateB, undefined, { runId: "job-B" })).r);
   assert.deepEqual(B.reasoning.functions!.required, [], "the goal names no priority muscles");
-  assert.ok(["glutes", "abdominals"].every((t) => B.reasoning.functions!.unavailable.some((u) => u.target === t)));
+  // Whatever the restrictions make untrainable (abdominals here; which muscles depends on Fitness Knowledge) is
+  // information, never a blocking limitation, because the goal doesn't require it.
+  const unavailable = B.reasoning.functions!.unavailable.map((u) => u.target);
+  assert.ok(unavailable.includes("abdominals"), unavailable.join(","));
   const m = reasonerReviewModel({ content: toContent(B, "job-B"), run: B.run, knowledge: K, current: cur(stateB) });
-  assert.ok(!(m.adequacy?.limitations ?? []).some((f) => f.target === "glutes" || f.target === "abdominals"), JSON.stringify(m.adequacy?.limitations));
-  assert.ok(m.adequacyNotes.some((n) => /Glutes isn't trained/.test(n)) && m.adequacyNotes.some((n) => /Abdominals isn't trained/.test(n)));
+  assert.ok(!(m.adequacy?.limitations ?? []).some((f) => unavailable.includes(f.target ?? "")), JSON.stringify(m.adequacy?.limitations));
+  for (const t of unavailable) assert.ok(m.adequacyNotes.some((n) => n.toLowerCase().startsWith(t.replace(/_/g, " ")) && /isn't trained/.test(n)), `${t} shown as information`);
 });
 
 await check("23. Adequacy boundary: no global number blocks — push/pull imbalance and a minority-share session target are information/judgment only", () => {

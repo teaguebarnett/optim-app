@@ -271,7 +271,8 @@ const place = (id: string, reps: number[], rir: number[]) => (p: WirePlan) => {
 await check("16. Bracing is load-sensitive: a generic knowledge rule, enforced as a submaximal cap (no exercise exceptions)", async () => {
   // Knowledge: one rule over metadata — every loaded, non-chest-supported compound with low base bracing rises to moderate when heavy.
   for (const e of FOUNDATION_KNOWLEDGE.exercises()) {
-    const expected = e.mechanics === "compound" && levelRank(e.loadingPotential) >= levelRank("moderate") && !e.positions.includes("prone") && levelRank(e.demands.bracing) <= levelRank("low");
+    // V2: a curated chest-supported (external) setup carries the trunk like a prone one.
+    const expected = e.mechanics === "compound" && levelRank(e.loadingPotential) >= levelRank("moderate") && !e.positions.includes("prone") && e.trunkSupport !== "external" && levelRank(e.demands.bracing) <= levelRank("low");
     assert.equal(e.loadedDemands.bracing === "moderate", expected, `${e.id}: loaded bracing doesn't follow the rule`);
   }
   const K = FOUNDATION_KNOWLEDGE;
@@ -408,7 +409,8 @@ await check("21. Bracing fit is graded honestly: compatible / conditional / unce
   for (const e of K.exercises()) {
     const c = exerciseEligibility(e, cons);
     if (!c.loadConditions.length) continue;
-    assert.equal(c.loadConditions[0].certainty, e.trunkSupport === "none" ? "uncertain" : "conditional", e.id);
+    // V2: a thigh/knee pad only anchors the pelvis — the trunk is unsupported, so fit stays uncertain.
+    assert.equal(c.loadConditions[0].certainty, e.trunkSupport === "none" || e.trunkSupport === "thigh_anchored" ? "uncertain" : "conditional", e.id);
     assert.ok(c.loadConditions[0].conditions.some((x) => /reps in reserve/.test(x)));
   }
   // Uncertain use: needs a rationale; then goes to coach review. Conditional use: conditions exposed, no review item.

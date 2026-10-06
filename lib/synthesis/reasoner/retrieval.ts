@@ -31,6 +31,14 @@ export interface EvidenceExercise {
   demands: Record<string, string>;
   suitability: Record<string, string>;
   ordering: string;
+  /** Fitness Knowledge V2 — what distinguishes candidates under constraints. */
+  apparatus: string[];
+  positions: string[];
+  trunkSupport: string;
+  role: string;
+  emphasis: string[];
+  path: { grip?: string; plane?: string; elbows?: string } | null;
+  specificity: Array<{ exerciseId: string; level: string }>;
 }
 
 export interface EvidencePacket {
@@ -91,9 +99,16 @@ export function retrieveEvidence(params: { knowledge: FitnessKnowledgeRegistry; 
       mechanics: e.mechanics,
       laterality: e.laterality,
       equipment: e.equipment,
-      demands: { skill: e.demands.skill, stability: e.demands.stability, bracing: e.demands.bracing, spinal_loading: e.demands.spinal_loading, systemic_fatigue: e.demands.systemic_fatigue },
+      demands: { skill: e.demands.skill, stability: e.demands.stability, bracing: e.demands.bracing, spinal_loading: e.demands.spinal_loading, grip: e.demands.grip, systemic_fatigue: e.demands.systemic_fatigue },
       suitability: e.suitability,
       ordering: e.ordering,
+      apparatus: e.apparatus,
+      positions: e.positions,
+      trunkSupport: e.trunkSupport,
+      role: e.role,
+      emphasis: e.emphasis,
+      path: e.path ?? null,
+      specificity: e.specificity,
     };
   });
   return { domain: params.domain, claims, exercises, retrievedRefs: [...refs] };

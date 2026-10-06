@@ -138,13 +138,16 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
     exercises: [0, 1, 2].map((k) => {
       const row = rows[cursor++ % rows.length];
       const role = k === 0 && row[5] === "C" ? "main" : "accessory";
-      const submax = row[11] === "K" || row[11] === "U";
+      const fit = row.at(-1);
+      const submax = fit === "K" || fit === "U";
       const coachRir = rirRule(role) ? rangeOf(rirRule(role)![2]) : null;
       // Differentiated effort: mains near the hard end, accessories further from failure; S rows stay submaximal.
-      const lo = coachRir ? Math.min(coachRir.max, Math.max(coachRir.min + (role === "accessory" ? 1 : 0), submax ? 2 : 0)) : 0;
+      // Differentiated: the last accessory slot sits furthest from failure (keeps the default plan's effort varied
+      // whatever rows the pool lists first).
+      const lo = coachRir ? Math.min(coachRir.max, Math.max(coachRir.min + (role === "accessory" ? (k === 2 ? 2 : 1) : 0), submax ? 2 : 0)) : 0;
       const rir = coachRir ? [lo, Math.max(lo, coachRir.max)] : undefined;
       const repMin = submax ? Math.min(reps[role].max, Math.max(reps[role].min, 6)) : reps[role].min;
-      return { id: row[0], role, sets: sets[role].min, reps: [repMin, reps[role].max], ...(rir ? { rir } : {}), note: row[11] === "U" ? "Scripted: no compatible alternative in the pool for this slot." : "Scripted; repeats only when the pool is small." };
+      return { id: row[0], role, sets: sets[role].min, reps: [repMin, reps[role].max], ...(rir ? { rir } : {}), note: fit === "U" ? "Scripted: no compatible alternative in the pool for this slot." : "Scripted; repeats only when the pool is small." };
     }),
   }));
   const coachKey = ri.coach.rules[0][0];

@@ -23,9 +23,10 @@ import type { ResistanceMethod } from "../planners/resistance/method.ts";
 import type { DomainRouting } from "./domains.ts";
 import type { EvidencePacket } from "./retrieval.ts";
 
-export const REASONER_VERSION = "fitness-reasoner-v1.4.0";
+export const REASONER_VERSION = "fitness-reasoner-v1.5.0";
 
-export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment|demands skill,stability,bracing,spine,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}, and where the exercise has a pad/bench the trunk kept against it — or as the coach cleared it); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review)`;
+/** Row columns (Fitness Knowledge V2). Columns 0–5 and the trailing fit code keep their V1 positions. */
+export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment+apparatus|positions|trunk support E chest pad/prone, P back pad/bench, T thigh/knee pad only (pelvis anchored, trunk unsupported), N none|demands skill,stability,bracing,spine,grip,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|ordering E/F/L|role M main lift, A compound accessory, I isolation, T trunk, C carry, P power|emphasis (stimulus bias, most first)|path grip/plane/elbows (- when not material)|strength transfer exercise:level (- none)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}, and where the exercise has a pad/bench the trunk kept against it — or as the coach cleared it); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review)`;
 
 export interface ReasoningInput {
   v: { reasoner: string; prompt: string; knowledge: string };
@@ -84,6 +85,8 @@ export type ContextOnlyConstraint = { constraintId: string; how: string };
 /** Exercise-row constraint-fit code (Gate 4.0C-3C). */
 const fitCode = (conds: Array<{ certainty: "conditional" | "uncertain" }> | undefined) => (!conds?.length ? "-" : conds.some((c) => c.certainty === "uncertain") ? "U" : "K");
 const L = (l: string) => ({ none: "N", low: "L", moderate: "M", high: "H" })[l] ?? "?";
+const TRUNK_CODE: Record<string, string> = { external: "E", partial: "P", thigh_anchored: "T", none: "N" };
+const ROLE_CODE: Record<string, string> = { main_lift: "M", compound_accessory: "A", isolation: "I", trunk: "T", carry: "C", power: "P" };
 const factRef = (f: Fact<unknown>) => (isKnown(f) ? f.source.ref : (f as { ref: string }).ref);
 
 export function tagRule(t: ConstraintTag, knowledge: FitnessKnowledgeRegistry): string | null {
@@ -238,7 +241,26 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
     evidence: params.evidence.claims.map((x) => ({ ref: x.ref, claim: x.statement, source: x.support, ...(x.parameters ? { params: x.parameters } : {}) })),
     exerciseLegend: EXERCISE_ROW_LEGEND,
     exercises: params.evidence.exercises.map((e) =>
-      [e.id, e.name, e.patterns.join(","), e.primary.join(","), e.secondary.join(","), e.mechanics === "compound" ? "C" : "I", e.laterality[0].toUpperCase(), e.equipment, [e.demands.skill, e.demands.stability, e.demands.bracing, e.demands.spinal_loading, e.demands.systemic_fatigue].map(L).join(""), [e.suitability.strength, e.suitability.hypertrophy, e.suitability.power].map(L).join(""), e.ordering[0].toUpperCase(), fitCode(params.pool.loadConditions.get(e.id))].join("|")
+      [
+        e.id,
+        e.name,
+        e.patterns.join(","),
+        e.primary.join(","),
+        e.secondary.join(","),
+        e.mechanics === "compound" ? "C" : "I",
+        e.laterality[0].toUpperCase(),
+        [e.equipment, ...e.apparatus].join("+"),
+        e.positions.join(","),
+        TRUNK_CODE[e.trunkSupport] ?? "N",
+        [e.demands.skill, e.demands.stability, e.demands.bracing, e.demands.spinal_loading, e.demands.grip, e.demands.systemic_fatigue].map(L).join(""),
+        [e.suitability.strength, e.suitability.hypertrophy, e.suitability.power].map(L).join(""),
+        e.ordering[0].toUpperCase(),
+        ROLE_CODE[e.role] ?? "A",
+        e.emphasis.join(","),
+        e.path ? [e.path.grip ?? "", e.path.plane ?? "", e.path.elbows ?? ""].join("/") : "-",
+        e.specificity.length ? e.specificity.map((x) => `${x.exerciseId.replace(/^exercise\./, "")}:${L(x.level)}`).join(",") : "-",
+        fitCode(params.pool.loadConditions.get(e.id)),
+      ].join("|")
     ),
     unresolved: params.unresolved,
     ...(params.functions ? { functions: params.functions } : {}),

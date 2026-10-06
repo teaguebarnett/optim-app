@@ -89,7 +89,9 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
           else {
             const loaded = exercise.loadedDemands?.[t.demand];
             if (loaded && levelRank(loaded) >= levelRank(t.atOrAbove)) {
-              const supported = exercise.trunkSupport !== "none";
+              // Only a pad that carries or backs the trunk lets execution conditions be trusted; a thigh/knee pad
+              // merely anchors the pelvis (V2), so that fit stays uncertain — never silently "safe".
+              const supported = exercise.trunkSupport === "partial" || exercise.trunkSupport === "external";
               const conditions = [`at least ${LOADED_DEMAND_CONDITION.minReps} reps per set`, `at least ${LOADED_DEMAND_CONDITION.minRir} reps in reserve`, ...(supported ? ["trunk kept against the pad or bench throughout"] : [])];
               loadConditions.push({ certainty: supported ? "conditional" : "uncertain", conditions, constraintId: c.id, enforcement: c.enforcement, demand: t.demand, limit: t.atOrAbove, loadedLevel: loaded, ...LOADED_DEMAND_CONDITION });
             }

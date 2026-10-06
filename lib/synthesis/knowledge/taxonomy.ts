@@ -73,6 +73,12 @@ export const MOVEMENT_PATTERNS = {
   elbow_flexion: { name: "Elbow flexion", category: "arm_isolation" },
   elbow_extension: { name: "Elbow extension", category: "arm_isolation" },
   shoulder_isolation: { name: "Shoulder isolation (raises, flys, rear-delt work)", category: "upper_isolation" },
+  /** V2 — straight-arm / pullover work: lat-focused shoulder extension without elbow flexion. */
+  shoulder_extension: { name: "Shoulder extension (straight-arm pulldowns, pullovers)", category: "upper_isolation" },
+  /** V2 — single-joint hip extension (kickbacks): glute work without a squat, hinge or bridge. */
+  hip_extension_isolation: { name: "Hip extension isolation (kickbacks)", category: "lower_isolation" },
+  /** V2 — scapular elevation (shrugs). */
+  shrug: { name: "Shrug / scapular elevation", category: "upper_isolation" },
   carry: { name: "Loaded carry", category: "full_body" },
   trunk_flexion: { name: "Trunk flexion", category: "trunk" },
   trunk_rotation: { name: "Trunk rotation", category: "trunk" },
@@ -91,7 +97,7 @@ export type EquipmentId = (typeof EQUIPMENT)[number];
 
 /** Fixed apparatus an exercise also needs (a pull-up needs a bar even
  * though it's "bodyweight"). Not derivable from today's intake. */
-export const APPARATUS = ["bench", "squat_rack", "pull_up_bar", "box", "back_extension_bench", "trap_bar", "ankle_anchor"] as const;
+export const APPARATUS = ["bench", "squat_rack", "pull_up_bar", "box", "back_extension_bench", "trap_bar", "ankle_anchor", "dip_station"] as const;
 export type ApparatusId = (typeof APPARATUS)[number];
 
 export const BODY_POSITIONS = ["standing", "seated", "supine", "prone", "side_lying", "kneeling", "split_stance", "single_leg_stance", "hanging", "hip_hinged", "overhead"] as const;
@@ -110,3 +116,18 @@ export type ProgressionMode = (typeof PROGRESSION_MODES)[number];
 
 export const TRAINING_QUALITIES = ["strength", "hypertrophy", "power"] as const;
 export type TrainingQuality = (typeof TRAINING_QUALITIES)[number];
+
+/** V2 — how much the setup supports the trunk (decides how far execution conditions can be trusted to keep a
+ * load-sensitive demand low): a chest pad / prone bench carries it (external); a back pad or bench supports it
+ * (partial); a thigh/knee pad only anchors the pelvis — the trunk still stabilizes itself (thigh_anchored); none. */
+export const TRUNK_SUPPORT = ["external", "partial", "thigh_anchored", "none"] as const;
+export type TrunkSupport = (typeof TRUNK_SUPPORT)[number];
+
+/** V2 — the training role an exercise usually plays in a program (a planning hint, not a rule). */
+export const EXERCISE_ROLES = ["main_lift", "compound_accessory", "isolation", "trunk", "carry", "power"] as const;
+export type ExerciseRole = (typeof EXERCISE_ROLES)[number];
+
+/** V2 — grip / arm path, only where it materially changes the stimulus or the fit. */
+export const GRIPS = ["neutral", "pronated", "supinated", "mixed", "rope", "single_handle"] as const;
+export const PULL_PATHS = ["horizontal", "low_row", "high_row", "vertical", "straight_arm", "incline", "decline", "overhead"] as const;
+export const ELBOW_PATHS = ["tucked", "flared", "straight"] as const;

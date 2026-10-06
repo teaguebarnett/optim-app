@@ -21,6 +21,11 @@ import {
   MUSCLES,
   PROGRESSION_MODES,
   TRAINING_QUALITIES,
+  TRUNK_SUPPORT,
+  EXERCISE_ROLES,
+  GRIPS,
+  PULL_PATHS,
+  ELBOW_PATHS,
   levelRank,
   type MovementPatternId,
   type MuscleId,
@@ -124,7 +129,21 @@ function validateExercise(e: ExerciseEntry, ids: Set<string>, issues: string[], 
   if (!e.positions?.length) at("no body position");
   for (const p of e.positions ?? []) if (!has(BODY_POSITIONS, p)) at(`unknown position ${p}`);
   for (const d of DEMANDS) if (!has(LEVELS, e.demands?.[d])) at(`demand ${d} missing or invalid`);
-  if (!["external", "partial", "none"].includes(e.trunkSupport)) at("trunkSupport missing or invalid");
+  if (!has(TRUNK_SUPPORT, e.trunkSupport)) at("trunkSupport missing or invalid");
+  // V2 metadata.
+  if (!has(EXERCISE_ROLES, e.role)) at("role missing or invalid");
+  if (!e.emphasis?.length) at("no stimulus emphasis");
+  for (const m of e.emphasis ?? []) if (![...e.primaryMuscles, ...e.secondaryMuscles].includes(m)) at(`emphasis ${m} isn't one of its muscles`);
+  if (e.path?.grip && !has(GRIPS, e.path.grip)) at(`unknown grip ${e.path.grip}`);
+  if (e.path?.plane && !has(PULL_PATHS, e.path.plane)) at(`unknown path ${e.path.plane}`);
+  if (e.path?.elbows && !has(ELBOW_PATHS, e.path.elbows)) at(`unknown elbow path ${e.path.elbows}`);
+  for (const v of e.setupVariations ?? []) if (!v.label?.trim() || !v.changes?.trim()) at("setup variation needs a label and what it changes");
+  for (const sp of e.specificity ?? []) {
+    if (sp.exerciseId === e.id) at("lists itself in specificity");
+    else if (!ids.has(sp.exerciseId)) at(`specificity target ${sp.exerciseId} doesn't exist`);
+    if (!has(LEVELS, sp.level)) at(`specificity level ${sp.level} invalid`);
+  }
+  if (e.trunkSupport === "external" && !e.positions.some((p) => p === "prone" || p === "seated" || p === "standing")) at("external trunk support needs a prone, seated or standing (chest-pad) position");
   for (const [d, l] of Object.entries(e.loadedDemands ?? {})) if (!has(DEMANDS, d) || !has(LEVELS, l) || levelRank(l) <= levelRank(e.demands[d as keyof typeof e.demands])) at(`loaded demand ${d} must be a higher level than its base demand`);
   if (!has(LEVELS, e.loadingPotential)) at("invalid loadingPotential");
   for (const q of TRAINING_QUALITIES) if (!has(LEVELS, e.suitability?.[q])) at(`suitability ${q} missing or invalid`);
@@ -288,7 +307,10 @@ function taxonomyEntries(): KnowledgeEntry[] {
   ];
 }
 
-export const FOUNDATION_KNOWLEDGE_VERSION = "0.4.0";
+/** 0.5.0 — Fitness Knowledge V2: richer exercise metadata (trunk support incl. thigh-anchored, role, stimulus
+ * emphasis, grip/arm path, setup variations, strength specificity) and broader coverage (supported and lat-focused
+ * pulling, supported pressing, machine/isolation options). Changing it changes every planning-state fingerprint. */
+export const FOUNDATION_KNOWLEDGE_VERSION = "0.5.0";
 
 /** The knowledge set OPTIM ships today. */
 export const FOUNDATION_KNOWLEDGE: FitnessKnowledgeRegistry = createKnowledgeRegistry({

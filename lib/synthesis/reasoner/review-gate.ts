@@ -414,6 +414,7 @@ export function clientFacingProgramContent(params: { content: UniversalTrainingP
 
 /** Exercise names whose conditional fit relies on the pad/bench (client setup cue). */
 export function supportedSetupNames(run: ReasonerRun | null, knowledge?: FitnessKnowledgeRegistry): Set<string> {
-  // Gate 4.0C-5: a coach-cleared exercise is "K" too but may have no pad/bench — only supported exercises get the cue.
-  return new Set((run?.input?.exercises ?? []).filter((row) => fitCodeOf(row) === "K" && (!knowledge || knowledge.getExercise(row.split("|")[0])?.trunkSupport !== "none")).map((row) => row.split("|")[1].toLowerCase()));
+  // Gate 4.0C-5 / V2: a coach-cleared exercise is "K" too but may have no pad/bench (or only a thigh pad) — only a
+  // setup that actually supports the back or chest gets the cue.
+  return new Set((run?.input?.exercises ?? []).filter((row) => fitCodeOf(row) === "K" && (!knowledge || ["partial", "external"].includes(knowledge.getExercise(row.split("|")[0])?.trunkSupport ?? ""))).map((row) => row.split("|")[1].toLowerCase()));
 }

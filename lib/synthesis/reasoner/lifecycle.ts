@@ -34,6 +34,7 @@ import { diffPlanningState, planningState, PART_LABEL, type PlanningState, type 
 import type { ReasonerRun } from "./run.ts";
 import type { UniversalTrainingProgramContent } from "../../training/types.ts";
 import { isKnown } from "../facts.ts";
+import { existedIn } from "../knowledge/history.ts";
 
 export type LifecycleStatus = "current" | "unaffected" | "loosened" | "superseded";
 
@@ -198,8 +199,10 @@ function solvedUncertain(run: ReasonerRun, id: string): boolean {
   return (run.input?.exercises ?? []).some((r) => r.startsWith(`${id}|`) && r.split("|").at(-1) === "U");
 }
 
-/** Under the solve's own state, the exercise was excluded, withheld or uncertain (so "now usable" is a real change). */
+/** Under the solve's own state, the exercise was excluded, withheld, uncertain — or didn't exist in the knowledge the
+ * run used (so "now usable" is a real change). */
 function wasUnusable(e: ExerciseEntry, run: ReasonerRun): boolean {
+  if (!existedIn(run.versions.knowledge, e.id)) return true;
   if (run.preflight?.withheld.includes(e.id)) return true;
   const snap = run.snapshots.constraintSet as ConstraintSet;
   const access = resolveEquipmentAccess(run.snapshots.clientState);

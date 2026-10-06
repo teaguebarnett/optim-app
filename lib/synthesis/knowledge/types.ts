@@ -11,6 +11,7 @@
 // rests on: an external source, OPTIM's own curation, or nothing yet
 // (source_needed).
 
+import type { ExerciseRole, TrunkSupport, GRIPS, PULL_PATHS, ELBOW_PATHS } from "./taxonomy.ts";
 import type { GoalClass } from "../goal-contract.ts";
 import type { ApparatusId, BodyPosition, Demand, EquipmentId, JointActionId, Level, MovementPatternId, MuscleId, ProgressionMode, TrainingQuality } from "./taxonomy.ts";
 
@@ -153,7 +154,18 @@ export interface ExerciseEntry extends KnowledgeEntryBase {
    * Decides how far OPTIM can trust execution conditions to keep a
    * load-sensitive demand low. Internal curation over positions/equipment.
    */
-  trunkSupport: "external" | "partial" | "none";
+  trunkSupport: TrunkSupport;
+  /** V2 — the training role it usually plays (a planning hint for the Reasoner, never a rule). */
+  role: ExerciseRole;
+  /** V2 — stimulus bias: the muscles this variation emphasises, most-emphasised first (a subset of primary +
+   * secondary). Distinguishes e.g. a lat-biased row from an upper-back-biased one. */
+  emphasis: MuscleId[];
+  /** V2 — grip / arm path, only where it materially changes the stimulus or the constraint fit. */
+  path?: { grip?: (typeof GRIPS)[number]; plane?: (typeof PULL_PATHS)[number]; elbows?: (typeof ELBOW_PATHS)[number] };
+  /** V2 — setup variations that matter (what they change), kept on the exercise rather than as separate entries. */
+  setupVariations: Array<{ label: string; changes: string }>;
+  /** V2 — how directly it builds a main lift's strength (exercise id → level); empty when not a meaningful transfer. */
+  specificity: Array<{ exerciseId: string; level: Level }>;
 }
 
 /**
