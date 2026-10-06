@@ -97,7 +97,16 @@ export type EquipmentId = (typeof EQUIPMENT)[number];
 
 /** Fixed apparatus an exercise also needs (a pull-up needs a bar even
  * though it's "bodyweight"). Not derivable from today's intake. */
-export const APPARATUS = ["bench", "squat_rack", "pull_up_bar", "box", "back_extension_bench", "trap_bar", "ankle_anchor", "dip_station"] as const;
+/** Standard selectorized/plate machines a full commercial gym is assumed to have (recorded as an assumption). */
+export const STANDARD_MACHINES = ["leg_press_machine", "hack_squat_machine", "chest_press_machine", "shoulder_press_machine", "chest_supported_row_machine", "assisted_pull_up_machine", "leg_curl_machine", "leg_extension_machine", "hip_abduction_adduction_machine", "standing_calf_machine", "seated_calf_machine", "pec_deck_machine", "smith_machine"] as const;
+/** Specialty machines no gym type is assumed to have — available only when known for the client. */
+export const SPECIALTY_MACHINES = ["low_row_machine", "high_row_machine", "plate_loaded_pulldown", "pullover_machine", "incline_press_machine", "dip_machine", "lateral_raise_machine", "belt_squat_machine", "hip_thrust_machine", "glute_kickback_machine", "preacher_curl_machine", "crunch_machine"] as const;
+export const APPARATUS = ["bench", "squat_rack", "pull_up_bar", "box", "back_extension_bench", "trap_bar", "ankle_anchor", "dip_station", ...STANDARD_MACHINES, ...SPECIALTY_MACHINES] as const;
+export const APPARATUS_LABEL: Record<(typeof APPARATUS)[number], string> = {
+  bench: "Bench", squat_rack: "Squat rack", pull_up_bar: "Pull-up bar", box: "Plyo box", back_extension_bench: "Back-extension bench", trap_bar: "Trap bar", ankle_anchor: "Cable ankle strap", dip_station: "Dip station",
+  leg_press_machine: "Leg press", hack_squat_machine: "Hack squat machine", chest_press_machine: "Chest press machine", shoulder_press_machine: "Shoulder press machine", chest_supported_row_machine: "Chest-supported row machine", assisted_pull_up_machine: "Assisted pull-up machine", leg_curl_machine: "Leg curl machine", leg_extension_machine: "Leg extension machine", hip_abduction_adduction_machine: "Hip abduction/adduction machine", standing_calf_machine: "Standing calf raise machine", seated_calf_machine: "Seated calf raise machine", pec_deck_machine: "Pec deck / rear-delt machine", smith_machine: "Smith machine",
+  low_row_machine: "Chest-supported low row machine", high_row_machine: "Chest-supported high row machine", plate_loaded_pulldown: "Plate-loaded pulldown machine", pullover_machine: "Pullover machine", incline_press_machine: "Incline press machine", dip_machine: "Seated dip machine", lateral_raise_machine: "Lateral raise machine", belt_squat_machine: "Belt squat machine", hip_thrust_machine: "Hip thrust machine", glute_kickback_machine: "Glute kickback machine", preacher_curl_machine: "Preacher curl machine", crunch_machine: "Ab crunch machine",
+};
 export type ApparatusId = (typeof APPARATUS)[number];
 
 export const BODY_POSITIONS = ["standing", "seated", "supine", "prone", "side_lying", "kneeling", "split_stance", "single_leg_stance", "hanging", "hip_hinged", "overhead"] as const;
@@ -131,3 +140,18 @@ export type ExerciseRole = (typeof EXERCISE_ROLES)[number];
 export const GRIPS = ["neutral", "pronated", "supinated", "mixed", "rope", "single_handle"] as const;
 export const PULL_PATHS = ["horizontal", "low_row", "high_row", "vertical", "straight_arm", "incline", "decline", "overhead"] as const;
 export const ELBOW_PATHS = ["tucked", "flared", "straight"] as const;
+
+/** Laterality — limb regions a restriction can name, and the joints each covers (JOINT_ACTIONS joints; "wrist" =
+ * gripping/holding). Programming regions, not a medical anatomy atlas. */
+export const LIMB_REGIONS = {
+  upper_limb: { label: "arm", joints: ["shoulder", "scapula", "elbow", "wrist"] },
+  shoulder: { label: "shoulder", joints: ["shoulder", "scapula"] },
+  elbow: { label: "elbow", joints: ["elbow"] },
+  wrist_hand: { label: "wrist / hand", joints: ["wrist"] },
+  lower_limb: { label: "leg", joints: ["hip", "knee", "ankle"] },
+  hip: { label: "hip", joints: ["hip"] },
+  knee: { label: "knee", joints: ["knee"] },
+  ankle: { label: "ankle", joints: ["ankle"] },
+} as const satisfies Record<string, { label: string; joints: readonly string[] }>;
+export type LimbRegion = keyof typeof LIMB_REGIONS;
+export type LimbSide = "left" | "right" | "both";

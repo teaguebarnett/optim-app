@@ -6,10 +6,10 @@
 // medical rules — nothing here is keyed to a diagnosis.
 
 import type { ConstraintTag } from "../constraints.ts";
-import { EQUIPMENT, type BodyPosition, type Demand, type EquipmentId, type Level, type MovementPatternId } from "../knowledge/taxonomy.ts";
+import { EQUIPMENT, LIMB_REGIONS, type BodyPosition, type Demand, type EquipmentId, type JointActionId, type Level, type LimbRegion, type MovementPatternId } from "../knowledge/taxonomy.ts";
 import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 
-export type RestrictionGroup = "movements" | "demands" | "positions" | "equipment" | "exercises";
+export type RestrictionGroup = "movements" | "demands" | "positions" | "equipment" | "exercises" | "limbs";
 
 export interface RestrictionOption {
   id: string;
@@ -70,6 +70,21 @@ export const RESTRICTION_OPTIONS: RestrictionOption[] = [
   position("avoid_kneeling", "Avoid kneeling", "Kneeling cable work, Nordic curls.", "kneeling"),
 
   ...EQUIPMENT.map((e): RestrictionOption => ({ id: `avoid_equipment_${e}`, group: "equipment", label: `Avoid ${EQUIPMENT_LABEL[e]}`, help: `No exercises using ${EQUIPMENT_LABEL[e]}.`, tags: [{ kind: "avoid_equipment", equipment: e }] })),
+
+  // Laterality — one limb region on one side. Single-arm / single-leg work stays available for the other side.
+  ...(["right", "left"] as const).flatMap((side): RestrictionOption[] => {
+    const other = side === "right" ? "left" : "right";
+    const limb = (id: string, label: string, help: string, region: LimbRegion, actions?: JointActionId[]): RestrictionOption => ({ id: `avoid_${side}_${id}`, group: "limbs", label, help, tags: [{ kind: "avoid_limb_loading", region, side, ...(actions ? { actions } : {}) }] });
+    return [
+      limb("arm_loading", `Avoid loading the ${side} arm`, `No exercise that works or loads the ${side} arm; single-arm work for the ${other} arm stays available.`, "upper_limb"),
+      limb("arm_pulling", `Avoid ${side}-arm pulling`, `No elbow flexion or shoulder extension with the ${side} arm (rows, pulldowns, curls); ${other}-arm single-arm pulls stay available.`, "upper_limb", ["elbow_flexion", "shoulder_extension", "shoulder_adduction"]),
+      limb("arm_pressing", `Avoid ${side}-arm pressing`, `No elbow extension or pressing with the ${side} arm; ${other}-arm single-arm presses stay available.`, "upper_limb", ["elbow_extension", "shoulder_flexion", "shoulder_horizontal_adduction"]),
+      limb("shoulder_loading", `Avoid loading the ${side} shoulder`, `No exercise moving or loading the ${side} shoulder.`, "shoulder"),
+      limb("elbow_loading", `Avoid loading the ${side} elbow`, `No exercise bending or straightening the ${side} elbow under load.`, "elbow"),
+      limb("knee_loading", `Avoid loading the ${side} knee`, `No exercise bending or straightening the ${side} knee under load; ${other}-leg single-leg work stays available.`, "knee"),
+      limb("leg_loading", `Avoid loading the ${side} leg`, `No exercise that works the ${side} leg; ${other}-leg single-leg work stays available.`, "lower_limb"),
+    ];
+  }),
 ];
 
 const BY_ID = new Map(RESTRICTION_OPTIONS.map((o) => [o.id, o]));
@@ -131,6 +146,10 @@ export function subsumes(b: ConstraintTag[], a: ConstraintTag[]): boolean {
   return a.every((t) =>
     b.some((u) => {
       if (t.kind === "avoid_demand" && u.kind === "avoid_demand") return t.demand === u.demand && LEVEL_RANK[u.atOrAbove] <= LEVEL_RANK[t.atOrAbove];
+      // A limb restriction covers another on the same side when its region contains the other's joints and it
+      // restricts at least the same actions (no action list = all loading).
+      if (t.kind === "avoid_limb_loading" && u.kind === "avoid_limb_loading")
+        return (u.side === t.side || u.side === "both") && LIMB_REGIONS[t.region].joints.every((j) => (LIMB_REGIONS[u.region].joints as readonly string[]).includes(j)) && (!u.actions?.length || (!!t.actions?.length && t.actions.every((a) => u.actions!.includes(a))));
       return JSON.stringify(t) === JSON.stringify(u);
     })
   );

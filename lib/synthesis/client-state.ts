@@ -56,6 +56,9 @@ export interface ClientState {
   equipment: {
     environments: Fact<string[]>;
     available: Fact<string[]>;
+    /** Equipment specificity — specific apparatus/machines the coach confirmed present or absent for this client
+     * (apparatus id → state). Missing when nothing is confirmed; never inferred from "machine access". */
+    confirmedApparatus: Fact<Record<string, "available" | "unavailable">>;
   };
   recovery: {
     sleep: Fact<string>;
@@ -101,6 +104,8 @@ export interface ClientStateSources {
   workspaceId: string;
   onboarding: OnboardingProgress | null;
   healthReview: HealthReviewRecord | null;
+  /** Coach-confirmed specific equipment for this client (client_equipment_profiles), when any. */
+  equipmentProfile?: { apparatus: Record<string, "available" | "unavailable">; confirmedAtIso: string } | null;
 }
 
 type Answers = Record<string, Record<string, unknown> | undefined>;
@@ -213,7 +218,14 @@ export function deriveClientState(src: ClientStateSources): ClientState {
       currentSessionsPerWeek: num("starting_point", "weeklyFrequency"),
       notes: str("starting_point", "trainingNotes"),
     },
-    equipment: { environments, available },
+    equipment: {
+      environments,
+      available,
+      confirmedApparatus:
+        src.equipmentProfile && Object.keys(src.equipmentProfile.apparatus).length
+          ? known(src.equipmentProfile.apparatus, "coach_confirmed", { kind: "coach_brain", ref: `client_equipment_profile@${src.equipmentProfile.confirmedAtIso}` })
+          : missing("client_equipment_profile.apparatus"),
+    },
     recovery: {
       sleep: str("fuel_recovery", "typicalSleep"),
       obstacles: list("fuel_recovery", "consistencyObstacles"),

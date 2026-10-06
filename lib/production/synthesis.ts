@@ -13,6 +13,7 @@ import { getAuthenticatedContext } from "./auth.ts";
 import { resolveCoachIntelligenceForClient } from "./coach-brain.ts";
 import { UnauthorizedError } from "./errors.ts";
 import { getOnboardingProgressForClient } from "./onboarding.ts";
+import { getEquipmentProfile } from "./equipment-profile.ts";
 import { resolveHealthReviewRecordForClient } from "./pain-safety.ts";
 
 export async function loadSynthesisInputForClient(clientProfileId: string): Promise<SynthesisInput> {
@@ -38,15 +39,16 @@ export async function loadSynthesisInputForClient(clientProfileId: string): Prom
     throw new UnauthorizedError(`User ${ctx.userId} cannot read synthesis state for ${clientProfileId}.`);
   }
 
-  const [onboarding, healthReview, intelligence] = await Promise.all([
+  const [onboarding, healthReview, intelligence, equipmentProfile] = await Promise.all([
     getOnboardingProgressForClient(clientProfileId),
     resolveHealthReviewRecordForClient(clientProfileId, workspaceId),
     resolveCoachIntelligenceForClient({ workspaceId, clientProfileId }),
+    getEquipmentProfile(clientProfileId),
   ]);
 
   return buildSynthesisInput({
     knowledge: FOUNDATION_KNOWLEDGE,
     coachMethod: intelligence.method,
-    client: deriveClientState({ clientProfileId, workspaceId, onboarding, healthReview }),
+    client: deriveClientState({ clientProfileId, workspaceId, onboarding, healthReview, equipmentProfile }),
   });
 }

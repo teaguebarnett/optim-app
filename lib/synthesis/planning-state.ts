@@ -99,7 +99,8 @@ export function planningState(src: PlanningStateSource): PlanningState {
 
   const c = src.client;
   const access = resolveEquipmentAccess(c);
-  const equipment = access ? { equipment: Object.entries(access.equipment).filter(([, s]) => s === "available").map(([e]) => e).sort(), apparatus: Object.fromEntries(Object.entries(access.apparatus).sort()) } : null;
+  // Only KNOWN apparatus states count (unknown is the default), so adding apparatus ids to the taxonomy is no change.
+  const equipment = access ? { equipment: Object.entries(access.equipment).filter(([, s]) => s === "available").map(([e]) => e).sort(), apparatus: Object.fromEntries(Object.entries(access.apparatus).filter(([, s]) => s !== "unknown").sort()) } : null;
   const len = val(c.schedule.maxSessionLength) as { minutes: number; openEnded?: boolean } | null;
   const days = (val(c.schedule.availableDays) as string[] | null)?.slice().sort() ?? null;
   const schedule = { days, minutes: len ? (len.openEnded ? `${len.minutes}+` : len.minutes) : null };
@@ -118,7 +119,12 @@ export function planningState(src: PlanningStateSource): PlanningState {
   const summary: Record<PlanningStatePart, string[]> = {
     restrictions: hard.filter((x) => !["availability", "session_length", "equipment"].includes(x.category) && !isExerciseFitConstraint(x.id)).flatMap((x) => x.tags.filter((t) => t.kind !== "avoid_exercise").map((t) => tagSummary(t, name)).filter((s): s is string => !!s)),
     exerciseFit: [...new Set(fitTags.map((t) => (t.kind === "avoid_exercise" ? `Not ${name(t.exerciseId)}` : t.kind === "exercise_cleared" ? `${name(t.exerciseId)} cleared under conditions` : "")).filter(Boolean))],
-    equipment: equipment ? [`Equipment: ${equipment.equipment.join(", ") || "none"}`] : ["Equipment unknown"],
+    equipment: equipment
+      ? [
+          `Equipment: ${equipment.equipment.join(", ") || "none"}`,
+          ...Object.entries(access!.apparatus).filter(([a, st]) => st !== "unknown" && access!.apparatusBasis?.[a as keyof NonNullable<typeof access>["apparatusBasis"]] === "coach_confirmed").map(([a, st]) => `${a.replace(/_/g, " ")}: ${st}`),
+        ]
+      : ["Equipment unknown"],
     schedule: [days ? `${days.length} available days` : "Availability unknown", schedule.minutes !== null ? `${schedule.minutes} min sessions` : "Session length unknown"],
     goal: [g.primary ? `Primary goal: ${g.primary.class.replace(/_/g, " ")}` : "No primary goal", ...(g.secondary ?? []).map((s) => `Secondary: ${s.class.replace(/_/g, " ")}`), ...(g.performanceTargets ?? []).map((t) => `Target: ${t.exercise} ${t.value} ${t.unit}`)],
     training: [`Experience: ${training.experience ?? "unknown"}`, `Currently ${training.currentSessionsPerWeek ?? "?"}×/week`],
@@ -140,6 +146,8 @@ function tagSummary(t: ConstraintTag, name: (id: string) => string): string | nu
       return `Not ${name(t.exerciseId)}`;
     case "avoid_equipment":
       return `No ${t.equipment}`;
+    case "avoid_limb_loading":
+      return `${t.side === "both" ? "Both" : t.side === "left" ? "Left" : "Right"} ${t.region.replace(/_/g, " ")}: no ${t.actions?.length ? t.actions.map((a) => a.replace(/_/g, " ")).join("/") : "loading"}`;
     case "requires_coach_review":
       return "Health review open";
     default:

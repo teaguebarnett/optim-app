@@ -13,7 +13,7 @@
 
 import { createHash } from "node:crypto";
 import { effectiveConstraints, type Constraint, type ConstraintSet } from "./constraints.ts";
-import { levelRank } from "./knowledge/taxonomy.ts";
+import { JOINT_ACTIONS, LIMB_REGIONS, levelRank, type JointActionId, type LimbRegion } from "./knowledge/taxonomy.ts";
 import { LOADED_DEMAND_CONDITION, type DemandCompatibility, type ExerciseEntry, type ExerciseFilter, type FitnessKnowledgeRegistry } from "./knowledge/types.ts";
 
 export interface EligibilityViolation {
@@ -45,12 +45,36 @@ export interface LoadCondition {
   originalCertainty?: "uncertain";
 }
 
+/** Plain description of the restriction behind a load condition (demand limits and limb restrictions). */
+export function describeLoadCondition(lc: LoadCondition): string {
+  if (lc.demand.startsWith("limb:")) {
+    const region = lc.demand.slice(5) as LimbRegion;
+    return `the ${lc.limit === "both" ? "both" : lc.limit} ${LIMB_REGIONS[region]?.label ?? region} restriction`;
+  }
+  return `nothing needing ${lc.demand.replace(/_/g, " ")} at ${lc.limit} or above`;
+}
+
 /** The overall compatibility of an exercise with a constraint set (Gate 4.0C-3C). */
 export function demandCompatibility(e: ExerciseEligibility): DemandCompatibility {
   if (!e.eligible) return "incompatible";
   const hard = e.loadConditions.filter((c) => c.enforcement === "hard");
   if (hard.some((c) => c.certainty === "uncertain")) return "uncertain";
-  return hard.length ? "conditional" : "compatible";
+  return hard.length || e.sideOnly ? "conditional" : "compatible";
+}
+
+/**
+ * Laterality — how an exercise involves a limb region, from metadata only: "dynamic" when one of its joint actions
+ * is at that region (and in the restricted actions, when listed); "hold" when the arm only holds/grips a meaningful
+ * load (grip demand ≥ moderate or hanging) and the restriction covers elbow flexion or the whole region; null when
+ * the region isn't involved. Lower-limb stance loading isn't modelled beyond split stances.
+ */
+export function limbInvolvement(exercise: ExerciseEntry, region: LimbRegion, actions?: JointActionId[]): "dynamic" | "hold" | null {
+  const joints = new Set<string>(LIMB_REGIONS[region].joints);
+  if (exercise.jointActions.some((a) => joints.has(JOINT_ACTIONS[a].joint) && (!actions?.length || actions.includes(a)))) return "dynamic";
+  const upper = joints.has("elbow") || joints.has("wrist") || joints.has("shoulder");
+  const holds = levelRank(exercise.demands.grip) >= levelRank("moderate") || exercise.positions.includes("hanging");
+  if (upper && holds && (!actions?.length || actions.includes("elbow_flexion"))) return "hold";
+  return null;
 }
 
 export interface ExerciseEligibility {
@@ -62,6 +86,8 @@ export interface ExerciseEligibility {
   /** Gate 4.0C-5 — set when an uncertain fit was made conditional by the coach's exercise clearance
    * (exercise_cleared, matching basis): the conditions the coach accepted. */
   clearedBy?: { constraintId: string; conditions: string[] };
+  /** Laterality — a unilateral exercise that fits only when performed with the UNAFFECTED side. */
+  sideOnly?: { side: "left" | "right"; constraintId: string; reason: string };
 }
 
 /** Stable fingerprint of an exercise's eligibility (what blocks it, under which conditions) — EXCLUDING any coach
@@ -77,6 +103,7 @@ const words = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, " ").tri
 export function exerciseEligibility(exercise: ExerciseEntry, constraints: ConstraintSet): ExerciseEligibility {
   const violations: EligibilityViolation[] = [];
   const loadConditions: LoadCondition[] = [];
+  let sideOnly: ExerciseEligibility["sideOnly"];
   for (const c of effectiveConstraints(constraints)) {
     const v = (basis: EligibilityViolation["basis"], reason: string) => violations.push({ constraintId: c.id, enforcement: c.enforcement, basis, reason });
     for (const t of c.tags) {
@@ -100,6 +127,20 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
         case "avoid_position":
           if (exercise.positions.includes(t.position)) v("metadata", `position ${t.position}`);
           break;
+        case "avoid_limb_loading": {
+          const r = limbInvolvement(exercise, t.region, t.actions);
+          if (!r) break;
+          const where = `${t.side === "both" ? "both" : t.side} ${LIMB_REGIONS[t.region].label}`;
+          const what = t.actions?.length ? t.actions.map((a) => a.replace(/_/g, " ")).join("/") : "loading";
+          const lowerSplit = LIMB_REGIONS[t.region].joints.some((j) => j === "hip" || j === "knee" || j === "ankle") && exercise.positions.includes("split_stance");
+          if (t.side !== "both" && exercise.laterality === "unilateral" && !lowerSplit) {
+            // One limb at a time: it fits with the other side only (never a family-wide ban).
+            if (!sideOnly) sideOnly = { side: t.side === "left" ? "right" : "left", constraintId: c.id, reason: `${where}: no ${what}` };
+          } else if (r === "dynamic") v("metadata", `${where}: ${what} (uses that limb)`);
+          else
+            loadConditions.push({ certainty: "uncertain", conditions: [`OPTIM can't establish the ${where} isn't loaded ${r === "hold" ? "while holding or gripping the weight" : "by the other leg's stance"}`], constraintId: c.id, enforcement: c.enforcement, demand: `limb:${t.region}`, limit: t.side, loadedLevel: r, ...LOADED_DEMAND_CONDITION });
+          break;
+        }
         case "avoid_exercise":
           if (exercise.id === t.exerciseId) v("metadata", "excluded by the coach");
           break;
@@ -121,7 +162,7 @@ export function exerciseEligibility(exercise: ExerciseEntry, constraints: Constr
       }
     }
   }
-  const result: ExerciseEligibility = { eligible: !violations.some((x) => x.enforcement === "hard"), violations, loadConditions };
+  const result: ExerciseEligibility = { eligible: !violations.some((x) => x.enforcement === "hard"), violations, loadConditions, ...(sideOnly ? { sideOnly } : {}) };
   // Gate 4.0C-5 — a coach clearance turns THIS exercise's uncertain fit into conditional fit, only under the basis it
   // was granted against (a stricter or different restriction makes it inert) and never for an ineligible exercise.
   if (result.eligible && loadConditions.some((l) => l.certainty === "uncertain" && l.enforcement === "hard")) {

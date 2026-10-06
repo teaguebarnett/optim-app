@@ -107,6 +107,8 @@ export interface PoolResult {
   byConstraint: Map<string, string[]>;
   /** Gate 4.0C-3B — eligible exercises that must stay submaximal under a hard demand restriction. */
   loadConditions: Map<string, LoadCondition[]>;
+  /** Laterality — unilateral exercises that fit only with the unaffected side (exercise id → that side). */
+  sideOnly: Map<string, "left" | "right">;
 }
 
 export function buildPool(input: SynthesisInput, method: ResistanceMethod): PoolResult | null {
@@ -120,6 +122,7 @@ export function buildPool(input: SynthesisInput, method: ResistanceMethod): Pool
   const unknownApparatus = new Map<ApparatusId, string[]>();
   const byConstraint = new Map<string, string[]>();
   const loadConditions = new Map<string, LoadCondition[]>();
+  const sideOnly = new Map<string, "left" | "right">();
   for (const e of input.knowledge.exercises()) {
     const reasons: string[] = [];
     if (!equipment.has(e.equipment)) reasons.push(`needs ${e.equipment}`);
@@ -141,9 +144,10 @@ export function buildPool(input: SynthesisInput, method: ResistanceMethod): Pool
       pool.push(e);
       const conds = elig.loadConditions.filter((x) => x.enforcement === "hard");
       if (conds.length) loadConditions.set(e.id, conds);
+      if (elig.sideOnly) sideOnly.set(e.id, elig.sideOnly.side);
     }
   }
-  return { pool, excluded, unknownApparatus, byConstraint, loadConditions };
+  return { pool, excluded, unknownApparatus, byConstraint, loadConditions, sideOnly };
 }
 
 function plan(input: SynthesisInput, ctx: { nowIso: string }): PlanSpecification | { status: "NEEDS_INPUT"; missing: MissingInput[] } {

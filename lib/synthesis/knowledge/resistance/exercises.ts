@@ -54,8 +54,42 @@ interface Spec {
 const evidence: Evidence = { status: "internal_curation", sources: [{ sourceId: SOURCES.internalTaxonomy.id }], reviewedByQualifiedExpert: false };
 const legacyEvidence: Evidence = { status: "internal_curation", sources: [{ sourceId: SOURCES.internalLibrary.id }, { sourceId: SOURCES.internalTaxonomy.id }], reviewedByQualifiedExpert: false };
 
+/** Equipment specificity — the specific machine each machine exercise needs. "Machine access" alone never implies
+ * a particular machine: availability comes from a gym baseline (standard machines only) or the client's known
+ * equipment (lib/synthesis/planners/resistance/equipment-access.ts). */
+const MACHINE: Record<string, ApparatusId> = {
+  "exercise.leg_press": "leg_press_machine",
+  "exercise.hack_squat": "hack_squat_machine",
+  "exercise.machine_chest_press": "chest_press_machine",
+  "exercise.machine_shoulder_press": "shoulder_press_machine",
+  "exercise.chest_supported_row": "chest_supported_row_machine",
+  "exercise.assisted_pull_up": "assisted_pull_up_machine",
+  "exercise.leg_curl": "leg_curl_machine",
+  "exercise.leg_extension": "leg_extension_machine",
+  "exercise.hip_abduction_machine": "hip_abduction_adduction_machine",
+  "exercise.hip_adduction_machine": "hip_abduction_adduction_machine",
+  "exercise.calf_raise": "standing_calf_machine",
+  "exercise.seated_calf_raise": "seated_calf_machine",
+  "exercise.pec_deck": "pec_deck_machine",
+  "exercise.reverse_pec_deck": "pec_deck_machine",
+  "exercise.smith_machine_bench_press": "smith_machine",
+  "exercise.machine_low_row": "low_row_machine",
+  "exercise.machine_high_row": "high_row_machine",
+  "exercise.machine_pulldown": "plate_loaded_pulldown",
+  "exercise.machine_pullover": "pullover_machine",
+  "exercise.incline_machine_press": "incline_press_machine",
+  "exercise.machine_dip": "dip_machine",
+  "exercise.machine_lateral_raise": "lateral_raise_machine",
+  "exercise.belt_squat": "belt_squat_machine",
+  "exercise.hip_thrust_machine": "hip_thrust_machine",
+  "exercise.glute_kickback_machine": "glute_kickback_machine",
+  "exercise.machine_preacher_curl": "preacher_curl_machine",
+  "exercise.machine_crunch": "crunch_machine",
+};
+
 function ex(id: string, spec: Spec): ExerciseEntry {
-  const s: Spec = { ...spec, ...(V2_METADATA[id] ?? {}) };
+  const merged: Spec = { ...spec, ...(V2_METADATA[id] ?? {}) };
+  const s: Spec = MACHINE[id] ? { ...merged, apparatus: [...(merged.apparatus ?? []), MACHINE[id]] } : merged;
   const [skill, stability, bracing, spinal_loading, impact, grip, systemic_fatigue] = s.demands;
   const [strength, hypertrophy, power] = s.suits;
   return {

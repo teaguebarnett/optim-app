@@ -29,7 +29,7 @@ export interface JobOutcome {
 
 export interface JobIntent {
   planningKey: string;
-  trigger: "initial" | "limitations_confirmed" | "fit_decision" | "preflight_answered" | "coach_requested";
+  trigger: "initial" | "limitations_confirmed" | "fit_decision" | "preflight_answered" | "equipment_confirmed" | "coach_requested";
   supersedesVersionId?: string;
   supersedesJobId?: string;
   programId?: string;

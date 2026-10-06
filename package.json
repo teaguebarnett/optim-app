@@ -98,6 +98,7 @@
     "verify:synthesis": "node --experimental-strip-types lib/synthesis/verify-synthesis.mts",
     "verify:knowledge": "node --experimental-strip-types lib/synthesis/knowledge/verify-knowledge.mts",
     "verify:knowledge-v2": "node --experimental-strip-types lib/synthesis/knowledge/verify-knowledge-v2.mts",
+    "verify:equipment-laterality": "node --experimental-strip-types lib/synthesis/knowledge/verify-equipment-laterality.mts",
     "verify:resistance-planner": "node --experimental-strip-types lib/synthesis/planners/resistance/verify-resistance-planner.mts",
     "verify:limitations": "node --experimental-strip-types lib/synthesis/limitations/verify-limitations.mts",
     "verify:provider-safety": "node --conditions=react-server --experimental-strip-types lib/ai/verify-provider-safety.mts",

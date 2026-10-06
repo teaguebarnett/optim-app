@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { FOUNDATION_KNOWLEDGE as K, FOUNDATION_KNOWLEDGE_VERSION, validateKnowledge } from "./registry.ts";
 import { ALL_SOURCES } from "./sources.ts";
 import { KNOWLEDGE_EXERCISE_IDS } from "./history.ts";
+import { SPECIALTY_MACHINES, STANDARD_MACHINES } from "./taxonomy.ts";
 import type { ExerciseEntry } from "./types.ts";
 import { demandCompatibility, exerciseEligibility } from "../exercise-eligibility.ts";
 import { buildPool, methodFor } from "../planners/resistance/planner.ts";
@@ -37,15 +38,15 @@ const pattern = (p: string): ConstraintTag => ({ kind: "avoid_movement_pattern",
 const BRACING: ConstraintTag = { kind: "avoid_demand", demand: "bracing", atOrAbove: "moderate" };
 const TEAGUE_TAGS: ConstraintTag[] = [BRACING, ...["squat", "hinge", "single_leg", "hip_thrust", "trunk_flexion", "trunk_rotation", "anti_extension", "anti_rotation", "anti_lateral_flexion"].map(pattern), { kind: "avoid_exercise", exerciseId: "exercise.lat_pulldown" }];
 const SIX_DAYS = { your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"] }, starting_point: { trainingExperience: "experienced_consistent", weeklyFrequency: 6, recentConsistency: "very_consistent" }, what_you_want: { primaryGoal: "build_muscle", secondaryGoals: ["get_stronger"] } };
-const inputFor = (tags: ConstraintTag[], patch: Record<string, Record<string, unknown>> = {}) => scenarioInput({ restrictions: restrict(tags), patch: { ...SIX_DAYS, ...patch } });
-const poolFor = (tags: ConstraintTag[], patch: Record<string, Record<string, unknown>> = {}) => {
-  const i = inputFor(tags, patch);
+const inputFor = (tags: ConstraintTag[], patch: Record<string, Record<string, unknown>> = {}, equipment?: Record<string, "available" | "unavailable">) => scenarioInput({ restrictions: restrict(tags), patch: { ...SIX_DAYS, ...patch }, ...(equipment ? { equipment } : {}) });
+const PRIVATE_GYM = { your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["private_gym"] } };
+const poolFor = (tags: ConstraintTag[], patch: Record<string, Record<string, unknown>> = {}, equipment?: Record<string, "available" | "unavailable">) => {
+  const i = inputFor(tags, patch, equipment);
   const m = methodFor(i)!;
   assert.ok(m.ok);
   return { input: i, pool: buildPool(i, (m as { method: Parameters<typeof buildPool>[1] }).method)! };
 };
 const fit = (id: string, tags: ConstraintTag[]) => demandCompatibility(exerciseEligibility(K.getExercise(id)!, inputFor(tags).constraints));
-const fitCodeOf = (rows: string[], id: string) => rows.find((r) => r.startsWith(`${id}|`))?.split("|").at(-1);
 const col = (rows: string[], id: string, i: number) => rows.find((r) => r.startsWith(`${id}|`))?.split("|")[i];
 const isBackCompound = (e: ExerciseEntry) => e.mechanics === "compound" && e.primaryMuscles.some((m) => m === "lats" || m === "mid_back");
 const isLatWork = (e: ExerciseEntry) => e.primaryMuscles.includes("lats");
@@ -107,26 +108,28 @@ await check("4. Stimulus bias distinguishes what a variation actually trains (la
   assert.deepEqual(dupes, [], "no trivial V2 duplicates");
 });
 
-await check("5. Teague dogfood fixture: materially richer pool — several legitimate back/lat compounds, honest fit classes, Lat Pulldown excluded", async () => {
-  const { pool } = poolFor(TEAGUE_TAGS);
+await check("5. Teague dogfood fixture (private gym, nothing confirmed): richer pool from KNOWN equipment only — honest fit classes, Lat Pulldown excluded", async () => {
+  const { pool } = poolFor(TEAGUE_TAGS, PRIVATE_GYM);
   const certain = (e: ExerciseEntry) => !pool.loadConditions.get(e.id)?.some((c) => c.certainty === "uncertain");
+  assert.ok(!pool.pool.some((e) => e.equipment === "machine"), "a private gym's 'machine access' unlocks no specific machine");
   const backCompounds = pool.pool.filter((e) => isBackCompound(e) && certain(e)).map((e) => e.id);
   const latWork = pool.pool.filter((e) => isLatWork(e) && certain(e)).map((e) => e.id);
-  const v1BackCompounds = backCompounds.filter((id) => KNOWLEDGE_EXERCISE_IDS["0.4.0"].includes(id));
-  assert.deepEqual(v1BackCompounds, ["exercise.chest_supported_row"], "V1: one confirmed-compatible back/lat compound");
-  assert.ok(backCompounds.length >= 4, `V2 back/lat compounds: ${backCompounds.join(", ")}`);
-  assert.ok(latWork.length >= 5, `V2 lat options: ${latWork.join(", ")}`);
-  assert.ok(pool.pool.some((e) => e.patterns.includes("vertical_pull") && certain(e)), "a confirmed-compatible vertical-ish pull exists");
+  assert.ok(backCompounds.length >= 2, `back/lat compounds: ${backCompounds.join(", ")}`);
+  assert.ok(latWork.length >= 4, `lat options: ${latWork.join(", ")}`);
+  // With the client's specific machines confirmed, the chest-supported machine options join — and only those.
+  const confirmed = poolFor(TEAGUE_TAGS, PRIVATE_GYM, { high_row_machine: "available", chest_supported_row_machine: "available" }).pool;
+  const added = confirmed.pool.filter((e) => !pool.pool.some((x) => x.id === e.id)).map((e) => e.id).sort();
+  assert.deepEqual(added, ["exercise.chest_supported_row", "exercise.machine_high_row"]);
   // Excluded stays excluded; incompatible stays incompatible; uncertain stays uncertain; conditional stays conditional.
   assert.equal(fit("exercise.lat_pulldown", TEAGUE_TAGS), "incompatible");
-  assert.ok(!pool.pool.some((e) => e.id === "exercise.lat_pulldown"));
+  assert.ok(!confirmed.pool.some((e) => e.id === "exercise.lat_pulldown"));
   for (const id of ["exercise.pull_up", "exercise.barbell_row", "exercise.barbell_back_squat", "exercise.plank"]) assert.equal(fit(id, TEAGUE_TAGS), "incompatible", id);
   for (const id of ["exercise.machine_pulldown", "exercise.seated_cable_row", "exercise.single_arm_cable_pulldown"]) assert.equal(fit(id, TEAGUE_TAGS), "uncertain", id);
   for (const id of ["exercise.machine_chest_press", "exercise.incline_machine_press"]) assert.equal(fit(id, TEAGUE_TAGS), "conditional", id);
 });
 
-await check("6. Teague fixture through the Reasoner (scripted model): rows carry enough to tell supported from unsupported options", async () => {
-  const i = inputFor(TEAGUE_TAGS);
+await check("6. Teague fixture through the Reasoner (scripted model): rows tell supported from unsupported, and the equipment basis is explicit", async () => {
+  const i = inputFor(TEAGUE_TAGS, PRIVATE_GYM, { high_row_machine: "available" });
   const m = fakeModel((ri) => scriptedOutput(ri));
   const r = await runFitnessReasoner({ input: i, model: m, nowIso: NOW, runId: "v2-teague" });
   assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : r.status);
@@ -135,15 +138,14 @@ await check("6. Teague fixture through the Reasoner (scripted model): rows carry
   assert.ok(m.lastInput!.constraints.some((c) => c.rules.includes("not Lat Pulldown")));
   // Columns: 9 = trunk support, 13 = role, 14 = emphasis, 15 = path, 16 = strength transfer; fit stays last.
   assert.equal(col(rows, "exercise.machine_high_row", 9), "E");
-  assert.equal(col(rows, "exercise.machine_low_row", 14)?.split(",")[0], "lats");
-  assert.equal(col(rows, "exercise.chest_supported_row", 14)?.split(",")[0], "mid_back");
-  assert.equal(col(rows, "exercise.machine_chest_press", 9), "P");
-  assert.equal(fitCodeOf(rows, "exercise.machine_chest_press"), "K");
+  assert.ok(!rows.some((x) => x.startsWith("exercise.machine_low_row|")), "unconfirmed specialty machine not offered");
+  assert.equal(col(rows, "exercise.incline_dumbbell_row", 9), "E");
   assert.ok(!rows.some((x) => x.endsWith("|U")), "uncertain options are withheld, not offered");
-  assert.ok(r.run.preflight!.withheld.includes("exercise.machine_pulldown"), "uncertain thigh-anchored pulldown withheld for the coach");
+  assert.ok(r.run.preflight!.withheld.includes("exercise.seated_cable_row"));
+  assert.match(m.lastInput!.equipment.basis!.high_row_machine, /coach confirmed/);
+  assert.match(m.lastInput!.equipment.basis!.bench, /assumed/);
+  assert.ok(m.lastInput!.equipment.apparatusUnknown.includes("low_row_machine"));
   assert.ok(m.lastInput!.exerciseLegend.includes("T thigh/knee pad only"));
-  assert.ok(rows.length > 40, `${rows.length} candidates`);
-  // Budget sanity: the richer input stays well inside the model's context.
   assert.ok(m.lastUserMessage.length < 60_000, `${m.lastUserMessage.length} chars`);
 });
 
@@ -187,10 +189,13 @@ await check("11. Generalization: exercise-specific exclusion removes exactly tha
   assert.deepEqual(all.filter((id) => !withEx.includes(id)), ["exercise.chest_supported_row"]);
 });
 
-await check("12. Generalization: no relevant restriction — everything the equipment allows is offered, all compatible", () => {
-  const { pool } = poolFor([]);
+await check("12. Generalization: no relevant restriction — everything the KNOWN equipment allows is offered, all compatible", () => {
+  const { pool, input } = poolFor([]);
   assert.equal(pool.loadConditions.size, 0, "no load conditions without a restriction");
-  assert.ok(pool.pool.length > 80, `${pool.pool.length}`);
+  assert.ok(pool.pool.length > 70, `${pool.pool.length}`);
+  assert.ok(pool.pool.every((e) => e.apparatus.every((a) => !(SPECIALTY_MACHINES as readonly string[]).includes(a))), "commercial gym: no specialty machine is assumed");
+  assert.ok(pool.pool.some((e) => e.apparatus.some((a) => (STANDARD_MACHINES as readonly string[]).includes(a))), "commercial gym: standard machines are assumed");
+  assert.ok(input.client.equipment.environments.status === "known");
   for (const f of functionAvailability(pool.pool, pool.loadConditions)) assert.equal(f.state, "available", f.target);
 });
 
@@ -210,7 +215,8 @@ await check("13. A new knowledge version may make a better plan possible — sur
   const a = assessPlanningState({ run: old, content, current: { client: i.client, goal: i.goal, constraints: i.constraints, coachMethodVersionId: i.coach!.versionId, knowledgeVersion: FOUNDATION_KNOWLEDGE_VERSION }, knowledge: K, openConsequence: false });
   assert.deepEqual(a.changes.map((c) => c.part), ["knowledge"]);
   assert.equal(a.status, "loosened", `${a.status} ${a.reasons.join(" ")}`);
-  assert.ok(a.newlyAvailable.includes("Chest-Supported Machine High Row"), a.newlyAvailable.join(", "));
+  assert.ok(a.newlyAvailable.includes("Incline Chest-Supported Dumbbell Row"), a.newlyAvailable.join(", "));
+  assert.ok(!a.newlyAvailable.includes("Chest-Supported Machine High Row"), "a machine whose availability is unknown is never 'newly available'");
   assert.equal(decideRevision({ assessment: a, draftJobId: "j", trigger: "limitations_confirmed", jobs: [] }).queue, false, "no automatic paid call");
   assert.equal(decideRevision({ assessment: a, draftJobId: "j", trigger: "coach_requested", jobs: [] }).queue, true, "the coach may ask for it");
 });

@@ -29,6 +29,7 @@ import { expandReasonerPlan, validateReasonerPlan } from "./expand.ts";
 import { REASONER_RUN_SCHEMA, sha256, type ReasonerAttempt, type ReasonerRun, type RunPreflight } from "./run.ts";
 import { evaluateAdequacy, fitOf, functionAvailability, goalRequiredTargets, type AdequacyResult, type FunctionAvailability, type WeekSession } from "./adequacy.ts";
 import { planningState } from "../planning-state.ts";
+import { describeLoadCondition } from "../exercise-eligibility.ts";
 
 /** The model boundary the reasoner needs (lib/ai's provider implements it). */
 export interface ReasonerModel {
@@ -131,7 +132,7 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     if (ask.size) {
       preflight.questions = [...ask].map(([id, serves]) => {
         const lc = pool.loadConditions.get(id)!.find((c) => c.certainty === "uncertain")!;
-        return { exerciseId: id, exerciseName: input.knowledge.getExercise(id)?.name ?? id, serves: [...serves], restriction: `nothing needing ${lc.demand.replace(/_/g, " ")} at ${lc.limit} or above`, conditions: lc.conditions };
+        return { exerciseId: id, exerciseName: input.knowledge.getExercise(id)?.name ?? id, serves: [...serves], restriction: describeLoadCondition(lc), conditions: lc.conditions };
       });
       const missing: MissingInput[] = preflight.questions.map((q) => ({ fact: `exercise_fit.${q.exerciseId}`, why: `OPTIM can't confirm ${q.exerciseName} stays within the client's confirmed restriction (${q.restriction}), and it's the only way left to train ${q.serves.map((x) => x.replace(/_/g, " ")).join(", ")}. Decide whether it fits under these conditions — ${q.conditions.join("; ")} — or exclude it.`, blockedDecision: `Exercise selection for ${q.serves.map((x) => x.replace(/_/g, " ")).join(", ")}.`, providedBy: "coach" }));
       return finish({ status: "NEEDS_INPUT", source: "preflight", missing, routing, summary: "Before OPTIM plans, confirm whether these exercises fit the client's restrictions." }, { missing, needsInputSource: "preflight" });

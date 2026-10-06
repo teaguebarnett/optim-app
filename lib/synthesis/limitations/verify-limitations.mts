@@ -11,7 +11,7 @@ import { deriveClientState } from "../client-state.ts";
 import { deriveConstraintSet } from "../constraints.ts";
 import { exerciseEligibility } from "../exercise-eligibility.ts";
 import { FOUNDATION_KNOWLEDGE as K } from "../knowledge/registry.ts";
-import { BODY_POSITIONS, DEMANDS, EQUIPMENT, LEVELS, MOVEMENT_PATTERNS } from "../knowledge/taxonomy.ts";
+import { BODY_POSITIONS, DEMANDS, EQUIPMENT, LEVELS, MOVEMENT_PATTERNS , LIMB_REGIONS, JOINT_ACTIONS } from "../knowledge/taxonomy.ts";
 import type { PlanSpecification } from "../plan-spec.ts";
 import { runPlanner, type PlannerRun } from "../planner.ts";
 import { RESISTANCE_PLANNER } from "../planners/resistance/planner.ts";
@@ -142,6 +142,7 @@ await check("3. Proposed interpretation uses valid taxonomy ids only", async () 
       else if (t.kind === "avoid_demand") assert.ok((DEMANDS as readonly string[]).includes(t.demand) && (LEVELS as readonly string[]).includes(t.atOrAbove), o.id);
       else if (t.kind === "avoid_position") assert.ok((BODY_POSITIONS as readonly string[]).includes(t.position), o.id);
       else if (t.kind === "avoid_equipment") assert.ok((EQUIPMENT as readonly string[]).includes(t.equipment), o.id);
+      else if (t.kind === "avoid_limb_loading") assert.ok(t.region in LIMB_REGIONS && ["left", "right", "both"].includes(t.side) && (t.actions ?? []).every((a) => a in JOINT_ACTIONS), o.id);
       else assert.fail(`${o.id}: unexpected tag ${t.kind}`);
     }
   }

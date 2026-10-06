@@ -22,6 +22,8 @@ import {
   PROGRESSION_MODES,
   TRAINING_QUALITIES,
   TRUNK_SUPPORT,
+  STANDARD_MACHINES,
+  SPECIALTY_MACHINES,
   EXERCISE_ROLES,
   GRIPS,
   PULL_PATHS,
@@ -130,6 +132,8 @@ function validateExercise(e: ExerciseEntry, ids: Set<string>, issues: string[], 
   for (const p of e.positions ?? []) if (!has(BODY_POSITIONS, p)) at(`unknown position ${p}`);
   for (const d of DEMANDS) if (!has(LEVELS, e.demands?.[d])) at(`demand ${d} missing or invalid`);
   if (!has(TRUNK_SUPPORT, e.trunkSupport)) at("trunkSupport missing or invalid");
+  // Equipment specificity: a machine exercise names the specific machine it needs.
+  if (e.equipment === "machine" && !e.apparatus.some((a) => has(STANDARD_MACHINES, a) || has(SPECIALTY_MACHINES, a))) at("machine exercise names no specific machine");
   // V2 metadata.
   if (!has(EXERCISE_ROLES, e.role)) at("role missing or invalid");
   if (!e.emphasis?.length) at("no stimulus emphasis");

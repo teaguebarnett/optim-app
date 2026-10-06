@@ -17,14 +17,14 @@ import type { LimitationsState } from "@/lib/production/structured-limitations";
 
 export interface LimitationOptionView {
   id: string;
-  group: "movements" | "demands" | "positions" | "equipment" | "exercises";
+  group: "movements" | "demands" | "positions" | "equipment" | "exercises" | "limbs";
   label: string;
   help: string;
   /** Gate 4.0C-4 — options sharing a dimension are alternatives (single select); others are independent facts. */
   dimension: { key: string; label: string };
 }
 
-const GROUP_LABEL: Record<LimitationOptionView["group"], string> = { movements: "Movements", demands: "Exercise demands", positions: "Positions", equipment: "Equipment", exercises: "A specific exercise" };
+const GROUP_LABEL: Record<LimitationOptionView["group"], string> = { movements: "Movements", demands: "Exercise demands", positions: "Positions", equipment: "Equipment", exercises: "A specific exercise", limbs: "One side / limb" };
 
 export function StructuredLimitationsCard({ workspaceId, clientProfileId, state, options }: { workspaceId: string; clientProfileId: string; state: LimitationsState; options: LimitationOptionView[] }) {
   const router = useRouter();

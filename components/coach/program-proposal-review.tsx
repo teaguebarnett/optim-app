@@ -28,6 +28,7 @@ import {
   resolveReasonerFitDecisionAction,
   confirmDraftFitDecisionAction,
   recordExerciseFitDecisionsAction,
+  confirmClientEquipmentAction,
   requestRevisionAction,
   acceptPlanAdequacyAction,
   resolveProgramIntegrityAction,
@@ -201,7 +202,7 @@ function LifecycleSection({ review, revisionJob, revisionAction, workspaceId, cl
         <div className="rounded border border-border-strong bg-surface-raised px-3 py-2 text-xs text-off-white">
           <p className="font-medium">Revised proposal — prepared from the client&apos;s current state</p>
           <p className="mt-1 text-neutral">
-            OPTIM re-solved the whole program after {review.revision.trigger === "limitations_confirmed" ? "you confirmed the client's limitations" : review.revision.trigger === "fit_decision" ? "your exercise decision" : review.revision.trigger === "preflight_answered" ? "you answered its fit questions" : "you asked for a revision"} ({formatShortDate(review.revision.requestedAtIso)}). The proposal it replaces is kept unchanged in this program&apos;s history.
+            OPTIM re-solved the whole program after {review.revision.trigger === "limitations_confirmed" ? "you confirmed the client's limitations" : review.revision.trigger === "fit_decision" ? "your exercise decision" : review.revision.trigger === "preflight_answered" ? "you answered its fit questions" : review.revision.trigger === "equipment_confirmed" ? "you confirmed the client's equipment" : "you asked for a revision"} ({formatShortDate(review.revision.requestedAtIso)}). The proposal it replaces is kept unchanged in this program&apos;s history.
           </p>
           {review.revision.changes.length ? <ul className="mt-1 space-y-0.5 text-neutral">{changeLines(review.revision.changes).map((x) => <li key={x}>• {x}</li>)}</ul> : null}
         </div>
@@ -278,7 +279,7 @@ function AdequacySection({ a, acceptAction }: { a: AdequacyDecision; acceptActio
   );
 }
 
-function ReasonerContextSection({ review, resolveAction, repairEnabled, integrityAction, repairAction, revisionJob, revisionAction, adequacyAction, confirmDecisionAction, withheldAction, workspaceId, clientProfileId }: { workspaceId: string; clientProfileId: string; review: ReasonerReviewModel; resolveAction: (formData: FormData) => Promise<void>; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void>; revisionJob: ReasonerJobView | null; revisionAction: (formData: FormData) => Promise<void>; adequacyAction: (formData: FormData) => Promise<void>; confirmDecisionAction: (formData: FormData) => Promise<void>; withheldAction: (formData: FormData) => Promise<void> }) {
+function ReasonerContextSection({ review, resolveAction, repairEnabled, integrityAction, repairAction, revisionJob, revisionAction, adequacyAction, confirmDecisionAction, withheldAction, equipmentAction, workspaceId, clientProfileId }: { workspaceId: string; clientProfileId: string; review: ReasonerReviewModel; equipmentAction: (formData: FormData) => Promise<void>; resolveAction: (formData: FormData) => Promise<void>; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void>; revisionJob: ReasonerJobView | null; revisionAction: (formData: FormData) => Promise<void>; adequacyAction: (formData: FormData) => Promise<void>; confirmDecisionAction: (formData: FormData) => Promise<void>; withheldAction: (formData: FormData) => Promise<void> }) {
   const list = (items: string[]) => (
     <ul className="mt-1.5 space-y-1 text-xs">
       {items.map((line) => (
@@ -385,6 +386,37 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
                     <input type="hidden" name="verdict" value="excluded" />
                     <Button type="submit" variant="ghost" size="sm">
                       Exclude it for this client
+                    </Button>
+                  </form>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {review.lifecycle?.status !== "superseded" && review.unknownEquipment.length > 0 ? (
+        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-off-white">Not used — equipment not confirmed · {review.unknownEquipment.length}</summary>
+          <p className="mt-1.5 text-xs text-neutral">OPTIM only plans with specific machines it knows the client has. Confirm what&apos;s at their gym; it&apos;s saved for this client.</p>
+          <ul className="mt-1.5 space-y-2 text-xs">
+            {review.unknownEquipment.map((u) => (
+              <li key={u.apparatus}>
+                <p className="text-off-white">
+                  <span className="font-medium">{u.label}</span> — would allow {u.exercises.join(", ")}.
+                </p>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <form action={equipmentAction}>
+                    <input type="hidden" name="apparatus" value={u.apparatus} />
+                    <input type="hidden" name="state" value="available" />
+                    <Button type="submit" variant="secondary" size="sm">
+                      They have it
+                    </Button>
+                  </form>
+                  <form action={equipmentAction}>
+                    <input type="hidden" name="apparatus" value={u.apparatus} />
+                    <input type="hidden" name="state" value="unavailable" />
+                    <Button type="submit" variant="ghost" size="sm">
+                      They don&apos;t
                     </Button>
                   </form>
                 </div>
@@ -553,6 +585,12 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     "use server";
     const res = await recordExerciseFitDecisionsAction({ workspaceId, clientProfileId, context: "withheld", decisions: [{ exerciseId: String(formData.get("exerciseId") ?? ""), verdict: formData.get("verdict") === "excluded" ? "excluded" : "cleared" }] });
     if (!res.ok) throw new Error(res.errors.join(" "));
+    await revalidate();
+  }
+  async function equipmentAction(formData: FormData): Promise<void> {
+    "use server";
+    const res = await confirmClientEquipmentAction({ workspaceId, clientProfileId, apparatus: String(formData.get("apparatus") ?? ""), state: formData.get("state") === "unavailable" ? "unavailable" : "available" });
+    if (!res.ok) throw new Error(res.message);
     await revalidate();
   }
   async function requestRepairAction(formData: FormData): Promise<void> {
@@ -1112,7 +1150,7 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
       </div>
 
       {adjustment ? <AdjustmentProposalBanner adjustment={adjustment} /> : null}
-      {proposal.reasonerReview ? <ReasonerContextSection review={proposal.reasonerReview} resolveAction={resolveDecisionAction} repairEnabled={proposal.repairReasoningEnabled} integrityAction={resolveIntegrityAction} repairAction={requestRepairAction} revisionJob={proposal.revisionJob} revisionAction={revisionAction} adequacyAction={adequacyAction} confirmDecisionAction={confirmDecisionAction} withheldAction={withheldAction} workspaceId={workspaceId} clientProfileId={clientProfileId} /> : null}
+      {proposal.reasonerReview ? <ReasonerContextSection review={proposal.reasonerReview} resolveAction={resolveDecisionAction} repairEnabled={proposal.repairReasoningEnabled} integrityAction={resolveIntegrityAction} repairAction={requestRepairAction} revisionJob={proposal.revisionJob} revisionAction={revisionAction} adequacyAction={adequacyAction} confirmDecisionAction={confirmDecisionAction} withheldAction={withheldAction} equipmentAction={equipmentAction} workspaceId={workspaceId} clientProfileId={clientProfileId} /> : null}
       {whyThisPlan.length > 0 ? (
         <details className="mb-2 rounded border border-border-strong bg-surface-raised px-3 py-2">
           <summary className="cursor-pointer text-xs font-medium text-off-white">Why this plan</summary>

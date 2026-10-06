@@ -11,7 +11,7 @@
 
 import { termsMentionedInRestrictionText } from "../coach/program-directions.ts";
 import type { DayOfWeek } from "../types.ts";
-import type { BodyPosition, Demand, EquipmentId, Level, MovementPatternId } from "./knowledge/taxonomy.ts";
+import type { BodyPosition, Demand, EquipmentId, JointActionId, Level, LimbRegion, LimbSide, MovementPatternId } from "./knowledge/taxonomy.ts";
 import { isKnown } from "./facts.ts";
 import type { ClientState } from "./client-state.ts";
 import { effectiveExerciseDecisions, type ExerciseFitDecisionRecord } from "./limitations/exercise-decisions.ts";
@@ -32,6 +32,9 @@ export type ConstraintTag =
   /** A specific exercise, by Fitness Knowledge id (never by name). */
   | { kind: "avoid_exercise"; exerciseId: string }
   | { kind: "avoid_equipment"; equipment: EquipmentId }
+  /** Laterality — no loading of one limb region on one side (or both), optionally only for the listed joint actions
+   * (e.g. right arm, elbow flexion). Coaching restriction, never a diagnosis. */
+  | { kind: "avoid_limb_loading"; region: LimbRegion; side: LimbSide; actions?: JointActionId[] }
   /** Gate 4.0C-5 — the coach confirmed this exercise fits the client's restrictions, but ONLY under the stated
    * conditions and ONLY while its eligibility basis (what made it uncertain) is unchanged. Never a broader rule. */
   | { kind: "exercise_cleared"; exerciseId: string; conditions: string[]; basis: string }

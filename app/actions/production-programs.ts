@@ -92,9 +92,10 @@ import { loadSynthesisInputForClient } from "../../lib/production/synthesis";
 import { getLatestReasonerJob, getReasonerRunForJob, isReasonerProposalEnabled, isRepairReasoningEnabled, productionRepairModel } from "../../lib/production/reasoner-proposals";
 import { planningContextFor, queueAfterPreflightAnswers, queueRevisionIfMaterial, resolveGenerationContext, startReasonerGeneration, type RevisionQueueResult } from "../../lib/production/reasoner-lifecycle";
 import { recordExerciseFitDecisions, type ExerciseFitDecisionInput } from "../../lib/production/structured-limitations";
+import { setConfirmedApparatus } from "../../lib/production/equipment-profile";
 import { applyReplacement, checkReplacement, defaultReplacement, parseRepairOutput, REPAIR_PROMPT_VERSION, REPAIR_SYSTEM_PROMPT, repairInput, validateRepair, type Replacement } from "../../lib/synthesis/reasoner/edit-impact";
 import { methodFor } from "../../lib/synthesis/planners/resistance/planner";
-import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, removeExerciseEverywhere, supportedSetupNames, type ReasonerReviewModel } from "../../lib/synthesis/reasoner/review-gate";
+import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, removeExerciseEverywhere, sideOnlyNames, supportedSetupNames, type ReasonerReviewModel } from "../../lib/synthesis/reasoner/review-gate";
 import { FOUNDATION_KNOWLEDGE } from "../../lib/synthesis/knowledge/registry";
 import type { ReasonerJobView } from "../../lib/synthesis/reasoner/proposal-job";
 
@@ -961,6 +962,16 @@ export async function recordExerciseFitDecisionsAction(params: { workspaceId: st
   }
 }
 
+/** Equipment specificity — the coach confirms whether the client has a specific machine/apparatus. A confirmation that
+ * supersedes the draft (a planned exercise's equipment is absent) prepares ONE revision; one that only makes more
+ * exercises usable leaves the draft valid (a better plan may be possible — the coach asks for it). */
+export async function confirmClientEquipmentAction(params: { workspaceId: string; clientProfileId: string; apparatus: string; state: "available" | "unavailable" }): Promise<{ ok: true; revision: "queued" | "not_needed" | "already_prepared" | "in_flight" | "unavailable" } | { ok: false; message: string }> {
+  const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
+  const saved = await setConfirmedApparatus({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachUserId: ctx.userId, changes: { [params.apparatus]: params.state } });
+  if (!saved.ok) return saved;
+  return { ok: true, revision: revisionOutcome(await queueRevisionQuietly({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, trigger: "equipment_confirmed" })) };
+}
+
 /** Gate 4.0C-5 — the coach explicitly asks for a revision of a superseded (or improvable) draft: ONE Reasoner call
  * from the current state. Never repeats while one is preparing or after one is ready for this state. */
 export async function requestRevisionAction(params: { workspaceId: string; clientProfileId: string }): Promise<{ revision: "queued" | "not_needed" | "already_prepared" | "in_flight" | "unavailable" }> {
@@ -1136,7 +1147,7 @@ export async function approveProgramProposalAction(params: { workspaceId: string
     // Gate 4.0C-5 — fails closed on a superseded draft, open fit / integrity / adequacy decisions, or a missing run.
     const review = reasonerReviewModel({ content: approved.content, run, knowledge: FOUNDATION_KNOWLEDGE, original: original.content, current });
     if (review.approvalBlockedReason) throw new Error(review.approvalBlockedReason);
-    const clientContent = clientFacingProgramContent({ content: approved.content, reviewedVersionId: approved.versionId, knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(run, FOUNDATION_KNOWLEDGE), nowIso: new Date().toISOString() });
+    const clientContent = clientFacingProgramContent({ content: approved.content, reviewedVersionId: approved.versionId, knowledge: FOUNDATION_KNOWLEDGE, supportedSetup: supportedSetupNames(run, FOUNDATION_KNOWLEDGE), sideOnly: sideOnlyNames(run, FOUNDATION_KNOWLEDGE), nowIso: new Date().toISOString() });
     if (findClientCopyLeaks(clientContent).length) throw new Error("Some session names still contain internal planning notes. Rename those sessions, then approve.");
     const saved = await saveProposalDraft({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, current: { programId: approved.programId, content: approved.content, versionId: approved.versionId }, nextContent: clientContent });
     publishVersionId = saved.versionId;

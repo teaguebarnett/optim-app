@@ -87,6 +87,7 @@ function namesIn(content: UniversalTrainingProgramContent): Set<string> {
   return out;
 }
 
+/** Only a CONFIRMED absence makes a planned exercise unavailable; unknown equipment never supersedes a draft. */
 const equipmentProblem = (ex: ExerciseEntry, access: EquipmentAccess | null): string | null => {
   if (!access) return null;
   if (access.equipment[ex.equipment] !== "available") return `needs ${ex.equipment.replace(/_/g, " ")}, which isn't available`;
@@ -187,7 +188,7 @@ export function assessPlanningState(params: { run: ReasonerRun; content: Univers
     const offered = new Set((run.input?.exercises ?? []).filter((r) => r.split("|").at(-1) !== "U").map((r) => r.split("|")[0]));
     const newly = knowledge
       .exercises()
-      .filter((e) => !offered.has(e.id) && e.prescription.includes("reps") && currentFit(e, current.constraints, access).state === "ok" && wasUnusable(e, run))
+      .filter((e) => !offered.has(e.id) && e.prescription.includes("reps") && currentFit(e, current.constraints, access).state === "ok" && (!access || e.apparatus.every((a) => access.apparatus[a] === "available")) && wasUnusable(e, run))
       .map((e) => e.name);
     if (newly.length) return { ...base, status: "loosened", changes, reasons: [], hits, newlyAvailable: newly };
   }
@@ -206,6 +207,8 @@ function wasUnusable(e: ExerciseEntry, run: ReasonerRun): boolean {
   if (run.preflight?.withheld.includes(e.id)) return true;
   const snap = run.snapshots.constraintSet as ConstraintSet;
   const access = resolveEquipmentAccess(run.snapshots.clientState);
+  // Specific apparatus that was unknown when the run solved (never planned around) counts as unusable then.
+  if (access && e.apparatus.some((a) => access.apparatus[a] !== "available")) return true;
   return currentFit(e, snap, access).state !== "ok";
 }
 
@@ -213,7 +216,7 @@ function wasUnusable(e: ExerciseEntry, run: ReasonerRun): boolean {
 // Revision orchestration (pure decision; the production action performs it)
 // ---------------------------------------------------------------------------
 
-export type RevisionTrigger = "limitations_confirmed" | "fit_decision" | "preflight_answered" | "coach_requested";
+export type RevisionTrigger = "limitations_confirmed" | "fit_decision" | "preflight_answered" | "equipment_confirmed" | "coach_requested";
 
 export interface RevisionJobRecord {
   jobId: string;

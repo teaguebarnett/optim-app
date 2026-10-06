@@ -15,6 +15,7 @@ import { isKnown, type Fact } from "../facts.ts";
 import { effectiveConstraints, type Constraint, type ConstraintTag } from "../constraints.ts";
 import { FOUNDATION_KNOWLEDGE_VERSION } from "../knowledge/registry.ts";
 import { LOADED_DEMAND_CONDITION, type FitnessKnowledgeRegistry } from "../knowledge/types.ts";
+import { LIMB_REGIONS } from "../knowledge/taxonomy.ts";
 import type { PoolResult } from "../planners/resistance/planner.ts";
 import type { LoadCondition } from "../exercise-eligibility.ts";
 import type { SynthesisInput } from "../synthesis-input.ts";
@@ -26,7 +27,7 @@ import type { EvidencePacket } from "./retrieval.ts";
 export const REASONER_VERSION = "fitness-reasoner-v1.5.0";
 
 /** Row columns (Fitness Knowledge V2). Columns 0–5 and the trailing fit code keep their V1 positions. */
-export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment+apparatus|positions|trunk support E chest pad/prone, P back pad/bench, T thigh/knee pad only (pelvis anchored, trunk unsupported), N none|demands skill,stability,bracing,spine,grip,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|ordering E/F/L|role M main lift, A compound accessory, I isolation, T trunk, C carry, P power|emphasis (stimulus bias, most first)|path grip/plane/elbows (- when not material)|strength transfer exercise:level (- none)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}, and where the exercise has a pad/bench the trunk kept against it — or as the coach cleared it); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review)`;
+export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment+apparatus|positions|trunk support E chest pad/prone, P back pad/bench, T thigh/knee pad only (pelvis anchored, trunk unsupported), N none|demands skill,stability,bracing,spine,grip,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|ordering E/F/L|role M main lift, A compound accessory, I isolation, T trunk, C carry, P power|emphasis (stimulus bias, most first)|path grip/plane/elbows (- when not material)|strength transfer exercise:level (- none)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}, and where the exercise has a pad/bench the trunk kept against it — or as the coach cleared it); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review); S side-limited (unilateral: only the unaffected side — name that side in its note)`;
 
 export interface ReasoningInput {
   v: { reasoner: string; prompt: string; knowledge: string };
@@ -41,7 +42,7 @@ export interface ReasoningInput {
   anchors: { days: { value: number; basis: string }; weeks: { value: number; basis: string } | null };
   /** Gate 4.0C-3B — exercises excluded ONLY by a constraint (alias) or the coach's avoided list: shows what a goal may be blocked from. */
   blocked: Record<string, string[]>;
-  equipment: { available: string[]; apparatus: string[]; apparatusUnknown: string[] };
+  equipment: { available: string[]; apparatus: string[]; apparatusUnknown: string[]; /** Why each known apparatus is known (baseline assumption vs coach-confirmed). */ basis?: Record<string, string> };
   evidence: Array<{ ref: string; claim: string; source: string; params?: unknown }>;
   exerciseLegend: string;
   exercises: string[];
@@ -77,13 +78,15 @@ export interface Allowed {
   loadConditions: Map<string, LoadCondition[]>;
   /** Exercise id → what blocks it (constraint alias or "t_exercises_avoided"). */
   blockedBy: Map<string, string>;
+  /** Laterality — unilateral exercises allowed only on the named (unaffected) side. */
+  sideOnly: Map<string, "left" | "right">;
 }
 
 /** Constraints the model never sees, with how OPTIM accounted for them. */
 export type ContextOnlyConstraint = { constraintId: string; how: string };
 
-/** Exercise-row constraint-fit code (Gate 4.0C-3C). */
-const fitCode = (conds: Array<{ certainty: "conditional" | "uncertain" }> | undefined) => (!conds?.length ? "-" : conds.some((c) => c.certainty === "uncertain") ? "U" : "K");
+/** Exercise-row constraint-fit code (Gate 4.0C-3C; S = laterality: the unaffected side only). */
+const fitCode = (conds: Array<{ certainty: "conditional" | "uncertain" }> | undefined, sideOnly?: string) => (conds?.some((c) => c.certainty === "uncertain") ? "U" : conds?.length ? "K" : sideOnly ? "S" : "-");
 const L = (l: string) => ({ none: "N", low: "L", moderate: "M", high: "H" })[l] ?? "?";
 const TRUNK_CODE: Record<string, string> = { external: "E", partial: "P", thigh_anchored: "T", none: "N" };
 const ROLE_CODE: Record<string, string> = { main_lift: "M", compound_accessory: "A", isolation: "I", trunk: "T", carry: "C", power: "P" };
@@ -101,6 +104,10 @@ export function tagRule(t: ConstraintTag, knowledge: FitnessKnowledgeRegistry): 
       return `not ${knowledge.getExercise(t.exerciseId)?.name ?? t.exerciseId}`;
     case "avoid_equipment":
       return `no ${t.equipment}`;
+    case "avoid_limb_loading": {
+      const where = `${t.side === "both" ? "both" : t.side} ${LIMB_REGIONS[t.region].label}`;
+      return `${where}: no ${t.actions?.length ? t.actions.map((a) => a.replace(/_/g, " ")).join(" / ") : "loading"}${t.side === "both" ? "" : ` (unilateral work on the ${t.side === "left" ? "right" : "left"} side only — rows marked S)`}`;
+    }
     default:
       return null; // free text, literal terms, scheduling and review tags are never sent
   }
@@ -237,7 +244,12 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
     bounds: { days: [b.min!, b.max!], available: isKnown(c.schedule.availableDays) ? c.schedule.availableDays.value : [], minutes: cap, weeks: pw ? [pw.min, pw.max] : null, preferredWeeks: pw?.preferred ?? null },
     anchors,
     blocked,
-    equipment: { available: access ? availableEquipment(access) : [], apparatus: access ? availableApparatus(access) : [], apparatusUnknown: access ? Object.entries(access.apparatus).filter(([, s]) => s === "unknown").map(([a]) => a) : [] },
+    equipment: {
+      available: access ? availableEquipment(access) : [],
+      apparatus: access ? availableApparatus(access) : [],
+      apparatusUnknown: access ? Object.entries(access.apparatus).filter(([, s]) => s === "unknown").map(([a]) => a) : [],
+      ...(access ? { basis: Object.fromEntries(Object.entries(access.apparatus).filter(([, s]) => s !== "unknown").map(([a, st]) => [a, `${st} (${access.apparatusBasis[a as keyof typeof access.apparatusBasis] === "coach_confirmed" ? "coach confirmed" : "assumed: standard for the gym type"})`])) } : {}),
+    },
     evidence: params.evidence.claims.map((x) => ({ ref: x.ref, claim: x.statement, source: x.support, ...(x.parameters ? { params: x.parameters } : {}) })),
     exerciseLegend: EXERCISE_ROW_LEGEND,
     exercises: params.evidence.exercises.map((e) =>
@@ -259,7 +271,7 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
         e.emphasis.join(","),
         e.path ? [e.path.grip ?? "", e.path.plane ?? "", e.path.elbows ?? ""].join("/") : "-",
         e.specificity.length ? e.specificity.map((x) => `${x.exerciseId.replace(/^exercise\./, "")}:${L(x.level)}`).join(",") : "-",
-        fitCode(params.pool.loadConditions.get(e.id)),
+        fitCode(params.pool.loadConditions.get(e.id), params.pool.sideOnly?.get(e.id)),
       ].join("|")
     ),
     unresolved: params.unresolved,
@@ -278,6 +290,7 @@ export function buildReasoningInput(params: { input: SynthesisInput; method: Res
       submaximalOnly: new Set(params.evidence.exercises.map((e) => e.id).filter((id) => params.pool.loadConditions.has(id))),
       loadConditions: new Map([...params.pool.loadConditions].map(([id, conds]) => [id, conds.map((c) => ({ ...c, constraintId: aliasOf.get(c.constraintId) ?? c.constraintId }))])),
       uncertain: new Set(params.evidence.exercises.map((e) => e.id).filter((id) => fitCode(params.pool.loadConditions.get(id)) === "U")),
+      sideOnly: new Map(params.evidence.exercises.filter((e) => params.pool.sideOnly?.has(e.id)).map((e) => [e.id, params.pool.sideOnly.get(e.id)!])),
       blockedBy,
     },
   };

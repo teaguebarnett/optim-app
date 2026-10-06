@@ -23,11 +23,13 @@ import { MUSCLES } from "../knowledge/taxonomy.ts";
 import type { ReasonerRun } from "./run.ts";
 import type { DecisionResolution, ReasonerProvenance, RepairRecommendationRecord, UniversalTrainingProgramContent } from "../../training/types.ts";
 import { analyzeProgramIntegrity, type IntegrityAnalysis } from "./edit-impact.ts";
-import { demandCompatibility, eligibilityBasis, exerciseEligibility } from "../exercise-eligibility.ts";
+import { demandCompatibility, describeLoadCondition, eligibilityBasis, exerciseEligibility } from "../exercise-eligibility.ts";
 import { effectiveConstraints, type ConstraintSet } from "../constraints.ts";
 import { canonicalJson, sha256 } from "./run.ts";
 import { assessPlanningState, currentCandidatePool, type CurrentPlanningInputs, type LifecycleAssessment } from "./lifecycle.ts";
 import { evaluateAdequacy, functionAvailability, goalRequiredTargets, weekFromContent, type AdequacyFinding } from "./adequacy.ts";
+import { resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
+import { APPARATUS_LABEL } from "../knowledge/taxonomy.ts";
 import type { RevisionProvenance } from "../../training/types.ts";
 
 /** The restriction facts in force (effective hard constraints' categories and tags), independent of ids/timestamps. */
@@ -113,6 +115,9 @@ export interface ReasonerReviewModel {
   withheld: Array<{ exerciseId: string; exerciseName: string; restriction: string; conditions: string[] }>;
   /** Gate 4.0C-5 — this draft is a revision of an earlier one (lineage). */
   revision: RevisionProvenance | null;
+  /** Equipment specificity — specific apparatus whose availability is unknown for this client and that would make
+   * otherwise-eligible exercises usable (the coach can confirm it). */
+  unknownEquipment: Array<{ apparatus: string; label: string; exercises: string[] }>;
   unresolvedCount: number;
   approvalBlockedReason: string | null;
   needsYou: ReviewNote[];
@@ -151,7 +156,7 @@ export function reasonerReviewModel(params: {
   if (params.current && !params.currentConstraints) params = { ...params, currentConstraints: params.current.constraints };
   const wrongClient = !!params.run && ((!!params.currentConstraints && params.currentConstraints.clientProfileId !== (params.run.snapshots.constraintSet as ConstraintSet).clientProfileId) || (!!params.current && params.current.client.clientProfileId !== params.run.snapshots.clientState.clientProfileId));
   if (!params.run?.input || !params.run.result.plan || wrongClient) {
-    return { headline: rp.headline, available: false, constraintsChanged: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], lifecycle: null, adequacy: null, adequacyNotes: [], withheld: [], revision: rp.revision ?? null, unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
+    return { headline: rp.headline, available: false, constraintsChanged: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], lifecycle: null, adequacy: null, adequacyNotes: [], withheld: [], revision: rp.revision ?? null, unknownEquipment: [], unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
   }
   const run = params.run;
   const plan = run.result.plan!;
@@ -203,7 +208,7 @@ export function reasonerReviewModel(params: {
       } else if (compat === "uncertain") {
         fit = "uncertain";
         const lc = elig.loadConditions.find((l) => l.enforcement === "hard" && l.certainty === "uncertain")!;
-        restriction = `your confirmed restriction (nothing needing ${lc.demand.replace(/_/g, " ")} at ${lc.limit} or above)`;
+        restriction = `your confirmed restriction (${describeLoadCondition(lc)})`;
         conditions = lc.conditions;
       } else if (!isPresent && (fitCodeOf(input.exercises.find((r) => r.startsWith(`${keyId}|`)) ?? "") === "U" || decidedKeys.has(`constraint_fit:${keyId}`))) {
         // Removed earlier after a fit decision; under the current restrictions it would fit — keep the history row.
@@ -286,7 +291,7 @@ export function reasonerReviewModel(params: {
     .filter(({ elig }) => elig.eligible && !elig.clearedBy && elig.loadConditions.some((l) => l.certainty === "uncertain" && l.enforcement === "hard"))
     .map(({ e, elig }) => {
       const lc = elig.loadConditions.find((l) => l.certainty === "uncertain" && l.enforcement === "hard")!;
-      return { exerciseId: e.id, exerciseName: e.name, restriction: `nothing needing ${lc.demand.replace(/_/g, " ")} at ${lc.limit} or above`, conditions: lc.conditions };
+      return { exerciseId: e.id, exerciseName: e.name, restriction: describeLoadCondition(lc), conditions: lc.conditions };
     });
 
   const mentionsDecision = (t: string) => decisions.some((d) => t.toLowerCase().includes(d.exerciseName.toLowerCase()));
@@ -309,6 +314,7 @@ export function reasonerReviewModel(params: {
     adequacyNotes: allFindings.filter((f) => f.kind === "information").map((f) => f.message),
     withheld,
     revision: rp.revision ?? null,
+    unknownEquipment: unknownEquipmentFor(params.knowledge, constraints, clientNow),
     unresolvedCount: unresolved.length + (integrityOpen ? 1 : 0) + (adequacyOpen ? 1 : 0) + (superseded ? 1 : 0),
     // A superseded draft is no longer the solution: its own decisions are moot (the revision replaces it), so the
     // supersession is the ONLY blocker shown and its decision actions are refused server-side.
@@ -328,6 +334,22 @@ export function reasonerReviewModel(params: {
     why: rp.decisions.map((d) => ({ ...d, decision: clean(d.decision), because: clean(d.because) })),
     reference,
   };
+}
+
+/** Specific apparatus with UNKNOWN availability that gates otherwise-eligible exercises (constraint-eligible, the
+ * equipment category available, every other apparatus available). */
+function unknownEquipmentFor(knowledge: FitnessKnowledgeRegistry, constraints: ConstraintSet, client: Parameters<typeof resolveEquipmentAccess>[0]): ReasonerReviewModel["unknownEquipment"] {
+  const access = resolveEquipmentAccess(client);
+  if (!access) return [];
+  const by = new Map<string, string[]>();
+  for (const e of knowledge.exercises()) {
+    if (!e.prescription.includes("reps") || access.equipment[e.equipment] !== "available") continue;
+    const unknown = e.apparatus.filter((a) => access.apparatus[a] === "unknown");
+    if (!unknown.length || e.apparatus.some((a) => access.apparatus[a] === "unavailable")) continue;
+    if (!exerciseEligibility(e, constraints).eligible) continue;
+    for (const a of unknown) by.set(a, [...(by.get(a) ?? []), e.name]);
+  }
+  return [...by].map(([apparatus, exercises]) => ({ apparatus, label: APPARATUS_LABEL[apparatus as keyof typeof APPARATUS_LABEL] ?? apparatus.replace(/_/g, " "), exercises })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Removes every occurrence of an exercise from the draft (all weeks), refusing to empty a session. */
@@ -379,7 +401,7 @@ export function findClientCopyLeaks(content: UniversalTrainingProgramContent): s
  * reasoning, review context, Reasoner provenance and planning commentary are
  * dropped (they remain in the reviewed draft, which clients never see).
  */
-export function clientFacingProgramContent(params: { content: UniversalTrainingProgramContent; reviewedVersionId: string; knowledge: FitnessKnowledgeRegistry; supportedSetup: Set<string>; nowIso: string }): UniversalTrainingProgramContent {
+export function clientFacingProgramContent(params: { content: UniversalTrainingProgramContent; reviewedVersionId: string; knowledge: FitnessKnowledgeRegistry; supportedSetup: Set<string>; nowIso: string; /** Laterality: exercise name → the only side to train. */ sideOnly?: Map<string, "left" | "right"> }): UniversalTrainingProgramContent {
   const c = structuredClone(params.content);
   const byName = new Map(params.knowledge.exercises().map((e) => [e.name.toLowerCase(), e]));
   for (const w of c.weeks)
@@ -394,7 +416,9 @@ export function clientFacingProgramContent(params: { content: UniversalTrainingP
             const p = i.prescription;
             const effort = typeof p.rir === "number" ? `Stop each set with about ${p.rir} rep${p.rir === 1 ? "" : "s"} left in the tank.` : typeof p.rpe === "number" ? `Stop each set with about ${10 - p.rpe} rep${10 - p.rpe === 1 ? "" : "s"} left in the tank (RPE ${p.rpe}).` : "";
             const setup = params.supportedSetup.has(i.name.toLowerCase()) ? "Keep your back or chest against the pad or bench the whole set." : "";
-            const cue = [effort, setup].filter(Boolean).join(" ");
+            const side = params.sideOnly?.get(i.name.toLowerCase());
+            const sideCue = side ? `${side === "left" ? "Left" : "Right"} side only.` : "";
+            const cue = [sideCue, effort, setup].filter(Boolean).join(" ");
             if (cue) i.coachCue = cue;
             else delete i.coachCue;
           }
@@ -410,6 +434,21 @@ export function clientFacingProgramContent(params: { content: UniversalTrainingP
   }
   c.updatedAtIso = params.nowIso;
   return c;
+}
+
+/** Laterality — exercise names (lowercase) the plan may only train on one side, with that side (from the run's own
+ * constraint snapshot; client cue "Left side only."). */
+export function sideOnlyNames(run: ReasonerRun | null, knowledge: FitnessKnowledgeRegistry): Map<string, "left" | "right"> {
+  const out = new Map<string, "left" | "right">();
+  if (!run) return out;
+  const cs = run.snapshots.constraintSet as ConstraintSet;
+  for (const row of run.input?.exercises ?? []) {
+    if (fitCodeOf(row) !== "S") continue;
+    const ex = knowledge.getExercise(row.split("|")[0]);
+    const side = ex ? exerciseEligibility(ex, cs).sideOnly?.side : undefined;
+    if (ex && side) out.set(ex.name.toLowerCase(), side);
+  }
+  return out;
 }
 
 /** Exercise names whose conditional fit relies on the pad/bench (client setup cue). */

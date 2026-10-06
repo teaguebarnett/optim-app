@@ -70,7 +70,7 @@ const BASE = {
 };
 export type Patch = Record<string, Record<string, unknown> | undefined>;
 
-export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMethod | null; restrictions?: CoachStructuredRestriction[]; healthReview?: HealthReviewRecord | null; coachConfirmedGoal?: GoalSpec; coachConfirmedTargets?: PerformanceTargetValue[]; clientId?: string } = {}): SynthesisInput {
+export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMethod | null; restrictions?: CoachStructuredRestriction[]; healthReview?: HealthReviewRecord | null; coachConfirmedGoal?: GoalSpec; coachConfirmedTargets?: PerformanceTargetValue[]; clientId?: string; /** Coach-confirmed specific equipment (apparatus id → state). */ equipment?: Record<string, "available" | "unavailable"> } = {}): SynthesisInput {
   const id = opts.clientId ?? "client-eval";
   const answers = structuredClone(BASE) as Record<string, Record<string, unknown>>;
   for (const [step, values] of Object.entries(opts.patch ?? {})) {
@@ -78,7 +78,7 @@ export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMetho
     else answers[step] = { ...(answers[step] ?? {}), ...values };
   }
   const onboarding = { clientId: id, workspaceId: WS, currentStepIndex: 6, answers, completedAtIso: NOW, updatedAtIso: NOW } as unknown as OnboardingProgress;
-  const client = deriveClientState({ clientProfileId: id, workspaceId: WS, onboarding, healthReview: opts.healthReview ?? null });
+  const client = deriveClientState({ clientProfileId: id, workspaceId: WS, onboarding, healthReview: opts.healthReview ?? null, equipmentProfile: opts.equipment ? { apparatus: opts.equipment, confirmedAtIso: NOW } : null });
   const input = buildSynthesisInput({ knowledge: FOUNDATION_KNOWLEDGE, coachMethod: opts.coach === undefined ? coachMethod() : opts.coach, client, coachStructuredRestrictions: opts.restrictions });
   return opts.coachConfirmedGoal ? { ...input, goal: withCoachConfirmedGoal(input.goal, opts.coachConfirmedGoal, opts.coachConfirmedTargets) } : input;
 }
@@ -139,6 +139,7 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
       const row = rows[cursor++ % rows.length];
       const role = k === 0 && row[5] === "C" ? "main" : "accessory";
       const fit = row.at(-1);
+      const side = /on the (left|right) side only/.exec(ri.constraints.flatMap((c) => c.rules).join(" "))?.[1];
       const submax = fit === "K" || fit === "U";
       const coachRir = rirRule(role) ? rangeOf(rirRule(role)![2]) : null;
       // Differentiated effort: mains near the hard end, accessories further from failure; S rows stay submaximal.
@@ -147,7 +148,7 @@ export function scriptedOutput(ri: ReasoningInput, tweak?: (p: WirePlan) => void
       const lo = coachRir ? Math.min(coachRir.max, Math.max(coachRir.min + (role === "accessory" ? (k === 2 ? 2 : 1) : 0), submax ? 2 : 0)) : 0;
       const rir = coachRir ? [lo, Math.max(lo, coachRir.max)] : undefined;
       const repMin = submax ? Math.min(reps[role].max, Math.max(reps[role].min, 6)) : reps[role].min;
-      return { id: row[0], role, sets: sets[role].min, reps: [repMin, reps[role].max], ...(rir ? { rir } : {}), note: fit === "U" ? "Scripted: no compatible alternative in the pool for this slot." : "Scripted; repeats only when the pool is small." };
+      return { id: row[0], role, sets: sets[role].min, reps: [repMin, reps[role].max], ...(rir ? { rir } : {}), note: fit === "U" ? "Scripted: no compatible alternative in the pool for this slot." : fit === "S" ? `Scripted: ${side ?? "unaffected"} side only.` : "Scripted; repeats only when the pool is small." };
     }),
   }));
   const coachKey = ri.coach.rules[0][0];

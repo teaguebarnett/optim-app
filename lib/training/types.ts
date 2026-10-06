@@ -582,7 +582,7 @@ export interface ReasonerProvenance {
 export interface RevisionProvenance {
   supersedesVersionId: string;
   supersedesJobId: string;
-  trigger: "limitations_confirmed" | "fit_decision" | "preflight_answered" | "coach_requested";
+  trigger: "limitations_confirmed" | "fit_decision" | "preflight_answered" | "equipment_confirmed" | "coach_requested";
   previousPlanningKey: string | null;
   planningKey: string;
   /** What changed in the authoritative state (plain language lines per part). */

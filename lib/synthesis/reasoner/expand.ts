@@ -351,6 +351,8 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
 
   // Gate 4.0C-3C — uncertain constraint fit: needs a rationale, and goes to coach review (never silently "safe").
   for (const s of plan.sessions) for (const e of s.exercises) if (allowed.uncertain.has(e.exerciseId) && !e.note) errors.push(`${e.exerciseId} has uncertain constraint fit (U): say in its note why no compatible alternative serves this session.`);
+  // Laterality: a side-limited unilateral exercise must say which side it is performed with.
+  for (const s of plan.sessions) for (const e of s.exercises) { const side = allowed.sideOnly?.get(e.exerciseId); if (side && !new RegExp(`\\b${side}\\b`, "i").test(e.note ?? "")) errors.push(`${e.exerciseId} is side-limited (S): perform it with the ${side} side only and say so in its note.`); }
 
   // Goal access: truthful about what is and isn't trainable.
   const usedIds = new Set(plan.sessions.flatMap((s) => s.exercises.map((e) => e.exerciseId)));
