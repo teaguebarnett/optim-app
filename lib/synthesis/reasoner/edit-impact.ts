@@ -23,6 +23,7 @@
 // tradeoff (recorded, invalidated if the program changes further).
 
 import { createHash } from "node:crypto";
+import { rowExecutable } from "./lifecycle.ts";
 import { exerciseEligibility, demandCompatibility } from "../exercise-eligibility.ts";
 import { LOADED_DEMAND_CONDITION, type FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import { MOVEMENT_PATTERNS, MUSCLES } from "../knowledge/taxonomy.ts";
@@ -182,7 +183,7 @@ export function feasibleCandidates(params: { run: ReasonerRun; knowledge: Fitnes
   for (const row of run.input?.exercises ?? []) {
     const [id] = row.split("|");
     const ex = knowledge.getExercise(id);
-    if (!ex || present.has(ex.name.toLowerCase())) continue;
+    if (!ex || present.has(ex.name.toLowerCase()) || !rowExecutable(row)) continue;
     const elig = exerciseEligibility(ex, constraints);
     const fit = demandCompatibility(elig);
     if (fit !== "compatible" && fit !== "conditional") continue; // uncertain or incompatible: never offered

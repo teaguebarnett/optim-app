@@ -9,6 +9,7 @@ import type { ReasonerResult } from "../reasoner.ts";
 import type { SynthesisInput } from "../../synthesis-input.ts";
 import type { FailureCategory } from "./taxonomy.ts";
 import { coachMethod, layer, range, restrict, scenarioInput } from "./fixtures.ts";
+import { apparatusGaps, resolveEquipmentAccess } from "../../planners/resistance/equipment-access.ts";
 
 export interface Scenario {
   id: string;
@@ -72,7 +73,9 @@ export const SCENARIOS: Scenario[] = [
     input: () => scenarioInput({ patch: { your_week: { trainingEnvironment: ["limited_equipment"] }, ...goal("build_muscle") } }),
     expectedStatus: "PLANNED_OR_NEEDS_INPUT",
     expectsModel: true,
-    hard: (r, inp) => [...statusIs(r, "PLANNED_OR_NEEDS_INPUT"), ...(exs(r, inp).some((e) => !["bodyweight", "bands"].includes(e.equipment) || e.apparatus.length) ? ["used unavailable equipment/apparatus"] : [])],
+    // Specific apparatus (e.g. a pull-up bar) is unknown here, not absent: it may be planned as an execution dependency
+    // the coach confirms — never an unavailable equipment category, never a confirmed-absent apparatus.
+    hard: (r, inp) => [...statusIs(r, "PLANNED_OR_NEEDS_INPUT"), ...(exs(r, inp).some((e) => !["bodyweight", "bands"].includes(e.equipment) || apparatusGaps(resolveEquipmentAccess(inp.client), e.apparatus).unavailable.length) ? ["used unavailable equipment/apparatus"] : [])],
     review: (r) => (r.status === "PLANNED" ? [flag(mentions(r, /apparatus|pull.?up bar|equipment|limited/i), "limited equipment acknowledged", "REASONING_FAILURE")] : []),
   },
   planScenario("09", "Dumbbell-only (coach-confirmed no bands/kettlebells)", () => scenarioInput({ patch: { your_week: { trainingEnvironment: ["home_gym"] } }, restrictions: restrict([{ kind: "avoid_equipment", equipment: "bands" }, { kind: "avoid_equipment", equipment: "kettlebell" }]) }), (p, inp) => (exs(p, inp).some((e) => !["dumbbell", "bodyweight"].includes(e.equipment)) ? ["non-dumbbell equipment used"] : [])),

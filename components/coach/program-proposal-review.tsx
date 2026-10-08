@@ -45,6 +45,8 @@ import { ProposalScheduleNavigator } from "@/components/coach/proposal-schedule-
 import { RevisionPoller } from "@/components/coach/revision-poller";
 import { ProposalApproveForm } from "@/components/coach/proposal-approve-form";
 import { ProposalRejectForm } from "@/components/coach/proposal-reject-form";
+import { EquipmentAnswer } from "@/components/coach/equipment-answer";
+import type { EquipmentAnswer as EquipmentAnswerValue } from "@/lib/synthesis/equipment-answers";
 import { parseRejectionReason } from "@/lib/coach/proposal-rejection";
 import type { SaveResult } from "@/components/coach/live-start-date-form";
 import { describeIntervalOverview } from "@/lib/workout/interval";
@@ -279,7 +281,52 @@ function AdequacySection({ a, acceptAction }: { a: AdequacyDecision; acceptActio
   );
 }
 
-function ReasonerContextSection({ review, resolveAction, repairEnabled, integrityAction, repairAction, revisionJob, revisionAction, adequacyAction, confirmDecisionAction, withheldAction, equipmentAction, workspaceId, clientProfileId }: { workspaceId: string; clientProfileId: string; review: ReasonerReviewModel; equipmentAction: (formData: FormData) => Promise<void>; resolveAction: (formData: FormData) => Promise<void>; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void>; revisionJob: ReasonerJobView | null; revisionAction: (formData: FormData) => Promise<void>; adequacyAction: (formData: FormData) => Promise<void>; confirmDecisionAction: (formData: FormData) => Promise<void>; withheldAction: (formData: FormData) => Promise<void> }) {
+/** Equipment the plan depends on: unknown is planned (not assumed) and listed for the coach to confirm; a confirmed
+ * absence was resolved by substitution, or needs the coach when nothing preserves the work. */
+function EquipmentSection({ equipment, action }: { equipment: ReasonerReviewModel["equipment"]; action: (apparatus: string, state: EquipmentAnswerValue) => Promise<{ ok: true } | { ok: false; message: string }> }) {
+  const toConfirm = equipment.items.filter((i) => i.state === "unknown" && i.exercises.length).length;
+  return (
+    <details open={toConfirm > 0 || equipment.unresolved.length > 0} className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-off-white">
+        Equipment this plan uses{toConfirm ? ` · ${toConfirm} to confirm` : ""}
+        {equipment.substitutions.length ? ` · ${equipment.substitutions.length} substituted` : ""}
+        {equipment.unresolved.length ? ` · ${equipment.unresolved.length} without an equivalent` : ""}
+      </summary>
+      <p className="mt-1.5 text-xs text-neutral">OPTIM designs the best program first, then checks the equipment. Equipment you haven&apos;t confirmed is still planned — confirm it so the client can do these sessions as written. Your answers are saved for this client.</p>
+      {equipment.substitutions.length ? (
+        <ul className="mt-1.5 space-y-1 text-xs text-off-white">
+          {equipment.substitutions.map((x) => (
+            <li key={`${x.from}>${x.to}`}>
+              • Substituted: <span className="font-medium">{x.to}</span> replaces {x.from} ({x.days.join(", ")}) — you confirmed no {x.apparatus.join(" or ").toLowerCase()}.
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {equipment.unresolved.length ? (
+        <ul className="mt-1.5 space-y-1 text-xs text-warning-strong">
+          {equipment.unresolved.map((x) => (
+            <li key={x.exercise}>
+              • No equivalent: {x.exercise} ({x.serves}; {x.days.join(", ")}) needs {x.apparatus.join(" or ").toLowerCase()}, which you confirmed the client doesn&apos;t have. It&apos;s listed under the program&apos;s limitations for your decision.
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <ul className="mt-2 space-y-2.5 text-xs">
+        {equipment.items.map((i) => (
+          <li key={i.apparatus}>
+            <p className="text-off-white">
+              <span className="font-medium">{i.label}</span>
+              <span className="text-neutral"> — {i.exercises.length ? `used by ${i.exercises.join(", ")}` : "not used in this plan"}</span>
+            </p>
+            <EquipmentAnswer apparatus={i.apparatus} label={i.label} saved={i.basis === "coach_confirmed" ? i.state : "unknown"} action={action} />
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function ReasonerContextSection({ review, resolveAction, repairEnabled, integrityAction, repairAction, revisionJob, revisionAction, adequacyAction, confirmDecisionAction, withheldAction, equipmentAction, workspaceId, clientProfileId }: { workspaceId: string; clientProfileId: string; review: ReasonerReviewModel; equipmentAction: (apparatus: string, state: EquipmentAnswerValue) => Promise<{ ok: true } | { ok: false; message: string }>; resolveAction: (formData: FormData) => Promise<void>; repairEnabled: boolean; integrityAction: (formData: FormData) => Promise<void>; repairAction: (formData: FormData) => Promise<void>; revisionJob: ReasonerJobView | null; revisionAction: (formData: FormData) => Promise<void>; adequacyAction: (formData: FormData) => Promise<void>; confirmDecisionAction: (formData: FormData) => Promise<void>; withheldAction: (formData: FormData) => Promise<void> }) {
   const list = (items: string[]) => (
     <ul className="mt-1.5 space-y-1 text-xs">
       {items.map((line) => (
@@ -394,36 +441,8 @@ function ReasonerContextSection({ review, resolveAction, repairEnabled, integrit
           </ul>
         </details>
       ) : null}
-      {review.lifecycle?.status !== "superseded" && review.unknownEquipment.length > 0 ? (
-        <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-off-white">Not used — equipment not confirmed · {review.unknownEquipment.length}</summary>
-          <p className="mt-1.5 text-xs text-neutral">OPTIM only plans with specific machines it knows the client has. Confirm what&apos;s at their gym; it&apos;s saved for this client.</p>
-          <ul className="mt-1.5 space-y-2 text-xs">
-            {review.unknownEquipment.map((u) => (
-              <li key={u.apparatus}>
-                <p className="text-off-white">
-                  <span className="font-medium">{u.label}</span> — would allow {u.exercises.join(", ")}.
-                </p>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <form action={equipmentAction}>
-                    <input type="hidden" name="apparatus" value={u.apparatus} />
-                    <input type="hidden" name="state" value="available" />
-                    <Button type="submit" variant="secondary" size="sm">
-                      They have it
-                    </Button>
-                  </form>
-                  <form action={equipmentAction}>
-                    <input type="hidden" name="apparatus" value={u.apparatus} />
-                    <input type="hidden" name="state" value="unavailable" />
-                    <Button type="submit" variant="ghost" size="sm">
-                      They don&apos;t
-                    </Button>
-                  </form>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </details>
+      {review.lifecycle?.status !== "superseded" && (review.equipment.items.length > 0 || review.equipment.substitutions.length > 0 || review.equipment.unresolved.length > 0) ? (
+        <EquipmentSection equipment={review.equipment} action={equipmentAction} />
       ) : null}
       {review.adequacyNotes.length > 0 ? (
         <details className="rounded border border-border-strong bg-surface-raised px-3 py-2">
@@ -587,11 +606,12 @@ export function ProgramProposalReview({ workspaceId, clientProfileId, clientId, 
     if (!res.ok) throw new Error(res.errors.join(" "));
     await revalidate();
   }
-  async function equipmentAction(formData: FormData): Promise<void> {
+  async function equipmentAction(apparatus: string, state: EquipmentAnswerValue): Promise<{ ok: true } | { ok: false; message: string }> {
     "use server";
-    const res = await confirmClientEquipmentAction({ workspaceId, clientProfileId, apparatus: String(formData.get("apparatus") ?? ""), state: formData.get("state") === "unavailable" ? "unavailable" : "available" });
-    if (!res.ok) throw new Error(res.message);
+    const res = await confirmClientEquipmentAction({ workspaceId, clientProfileId, apparatus, state: state === "unavailable" || state === "unknown" ? state : "available" });
+    if (!res.ok) return res;
     await revalidate();
+    return { ok: true };
   }
   async function requestRepairAction(formData: FormData): Promise<void> {
     "use server";

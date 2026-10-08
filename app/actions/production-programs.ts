@@ -962,10 +962,11 @@ export async function recordExerciseFitDecisionsAction(params: { workspaceId: st
   }
 }
 
-/** Equipment specificity — the coach confirms whether the client has a specific machine/apparatus. A confirmation that
- * supersedes the draft (a planned exercise's equipment is absent) prepares ONE revision; one that only makes more
- * exercises usable leaves the draft valid (a better plan may be possible — the coach asks for it). */
-export async function confirmClientEquipmentAction(params: { workspaceId: string; clientProfileId: string; apparatus: string; state: "available" | "unavailable" }): Promise<{ ok: true; revision: "queued" | "not_needed" | "already_prepared" | "in_flight" | "unavailable" } | { ok: false; message: string }> {
+/** Equipment specificity — the coach answers whether the client has a specific machine/apparatus ("unknown" returns it
+ * to unanswered). A confirmation that supersedes the draft (a planned exercise's equipment is absent) prepares ONE
+ * revision; one that only makes more exercises usable leaves the draft valid (a better plan may be possible — the
+ * coach asks for it). */
+export async function confirmClientEquipmentAction(params: { workspaceId: string; clientProfileId: string; apparatus: string; state: "available" | "unavailable" | "unknown" }): Promise<{ ok: true; revision: "queued" | "not_needed" | "already_prepared" | "in_flight" | "unavailable" } | { ok: false; message: string }> {
   const ctx = await requireAssignedCoachAuthority(params.workspaceId, params.clientProfileId);
   const saved = await setConfirmedApparatus({ workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachUserId: ctx.userId, changes: { [params.apparatus]: params.state } });
   if (!saved.ok) return saved;

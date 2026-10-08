@@ -123,7 +123,7 @@ export interface AdequacyFinding {
   kind: "limitation" | "deficiency" | "information";
   /** A universal invariant, B methodology, C goal, D Reasoner judgment (see header). */
   basis: "A" | "B" | "C" | "D";
-  code: "coverage_missing" | "coverage_dishonest" | "session_targets" | "session_empty" | "goal_target_untrained" | "goal_target_infeasible" | "target_declared_limited" | "target_reduced_by_choice" | "target_unavailable" | "push_pull_note";
+  code: "coverage_missing" | "coverage_dishonest" | "session_targets" | "session_empty" | "goal_target_untrained" | "goal_target_infeasible" | "target_declared_limited" | "target_reduced_by_choice" | "target_unavailable" | "push_pull_note" | "equipment_unresolved";
   target: string | null;
   message: string;
 }

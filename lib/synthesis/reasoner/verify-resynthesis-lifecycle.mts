@@ -265,7 +265,7 @@ await check("10. Only-uncertain options for a GOAL-required muscle → stops BEF
   // conditional lats option the pool offers under the bracing restriction (whatever Fitness Knowledge contains).
   const base = input(record(BRACING));
   const bm = methodFor(base)!;
-  const bp = buildPool(base, (bm as { method: Parameters<typeof buildPool>[1] }).method)!;
+  const bp = buildPool(base, (bm as { method: Parameters<typeof buildPool>[1] }).method, { apparatus: "ideal" })!;
   const certainLats = functionAvailability(bp.pool, bp.loadConditions).find((f) => f.target === "lats")!.certain;
   const uncertainLats = functionAvailability(bp.pool, bp.loadConditions).find((f) => f.target === "lats")!.uncertain;
   assert.ok(certainLats.length > 1 && uncertainLats.length > 0, "fixture premise");

@@ -1,8 +1,8 @@
 // Gate 4.0C-3 — Fitness Knowledge retrieval: a bounded evidence packet for
 // one reasoning call, never the whole corpus. Selection is by domain,
 // goal emphasis and the client's eligible exercise pool (hard constraints,
-// equipment, known apparatus and the coach's avoided exercises already
-// applied). Every entry handed to the model is recorded so the validator
+// equipment categories and the coach's avoided exercises already applied;
+// specific apparatus is marked on each row, never filtered). Every entry handed to the model is recorded so the validator
 // can reject citations of anything not supplied.
 
 import type { ExerciseEntry, FitnessKnowledgeRegistry, KnowledgeClaim } from "../knowledge/types.ts";

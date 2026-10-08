@@ -63,3 +63,9 @@ export function resolveEquipmentAccess(client: ClientState): EquipmentAccess | n
 
 export const availableEquipment = (a: EquipmentAccess) => EQUIPMENT.filter((e) => a.equipment[e] === "available");
 export const availableApparatus = (a: EquipmentAccess) => APPARATUS.filter((x) => a.apparatus[x] === "available");
+
+/** An exercise's specific apparatus that isn't known available: unknown (never asked/confirmed) vs confirmed absent. */
+export function apparatusGaps(access: EquipmentAccess | null, apparatus: readonly ApparatusId[]): { unknown: ApparatusId[]; unavailable: ApparatusId[] } {
+  if (!access) return { unknown: [], unavailable: [] };
+  return { unknown: apparatus.filter((a) => access.apparatus[a] === "unknown"), unavailable: apparatus.filter((a) => access.apparatus[a] === "unavailable") };
+}

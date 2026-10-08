@@ -111,7 +111,14 @@ export interface PoolResult {
   sideOnly: Map<string, "left" | "right">;
 }
 
-export function buildPool(input: SynthesisInput, method: ResistanceMethod): PoolResult | null {
+/**
+ * apparatus: "known_only" (the deterministic planner) — an exercise needs every specific apparatus KNOWN available.
+ * "ideal" (model-led planning) — specific apparatus never narrows the ideal plan: unknown stays unknown (shown to the
+ * coach as an execution dependency) and a confirmed absence is resolved AFTER planning by substitution. Equipment
+ * categories, constraints and the coach's exclusions still apply first.
+ */
+export function buildPool(input: SynthesisInput, method: ResistanceMethod, opts: { apparatus?: "known_only" | "ideal" } = {}): PoolResult | null {
+  const ideal = opts.apparatus === "ideal";
   const access = resolveEquipmentAccess(input.client);
   if (!access) return null;
   const equipment = new Set(availableEquipment(access));
@@ -128,7 +135,7 @@ export function buildPool(input: SynthesisInput, method: ResistanceMethod): Pool
     if (!equipment.has(e.equipment)) reasons.push(`needs ${e.equipment}`);
     for (const a of e.apparatus) {
       if (apparatus.has(a)) continue;
-      reasons.push(`needs ${a} (${access.apparatus[a]})`);
+      if (!ideal) reasons.push(`needs ${a} (${access.apparatus[a]})`);
       if (access.apparatus[a] === "unknown") unknownApparatus.set(a, [...(unknownApparatus.get(a) ?? []), e.id]);
     }
     const elig = exerciseEligibility(e, input.constraints);
@@ -522,7 +529,9 @@ function validate(spec: PlanSpecification, input: SynthesisInput): PlanValidatio
       if (!elig.eligible) errors.push(`${e.id} violates a hard constraint: ${elig.violations.map((v) => v.reason).join("; ")}`);
       if (elig.violations.some((v) => v.basis === "name_search")) errors.push(`${e.id} was screened by name, not metadata.`);
       if (!equipment.has(e.equipment)) errors.push(`${e.id} needs unavailable equipment ${e.equipment}.`);
-      for (const a of e.apparatus) if (!apparatus.has(a)) errors.push(`${e.id} needs ${a}, which isn't known available.`);
+      // Only a CONFIRMED absence makes an exercise unexecutable; unknown apparatus is an execution dependency the
+      // review shows the coach (the deterministic planner's own pool never contains it).
+      for (const a of e.apparatus) if (!apparatus.has(a) && access?.apparatus[a] === "unavailable") errors.push(`${e.id} needs ${a}, which the coach confirmed isn't available.`);
     }
   });
   if (r.weeks.length !== spec.durationWeeks?.value) errors.push("Week count doesn't match duration.");

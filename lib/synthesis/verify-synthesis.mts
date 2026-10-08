@@ -363,6 +363,8 @@ check("14. Invite/onboarding flow is unchanged", () => {
     "components/coach/program-proposal-review.tsx",
     // Gate 4.0C-5 — coach-side re-synthesis lifecycle (server-only orchestration); still never onboarding/auth/client app.
     "lib/production/reasoner-lifecycle.ts",
+    // Equipment resolution — the coach's equipment-answer control (coach-side review only).
+    "components/coach/equipment-answer.tsx",
     // Equipment specificity — coach-confirmed client equipment (staff-only); still never onboarding/auth/client app.
     "lib/production/equipment-profile.ts"];
   const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => !/verify-[^/]*\.mts$/.test(f) && /from ["'][^"']*\/synthesis\//.test(readFileSync(f, "utf8")));

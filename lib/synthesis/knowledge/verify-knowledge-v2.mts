@@ -2,6 +2,7 @@
 // The Teague dogfood restrictions are ONE regression fixture; nothing in knowledge or eligibility is client-specific.
 
 import assert from "node:assert/strict";
+import { resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
 import { readFileSync } from "node:fs";
 import { FOUNDATION_KNOWLEDGE as K, FOUNDATION_KNOWLEDGE_VERSION, validateKnowledge } from "./registry.ts";
 import { ALL_SOURCES } from "./sources.ts";
@@ -138,7 +139,9 @@ await check("6. Teague fixture through the Reasoner (scripted model): rows tell 
   assert.ok(m.lastInput!.constraints.some((c) => c.rules.includes("not Lat Pulldown")));
   // Columns: 9 = trunk support, 13 = role, 14 = emphasis, 15 = path, 16 = strength transfer; fit stays last.
   assert.equal(col(rows, "exercise.machine_high_row", 9), "E");
-  assert.ok(!rows.some((x) => x.startsWith("exercise.machine_low_row|")), "unconfirmed specialty machine not offered");
+  // Unknown apparatus doesn't narrow the ideal plan: offered, and marked as not confirmed ("?") — never as available.
+  assert.equal(col(rows, "exercise.machine_low_row", 7), "machine+low_row_machine?", "unconfirmed machine offered, marked unconfirmed");
+  assert.equal(col(rows, "exercise.machine_high_row", 7), "machine+high_row_machine", "coach-confirmed: no marker");
   assert.equal(col(rows, "exercise.incline_dumbbell_row", 9), "E");
   assert.ok(!rows.some((x) => x.endsWith("|U")), "uncertain options are withheld, not offered");
   assert.ok(r.run.preflight!.withheld.includes("exercise.seated_cable_row"));
@@ -216,7 +219,9 @@ await check("13. A new knowledge version may make a better plan possible — sur
   assert.deepEqual(a.changes.map((c) => c.part), ["knowledge"]);
   assert.equal(a.status, "loosened", `${a.status} ${a.reasons.join(" ")}`);
   assert.ok(a.newlyAvailable.includes("Incline Chest-Supported Dumbbell Row"), a.newlyAvailable.join(", "));
-  assert.ok(!a.newlyAvailable.includes("Chest-Supported Machine High Row"), "a machine whose availability is unknown is never 'newly available'");
+  // The old solve never planned around unknown machines; the ideal plan may now — as an unconfirmed dependency.
+  assert.ok(a.newlyAvailable.includes("Chest-Supported Machine High Row"), "unknown equipment no longer narrows planning");
+  assert.equal(resolveEquipmentAccess(i.client)!.apparatus.high_row_machine, "unknown", "…and stays unknown, never assumed available");
   assert.equal(decideRevision({ assessment: a, draftJobId: "j", trigger: "limitations_confirmed", jobs: [] }).queue, false, "no automatic paid call");
   assert.equal(decideRevision({ assessment: a, draftJobId: "j", trigger: "coach_requested", jobs: [] }).queue, true, "the coach may ask for it");
 });

@@ -28,8 +28,9 @@ import { effectiveConstraints, type ConstraintSet } from "../constraints.ts";
 import { canonicalJson, sha256 } from "./run.ts";
 import { assessPlanningState, currentCandidatePool, type CurrentPlanningInputs, type LifecycleAssessment } from "./lifecycle.ts";
 import { evaluateAdequacy, functionAvailability, goalRequiredTargets, weekFromContent, type AdequacyFinding } from "./adequacy.ts";
-import { resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
-import { APPARATUS_LABEL } from "../knowledge/taxonomy.ts";
+import { resolveEquipmentAccess, type AccessState } from "../planners/resistance/equipment-access.ts";
+import { APPARATUS } from "../knowledge/taxonomy.ts";
+import { apparatusLabel } from "./equipment-resolution.ts";
 import type { RevisionProvenance } from "../../training/types.ts";
 
 /** The restriction facts in force (effective hard constraints' categories and tags), independent of ids/timestamps. */
@@ -115,9 +116,9 @@ export interface ReasonerReviewModel {
   withheld: Array<{ exerciseId: string; exerciseName: string; restriction: string; conditions: string[] }>;
   /** Gate 4.0C-5 — this draft is a revision of an earlier one (lineage). */
   revision: RevisionProvenance | null;
-  /** Equipment specificity — specific apparatus whose availability is unknown for this client and that would make
-   * otherwise-eligible exercises usable (the coach can confirm it). */
-  unknownEquipment: Array<{ apparatus: string; label: string; exercises: string[] }>;
+  /** Equipment specificity — what the CURRENT draft needs and how it was resolved. Unknown never restricts planning;
+   * it is an execution dependency the coach can confirm. Unresolved items also block approval (adequacy). */
+  equipment: EquipmentReview;
   unresolvedCount: number;
   approvalBlockedReason: string | null;
   needsYou: ReviewNote[];
@@ -125,6 +126,15 @@ export interface ReasonerReviewModel {
   handled: string[];
   why: ReasonerProvenance["decisions"];
   reference: { runId: string; reasonerVersion: string; promptVersion: string; knowledgeVersion: string };
+}
+
+export interface EquipmentReview {
+  /** Specific apparatus the draft's exercises need (and every coach answer, so it can be changed), unknown first. */
+  items: Array<{ apparatus: string; label: string; state: AccessState; basis: "baseline" | "coach_confirmed" | "unknown"; exercises: string[] }>;
+  /** Planned exercises replaced because the coach confirmed their equipment absent. */
+  substitutions: Array<{ from: string; to: string; apparatus: string[]; days: string[] }>;
+  /** Planned work with no adequate equivalent without the absent equipment (left the plan; coach decides). */
+  unresolved: Array<{ exercise: string; apparatus: string[]; serves: string; days: string[] }>;
 }
 
 const fitCodeOf = (row: string) => row.split("|").at(-1);
@@ -156,7 +166,7 @@ export function reasonerReviewModel(params: {
   if (params.current && !params.currentConstraints) params = { ...params, currentConstraints: params.current.constraints };
   const wrongClient = !!params.run && ((!!params.currentConstraints && params.currentConstraints.clientProfileId !== (params.run.snapshots.constraintSet as ConstraintSet).clientProfileId) || (!!params.current && params.current.client.clientProfileId !== params.run.snapshots.clientState.clientProfileId));
   if (!params.run?.input || !params.run.result.plan || wrongClient) {
-    return { headline: rp.headline, available: false, constraintsChanged: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], lifecycle: null, adequacy: null, adequacyNotes: [], withheld: [], revision: rp.revision ?? null, unknownEquipment: [], unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
+    return { headline: rp.headline, available: false, constraintsChanged: false, decisions: [], integrity: null, history: rp.decisionResolutions ?? [], lifecycle: null, adequacy: null, adequacyNotes: [], withheld: [], revision: rp.revision ?? null, equipment: { items: [], substitutions: [], unresolved: [] }, unresolvedCount: 0, approvalBlockedReason: "OPTIM couldn't load this proposal's review record, so it can't confirm nothing needs your decision. Reject it and prepare a new one.", needsYou: rp.needsYou.map((t) => ({ kind: "acknowledgement", text: clean(t) })), worthKnowing: rp.worthKnowing.map(clean), handled: rp.handled.map(clean), why: rp.decisions, reference };
   }
   const run = params.run;
   const plan = run.result.plan!;
@@ -267,7 +277,10 @@ export function reasonerReviewModel(params: {
   });
   // The solve's own honesty problems that survived its repair attempt stay on the record.
   const solveDeficiencies = (run.result.adequacy?.findings ?? []).filter((f) => f.kind === "deficiency" && (f.code === "session_targets" || f.code === "session_empty" || f.code === "coverage_dishonest" || f.code === "coverage_missing"));
-  const allFindings = [...contentAdequacy.findings, ...solveDeficiencies.filter((f) => !contentAdequacy.findings.some((g) => g.message === f.message))];
+  const equipment = equipmentReview({ knowledge: params.knowledge, content: params.content, run, client: clientNow, present });
+  // Work that lost its equipment with no adequate equivalent is a limitation the coach accepts explicitly (or fixes).
+  const equipmentFindings: AdequacyFinding[] = equipment.unresolved.map((u) => ({ kind: "limitation", basis: "A", code: "equipment_unresolved", target: params.knowledge.exercises().find((e) => e.name === u.exercise)?.primaryMuscles[0] ?? null, message: `${u.exercise} (${u.serves}; ${u.days.join(", ")}) needs ${u.apparatus.join(" or ").toLowerCase()}, which you confirmed the client doesn't have, and no eligible exercise preserves that work. Confirm the equipment, add a replacement, or accept the reduced work.` }));
+  const allFindings = [...contentAdequacy.findings, ...solveDeficiencies.filter((f) => !contentAdequacy.findings.some((g) => g.message === f.message)), ...equipmentFindings];
   const limitations = allFindings.filter((f) => f.kind === "limitation");
   const deficiencies = allFindings.filter((f) => f.kind === "deficiency");
   let adequacy: AdequacyDecision | null = null;
@@ -314,7 +327,7 @@ export function reasonerReviewModel(params: {
     adequacyNotes: allFindings.filter((f) => f.kind === "information").map((f) => f.message),
     withheld,
     revision: rp.revision ?? null,
-    unknownEquipment: unknownEquipmentFor(params.knowledge, constraints, clientNow),
+    equipment,
     unresolvedCount: unresolved.length + (integrityOpen ? 1 : 0) + (adequacyOpen ? 1 : 0) + (superseded ? 1 : 0),
     // A superseded draft is no longer the solution: its own decisions are moot (the revision replaces it), so the
     // supersession is the ONLY blocker shown and its decision actions are refused server-side.
@@ -324,7 +337,7 @@ export function reasonerReviewModel(params: {
         "",
         unresolved.length ? `Decide first: ${unresolved.map((d) => d.exerciseName).join(", ")} — ${unresolved.some((d) => d.fit === "incompatible") ? "conflicts with or can't be confirmed against" : "OPTIM couldn't confirm it fits"} the client's confirmed restrictions.` : "",
         integrityOpen ? `Your changes left ${integrity!.analysis.deficiencies.map((d) => d.label.toLowerCase()).join(", ")} underrepresented — choose a replacement or accept the reduced stimulus.` : "",
-        adequacyOpen ? `This program ${adequacy!.limitations.length ? `can't fully train ${[...new Set(adequacy!.limitations.map((f) => f.target).filter(Boolean))].map((t) => String(t).replace(/_/g, " ")).join(", ") || "everything the goal needs"} under the current restrictions` : ""}${adequacy!.limitations.length && adequacy!.deficiencies.length ? ", and " : ""}${adequacy!.deficiencies.length ? `has gaps OPTIM couldn't resolve (${adequacy!.deficiencies.length})` : ""} — fix them, or accept them explicitly.` : "",
+        adequacyOpen ? `This program ${adequacy!.limitations.length ? `can't fully train ${[...new Set(adequacy!.limitations.map((f) => f.target).filter(Boolean))].map((t) => String(t).replace(/_/g, " ")).join(", ") || "everything the goal needs"} under the current restrictions${equipmentFindings.length ? " and equipment" : ""}` : ""}${adequacy!.limitations.length && adequacy!.deficiencies.length ? ", and " : ""}${adequacy!.deficiencies.length ? `has gaps OPTIM couldn't resolve (${adequacy!.deficiencies.length})` : ""} — fix them, or accept them explicitly.` : "",
       ]
         .filter(Boolean)
         .join(" ") || null,
@@ -336,20 +349,29 @@ export function reasonerReviewModel(params: {
   };
 }
 
-/** Specific apparatus with UNKNOWN availability that gates otherwise-eligible exercises (constraint-eligible, the
- * equipment category available, every other apparatus available). */
-function unknownEquipmentFor(knowledge: FitnessKnowledgeRegistry, constraints: ConstraintSet, client: Parameters<typeof resolveEquipmentAccess>[0]): ReasonerReviewModel["unknownEquipment"] {
-  const access = resolveEquipmentAccess(client);
-  if (!access) return [];
-  const by = new Map<string, string[]>();
-  for (const e of knowledge.exercises()) {
-    if (!e.prescription.includes("reps") || access.equipment[e.equipment] !== "available") continue;
-    const unknown = e.apparatus.filter((a) => access.apparatus[a] === "unknown");
-    if (!unknown.length || e.apparatus.some((a) => access.apparatus[a] === "unavailable")) continue;
-    if (!exerciseEligibility(e, constraints).eligible) continue;
-    for (const a of unknown) by.set(a, [...(by.get(a) ?? []), e.name]);
+/** What the CURRENT draft needs in specific equipment, under the CURRENT state, and the run's equipment resolution. */
+function equipmentReview(params: { knowledge: FitnessKnowledgeRegistry; content: UniversalTrainingProgramContent; run: ReasonerRun; client: Parameters<typeof resolveEquipmentAccess>[0]; present: Set<string> }): EquipmentReview {
+  const access = resolveEquipmentAccess(params.client);
+  if (!access) return { items: [], substitutions: [], unresolved: [] };
+  const byApparatus = new Map<string, string[]>();
+  for (const e of params.knowledge.exercises()) {
+    if (!params.present.has(e.name.toLowerCase())) continue;
+    for (const a of e.apparatus) if (access.apparatusBasis[a] !== "baseline") byApparatus.set(a, [...(byApparatus.get(a) ?? []), e.name]);
   }
-  return [...by].map(([apparatus, exercises]) => ({ apparatus, label: APPARATUS_LABEL[apparatus as keyof typeof APPARATUS_LABEL] ?? apparatus.replace(/_/g, " "), exercises })).sort((a, b) => a.label.localeCompare(b.label));
+  for (const a of APPARATUS) if (access.apparatusBasis[a] === "coach_confirmed" && !byApparatus.has(a)) byApparatus.set(a, []);
+  const rank: Record<AccessState, number> = { unknown: 0, unavailable: 1, available: 2 };
+  const items = [...byApparatus]
+    .map(([a, exercises]) => ({ apparatus: a, label: apparatusLabel(a), state: access.apparatus[a as keyof typeof access.apparatus], basis: access.apparatusBasis[a as keyof typeof access.apparatusBasis], exercises }))
+    .sort((x, y) => rank[x.state] - rank[y.state] || Number(!x.exercises.length) - Number(!y.exercises.length) || x.label.localeCompare(y.label));
+  const group = <T extends { day: string }>(rows: T[], key: (r: T) => string) => [...rows.reduce((m, r) => m.set(key(r), [...(m.get(key(r)) ?? []), r]), new Map<string, T[]>()).values()];
+  const resolutions = params.run.result.equipment ?? [];
+  const substitutions = group(resolutions.filter((r) => r.status === "substituted"), (r) => `${r.exerciseId}>${r.substituteId}`).map((rs) => ({ from: rs[0].exerciseName, to: rs[0].substituteName!, apparatus: rs[0].apparatus, days: rs.map((r) => r.day) }));
+  // Still open: the equipment is still confirmed absent and the coach hasn't put the work back themselves.
+  const unresolved = group(
+    resolutions.filter((r) => r.status === "unresolved" && !params.present.has(r.exerciseName.toLowerCase()) && (params.knowledge.getExercise(r.exerciseId)?.apparatus ?? []).some((a) => access.apparatus[a] === "unavailable")),
+    (r) => r.exerciseId
+  ).map((rs) => ({ exercise: rs[0].exerciseName, apparatus: rs[0].apparatus, serves: rs[0].serves, days: rs.map((r) => r.day) }));
+  return { items, substitutions, unresolved };
 }
 
 /** Removes every occurrence of an exercise from the draft (all weeks), refusing to empty a session. */

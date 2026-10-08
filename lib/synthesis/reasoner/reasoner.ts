@@ -30,6 +30,8 @@ import { REASONER_RUN_SCHEMA, sha256, type ReasonerAttempt, type ReasonerRun, ty
 import { evaluateAdequacy, fitOf, functionAvailability, goalRequiredTargets, type AdequacyResult, type FunctionAvailability, type WeekSession } from "./adequacy.ts";
 import { planningState } from "../planning-state.ts";
 import { describeLoadCondition } from "../exercise-eligibility.ts";
+import { resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
+import { resolvePlanEquipment } from "./equipment-resolution.ts";
 
 /** The model boundary the reasoner needs (lib/ai's provider implements it). */
 export interface ReasonerModel {
@@ -111,7 +113,8 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
   }
 
   // 3. Material-uncertainty preflight (Gate 4.0C-5) — deterministic, before any paid call.
-  const pool = buildPool(input, method)!;
+  // Ideal pool: specific apparatus never narrows the plan (unknown stays unknown; a confirmed absence is resolved below).
+  const pool = buildPool(input, method, { apparatus: "ideal" })!;
   const legacy = params.uncertainFit === "legacy_allow";
   const fit = (id: string) => fitOf(pool.loadConditions.get(id));
   const availability: FunctionAvailability[] = functionAvailability(pool.pool, pool.loadConditions).map((f) => (legacy && f.state === "uncertain_only" ? { ...f, state: "available" } : f));
@@ -155,8 +158,8 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
     const missing = [{ fact: "coach_decision.eligible_exercises", why: "Constraints, equipment and known apparatus leave fewer than two eligible exercises.", blockedDecision: "Exercise selection.", providedBy: "coach" as const }];
     return finish({ status: "NEEDS_INPUT", source: "planning", missing, routing }, { missing, needsInputSource: "planning" });
   }
-  const unresolved = [...pool.unknownApparatus.entries()].map(([a, ids]) => ({ fact: `client.apparatus.${a}`, why: `Unknown whether a ${a.replace(/_/g, " ")} is available; ${ids.length} exercise(s) needing it were left out.` }));
-  const { reasoning, allowed, contextOnly, constraintIdMap } = buildReasoningInput({ input, method, routing, secondary: emphasis?.secondary ?? null, evidence, promptVersion: REASONER_PROMPT_VERSION, unresolved, pool, functions });
+  const { reasoning, allowed, contextOnly, constraintIdMap } = buildReasoningInput({ input, method, routing, secondary: emphasis?.secondary ?? null, evidence, promptVersion: REASONER_PROMPT_VERSION, unresolved: [], pool, functions });
+  const access = resolveEquipmentAccess(input.client);
   run.input = reasoning;
   run.hashes.input = sha256(reasoning);
 
@@ -210,7 +213,10 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
       continue;
     }
     if (parsed.output.status === "NEEDS_INPUT") return finish({ status: "NEEDS_INPUT", source: "model", missing: parsed.output.needsInput, routing, summary: parsed.output.summary }, { missing: parsed.output.needsInput, needsInputSource: "model", summary: parsed.output.summary });
-    const plan = parsed.output.plan;
+    // Equipment resolution (deterministic): a confirmed-absent apparatus → the closest eligible equivalent, or a
+    // recorded coach decision. The validators then check the EXECUTION plan.
+    const resolved = resolvePlanEquipment({ plan: parsed.output.plan, knowledge: input.knowledge, access, offered, loadConditions: pool.loadConditions, sideOnly: pool.sideOnly });
+    const plan = resolved.plan;
     const spec = expandReasonerPlan({ plan, reasoning, contextOnly, constraintIdMap, method, input, model: { provider: params.model.provider, modelId: params.model.modelId, promptVersion: REASONER_PROMPT_VERSION, attempts: attempt }, nowIso: params.nowIso, allowed });
     const v = validateReasonerPlan({ plan, spec, reasoning, allowed, method, input });
     // Gate 4.0C-5 — current-state adequacy: deficiencies are validator feedback while attempts remain; on the last
@@ -222,7 +228,7 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
       const quality = [...v.quality, ...unattributed.map((k): QualityFinding => ({ code: "unattributed_decision", severity: "warning", message: `The ${k} decision didn't cite the coach rules, client facts or evidence it used.` }))];
       spec.quality = quality;
       if (deficiencies.length) rec.validationErrors = deficiencies;
-      return finish({ status: "PLANNED", spec, plan, quality, evidence, reasoning, attempts: attempt, modelId: params.model.modelId, adequacy: adequacy! }, { plan, spec, quality, adequacy: adequacy! });
+      return finish({ status: "PLANNED", spec, plan, quality, evidence, reasoning, attempts: attempt, modelId: params.model.modelId, adequacy: adequacy! }, { plan, spec, quality, adequacy: adequacy!, ...(resolved.resolutions.length ? { equipment: resolved.resolutions } : {}) });
     }
     rec.validationErrors = v.ok ? deficiencies : v.errors;
     // Deduplicated: the same citation error repeated across decisions is one correction, not many.

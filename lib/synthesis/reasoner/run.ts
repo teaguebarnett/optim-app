@@ -6,6 +6,7 @@
 // detectable. Never contains secrets: model output is structured JSON and
 // provider failures are recorded as error categories only.
 
+import type { EquipmentResolution } from "./equipment-resolution.ts";
 import { createHash } from "node:crypto";
 import type { ClientState } from "../client-state.ts";
 import type { ConstraintSet } from "../constraints.ts";
@@ -68,6 +69,8 @@ export interface ReasonerRun {
     errors?: string[];
     /** Gate 4.0C-5 — current-state adequacy of the planned program (absent on older runs). */
     adequacy?: AdequacyResult;
+    /** Equipment resolution of the planned exercises (confirmed-absent apparatus → substitute or coach decision). */
+    equipment?: EquipmentResolution[];
   };
   totals: { calls: number; inputTokens: number; outputTokens: number; latencyMs: number };
   /** Gate 4.0C-5 — the material planning state this run solved under (absent on older runs: derive from snapshots). */

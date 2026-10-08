@@ -9,7 +9,10 @@ import { resolveEquipmentAccess } from "../planners/resistance/equipment-access.
 import { runFitnessReasoner, type ReasonerResult } from "../reasoner/reasoner.ts";
 import { assessPlanningState } from "../reasoner/lifecycle.ts";
 import { reasonerResultToProgramContent } from "../reasoner/to-program.ts";
-import { clientFacingProgramContent, findClientCopyLeaks, sideOnlyNames, supportedSetupNames } from "../reasoner/review-gate.ts";
+import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, sideOnlyNames, supportedSetupNames } from "../reasoner/review-gate.ts";
+import { REASONER_SYSTEM_PROMPT } from "../reasoner/contract.ts";
+import { applyApparatusAnswers, equipmentAnswerView, sanitizeApparatus } from "../equipment-answers.ts";
+import { readFileSync } from "node:fs";
 import { fakeModel, NOW, restrict, scenarioInput, scriptedOutput, type WirePlan } from "../reasoner/eval/fixtures.ts";
 import { resolveRestrictionOption, subsumes } from "../limitations/vocabulary.ts";
 import { buildConfirmation } from "../limitations/confirm.ts";
@@ -41,6 +44,7 @@ const pool = (tags: ConstraintTag[] = [], e: Env = "commercial_gym", equipment?:
   return buildPool(i, (m as { method: Parameters<typeof buildPool>[1] }).method)!;
 };
 const ids = (p: ReturnType<typeof pool>) => p.pool.map((e) => e.id);
+const col7 = (rows: string[], id: string) => rows.find((r) => r.startsWith(`${id}|`))?.split("|")[7];
 const elig = (id: string, tags: ConstraintTag[]) => exerciseEligibility(K.getExercise(id)!, input(tags).constraints);
 const fit = (id: string, tags: ConstraintTag[]) => demandCompatibility(elig(id, tags));
 const machineOf = (id: string) => K.getExercise(id)!.apparatus.find((a) => a.endsWith("_machine") || a === "smith_machine" || a === "plate_loaded_pulldown");
@@ -76,7 +80,7 @@ await check("3. Specific KNOWN availability unlocks exactly that machine; a conf
   assert.equal(access.apparatusBasis.high_row_machine, "coach_confirmed");
 });
 
-await check("4. Lifecycle: unknown equipment never supersedes a draft; a confirmed absence of a planned machine does; a confirmed machine is 'a better plan may be possible'", async () => {
+await check("4. Lifecycle: unknown equipment never supersedes a draft; a confirmed absence of a planned machine does; confirming a machine the ideal solve already considered changes nothing", async () => {
   const base = input([], "commercial_gym");
   const res = await runFitnessReasoner({ input: base, model: fakeModel((ri) => scriptedOutput(ri, (p: WirePlan) => (p.sessions[0].exercises[0] = { id: "exercise.leg_press", role: "accessory", sets: 2, reps: [8, 12], rir: [2, 3] }))), nowIso: NOW, runId: "eq" });
   assert.equal(res.status, "PLANNED", res.status === "REJECTED" ? res.errors.join("; ") : res.status);
@@ -90,7 +94,14 @@ await check("4. Lifecycle: unknown equipment never supersedes a draft; a confirm
   assert.equal(assess().status, "current");
   assert.equal(assess({ leg_press_machine: "unavailable" }).status, "superseded");
   assert.ok(assess({ leg_press_machine: "unavailable" }).reasons.some((x) => /Leg Press/.test(x)));
-  const better = assess({ high_row_machine: "available" });
+  // The high row's machine was unknown at solve time: the ideal plan already considered it, so confirming it adds nothing.
+  assert.ok(r.run.input!.exercises.some((x) => x.startsWith("exercise.machine_high_row|") && x.includes("high_row_machine?")));
+  assert.equal(assess({ high_row_machine: "available" }).status, "unaffected");
+  // A solve made before unknown apparatus was planned around: the same confirmation makes a better plan possible.
+  const legacy = structuredClone(r.run);
+  legacy.input!.exercises = legacy.input!.exercises.filter((x) => !x.includes("?"));
+  const i2 = input([], "commercial_gym", { high_row_machine: "available" });
+  const better = assessPlanningState({ run: legacy, content, current: { client: i2.client, goal: i2.goal, constraints: i2.constraints, coachMethodVersionId: i2.coach!.versionId, knowledgeVersion: FOUNDATION_KNOWLEDGE_VERSION }, knowledge: K, openConsequence: false });
   assert.equal(better.status, "loosened");
   assert.ok(better.newlyAvailable.includes("Chest-Supported Machine High Row"));
 });
@@ -169,6 +180,150 @@ await check("10. No restriction = no filtering, no side limits, no load conditio
   assert.equal(p.sideOnly.size, 0);
   assert.equal(p.loadConditions.size, 0);
   for (const e of p.pool) assert.equal(fit(e.id, []), "compatible", e.id);
+});
+
+// ---------------------------------------------------------------------------
+// Ideal plan → equipment resolution → execution exercise
+// ---------------------------------------------------------------------------
+const GI: GenerationInputs = { version: 1, recordedAtIso: NOW, coachMethod: { methodVersionId: "mv-eval-7", playbookVersion: 7, operatingModelVersion: 1, confirmedAtIso: NOW, summary: [] }, clientIntake: { source: "client_onboarding", completedAtIso: NOW, healthReview: "not_required", summary: [], assumptions: [] } };
+const SQUAT_SINGLE_LEG: ConstraintTag[] = [{ kind: "avoid_movement_pattern", pattern: "squat" }, { kind: "avoid_movement_pattern", pattern: "single_leg" }];
+/** Plans with the scripted model, putting `id` first in session 1 (the model's ideal choice). */
+async function planWith(id: string, i: ReturnType<typeof input>, maxAttempts = 2) {
+  const m = fakeModel((ri) => scriptedOutput(ri, (p: WirePlan) => (p.sessions[0].exercises[0] = { id, role: "accessory", sets: 3, reps: [8, 12], rir: [2, 3] })));
+  const r = await runFitnessReasoner({ input: i, model: m, nowIso: NOW, runId: `eq-${id}`, maxAttempts });
+  return { r, m };
+}
+const plannedIds = (r: ReasonerResult) => (r.status === "PLANNED" ? r.plan.sessions.flatMap((s) => s.exercises.map((e) => e.exerciseId)) : []);
+const review = (r: ReasonerResult, i: ReturnType<typeof input>) => {
+  const p = r as Extract<ReasonerResult, { status: "PLANNED" }>;
+  const content = reasonerResultToProgramContent({ result: p, knowledge: K, programId: "p", workspaceId: "ws", clientProfileId: "client-eval", coachId: "c", title: "t", jobId: "j", generationInputs: GI, nowIso: NOW });
+  return reasonerReviewModel({ content, run: p.run, knowledge: K, current: { client: i.client, goal: i.goal, constraints: i.constraints, coachMethodVersionId: i.coach!.versionId, knowledgeVersion: FOUNDATION_KNOWLEDGE_VERSION } });
+};
+
+await check("11. A — Unknown equipment doesn't remove an otherwise-valid exercise from ideal planning, and stays unknown", async () => {
+  const i = input([], "private_gym"); // private gym: no machine is assumed
+  assert.equal(resolveEquipmentAccess(i.client)!.apparatus.chest_supported_row_machine, "unknown");
+  const m = methodFor(i)! as { method: Parameters<typeof buildPool>[1] };
+  assert.ok(!buildPool(i, m.method)!.pool.some((e) => e.id === "exercise.chest_supported_row"), "deterministic planner: known-only, unchanged");
+  assert.ok(buildPool(i, m.method, { apparatus: "ideal" })!.pool.some((e) => e.id === "exercise.chest_supported_row"), "ideal pool keeps it");
+  const { r, m: model } = await planWith("exercise.chest_supported_row", i);
+  assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : r.status);
+  assert.ok(plannedIds(r).includes("exercise.chest_supported_row"), "planned as the model chose it");
+  assert.equal(col7(model.lastInput!.exercises, "exercise.chest_supported_row"), "machine+chest_supported_row_machine?", "marked not confirmed, never as available");
+  assert.ok(!model.lastInput!.equipment.apparatus.includes("chest_supported_row_machine") && model.lastInput!.equipment.apparatusUnknown.includes("chest_supported_row_machine"));
+  assert.equal((r as Extract<ReasonerResult, { status: "PLANNED" }>).run.result.equipment, undefined, "nothing to resolve");
+  const item = review(r, i).equipment.items.find((x) => x.apparatus === "chest_supported_row_machine")!;
+  assert.deepEqual([item.state, item.basis, item.exercises], ["unknown", "unknown", ["Chest-Supported Row"]], "the review shows it as an unconfirmed dependency");
+  assert.match(REASONER_SYSTEM_PROMPT, /Never describe "\?" apparatus as confirmed/);
+});
+
+await check("12. B — Confirmed available equipment is planned and executed normally", async () => {
+  const i = input([], "private_gym", { chest_supported_row_machine: "available" });
+  const { r, m } = await planWith("exercise.chest_supported_row", i);
+  assert.equal(r.status, "PLANNED");
+  assert.ok(plannedIds(r).includes("exercise.chest_supported_row"));
+  assert.equal(col7(m.lastInput!.exercises, "exercise.chest_supported_row"), "machine+chest_supported_row_machine");
+  const item = review(r, i).equipment.items.find((x) => x.apparatus === "chest_supported_row_machine")!;
+  assert.deepEqual([item.state, item.basis], ["available", "coach_confirmed"]);
+  assert.equal(review(r, i).equipment.substitutions.length, 0);
+});
+
+await check("13. C — Confirmed unavailable can't stay the execution exercise: the strongest valid equivalent replaces it, intent preserved", async () => {
+  const i = input([], "private_gym", { chest_supported_row_machine: "unavailable" });
+  const { r, m } = await planWith("exercise.chest_supported_row", i);
+  assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : r.status);
+  assert.equal(m.calls, 1, "resolved deterministically — no repair call");
+  assert.equal(col7(m.lastInput!.exercises, "exercise.chest_supported_row"), "machine+chest_supported_row_machine!", "the ideal stage still saw it, marked absent");
+  const p = r as Extract<ReasonerResult, { status: "PLANNED" }>;
+  assert.ok(!plannedIds(r).includes("exercise.chest_supported_row"), "never the execution exercise");
+  const res = p.run.result.equipment!;
+  assert.equal(res.length, 1);
+  assert.equal(res[0].status, "substituted");
+  const o = K.getExercise("exercise.chest_supported_row")!;
+  const sub = K.getExercise(res[0].substituteId!)!;
+  assert.equal(sub.id, "exercise.incline_dumbbell_row", "same pattern, same muscles, chest-supported");
+  assert.equal(sub.patterns[0], o.patterns[0]);
+  assert.ok(o.primaryMuscles.every((x) => sub.primaryMuscles.includes(x)) && sub.trunkSupport === o.trunkSupport);
+  assert.equal(p.plan.sessions[0].exercises[0].exerciseId, sub.id, "in the same slot");
+  assert.deepEqual([p.plan.sessions[0].exercises[0].sets, p.plan.sessions[0].exercises[0].reps], [3, { min: 8, max: 12 }], "prescription kept");
+  assert.match(p.plan.sessions[0].exercises[0].note ?? "", /Replaces Chest-Supported Row \(no chest-supported row machine\)/i);
+  const rv = review(r, i);
+  assert.deepEqual(rv.equipment.substitutions.map((x) => [x.from, x.to]), [["Chest-Supported Row", "Incline Chest-Supported Dumbbell Row"]]);
+  assert.equal(rv.approvalBlockedReason?.includes("equipment") ?? false, false, "a good substitution doesn't block approval");
+  // Deterministic: the same state resolves the same way.
+  const again = await planWith("exercise.chest_supported_row", i);
+  assert.deepEqual(plannedIds(again.r), plannedIds(r));
+});
+
+await check("14. D — No adequate equivalent: the work leaves the execution plan and becomes an explicit, blocking coach decision", async () => {
+  const i = input(SQUAT_SINGLE_LEG, "commercial_gym", { leg_extension_machine: "unavailable" });
+  const { r } = await planWith("exercise.leg_extension", i);
+  assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : r.status);
+  const p = r as Extract<ReasonerResult, { status: "PLANNED" }>;
+  assert.ok(!plannedIds(r).includes("exercise.leg_extension"));
+  assert.deepEqual(p.run.result.equipment!.map((x) => [x.exerciseId, x.status, x.serves]), [["exercise.leg_extension", "unresolved", "knee extension — quadriceps"]]);
+  const rv = review(r, i);
+  assert.deepEqual(rv.equipment.unresolved.map((x) => x.exercise), ["Leg Extension"], "never silent");
+  const f = rv.adequacy!.limitations.find((x) => x.code === "equipment_unresolved")!;
+  assert.ok(f && /Leg Extension .*quadriceps.*no eligible exercise preserves that work/.test(f.message), f?.message);
+  assert.equal(rv.adequacy!.status, "unresolved");
+  assert.ok(rv.approvalBlockedReason && /restrictions and equipment/.test(rv.approvalBlockedReason), "blocks approval until the coach decides");
+  // Confirming the equipment after all lifts the block (and the draft becomes improvable).
+  const i2 = input(SQUAT_SINGLE_LEG, "commercial_gym", { leg_extension_machine: "available" });
+  const content = reasonerResultToProgramContent({ result: p, knowledge: K, programId: "p", workspaceId: "ws", clientProfileId: "client-eval", coachId: "c", title: "t", jobId: "j", generationInputs: GI, nowIso: NOW });
+  const after = reasonerReviewModel({ content, run: p.run, knowledge: K, current: { client: i2.client, goal: i2.goal, constraints: i2.constraints, coachMethodVersionId: i2.coach!.versionId, knowledgeVersion: FOUNDATION_KNOWLEDGE_VERSION } });
+  assert.equal(after.equipment.unresolved.length, 0);
+  assert.equal(after.lifecycle?.status, "loosened");
+});
+
+await check("15. E — Hard client restrictions override every equipment state", async () => {
+  // Confirmed available, but the restriction excludes it: never offered, and the model can't plan it.
+  const i = input(SQUAT_SINGLE_LEG, "commercial_gym", { leg_press_machine: "available" });
+  const { r, m } = await planWith("exercise.leg_press", i, 1);
+  assert.ok(!m.lastInput!.exercises.some((x) => x.startsWith("exercise.leg_press|")));
+  assert.ok(r.status === "REJECTED" && r.errors.some((e) => /exercise\.leg_press wasn't among the eligible candidates/.test(e)));
+  // Substitutes come only from the constraint-eligible pool.
+  const { r: c } = await planWith("exercise.leg_extension", input(SQUAT_SINGLE_LEG, "commercial_gym", { leg_extension_machine: "unavailable" }));
+  for (const id of plannedIds(c)) assert.ok(exerciseEligibility(K.getExercise(id)!, i.constraints).eligible, id);
+  // Unknown equipment doesn't override a restriction either.
+  const u = input(SQUAT_SINGLE_LEG, "private_gym");
+  const um = methodFor(u)! as { method: Parameters<typeof buildPool>[1] };
+  assert.ok(!buildPool(u, um.method, { apparatus: "ideal" })!.pool.some((e) => e.patterns.some((x) => x === "squat" || x === "single_leg")));
+});
+
+await check("16. F — Equipment answers round-trip: stored, read back, drive planning; Unknown removes the answer", () => {
+  let stored = applyApparatusAnswers({}, { chest_supported_row_machine: "available", leg_press_machine: "unavailable" })!;
+  assert.deepEqual(sanitizeApparatus(JSON.parse(JSON.stringify(stored))), stored, "jsonb round trip");
+  let access = resolveEquipmentAccess(input([], "private_gym", stored).client)!;
+  assert.deepEqual([access.apparatus.chest_supported_row_machine, access.apparatusBasis.chest_supported_row_machine, access.apparatus.leg_press_machine], ["available", "coach_confirmed", "unavailable"]);
+  stored = applyApparatusAnswers(stored, { chest_supported_row_machine: "unknown" })!;
+  assert.deepEqual(stored, { leg_press_machine: "unavailable" }, "Unknown deletes the answer — never stored as a value");
+  access = resolveEquipmentAccess(input([], "private_gym", stored).client)!;
+  assert.deepEqual([access.apparatus.chest_supported_row_machine, access.apparatusBasis.chest_supported_row_machine], ["unknown", "unknown"]);
+  assert.equal(applyApparatusAnswers(stored, { not_a_machine: "available" } as never), null, "unknown equipment ids are refused");
+  assert.deepEqual(sanitizeApparatus({ leg_press_machine: "maybe", bogus: "available", smith_machine: "available" }), { smith_machine: "available" });
+  // The commercial-gym baseline is overridden by an answer, and restored by Unknown.
+  const com = (eq: Record<string, "available" | "unavailable">) => resolveEquipmentAccess(input([], "commercial_gym", eq).client)!;
+  assert.deepEqual([com({ leg_press_machine: "unavailable" }).apparatus.leg_press_machine, com({}).apparatusBasis.leg_press_machine], ["unavailable", "baseline"]);
+});
+
+await check("17. G — The answer control shows the click immediately (saving), then saved; failures revert with a reason", () => {
+  const pressed = (v: ReturnType<typeof equipmentAnswerView>) => v.options.filter((o) => o.pressed).map((o) => o.value);
+  const idle = equipmentAnswerView({ shown: "unknown", saving: false, justSaved: false, error: null });
+  assert.deepEqual([pressed(idle), idle.status, idle.tone], [["unknown"], "Not confirmed", "warning"]);
+  const clicked = equipmentAnswerView({ shown: "available", saving: true, justSaved: false, error: null });
+  assert.deepEqual([pressed(clicked), clicked.status], [["available"], "Saving…"], "the chosen answer is selected at once");
+  assert.ok(clicked.options.find((o) => o.value === "available")!.loading && !clicked.options.find((o) => o.value === "unknown")!.loading);
+  const saved = equipmentAnswerView({ shown: "available", saving: false, justSaved: true, error: null });
+  assert.deepEqual([saved.status, saved.tone], ["Saved", "success"]);
+  assert.equal(equipmentAnswerView({ shown: "available", saving: false, justSaved: false, error: null }).status, "Confirmed: they have it");
+  assert.equal(equipmentAnswerView({ shown: "unknown", saving: false, justSaved: false, error: "Nothing was saved." }).status, "Nothing was saved.");
+  assert.deepEqual(equipmentAnswerView({ shown: "unavailable", saving: false, justSaved: false, error: null }).options.map((o) => o.label), ["Have it", "Don't have it", "Unknown"]);
+  // The component wires this to React's optimistic state inside a transition, with an accessible pressed state.
+  const src = readFileSync(new URL("../../../components/coach/equipment-answer.tsx", import.meta.url), "utf8");
+  assert.ok(/useOptimistic\(saved\)/.test(src) && /setShown\(next\)/.test(src) && /aria-pressed=\{o\.pressed\}/.test(src) && /role="status"/.test(src) && /variant=\{o\.pressed \? "primary" : "secondary"\}/.test(src));
+  const reviewSrc = readFileSync(new URL("../../../components/coach/program-proposal-review.tsx", import.meta.url), "utf8");
+  assert.ok(!/Not used — equipment not confirmed/.test(reviewSrc) && /Equipment this plan uses/.test(reviewSrc), "review language: unknown no longer reads as 'can't plan'");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

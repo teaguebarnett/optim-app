@@ -107,15 +107,16 @@ export function currentFit(ex: ExerciseEntry, constraints: ConstraintSet, access
   return { state: "ok", why: "", basis };
 }
 
-/** The eligible candidate space under the CURRENT state, the way the planner builds it (equipment and apparatus must be
- * known-available, constraint-eligible, rep-prescribed) — for current-state adequacy. */
+/** The eligible candidate space under the CURRENT state, the way the Reasoner plans (equipment categories available, no
+ * apparatus the coach confirmed absent — unknown apparatus doesn't narrow the ideal plan, constraint-eligible,
+ * rep-prescribed) — for current-state adequacy. */
 export function currentCandidatePool(knowledge: FitnessKnowledgeRegistry, constraints: ConstraintSet, client: ClientState): { pool: ExerciseEntry[]; loadConditions: Map<string, ReturnType<typeof exerciseEligibility>["loadConditions"]> } {
   const access = resolveEquipmentAccess(client);
   const pool: ExerciseEntry[] = [];
   const loadConditions = new Map<string, ReturnType<typeof exerciseEligibility>["loadConditions"]>();
   for (const e of knowledge.exercises()) {
     if (!e.prescription.includes("reps")) continue;
-    if (access && (access.equipment[e.equipment] !== "available" || e.apparatus.some((a) => access.apparatus[a] !== "available"))) continue;
+    if (access && (access.equipment[e.equipment] !== "available" || e.apparatus.some((a) => access.apparatus[a] === "unavailable"))) continue;
     const elig = exerciseEligibility(e, constraints);
     if (!elig.eligible) continue;
     pool.push(e);
@@ -185,15 +186,18 @@ export function assessPlanningState(params: { run: ReasonerRun; content: Univers
   // Loosened: exercises usable now that the solve couldn't use.
   if (FEASIBILITY.some((p) => changed.has(p))) {
     const access = resolveEquipmentAccess(current.client);
-    const offered = new Set((run.input?.exercises ?? []).filter((r) => r.split("|").at(-1) !== "U").map((r) => r.split("|")[0]));
+    const offered = new Set((run.input?.exercises ?? []).filter(rowExecutable).map((r) => r.split("|")[0]));
     const newly = knowledge
       .exercises()
-      .filter((e) => !offered.has(e.id) && e.prescription.includes("reps") && currentFit(e, current.constraints, access).state === "ok" && (!access || e.apparatus.every((a) => access.apparatus[a] === "available")) && wasUnusable(e, run))
+      .filter((e) => !offered.has(e.id) && e.prescription.includes("reps") && currentFit(e, current.constraints, access).state === "ok" && (!access || e.apparatus.every((a) => access.apparatus[a] !== "unavailable")) && wasUnusable(e, run))
       .map((e) => e.name);
     if (newly.length) return { ...base, status: "loosened", changes, reasons: [], hits, newlyAvailable: newly };
   }
   return { ...base, status: "unaffected", changes, reasons: [], hits };
 }
+
+/** A run's input row the solve could execute: not uncertain-fit ("U") and no apparatus the coach had confirmed absent ("!"). */
+export const rowExecutable = (row: string) => row.split("|").at(-1) !== "U" && !/!(\+|$)/.test(row.split("|")[7] ?? "");
 
 /** The exercise was offered as uncertain ("U") when the run solved (legacy policy). */
 function solvedUncertain(run: ReasonerRun, id: string): boolean {
@@ -207,7 +211,8 @@ function wasUnusable(e: ExerciseEntry, run: ReasonerRun): boolean {
   if (run.preflight?.withheld.includes(e.id)) return true;
   const snap = run.snapshots.constraintSet as ConstraintSet;
   const access = resolveEquipmentAccess(run.snapshots.clientState);
-  // Specific apparatus that was unknown when the run solved (never planned around) counts as unusable then.
+  // Specific apparatus not known available when the run solved: runs before reasoner v1.6 never planned around
+  // unknown apparatus; any run never executes a confirmed absence. (Offered "?" rows are excluded by the caller.)
   if (access && e.apparatus.some((a) => access.apparatus[a] !== "available")) return true;
   return currentFit(e, snap, access).state !== "ok";
 }
