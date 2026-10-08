@@ -538,5 +538,84 @@ await check("24. Phase set shifts apply only where the coach's set range has hea
     }
 });
 
+// Gate 4.0C-5 live regressions (job abb7623f, Knowledge 0.5.0): both attempts failed before any plan reached review.
+const LIVE_ARCH_NAME = "5-day body-part split (chest/triceps, back/biceps, delts, chest+back, arms+lower-limb)";
+const REAL_C1 = "client-eval:coach_structured:health_review";
+
+await check("25. Live: an over-long architecture.name is shortened deterministically, not a spent attempt", async () => {
+  assert.equal(LIVE_ARCH_NAME.length, 86);
+  const m = ok((p) => (p.architecture.name = LIVE_ARCH_NAME));
+  const r = await run(limitedInput(), m);
+  assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : "");
+  assert.equal(m.calls, 1, "no repair call spent on a label");
+  assert.ok(r.status === "PLANNED" && r.spec.weeklyStructure!.value.name === "5-day body-part split" && r.plan.architecture.name === "5-day body-part split");
+  assert.equal((r.run.attempts[0].raw as { plan: WirePlan }).plan.architecture.name, LIVE_ARCH_NAME, "the model's raw label stays in the run");
+  // No parenthetical: cut at a word boundary, ≤ 80 with an ellipsis; session titles share the rule.
+  const long = "Upper-body hypertrophy rotation emphasising supported pulling and submaximal pressing across five days";
+  const t = await run(limitedInput(), ok((p) => { p.architecture.name = long; p.sessions[0].title = long; }));
+  assert.ok(t.status === "PLANNED");
+  for (const v of [t.plan.architecture.name, t.plan.sessions[0].title]) assert.ok(v.length <= 80 && v.endsWith("…") && long.startsWith(v.slice(0, -1)) && !/\s…$/.test(v), v);
+  // Runaway text is still rejected; other limits are unchanged.
+  rejectedWith(await run(limitedInput(), ok((p) => (p.architecture.name = "x".repeat(241)))), /architecture\.name is too long \(max 240 chars\)/);
+  rejectedWith(await run(limitedInput(), ok((p) => (p.architecture.split = "s".repeat(41)))), /architecture\.split is too long \(max 40 chars\)/);
+  assert.equal(parseReasonerOutput({ status: "PLAN", plan: { architecture: { name: "" } } }).ok, false);
+});
+
+await check("26. Live: a constraint id cited as a client fact is rejected with exact repair feedback — never accepted or moved", async () => {
+  // Exactly the live shape: "C1" in decisions[].client (alongside a real fact) and in the deviation's client list.
+  const m = fakeModel((ri) => scriptedOutput(ri, (p) => p.decisions.forEach((d) => d.client.unshift("C1"))));
+  const r = await run(limitedInput(), m);
+  rejectedWith(r, /^Cites constraint "C1" in "client", which takes only client facts — list it in "constraints"\.$/);
+  assert.equal(m.calls, 2, "exactly one repair attempt — no extra paid calls");
+  const feedback = m.lastUserMessage.split("rejected by OPTIM's validators:")[1] ?? "";
+  assert.equal(feedback.split('Cites constraint "C1" in "client"').length - 1, 1, "repeated across decisions, the correction is sent once");
+  assert.ok(m.lastInput!.constraints.some((c) => c.id === "C1") && !Object.keys(m.lastInput!.client.facts).includes("C1"), "C1 exists only in the constraint namespace");
+});
+
+await check("27. Repair path: the validator-guided retry can move the ref; provenance records the real constraint, not a client fact", async () => {
+  const m = fakeModel((ri, attempt) => scriptedOutput(ri, (p) => p.decisions.forEach((d) => (attempt === 1 ? d.client.unshift("C1") : (d.constraints = ["C1"])))));
+  const r = await run(limitedInput(), m);
+  assert.equal(r.status, "PLANNED", r.status === "REJECTED" ? r.errors.join("; ") : "");
+  assert.equal(m.calls, 2);
+  assert.ok(m.lastUserMessage.includes('list it in "constraints"'), "the repair attempt was told exactly where the ref belongs");
+  assert.ok(r.status === "PLANNED");
+  assert.ok(r.spec.frequency.inputs.includes(`constraint:${REAL_C1}`), r.spec.frequency.inputs.join(", "));
+  assert.ok(!r.spec.frequency.inputs.some((x) => x === "client:C1" || x === "constraint:C1"), "alias never stored as provenance");
+  assert.ok(!r.spec.provenance.clientInputs.includes("C1"));
+});
+
+await check("28. Legitimate client-fact and constraint citations stay valid; unknown and cross-category refs fail", async () => {
+  const both = await run(limitedInput(), ok((p) => p.decisions.forEach((d) => (d.constraints = ["C1"]))));
+  assert.equal(both.status, "PLANNED", both.status === "REJECTED" ? both.errors.join("; ") : "");
+  assert.ok(both.status === "PLANNED" && both.spec.frequency.inputs.some((x) => x.startsWith("client:onboarding.")) && both.spec.frequency.inputs.includes(`constraint:${REAL_C1}`));
+  rejectedWith(await run(limitedInput(), ok((p) => (p.decisions[0].client = ["onboarding.nope.missing"]))), /^Cites client fact "onboarding\.nope\.missing", which wasn't provided\.$/);
+  rejectedWith(await run(limitedInput(), ok((p) => (p.decisions[0].constraints = ["C9"]))), /^Cites constraint "C9", which wasn't provided\.$/);
+  // The real constraint id never passes as an alias, and a client fact can't pose as a constraint.
+  assert.equal((await run(limitedInput(), ok((p) => (p.decisions[0].constraints = [REAL_C1])))).status, "REJECTED");
+  rejectedWith(await run(limitedInput(), ok((p) => (p.decisions[0].constraints = ["health_review"]))), /^Cites constraint "health_review", which wasn't provided\.$/);
+  const fact = (await (async () => { const a = ok(); await run(limitedInput(), a); return Object.keys(a.lastInput!.client.facts)[0]; })());
+  rejectedWith(await run(limitedInput(), ok((p) => (p.decisions[0].constraints = [fact]))), new RegExp(`^Cites client fact "${fact.replace(/\./g, "\\.")}" in "constraints", which takes only constraints — list it in "client"\\.$`));
+  rejectedWith(await run(limitedInput(), ok((p) => (p.decisions[0].evidence = ["C1"]))), /^Cites constraint "C1" in "evidence", which takes only evidence refs — list it in "constraints"\.$/);
+});
+
+await check("29. Deviations: a constraint in the client list is rejected; a confirmed constraint alone can justify a departure", async () => {
+  const a = ok();
+  await run(limitedInput(), a);
+  const anchor = a.lastInput!.anchors.days.value;
+  const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].slice(0, anchor + 1);
+  const moreDays = (p: WirePlan) => {
+    p.frequency.days = anchor + 1;
+    p.schedule.days = days;
+    p.sessions.push({ ...structuredClone(p.sessions[0]), day: days[anchor] });
+  };
+  rejectedWith(await run(limitedInput(), ok((p) => { moreDays(p); p.deviations = [{ field: "days", because: "Restriction leaves upper body only.", coach: [], client: ["C1"] }]; })), /Cites constraint "C1" in "client".*list it in "constraints"/);
+  const viaConstraint = await run(limitedInput(), ok((p) => { moreDays(p); p.deviations = [{ field: "days", because: "Restriction leaves upper body only.", coach: [], client: [], constraints: ["C1"] }]; }));
+  assert.equal(viaConstraint.status, "PLANNED", viaConstraint.status === "REJECTED" ? viaConstraint.errors.join("; ") : "");
+});
+
+await check("30. Prompt states the four reference namespaces and the constraints slot", () => {
+  assert.ok(REASONER_SYSTEM_PROMPT.includes('"constraints" = ids from "constraints"') && REASONER_SYSTEM_PROMPT.includes('"client":[client.facts keys],"constraints":[constraint ids],"evidence"'));
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

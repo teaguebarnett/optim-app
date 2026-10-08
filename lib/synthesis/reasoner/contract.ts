@@ -18,7 +18,7 @@ import { DAY_ORDER } from "../client-state.ts";
 import { MUSCLES, type MuscleId } from "../knowledge/taxonomy.ts";
 import type { CoverageCause, CoverageStatus } from "./adequacy.ts";
 
-export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.5.0";
+export const REASONER_PROMPT_VERSION = "reasoner-resistance-v2.6.0";
 
 export const DECISION_TOPICS = ["frequency", "structure", "schedule", "exercise_selection", "prescription", "effort", "progression", "recovery", "duration", "other"] as const;
 export type DecisionTopic = (typeof DECISION_TOPICS)[number];
@@ -62,6 +62,8 @@ export interface ReasonerDecision {
   because: string;
   coachRuleKeys: string[];
   clientFactRefs: string[];
+  /** Confirmed-constraint aliases from "constraints" (C1…) — their own namespace, never client facts. Absent before v2.6. */
+  constraintRefs?: string[];
   knowledgeRefs: string[];
 }
 
@@ -82,6 +84,8 @@ export interface AnchorDeviation {
   because: string;
   coachRuleKeys: string[];
   clientFactRefs: string[];
+  /** Confirmed-constraint aliases (absent before v2.6). */
+  constraintRefs?: string[];
 }
 
 /** Gate 4.0C-3C — what a phase does to one role's prescriptions, applied deterministically to every week in it. */
@@ -152,6 +156,20 @@ const str = (v: unknown, at: string, max: number): string => {
   return v.trim();
 };
 const optStr = (v: unknown, at: string, max: number): string | null => (v === undefined || v === null || v === "" ? null : str(v, at, max));
+/** A display label (architecture name, session title): a model label over `max` is shortened deterministically
+ * instead of costing a whole attempt (live 4.0C-5: an 86-char architecture.name rejected an otherwise-parsed plan).
+ * A trailing parenthetical goes first ("5-day body-part split (chest/triceps, …)" → "5-day body-part split"), then the
+ * label is cut at a word boundary with "…". Beyond `runaway` it is still rejected. The raw output stays in the run. */
+export const shortenLabel = (v: string, max: number): string => {
+  if (v.length <= max) return v;
+  let t = v;
+  while (t.length > max && /\s*[(\[][^()[\]]*[)\]]\s*$/.test(t)) t = t.replace(/\s*[(\[][^()[\]]*[)\]]\s*$/, "").trim();
+  if (t.length >= 3 && t.length <= max) return t;
+  const cut = t.slice(0, max - 1);
+  const space = cut.search(/\s\S*$/);
+  return `${(space >= max / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:/(+–—-]+$/, "")}…`;
+};
+const label = (v: unknown, at: string, max: number, runaway: number): string => shortenLabel(str(v, at, runaway), max);
 const int = (v: unknown, at: string, min: number, max: number): number => {
   if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) throw new SchemaError(`${at} must be an integer ${min}–${max}`);
   return v;
@@ -204,7 +222,7 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
       const s = obj(x, `sessions[${i}]`);
       return {
         day: oneOf(s.day, `sessions[${i}].day`, DAY_ORDER),
-        title: str(s.title, `sessions[${i}].title`, 80),
+        title: label(s.title, `sessions[${i}].title`, 80, 240),
         purpose: str(s.purpose, `sessions[${i}].purpose`, 240),
         targets: (() => {
           const t = arr(s.targets, `sessions[${i}].targets`, 4).map((m, j) => oneOf(m, `sessions[${i}].targets[${j}]`, MUSCLE_IDS));
@@ -243,7 +261,7 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
       goalEmphasis: { primary: oneOf(ge.primary, "goalEmphasis.primary", ["strength", "hypertrophy", "general"] as const), secondary: ge.secondary === null || ge.secondary === undefined ? null : oneOf(ge.secondary, "goalEmphasis.secondary", ["strength", "hypertrophy"] as const), rationale: str(ge.why, "goalEmphasis.why", 400) },
       frequency: { daysPerWeek: int(fr.days, "frequency.days", 1, 7), rationale: str(fr.why, "frequency.why", 400) },
       schedule: { days: arr(sc.days, "schedule.days", 7).map((d, i) => oneOf(d, `schedule.days[${i}]`, DAY_ORDER)), rationale: str(sc.why, "schedule.why", 400) },
-      architecture: { split: str(ar.split, "architecture.split", 40), name: str(ar.name, "architecture.name", 80), rationale: str(ar.why, "architecture.why", 400) },
+      architecture: { split: str(ar.split, "architecture.split", 40), name: label(ar.name, "architecture.name", 80, 240), rationale: str(ar.why, "architecture.why", 400) },
       sessions,
       durationWeeks: int(p.weeks, "plan.weeks", 1, 52),
       progression: {
@@ -258,7 +276,7 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
       }),
       deviations: (p.deviations === undefined ? [] : arr(p.deviations, "plan.deviations", 2)).map((x, i): AnchorDeviation => {
         const d = obj(x, `deviations[${i}]`);
-        return { field: oneOf(d.field, `deviations[${i}].field`, ["days", "weeks"] as const), because: str(d.because, `deviations[${i}].because`, 400), coachRuleKeys: strList(d.coach, `deviations[${i}].coach`, 6, 80), clientFactRefs: strList(d.client, `deviations[${i}].client`, 6, 120) };
+        return { field: oneOf(d.field, `deviations[${i}].field`, ["days", "weeks"] as const), because: str(d.because, `deviations[${i}].because`, 400), coachRuleKeys: strList(d.coach, `deviations[${i}].coach`, 6, 80), clientFactRefs: strList(d.client, `deviations[${i}].client`, 6, 120), constraintRefs: strList(d.constraints, `deviations[${i}].constraints`, 6, 40) };
       }),
       monitoring: strList(p.monitoring, "plan.monitoring", 6, 200),
       constraintsApplied: (p.constraintsApplied === undefined ? [] : arr(p.constraintsApplied, "plan.constraintsApplied", 15)).map((x, i) => {
@@ -284,6 +302,7 @@ export function parseReasonerOutput(raw: unknown): ParsedOutput {
           because: str(d.because, `decisions[${i}].because`, 600),
           coachRuleKeys: strList(d.coach, `decisions[${i}].coach`, 10, 80),
           clientFactRefs: strList(d.client, `decisions[${i}].client`, 10, 120),
+          constraintRefs: strList(d.constraints, `decisions[${i}].constraints`, 10, 40),
           knowledgeRefs: strList(d.evidence, `decisions[${i}].evidence`, 10, 120),
         };
       }),
@@ -331,6 +350,7 @@ DESIGN PRINCIPLES
 - CONSTRAINT FIT: "-" fits the constraints; K fits only under its stated conditions (submaximal; where it has a pad/bench, trunk kept against it — or as the coach cleared it). Exercises whose fit OPTIM can't establish are not offered. Never describe K work as proven safe.
 - PROGRESSION is a designed, executable block: contiguous phases covering week 1 to the last week. OPTIM computes every week's prescription from them, starting from each exercise as you list it: per role, "zones" (cycled weekly inside the phase: lower_half = heavier end of the listed rep range, upper_half = lighter end), "rir" (−1/0/+1 added to the listed RIR), "sets" (−1/0/+1 added to the listed sets of each exercise that has room inside the coach's set range; exercises at that boundary keep their listed sets) and "progress" (one of the coach's progression methods for that role, or "hold"). Every resulting week must stay inside the coach's ranges and each exercise's constraint-fit minimums. "focus" and "intent" are short labels with NO numbers — all numbers live in the structure, so the text can't contradict the prescription.
 - If a decision-critical fact is missing or contradictory, return NEEDS_INPUT instead of guessing. Never invent client facts. Medical questions go to the coach.
+- REFERENCES — four separate namespaces; each id goes only in its own list: "coach" = coach rule keys; "client" = keys of client.facts ONLY; "constraints" = ids from "constraints" (C1, C2, …) — a restriction is never a client fact; "evidence" = evidence refs.
 
 OUTPUT — one JSON object, no prose. Keep text short (one sentence per field; "decision" ≤ 150 characters); OPTIM renders explanations from your references. Every open question belongs in "unresolved" (up to 10) — never drop one to stay brief.
 {"status":"PLAN","plan":{
@@ -341,14 +361,14 @@ OUTPUT — one JSON object, no prose. Keep text short (one sentence per field; "
  "architecture":{"split":<coach-allowed split id for that day count>,"name":str,"why":str},
  "sessions":[{"day":"Monday","title":str,"purpose":str,"targets":[muscle ids],"exercises":[{"id":<exercise id>,"role":"main"|"accessory","sets":int,"reps":[min,max],"rir":[min,max] (required when the coach uses RIR/RPE),"rest":[minSec,maxSec] or omit for the coach's range,"note":str or omit}]}],
  "weeks":int,
- "deviations":[{"field":"days"|"weeks","because":str,"coach":[keys],"client":[refs]}] (only when departing from an anchor),
+ "deviations":[{"field":"days"|"weeks","because":str,"coach":[keys],"client":[client.facts keys],"constraints":[constraint ids]}] (only when departing from an anchor),
  "goalAccess":[{"target":str,"exercise":<exercise id>,"status":"direct"|"blocked","blockedBy":<key from "blocked"> or omit,"interim":str or omit}],
  "progression":{"model":str,"why":str,"phases":[{"weeks":[from,to],"focus":str,"intent":str,"main":{"zones":["as_prescribed"|"lower_half"|"upper_half",...],"rir":-1|0|1,"sets":-1|0|1,"progress":<coach method or "hold">},"accessory":{same}}],"deloadWeeks":[ints, only if the coach schedules deloads]},
  "monitoring":[≤4 str, optional — OPTIM adds the coach's deload triggers itself],
  "constraintsApplied":[{"id":<constraint id from "constraints">,"how":str}],
  "coverage":[{"target":<muscle id from functions.considered>,"status":"trained"|"reduced"|"not_trained","cause":"goal_priority"|"time"|"constraints"|"available_exercises" (unless trained),"why":str (unless trained)}],
  "assumptions":[str],"unresolved":[{"fact":str,"why":str,"from":"client"|"coach"|"either"}],"conflicts":[{"rule":<coach key>,"issue":str}],
- "decisions":[≤12 {"topic":"frequency"|"structure"|"schedule"|"exercise_selection"|"prescription"|"effort"|"progression"|"recovery"|"duration"|"other","decision":str,"because":str,"coach":[keys],"client":[refs],"evidence":[refs]}]
+ "decisions":[≤12 {"topic":"frequency"|"structure"|"schedule"|"exercise_selection"|"prescription"|"effort"|"progression"|"recovery"|"duration"|"other","decision":str,"because":str,"coach":[keys],"client":[client.facts keys],"constraints":[constraint ids],"evidence":[refs]}]
 }}
 or {"status":"NEEDS_INPUT","needsInput":[{"fact":str,"why":str,"blockedDecision":str,"providedBy":"client"|"coach"|"either"}],"summary":str}
 One session per scheduled day, in schedule order. Cover at least frequency, structure, schedule, exercise_selection, prescription, effort, progression and duration in "decisions", each with the exact refs you used.`;

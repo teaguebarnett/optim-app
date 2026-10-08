@@ -110,11 +110,11 @@ export interface WirePlan {
   sessions: WireSession[];
   weeks: number;
   progression: { model: string; why: string; phases: WirePhase[]; deloadWeeks: number[] };
-  deviations?: Array<{ field: string; because: string; coach: string[]; client: string[] }>;
+  deviations?: Array<{ field: string; because: string; coach: string[]; client: string[]; constraints?: string[] }>;
   goalAccess?: Array<{ target: string; exercise: string; status: string; blockedBy?: string; interim?: string }>;
   constraintsApplied: Array<{ id: string; how: string }>;
   conflicts?: Array<{ rule: string; issue: string }>;
-  decisions: Array<{ topic: string; decision: string; because: string; coach: string[]; client: string[]; evidence: string[] }>;
+  decisions: Array<{ topic: string; decision: string; because: string; coach: string[]; client: string[]; constraints?: string[]; evidence: string[] }>;
   coverage?: WireCoverage[];
 }
 

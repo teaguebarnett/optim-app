@@ -24,7 +24,7 @@ import type { ResistanceMethod } from "../planners/resistance/method.ts";
 import type { DomainRouting } from "./domains.ts";
 import type { EvidencePacket } from "./retrieval.ts";
 
-export const REASONER_VERSION = "fitness-reasoner-v1.5.0";
+export const REASONER_VERSION = "fitness-reasoner-v1.5.1";
 
 /** Row columns (Fitness Knowledge V2). Columns 0–5 and the trailing fit code keep their V1 positions. */
 export const EXERCISE_ROW_LEGEND = `id|name|patterns|primary muscles|secondary muscles|mechanics C/I|laterality B/U/A|equipment+apparatus|positions|trunk support E chest pad/prone, P back pad/bench, T thigh/knee pad only (pelvis anchored, trunk unsupported), N none|demands skill,stability,bracing,spine,grip,fatigue (N/L/M/H)|suitability strength,hypertrophy,power (N/L/M/H)|ordering E/F/L|role M main lift, A compound accessory, I isolation, T trunk, C carry, P power|emphasis (stimulus bias, most first)|path grip/plane/elbows (- when not material)|strength transfer exercise:level (- none)|constraint fit: - compatible; K conditional (within the constraints only with reps min ≥ ${LOADED_DEMAND_CONDITION.minReps}, rir min ≥ ${LOADED_DEMAND_CONDITION.minRir}, and where the exercise has a pad/bench the trunk kept against it — or as the coach cleared it); U uncertain (same minimums, but OPTIM can't establish it stays within the constraints — coach review); S side-limited (unilateral: only the unaffected side — name that side in its note)`;

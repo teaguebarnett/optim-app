@@ -225,7 +225,8 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
       return finish({ status: "PLANNED", spec, plan, quality, evidence, reasoning, attempts: attempt, modelId: params.model.modelId, adequacy: adequacy! }, { plan, spec, quality, adequacy: adequacy! });
     }
     rec.validationErrors = v.ok ? deficiencies : v.errors;
-    feedback = v.ok ? deficiencies : v.errors;
+    // Deduplicated: the same citation error repeated across decisions is one correction, not many.
+    feedback = [...new Set(v.ok ? deficiencies : v.errors)];
     params.onDiagnostic?.({ stage: "validation", detail: v.errors.join("; ").slice(0, 300) });
   }
   return finish({ status: "REJECTED", errors: feedback, attempts: maxAttempts, evidence }, { errors: feedback });

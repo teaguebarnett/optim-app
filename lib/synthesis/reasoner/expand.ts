@@ -111,6 +111,26 @@ export function weekNote(w: PlannedWeek): string {
   return `${w.phase.focus}. Mains: ${role(w.phase.main)}. Accessories: ${role(w.phase.accessory)}.`;
 }
 
+/** Gate 4.0C-5 — citations are namespaced: a ref is valid only in its own list. A ref that belongs to another list is
+ * named as such (exact repair feedback) and never moved or accepted — live: restriction "C1" was cited as a client
+ * fact, so a constraint never silently becomes a client fact (or the reverse). Unknown refs fail as before. */
+type Citable = Pick<Allowed, "coachRuleKeys" | "clientFactRefs" | "constraintIds" | "knowledgeRefs">;
+const CITATION: Record<"coach" | "client" | "constraints" | "evidence", { set: (a: Citable) => Set<string>; what: string; unknown: (r: string) => string }> = {
+  coach: { set: (a) => a.coachRuleKeys, what: "coach rule", unknown: (r) => `Cites coach rule "${r}", which wasn't provided.` },
+  client: { set: (a) => a.clientFactRefs, what: "client fact", unknown: (r) => `Cites client fact "${r}", which wasn't provided.` },
+  constraints: { set: (a) => a.constraintIds, what: "constraint", unknown: (r) => `Cites constraint "${r}", which wasn't provided.` },
+  evidence: { set: (a) => a.knowledgeRefs, what: "evidence ref", unknown: (r) => `Cites knowledge "${r}", which wasn't retrieved for this plan.` },
+};
+export function citationErrors(slot: keyof typeof CITATION, refs: string[], allowed: Citable): string[] {
+  const errors: string[] = [];
+  for (const r of refs) {
+    if (CITATION[slot].set(allowed).has(r)) continue;
+    const owner = (Object.keys(CITATION) as Array<keyof typeof CITATION>).find((k) => k !== slot && CITATION[k].set(allowed).has(r));
+    errors.push(owner ? `Cites ${CITATION[owner].what} "${r}" in "${slot}", which takes only ${CITATION[slot].what}s — list it in "${owner}".` : CITATION[slot].unknown(r));
+  }
+  return errors;
+}
+
 /** Gate 4.0C-3B — goal targets whose direct work is blocked: declared by the model or resolved by OPTIM from structured goal data. */
 export function blockedGoalTargets(plan: ReasonerPlan, reasoning: ReasoningInput): Array<{ target: string; exerciseId: string; blockedBy: string; interim: string | null }> {
   const out = plan.goalAccess.filter((g) => g.status === "blocked").map((g) => ({ target: g.target, exerciseId: g.exerciseId, blockedBy: g.blockedBy ?? "unknown", interim: g.interim ? g.interim.replace(/[.\s]+$/, "") + "." : null }));
@@ -161,7 +181,7 @@ export function expandReasonerPlan(params: { plan: ReasonerPlan; reasoning: Reas
 
   const decided = <T>(value: T, topics: DecisionTopic[], fallback: string, rule: string): Decided<T> => {
     const ds = plan.decisions.filter((d) => topics.includes(d.topic));
-    const inputs = [...new Set(ds.flatMap((d) => [...d.coachRuleKeys.map((k) => `coach:${k}`), ...d.clientFactRefs.map((r) => `client:${r}`), ...d.knowledgeRefs.map((r) => `knowledge:${r}`)]))];
+    const inputs = [...new Set(ds.flatMap((d) => [...d.coachRuleKeys.map((k) => `coach:${k}`), ...d.clientFactRefs.map((r) => `client:${r}`), ...(d.constraintRefs ?? []).map((r) => `constraint:${params.constraintIdMap[r] ?? r}`), ...d.knowledgeRefs.map((r) => `knowledge:${r}`)]))];
     return { value, rationale: ds.length ? ds.map((d) => `${d.decision}: ${d.because}`).join(" ") : fallback, rule, basis: "planner_rule", inputs: inputs.length ? inputs : ["reasoner:unattributed"] };
   };
   const weeklyMuscleSets: Record<string, { direct: number; indirect: number }> = {};
@@ -305,9 +325,8 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
     const dev = plan.deviations.find((d) => d.field === field);
     if (!dev) errors.push(`${field === "days" ? "Frequency" : "Program length"} ${actual[field]} departs from OPTIM's anchor (${anchor}) without a "deviations" entry.`);
     else {
-      if (!dev.coachRuleKeys.length && !dev.clientFactRefs.length) errors.push(`The ${field} deviation cites no client fact or coach rule; general guidance alone doesn't justify departing from the anchor.`);
-      for (const k of dev.coachRuleKeys) if (!allowed.coachRuleKeys.has(k)) errors.push(`Cites coach rule "${k}", which wasn't provided.`);
-      for (const r of dev.clientFactRefs) if (!allowed.clientFactRefs.has(r)) errors.push(`Cites client fact "${r}", which wasn't provided.`);
+      if (!dev.coachRuleKeys.length && !dev.clientFactRefs.length && !dev.constraintRefs?.length) errors.push(`The ${field} deviation cites no client fact or coach rule, nor a confirmed constraint; general guidance alone doesn't justify departing from the anchor.`);
+      errors.push(...citationErrors("coach", dev.coachRuleKeys, allowed), ...citationErrors("client", dev.clientFactRefs, allowed), ...citationErrors("constraints", dev.constraintRefs ?? [], allowed));
     }
   }
 
@@ -381,9 +400,7 @@ export function validateReasonerPlan(params: { plan: ReasonerPlan; spec: PlanSpe
 
   // Citations: only what was supplied.
   for (const dec of plan.decisions) {
-    for (const k of dec.coachRuleKeys) if (!allowed.coachRuleKeys.has(k)) errors.push(`Cites coach rule "${k}", which wasn't provided.`);
-    for (const r of dec.clientFactRefs) if (!allowed.clientFactRefs.has(r)) errors.push(`Cites client fact "${r}", which wasn't provided.`);
-    for (const r of dec.knowledgeRefs) if (!allowed.knowledgeRefs.has(r)) errors.push(`Cites knowledge "${r}", which wasn't retrieved for this plan.`);
+    errors.push(...citationErrors("coach", dec.coachRuleKeys, allowed), ...citationErrors("client", dec.clientFactRefs, allowed), ...citationErrors("constraints", dec.constraintRefs ?? [], allowed), ...citationErrors("evidence", dec.knowledgeRefs, allowed));
     for (const r of dec.knowledgeRefs) if (reasoning.evidence.find((c) => c.ref === r)?.source.startsWith("NO SOURCE")) quality.push({ code: "cites_unsourced", severity: "warning", message: `“${dec.decision}” leans on an open question with no source (${r}).` });
   }
   for (const c of plan.constraintsApplied) if (!allowed.constraintIds.has(c.constraintId)) errors.push(`Lists constraint "${c.constraintId}", which wasn't provided.`);
