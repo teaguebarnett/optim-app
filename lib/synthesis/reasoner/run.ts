@@ -32,6 +32,13 @@ export interface RunPreflight {
 
 export const REASONER_RUN_SCHEMA = "optim.reasoner-run.v1";
 
+export interface ReasonerRunTotals {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+}
+
 export interface ReasonerAttempt {
   attempt: number;
   /** The model's structured JSON exactly as parsed (null when the call failed). */
@@ -72,7 +79,7 @@ export interface ReasonerRun {
     /** Equipment resolution of the planned exercises (confirmed-absent apparatus → substitute or coach decision). */
     equipment?: EquipmentResolution[];
   };
-  totals: { calls: number; inputTokens: number; outputTokens: number; latencyMs: number };
+  totals: ReasonerRunTotals;
   /** Gate 4.0C-5 — the material planning state this run solved under (absent on older runs: derive from snapshots). */
   planningState?: PlanningState;
   preflight?: RunPreflight;

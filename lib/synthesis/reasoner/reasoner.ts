@@ -26,19 +26,15 @@ import { retrieveEvidence, type EvidencePacket } from "./retrieval.ts";
 import { buildReasoningInput, REASONER_VERSION, type ReasoningInput } from "./input.ts";
 import { parseReasonerOutput, REASONER_PROMPT_VERSION, REASONER_SYSTEM_PROMPT, type ReasonerPlan } from "./contract.ts";
 import { expandReasonerPlan, validateReasonerPlan } from "./expand.ts";
-import { REASONER_RUN_SCHEMA, sha256, type ReasonerAttempt, type ReasonerRun, type RunPreflight } from "./run.ts";
+import { REASONER_RUN_SCHEMA, sha256, type ReasonerRun, type RunPreflight } from "./run.ts";
 import { evaluateAdequacy, fitOf, functionAvailability, goalRequiredTargets, type AdequacyResult, type FunctionAvailability, type WeekSession } from "./adequacy.ts";
 import { planningState } from "../planning-state.ts";
+import { runModelAttempts, type ReasonerModel } from "./core.ts";
+
+export type { ReasonerModel } from "./core.ts";
 import { describeLoadCondition } from "../exercise-eligibility.ts";
 import { resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
 import { resolvePlanEquipment } from "./equipment-resolution.ts";
-
-/** The model boundary the reasoner needs (lib/ai's provider implements it). */
-export interface ReasonerModel {
-  provider: string;
-  modelId: string;
-  generate(request: { systemPrompt: string; userMessage: string; maxOutputTokens: number }): Promise<{ json: unknown; usage?: { inputTokens: number; outputTokens: number }; requestId?: string; latencyMs?: number }>;
-}
 
 export type ReasonerResult = { run: ReasonerRun } & (
   | { status: "DOMAIN_NOT_YET_SUPPORTED"; routing: Extract<DomainRouting, { status: "ROUTED" }>; message: string }
@@ -166,76 +162,44 @@ export async function runFitnessReasoner(params: { input: SynthesisInput; model:
   // 5. Model + 6. deterministic validation and current-state adequacy (one repair attempt).
   if (!params.model) return finish({ status: "PROVIDER_FAILED", message: PROVIDER_FAILED_MESSAGE, attempts: 0 }, { message: PROVIDER_FAILED_MESSAGE });
   const maxAttempts = params.maxAttempts ?? 2;
-  let feedback: string[] = [];
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const rec: ReasonerAttempt = { attempt, raw: null, parseErrors: [], validationErrors: [], usage: null, latencyMs: null, requestId: null, providerError: null };
-    run.attempts.push(rec);
-    run.totals.calls++;
-    let raw: unknown;
-    try {
-      const res = await params.model.generate({
-        systemPrompt: REASONER_SYSTEM_PROMPT,
-        userMessage: JSON.stringify(reasoning) + (feedback.length ? `\n\nYour previous output was rejected by OPTIM's validators:\n- ${feedback.join("\n- ")}\nReturn a corrected JSON object.` : ""),
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-      });
-      raw = res.json;
-      rec.usage = res.usage ?? null;
-      rec.latencyMs = res.latencyMs ?? null;
-      rec.requestId = res.requestId && /^[A-Za-z0-9_\-]{6,80}$/.test(res.requestId) ? res.requestId : null;
-      run.totals.inputTokens += res.usage?.inputTokens ?? 0;
-      run.totals.outputTokens += res.usage?.outputTokens ?? 0;
-      run.totals.latencyMs += res.latencyMs ?? 0;
-    } catch (err) {
-      const name = err instanceof Error ? err.name : "unknown";
-      // Gate 4.0C-3A: an executed-but-unusable call (e.g. truncated at max_tokens) still consumed tokens — record them.
-      const meta = err as { usage?: { inputTokens: number; outputTokens: number }; truncated?: boolean };
-      const truncated = meta.truncated === true;
-      rec.providerError = truncated ? `${name}:max_tokens` : name;
-      if (meta.usage && Number.isFinite(meta.usage.inputTokens) && Number.isFinite(meta.usage.outputTokens)) {
-        rec.usage = { inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens };
-        run.totals.inputTokens += meta.usage.inputTokens;
-        run.totals.outputTokens += meta.usage.outputTokens;
+  const model = params.model;
+  type Done = { kind: "needs_input"; needsInput: Extract<ReturnType<typeof parseReasonerOutput>, { ok: true }>["output"] & { status: "NEEDS_INPUT" } } | { kind: "planned"; body: ResultBody; result: ReasonerRun["result"] };
+  const outcome = await runModelAttempts<Done>({
+    model,
+    systemPrompt: REASONER_SYSTEM_PROMPT,
+    userMessage: JSON.stringify(reasoning),
+    maxAttempts,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    record: run,
+    onDiagnostic: params.onDiagnostic,
+    evaluate: (raw, attempt, isLast) => {
+      const parsed = parseReasonerOutput(raw);
+      if (!parsed.ok) return { kind: "retry", stage: "schema", errors: parsed.errors };
+      if (parsed.output.status === "NEEDS_INPUT") return { kind: "done", value: { kind: "needs_input", needsInput: parsed.output } };
+      // Equipment resolution (deterministic): a confirmed-absent apparatus → the closest eligible equivalent, or a
+      // recorded coach decision. The validators then check the EXECUTION plan.
+      const resolved = resolvePlanEquipment({ plan: parsed.output.plan, knowledge: input.knowledge, access, offered, loadConditions: pool.loadConditions, sideOnly: pool.sideOnly });
+      const plan = resolved.plan;
+      const spec = expandReasonerPlan({ plan, reasoning, contextOnly, constraintIdMap, method, input, model: { provider: model.provider, modelId: model.modelId, promptVersion: REASONER_PROMPT_VERSION, attempts: attempt }, nowIso: params.nowIso, allowed });
+      const v = validateReasonerPlan({ plan, spec, reasoning, allowed, method, input });
+      // Gate 4.0C-5 — current-state adequacy: deficiencies are validator feedback while attempts remain; on the last
+      // attempt they are recorded and block approval in review (never presented as review-ready).
+      const adequacy = v.ok ? evaluateAdequacy({ week: weekFromPlan(plan), knowledge: input.knowledge, functions: availability, required: requiredTargets, declared: plan.coverage ?? null, checkSessions: true }) : null;
+      const deficiencies = adequacy?.findings.filter((f) => f.kind === "deficiency").map((f) => f.message) ?? [];
+      if (v.ok && (!deficiencies.length || isLast)) {
+        const unattributed = (["frequency", "schedule", "weeklyStructure", "progression"] as const).filter((k) => spec[k]?.inputs.includes("reasoner:unattributed"));
+        const quality = [...v.quality, ...unattributed.map((k): QualityFinding => ({ code: "unattributed_decision", severity: "warning", message: `The ${k} decision didn't cite the coach rules, client facts or evidence it used.` }))];
+        spec.quality = quality;
+        return { kind: "done", recordErrors: deficiencies, value: { kind: "planned", body: { status: "PLANNED", spec, plan, quality, evidence, reasoning, attempts: attempt, modelId: model.modelId, adequacy: adequacy! }, result: { plan, spec, quality, adequacy: adequacy!, ...(resolved.resolutions.length ? { equipment: resolved.resolutions } : {}) } } };
       }
-      params.onDiagnostic?.({ stage: "provider", detail: name });
-      // Unreadable/truncated JSON is an output problem worth one repair; anything else is a provider failure.
-      if (name === "AiProviderInvalidOutputError" || name === "SyntaxError") {
-        feedback = ["Your output was not one complete, valid JSON object. Keep text fields short and return only the JSON."];
-        continue;
-      }
-      return finish({ status: "PROVIDER_FAILED", message: PROVIDER_FAILED_MESSAGE, attempts: attempt }, { message: PROVIDER_FAILED_MESSAGE });
-    }
-    rec.raw = raw;
-    const parsed = parseReasonerOutput(raw);
-    if (!parsed.ok) {
-      rec.parseErrors = parsed.errors;
-      feedback = parsed.errors;
-      params.onDiagnostic?.({ stage: "schema", detail: parsed.errors.join("; ").slice(0, 300) });
-      continue;
-    }
-    if (parsed.output.status === "NEEDS_INPUT") return finish({ status: "NEEDS_INPUT", source: "model", missing: parsed.output.needsInput, routing, summary: parsed.output.summary }, { missing: parsed.output.needsInput, needsInputSource: "model", summary: parsed.output.summary });
-    // Equipment resolution (deterministic): a confirmed-absent apparatus → the closest eligible equivalent, or a
-    // recorded coach decision. The validators then check the EXECUTION plan.
-    const resolved = resolvePlanEquipment({ plan: parsed.output.plan, knowledge: input.knowledge, access, offered, loadConditions: pool.loadConditions, sideOnly: pool.sideOnly });
-    const plan = resolved.plan;
-    const spec = expandReasonerPlan({ plan, reasoning, contextOnly, constraintIdMap, method, input, model: { provider: params.model.provider, modelId: params.model.modelId, promptVersion: REASONER_PROMPT_VERSION, attempts: attempt }, nowIso: params.nowIso, allowed });
-    const v = validateReasonerPlan({ plan, spec, reasoning, allowed, method, input });
-    // Gate 4.0C-5 — current-state adequacy: deficiencies are validator feedback while attempts remain; on the last
-    // attempt they are recorded and block approval in review (never presented as review-ready).
-    const adequacy = v.ok ? evaluateAdequacy({ week: weekFromPlan(plan), knowledge: input.knowledge, functions: availability, required: requiredTargets, declared: plan.coverage ?? null, checkSessions: true }) : null;
-    const deficiencies = adequacy?.findings.filter((f) => f.kind === "deficiency").map((f) => f.message) ?? [];
-    if (v.ok && (!deficiencies.length || attempt === maxAttempts)) {
-      const unattributed = (["frequency", "schedule", "weeklyStructure", "progression"] as const).filter((k) => spec[k]?.inputs.includes("reasoner:unattributed"));
-      const quality = [...v.quality, ...unattributed.map((k): QualityFinding => ({ code: "unattributed_decision", severity: "warning", message: `The ${k} decision didn't cite the coach rules, client facts or evidence it used.` }))];
-      spec.quality = quality;
-      if (deficiencies.length) rec.validationErrors = deficiencies;
-      return finish({ status: "PLANNED", spec, plan, quality, evidence, reasoning, attempts: attempt, modelId: params.model.modelId, adequacy: adequacy! }, { plan, spec, quality, adequacy: adequacy!, ...(resolved.resolutions.length ? { equipment: resolved.resolutions } : {}) });
-    }
-    rec.validationErrors = v.ok ? deficiencies : v.errors;
-    // Deduplicated: the same citation error repeated across decisions is one correction, not many.
-    feedback = [...new Set(v.ok ? deficiencies : v.errors)];
-    params.onDiagnostic?.({ stage: "validation", detail: v.errors.join("; ").slice(0, 300) });
-  }
-  return finish({ status: "REJECTED", errors: feedback, attempts: maxAttempts, evidence }, { errors: feedback });
+      return { kind: "retry", stage: "validation", errors: v.ok ? deficiencies : v.errors, diagnostic: v.errors.join("; ") };
+    },
+  });
+  if (outcome.kind === "provider_failed") return finish({ status: "PROVIDER_FAILED", message: PROVIDER_FAILED_MESSAGE, attempts: outcome.attempt }, { message: PROVIDER_FAILED_MESSAGE });
+  if (outcome.kind === "rejected") return finish({ status: "REJECTED", errors: outcome.errors, attempts: outcome.attempts, evidence }, { errors: outcome.errors });
+  const done = outcome.value;
+  if (done.kind === "needs_input") return finish({ status: "NEEDS_INPUT", source: "model", missing: done.needsInput.needsInput, routing, summary: done.needsInput.summary }, { missing: done.needsInput.needsInput, needsInputSource: "model", summary: done.needsInput.summary });
+  return finish(done.body, done.result);
 }
 
 /** One training week as planned (listed sets), for adequacy. */

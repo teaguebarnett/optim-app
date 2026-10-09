@@ -57,6 +57,9 @@ const EVIDENCE_LEVEL_SOURCES: Record<EvidenceLevel, KnowledgeSourceType[]> = {
   meta_analysis: ["meta_analysis"],
   systematic_review: ["systematic_review", "meta_analysis"],
   reference_work: ["textbook", "exercise_database"],
+  // Nutrition Knowledge V1 — named honestly: a narrative review or a single study is not a systematic review.
+  narrative_review: ["narrative_review"],
+  primary_study: ["randomized_trial", "original_study"],
 };
 
 const has = <T extends string>(list: readonly T[], v: unknown): v is T => (list as readonly string[]).includes(v as string);

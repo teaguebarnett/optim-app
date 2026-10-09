@@ -37,7 +37,7 @@ export type KnowledgeDomain = (typeof KNOWLEDGE_DOMAINS)[number];
 // Sources and evidence
 // ---------------------------------------------------------------------------
 
-export const KNOWLEDGE_SOURCE_TYPES = ["position_stand", "guideline", "meta_analysis", "systematic_review", "textbook", "exercise_database", "expert_consensus", "internal_curation"] as const;
+export const KNOWLEDGE_SOURCE_TYPES = ["position_stand", "guideline", "meta_analysis", "systematic_review", "narrative_review", "randomized_trial", "original_study", "textbook", "exercise_database", "expert_consensus", "internal_curation"] as const;
 export type KnowledgeSourceType = (typeof KNOWLEDGE_SOURCE_TYPES)[number];
 
 export interface KnowledgeSource {
@@ -63,7 +63,7 @@ export interface SourceCitation {
 
 /** The kind of evidence — derived from the cited sources' types, never a
  * free judgement. */
-export type EvidenceLevel = "consensus_guideline" | "meta_analysis" | "systematic_review" | "reference_work";
+export type EvidenceLevel = "consensus_guideline" | "meta_analysis" | "systematic_review" | "reference_work" | "narrative_review" | "primary_study";
 
 export type Evidence =
   | { status: "sourced"; level: EvidenceLevel; sources: SourceCitation[]; notes?: string }
@@ -214,6 +214,15 @@ export type CoachMethodDimension =
   | "deload"
   | "split"
   | "exercise_selection"
+  // Nutrition (Nutrition Knowledge V1)
+  | "calorie_target"
+  | "protein_target"
+  | "macro_distribution"
+  | "meal_structure"
+  | "training_rest_days"
+  | "rate_of_change"
+  | "progress_measures"
+  | "supplements"
   | "session_length";
 
 export interface KnowledgeClaim {

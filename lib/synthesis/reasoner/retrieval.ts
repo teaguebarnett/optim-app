@@ -60,25 +60,20 @@ function shortSource(src: { citation?: string; title: string; publishedOn?: stri
   return `${lead} ${year}`.trim();
 }
 
-export function retrieveEvidence(params: { knowledge: FitnessKnowledgeRegistry; domain: ReasoningDomain; emphasis: "strength" | "hypertrophy" | "general"; secondary: "strength" | "hypertrophy" | null; candidates: ExerciseEntry[] }): EvidencePacket {
-  const { knowledge } = params;
-  if (params.domain !== "resistance" && params.domain !== "general_fitness") return { domain: params.domain, claims: [], exercises: [], retrievedRefs: [] };
-  const qualities = new Set<string>([params.emphasis, ...(params.secondary ? [params.secondary] : [])]);
+/**
+ * Evidence claims from a knowledge registry's concepts — shared by every Reasoner domain. Definitions are vocabulary,
+ * not evidence (v1.1 token audit). Open questions (source_needed) are coach decisions, not planning evidence: the
+ * v1.1 live evaluation showed the model citing them as support in 17 of 20 plans despite the label, so they are never
+ * retrieved (Gate 4.0C-3A retrieval fix — not a prompt rule). `keep` applies the domain's own relevance filter.
+ */
+export function conceptClaims(knowledge: FitnessKnowledgeRegistry, topics: readonly string[], keep: (claim: KnowledgeClaim) => boolean = () => true): { claims: EvidenceClaim[]; refs: Set<string> } {
   const claims: EvidenceClaim[] = [];
   const refs = new Set<string>();
-  for (const topic of RESISTANCE_TOPICS) {
+  for (const topic of topics) {
     const c = knowledge.concept(topic);
     if (!c) continue;
     for (const claim of c.claims) {
-      // Definitions are vocabulary, not evidence — the model doesn't need them (v1.1 token audit).
-      if (claim.kind === "definition") continue;
-      // Open questions (no source) are coach decisions, not planning evidence. The v1.1 live
-      // evaluation showed the model citing them as support in 17 of 20 plans despite the label,
-      // so they are no longer retrieved (Gate 4.0C-3A, retrieval fix — not a prompt rule).
-      if (claim.evidence.status === "source_needed") continue;
-      const q = claim.appliesTo?.qualities;
-      // "general" support keeps quality-agnostic claims plus definitions; strength/hypertrophy keep their own.
-      if (q && q.length && !q.some((x) => qualities.has(x))) continue;
+      if (claim.kind === "definition" || claim.evidence.status === "source_needed" || !keep(claim)) continue;
       const support =
         claim.evidence.status === "sourced"
           ? `${claim.evidence.sources.map((s) => shortSource(knowledge.source(s.sourceId))).join("; ")} (${claim.evidence.level.replace(/_/g, " ")})`
@@ -88,6 +83,18 @@ export function retrieveEvidence(params: { knowledge: FitnessKnowledgeRegistry; 
       refs.add(c.id);
     }
   }
+  return { claims, refs };
+}
+
+export function retrieveEvidence(params: { knowledge: FitnessKnowledgeRegistry; domain: ReasoningDomain; emphasis: "strength" | "hypertrophy" | "general"; secondary: "strength" | "hypertrophy" | null; candidates: ExerciseEntry[] }): EvidencePacket {
+  const { knowledge } = params;
+  if (params.domain !== "resistance" && params.domain !== "general_fitness") return { domain: params.domain, claims: [], exercises: [], retrievedRefs: [] };
+  const qualities = new Set<string>([params.emphasis, ...(params.secondary ? [params.secondary] : [])]);
+  // "general" support keeps quality-agnostic claims plus definitions; strength/hypertrophy keep their own.
+  const { claims, refs } = conceptClaims(knowledge, RESISTANCE_TOPICS, (claim) => {
+    const q = claim.appliesTo?.qualities;
+    return !(q && q.length && !q.some((x) => qualities.has(x)));
+  });
   const exercises = params.candidates.map((e) => {
     refs.add(e.id);
     return {

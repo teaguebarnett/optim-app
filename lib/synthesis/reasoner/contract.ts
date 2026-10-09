@@ -140,22 +140,24 @@ export type ReasonerOutput =
 // Strict parser
 // ---------------------------------------------------------------------------
 
-class SchemaError extends Error {}
-const obj = (v: unknown, at: string): Record<string, unknown> => {
+/** Strict parse helpers, shared by every Reasoner domain contract: wrong types, unknown values or oversized text
+ * throw SchemaError; nothing is coerced. */
+export class SchemaError extends Error {}
+export const obj = (v: unknown, at: string): Record<string, unknown> => {
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new SchemaError(`${at} must be an object`);
   return v as Record<string, unknown>;
 };
-const arr = (v: unknown, at: string, max = 60): unknown[] => {
+export const arr = (v: unknown, at: string, max = 60): unknown[] => {
   if (!Array.isArray(v)) throw new SchemaError(`${at} must be an array`);
   if (v.length > max) throw new SchemaError(`${at} has too many items (max ${max})`);
   return v;
 };
-const str = (v: unknown, at: string, max: number): string => {
+export const str = (v: unknown, at: string, max: number): string => {
   if (typeof v !== "string" || !v.trim()) throw new SchemaError(`${at} must be a non-empty string`);
   if (v.length > max) throw new SchemaError(`${at} is too long (max ${max} chars)`);
   return v.trim();
 };
-const optStr = (v: unknown, at: string, max: number): string | null => (v === undefined || v === null || v === "" ? null : str(v, at, max));
+export const optStr = (v: unknown, at: string, max: number): string | null => (v === undefined || v === null || v === "" ? null : str(v, at, max));
 /** A display label (architecture name, session title): a model label over `max` is shortened deterministically
  * instead of costing a whole attempt (live 4.0C-5: an 86-char architecture.name rejected an otherwise-parsed plan).
  * A trailing parenthetical goes first ("5-day body-part split (chest/triceps, …)" → "5-day body-part split"), then the
@@ -169,21 +171,21 @@ export const shortenLabel = (v: string, max: number): string => {
   const space = cut.search(/\s\S*$/);
   return `${(space >= max / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:/(+–—-]+$/, "")}…`;
 };
-const label = (v: unknown, at: string, max: number, runaway: number): string => shortenLabel(str(v, at, runaway), max);
-const int = (v: unknown, at: string, min: number, max: number): number => {
+export const label = (v: unknown, at: string, max: number, runaway: number): string => shortenLabel(str(v, at, runaway), max);
+export const int = (v: unknown, at: string, min: number, max: number): number => {
   if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) throw new SchemaError(`${at} must be an integer ${min}–${max}`);
   return v;
 };
-const num = (v: unknown, at: string, min: number, max: number): number => {
+export const num = (v: unknown, at: string, min: number, max: number): number => {
   if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max) throw new SchemaError(`${at} must be a number ${min}–${max}`);
   return v;
 };
-const oneOf = <T extends string>(v: unknown, at: string, allowed: readonly T[]): T => {
+export const oneOf = <T extends string>(v: unknown, at: string, allowed: readonly T[]): T => {
   if (typeof v !== "string" || !(allowed as readonly string[]).includes(v)) throw new SchemaError(`${at} must be one of ${allowed.join(", ")}`);
   return v as T;
 };
 /** [min, max] pair. */
-const pair = (v: unknown, at: string, min: number, max: number, integer: boolean) => {
+export const pair = (v: unknown, at: string, min: number, max: number, integer: boolean) => {
   const a = arr(v, at, 2);
   if (a.length !== 2) throw new SchemaError(`${at} must be [min, max]`);
   const lo = integer ? int(a[0], `${at}[0]`, min, max) : num(a[0], `${at}[0]`, min, max);
@@ -191,7 +193,7 @@ const pair = (v: unknown, at: string, min: number, max: number, integer: boolean
   if (lo > hi) throw new SchemaError(`${at}: min must not exceed max`);
   return { min: lo, max: hi };
 };
-const strList = (v: unknown, at: string, maxItems: number, maxLen: number) => (v === undefined ? [] : arr(v, at, maxItems).map((x, i) => str(x, `${at}[${i}]`, maxLen)));
+export const strList = (v: unknown, at: string, maxItems: number, maxLen: number) => (v === undefined ? [] : arr(v, at, maxItems).map((x, i) => str(x, `${at}[${i}]`, maxLen)));
 const PROVIDERS = ["client", "coach", "either"] as const;
 const MUSCLE_IDS = Object.keys(MUSCLES) as MuscleId[];
 const COVERAGE_STATUS = ["trained", "reduced", "not_trained"] as const;

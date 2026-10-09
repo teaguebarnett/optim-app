@@ -12,9 +12,10 @@
 //   --from-raw <report.json> replay the first saved model response per scenario from an earlier
 //                           report through the CURRENT parser/validator — no model call
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runFitnessReasoner, type ReasonerModel, type ReasonerResult } from "../reasoner.ts";
+import { createLedger } from "./live-model.ts";
 import { FOUNDATION_KNOWLEDGE } from "../../knowledge/registry.ts";
 import { SCENARIOS, type Scenario } from "./scenarios.ts";
 import { fakeModel, NOW, scriptedOutput } from "./fixtures.ts";
@@ -31,54 +32,10 @@ const maxCalls = Number(arg("--max-calls") ?? 30);
 const concurrency = Number(arg("--concurrency") ?? 3);
 const ledgerPath = arg("--ledger");
 
-interface Ledger { calls: number; inputTokens: number; outputTokens: number; latencyMs: number; entries: Array<{ at: string; scenario: string; inputTokens: number; outputTokens: number; latencyMs: number }> }
-const readLedger = (): Ledger => (ledgerPath && existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, "utf8")) : { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, entries: [] });
-let ledger = readLedger();
-let inFlight = 0;
-const saveLedger = () => ledgerPath && writeFileSync(ledgerPath, JSON.stringify(ledger, null, 1));
-
-async function liveModel(scenario: string): Promise<ReasonerModel> {
-  const key = (process.env.ANTHROPIC_API_KEY ?? "").trim();
-  if (!key || /\s/.test(key)) throw new Error("Set ANTHROPIC_API_KEY (one key) to run --live.");
-  const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: key, authToken: null, maxRetries: 3 });
-  const modelId = process.env.AI_MODEL_ID || "claude-opus-5";
-  return {
-    provider: "anthropic",
-    modelId,
-    async generate({ systemPrompt, userMessage, maxOutputTokens }) {
-      // Budget guard: the ledger counts only calls that executed and consumed tokens; calls in
-      // flight are reserved so concurrency can never overshoot the cap.
-      ledger = readLedger();
-      if (ledger.calls + inFlight >= maxCalls) throw Object.assign(new Error("live call budget exhausted"), { name: "BudgetExhausted" });
-      inFlight++;
-      const t = Date.now();
-      let res;
-      try {
-        res = await client.messages.create({ model: modelId, max_tokens: maxOutputTokens, system: systemPrompt, messages: [{ role: "user", content: userMessage }], output_config: { effort: (process.env.REASONER_EFFORT as "high" | "medium" | undefined) ?? "high" } }, { timeout: 300_000 });
-      } catch (err) {
-        // Rejected before execution (billing, refusal, network…): not counted; recorded by status only.
-        const status = (err as { status?: number }).status;
-        throw Object.assign(new Error("provider request failed"), { name: `ProviderRequestFailed${status ? `_${status}` : ""}` });
-      } finally {
-        inFlight--;
-      }
-      const latencyMs = Date.now() - t;
-      ledger = readLedger();
-      ledger.calls++;
-      ledger.inputTokens += res.usage.input_tokens;
-      ledger.outputTokens += res.usage.output_tokens;
-      ledger.latencyMs += latencyMs;
-      ledger.entries.push({ at: new Date().toISOString(), scenario, inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens, latencyMs });
-      saveLedger();
-      if (res.stop_reason === "max_tokens") throw Object.assign(new Error("output hit max_tokens"), { name: "AiProviderInvalidOutputError", truncated: true, usage: { inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens } });
-      const text = res.content.find((b) => b.type === "text");
-      if (!text || text.type !== "text") throw Object.assign(new Error("no text"), { name: "AiProviderInvalidOutputError" });
-      const s = text.text;
-      return { json: JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1)), usage: { inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens }, requestId: (res as { _request_id?: string | null })._request_id ?? undefined, latencyMs };
-    },
-  };
-}
+// Metered live boundary shared with the Nutrition Reasoner eval (live-model.ts).
+const meter = ledgerPath ? createLedger(ledgerPath, maxCalls) : null;
+let ledger = meter?.read() ?? { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, entries: [] };
+const liveModel = (scenario: string): Promise<ReasonerModel> => meter!.liveModel(scenario);
 
 if (live && !ledgerPath) throw new Error("--live requires --ledger <file> so live calls are metered.");
 const fromRaw = arg("--from-raw");
@@ -124,6 +81,7 @@ const variance = repeat > 1 ? Object.fromEntries(selected.filter((s) => s.expect
 if (variance) for (const [id, v] of Object.entries(variance)) console.log(`variance ${id}: core ${v.core.coreAgreement ? "agrees" : "DIFFERS"} · freq ${v.core.frequency.values.join("/")} · split ${v.core.split.join("/")} · exercise overlap ${v.expression.exerciseOverlapMeanJaccard} · main-lift overlap ${v.expression.mainLiftOverlapMeanJaccard} · session-shape agreement ${v.expression.sessionSignatureAgreement} · volume CV ${v.expression.volumeCvMajorMuscles}${v.unexplainedVariation.length ? ` · UNEXPLAINED: ${v.unexplainedVariation.join("; ")}` : ""}`);
 const flagMisses = report.flatMap((r) => r.reviewFlags.filter((f) => !f.ok).map((f) => `${r.scenario}: ${f.flag} [${f.category}]`));
 if (flagMisses.length) console.log(`\nReview flags not met (for human review, not hard failures):\n- ${flagMisses.join("\n- ")}`);
+if (live) ledger = meter!.read();
 if (live) console.log(`\nLedger: ${ledger.calls}/${maxCalls} calls · ${ledger.inputTokens} in / ${ledger.outputTokens} out tokens · ${(ledger.latencyMs / 1000).toFixed(0)} s model time`);
 const out = arg("--out");
 if (out) writeFileSync(out, JSON.stringify({ generatedAtIso: new Date().toISOString(), live, report, variance }, null, 1));
