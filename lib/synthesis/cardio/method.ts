@@ -7,7 +7,7 @@
 // Every value keeps its Brain key so decisions can cite it. Nothing is defaulted.
 
 import type { ConfirmedCoachMethod } from "../../coach/coach-brain.ts";
-import { asRange } from "../../coach/calibration/model.ts";
+import { asLayered, asRange } from "../../coach/calibration/model.ts";
 import type { Range, Sourced } from "../planners/resistance/method.ts";
 
 export const CARDIO_ROLES = ["optional_low_intensity", "fat_loss", "conditioning", "health"] as const;
@@ -27,12 +27,18 @@ export interface CardioMethod {
   stepsTarget: Sourced<Range> | null;
   /** Endurance coaches only. */
   endurance: {
+    /** The endurance sports this coach coaches (endurance_sports) — the client's discipline is one of these. */
+    sports: Sourced<string[]> | null;
     days: Sourced<Range> | null;
     weeklyHours: Sourced<Range> | null;
     hardSessions: Sourced<Range> | null;
     intensityMix: Sourced<string> | null;
     weeklyIncreasePct: Sourced<Range> | null;
     downWeeks: Sourced<string> | null;
+    /** Down week every N weeks (e_down_every), when the coach schedules them. */
+    downEvery: Sourced<Range> | null;
+    /** Long-session cap: maximum minutes, or maximum share of the week (e_long_*). */
+    longSession: Sourced<{ maxMinutes: number } | { maxPercent: number }> | null;
   } | null;
 }
 
@@ -48,6 +54,11 @@ const toRange = (v: unknown): Range | null => {
 const strs = (v: unknown): string[] | null => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null);
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
 const src = <T>(value: T | null, key: string): Sourced<T> | null => (value === null ? null : { value, keys: [key] });
+/** A plain range answer, or the base of a layered one (cited as `<key>.base`, as the resistance reader does). */
+const rangeAt = (a: Record<string, unknown>, key: string): Sourced<Range> | null => {
+  const l = asLayered(a[key]);
+  return l ? src(toRange(l.base), `${key}.base`) : src(toRange(a[key]), key);
+};
 
 export function readCardioMethod(method: ConfirmedCoachMethod): CardioMethodRead {
   const cal = method.operatingModel.calibration;
@@ -63,10 +74,10 @@ export function readCardioMethod(method: ConfirmedCoachMethod): CardioMethodRead
 
   if (endurance) {
     const missing: Array<{ key: string; why: string }> = [];
-    const days = src(toRange(a.e_days), "e_days");
+    const days = rangeAt(a, "e_days");
     if (!days) missing.push({ key: "e_days", why: "How many endurance days the coach programs." });
     const unit = str(a.e_volume_unit);
-    const weeklyHours = unit === "hours" ? src(toRange(a.e_weekly_volume), "e_weekly_volume") : null;
+    const weeklyHours = unit === "hours" ? rangeAt(a, "e_weekly_volume") : null;
     if (unit !== "hours") missing.push({ key: "e_volume_unit", why: "Cardio Reasoner V1 plans endurance volume in time; this coach measures it in distance or load, which V1 can't convert honestly." });
     if (missing.length) return { ok: false, reason: "incomplete", missing };
     return {
@@ -79,7 +90,22 @@ export function readCardioMethod(method: ConfirmedCoachMethod): CardioMethodRead
         minutesByRole: {},
         intensityMethods,
         stepsTarget,
-        endurance: { days, weeklyHours, hardSessions: src(toRange(a.e_quality_sessions), "e_quality_sessions"), intensityMix: src(str(a.e_intensity_mix), "e_intensity_mix"), weeklyIncreasePct: src(toRange(a.e_weekly_increase), "e_weekly_increase"), downWeeks: src(str(a.e_down_weeks), "e_down_weeks") },
+        endurance: {
+          sports: src(strs(a.endurance_sports)?.length ? strs(a.endurance_sports) : null, "endurance_sports"),
+          days,
+          weeklyHours,
+          hardSessions: rangeAt(a, "e_quality_sessions"),
+          intensityMix: src(str(a.e_intensity_mix), "e_intensity_mix"),
+          weeklyIncreasePct: rangeAt(a, "e_weekly_increase"),
+          downWeeks: src(str(a.e_down_weeks), "e_down_weeks"),
+          downEvery: str(a.e_down_weeks) === "every_n" ? rangeAt(a, "e_down_every") : null,
+          longSession: (() => {
+            const basis = str(a.e_long_basis);
+            const m = basis === "max_duration" ? toRange(a.e_long_minutes) : null;
+            const pc = basis === "percent_of_week" ? toRange(a.e_long_percent) : null;
+            return m ? { value: { maxMinutes: m.max }, keys: ["e_long_minutes"] } : pc ? { value: { maxPercent: pc.max }, keys: ["e_long_percent"] } : null;
+          })(),
+        },
       },
     };
   }

@@ -1,5 +1,8 @@
 # Cardio Reasoner V1 — checkpoint status
 
+> Superseded by V1.1 — see `../cardio-reasoner-v1.1/STATUS.md` (live results and integration blockers). The V1 live
+> evaluation (10 scenarios, ≈ $1.33, average 6.9/10) is in `live-review-pack.md` / `live-ledger.json`.
+
 **Status: OFFLINE-VERIFIED development checkpoint. Not production-ready. No live-model evaluation yet.**
 Branch `cardio-reasoner-v1` (from `2f3b13c`; not merged, not deployed). Prompt `reasoner-cardio-v1.0.0`,
 reasoner `cardio-reasoner-v1.0.0`, knowledge `cardio-0.1.0`. No paid model calls were made in this gate.

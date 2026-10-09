@@ -1,0 +1,89 @@
+{
+ "calls": 10,
+ "inputTokens": 53396,
+ "outputTokens": 42354,
+ "latencyMs": 512015,
+ "entries": [
+  {
+   "at": "2026-10-09T19:40:33.537Z",
+   "scenario": "C01",
+   "inputTokens": 5418,
+   "outputTokens": 4850,
+   "latencyMs": 59410,
+   "usd": 0.14834
+  },
+  {
+   "at": "2026-10-09T19:41:22.244Z",
+   "scenario": "C02",
+   "inputTokens": 5336,
+   "outputTokens": 4182,
+   "latencyMs": 48688,
+   "usd": 0.13123
+  },
+  {
+   "at": "2026-10-09T19:42:23.770Z",
+   "scenario": "C03",
+   "inputTokens": 5397,
+   "outputTokens": 4752,
+   "latencyMs": 61508,
+   "usd": 0.145785
+  },
+  {
+   "at": "2026-10-09T19:43:23.711Z",
+   "scenario": "C04",
+   "inputTokens": 5388,
+   "outputTokens": 4555,
+   "latencyMs": 59922,
+   "usd": 0.140815
+  },
+  {
+   "at": "2026-10-09T19:44:14.380Z",
+   "scenario": "C05",
+   "inputTokens": 5430,
+   "outputTokens": 4196,
+   "latencyMs": 50652,
+   "usd": 0.13205
+  },
+  {
+   "at": "2026-10-09T19:45:01.497Z",
+   "scenario": "C06",
+   "inputTokens": 5219,
+   "outputTokens": 3929,
+   "latencyMs": 47102,
+   "usd": 0.12432
+  },
+  {
+   "at": "2026-10-09T19:45:46.970Z",
+   "scenario": "C07A",
+   "inputTokens": 5238,
+   "outputTokens": 3980,
+   "latencyMs": 45456,
+   "usd": 0.12569
+  },
+  {
+   "at": "2026-10-09T19:46:27.929Z",
+   "scenario": "C07E",
+   "inputTokens": 5309,
+   "outputTokens": 3689,
+   "latencyMs": 40943,
+   "usd": 0.11877
+  },
+  {
+   "at": "2026-10-09T19:47:17.559Z",
+   "scenario": "C08",
+   "inputTokens": 5393,
+   "outputTokens": 4238,
+   "latencyMs": 49610,
+   "usd": 0.132915
+  },
+  {
+   "at": "2026-10-09T19:48:06.300Z",
+   "scenario": "C13",
+   "inputTokens": 5268,
+   "outputTokens": 3983,
+   "latencyMs": 48724,
+   "usd": 0.125915
+  }
+ ],
+ "usd": 1.32583
+}

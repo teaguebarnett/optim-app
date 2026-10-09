@@ -1,4 +1,4 @@
-// Cardio Reasoner V1 — rails. Scripted models only (no provider): each test makes the "model" misbehave in one way
+// Cardio Reasoner V1.1 — rails. Scripted models only (no provider): each test makes the "model" misbehave in one way
 // and proves the deterministic layer catches it, plus knowledge, method, routing, safety, eligibility, schedule,
 // scenario, isolation and contract checks. Live-model quality is evaluated separately (not yet run).
 
@@ -53,14 +53,19 @@ const rail = (name: string, id: string, re: RegExp, tweak: (p: WireCardio["plan"
     const { r } = await run(id, tweak);
     rejectedWith(r, re);
   });
-/** Keep the progression consistent with a changed week 1 so a rail test fails only for its own reason. */
-const resync = (p: WireCardio["plan"]) => {
-  const total = (p.sessions as Array<{ minutes: number }>).reduce((t, s) => t + s.minutes, 0);
-  const hard = (p.sessions as Array<{ type: string; intensity: string }>).filter((s) => s.type === "intervals" || s.intensity === "vigorous").length;
-  p.progression = [1, 2, 3, 4].map((week) => ({ week, minutes: total, hardSessions: hard, change: "Hold." }));
+/** Keep the progression consistent with a changed week 1 (hold it for weeks 2–4) so a rail test fails only for its
+ * own reason; and keep the dose statement consistent with week 1's minutes. */
+const resync = (p: WireCardio["plan"], ri?: CardioReasoningInput) => {
+  const compact = (p.sessions as Array<Record<string, unknown>>).map((x) => ({ day: x.day, type: x.type, modality: x.modality, minutes: x.minutes, intensity: x.intensity, placement: x.placement, optional: x.optional }));
+  p.progression = [2, 3, 4].map((week) => ({ week, sessions: compact.map((x) => ({ ...x })), change: "Hold." }));
+  if (ri) {
+    const total = compact.reduce((t, x) => t + (x.minutes as number), 0);
+    const range = ri.bounds.minutesByRole[p.role];
+    p.dose.vsCoachRange = !range ? "no_coach_range" : total < range[0] ? "below" : "within";
+  }
 };
 
-console.log("\nCardio Reasoner V1\n");
+console.log("\nCardio Reasoner V1.1\n");
 
 await check("1. Cardio Knowledge V1: validated by the shared registry, every external source PubMed-verified, numbers only on sourced claims", () => {
   assert.equal(CARDIO_KNOWLEDGE.version, CARDIO_KNOWLEDGE_VERSION);
@@ -149,10 +154,13 @@ await check("7. Equipment: commercial gym → standard machines ASSUMED (recorde
 
 await check("8. Resistance week from program content (universal grammar): lower-body days detected; schedule conflicts surfaced", () => {
   const w = UPPER_LOWER(70);
-  assert.deepEqual(w.days.map((d) => `${d.day}:${d.lowerBody}`), ["Monday:true", "Tuesday:false", "Thursday:true", "Friday:false"]);
+  assert.deepEqual(w.days.map((d) => `${d.day}:${d.focus}:${d.lowerBody}`), ["Monday:lower:true", "Tuesday:upper:false", "Thursday:lower:true", "Friday:upper:false"]);
+  // V1.1: a full-body day with one major lower-body lift loads the legs (V1 called it an upper-body day).
+  const fb = resistanceProgram([{ day: "Monday", exercises: ["Leg Press", "Lat Pulldown", "Dumbbell Shoulder Press"] }, { day: "Thursday", exercises: ["Leg Curl", "Seated Cable Row", "Barbell Bench Press"] }]);
+  assert.deepEqual(fb.days.map((d) => `${d.day}:${d.focus}:${d.lowerBody}`), ["Monday:full_body:true", "Thursday:full_body:false"]);
   const i = scenarioInput({ patch: { your_week: { availableDays: ["mon", "tue", "wed", "thu"], maxSessionLength: "60" } }, coach: cardioCoach() });
   const c = scheduleConflicts(i.client, w);
-  assert.ok(c.some((x) => /Friday/.test(x) && /available/.test(x)) && c.some((x) => /cap/.test(x)), c.join(" | "));
+  assert.ok(c.some((x) => x.id === "resistance_on_unavailable_day" && x.days.includes("Friday")) && c.some((x) => x.id === "resistance_over_session_cap"), c.map((x) => x.text).join(" | "));
   assert.equal(scheduleConflicts(i.client, null).length, 0);
 });
 
@@ -205,17 +213,17 @@ await rail("17. intervals that don't fit the session", "C01", /doesn't fit in/, 
   const s = p.sessions.find((x: { type: string }) => x.type === "intervals");
   s.intervals.rounds = 20;
 });
-await rail("18. hard sessions for a client whose sleep/stress limits recovery", "C03", /limit for this client is 0 \(sleep or stress/, (p) => {
+await rail("18. hard sessions for a client whose sleep/stress limits recovery", "C03", /limit for this client is 0 \(sleep or stress/, (p, ri) => {
   p.sessions[0] = { ...p.sessions[0], type: "intervals", intensity: "vigorous", effort: [7, 8], talk: undefined, intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] } };
-  resync(p);
+  resync(p, ri);
 });
-await rail("19. hard work in week 1 for a new client", "C02", /new or returning to training/, (p) => {
+await rail("19. hard work in week 1 for a new client", "C02", /new or returning to training/, (p, ri) => {
   p.sessions[0] = { ...p.sessions[0], intensity: "vigorous", effort: [7, 8], talk: "few_words" };
-  resync(p);
+  resync(p, ri);
 });
-await rail("20. vigorous work despite a reported medication/condition", "C07E", /until the coach confirms the reported medication/, (p) => {
+await rail("20. vigorous work despite a reported medication/condition", "C07E", /until the coach confirms the reported medication/, (p, ri) => {
   p.sessions[0] = { ...p.sessions[0], intensity: "vigorous", effort: [7, 8], talk: undefined };
-  resync(p);
+  resync(p, ri);
 });
 await rail("21. heart-rate targets when OPTIM offered no zones (coach uses talk test / RPE)", "C01", /no heart-rate zones were offered/, (p) => {
   p.sessions[0].hrPct = [60, 70];
@@ -227,34 +235,34 @@ await rail("23. heart-rate band that doesn't match the label (endurance coach)",
   const s = p.sessions.find((x: { type: string }) => x.type === "steady");
   s.hrPct = [85, 92];
 });
-await rail("24. hard running the day before a lower-body strength day", "C01", /day before a lower-body strength day/, (p) => {
-  p.sessions[0] = { day: "Sunday", type: "intervals", modality: "cardio.running", minutes: 25, intensity: "vigorous", effort: [7, 8], intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] }, placement: "separate_day", purpose: "Intervals." };
-  resync(p);
+await rail("24. hard running the day before a lower-body strength day", "C01", /day before a lower-body strength day/, (p, ri) => {
+  p.sessions[0] = { day: "Sunday", type: "intervals", modality: "cardio.running", minutes: 25, intensity: "vigorous", effort: [7, 8], intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] }, placement: "separate_day", optional: false, purpose: "Intervals." };
+  resync(p, ri);
 });
-await rail("25. hard rowing on a lower-body strength day", "C05", /on a lower-body strength day interferes/, (p) => {
-  p.sessions[0] = { day: "Monday", type: "intervals", modality: "cardio.rowing", minutes: 20, intensity: "vigorous", effort: [7, 8], intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] }, placement: "separate_session", purpose: "Intervals." };
-  resync(p);
+await rail("25. hard rowing on a lower-body strength day", "C05", /on a lower-body strength day interferes/, (p, ri) => {
+  p.sessions[0] = { day: "Monday", type: "intervals", modality: "cardio.rowing", minutes: 20, intensity: "vigorous", effort: [7, 8], intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] }, placement: "separate_session", optional: false, purpose: "Intervals." };
+  resync(p, ri);
 });
 await rail("26. 'separate_day' placement on a resistance day", "C01", /is a resistance day/, (p) => {
   p.sessions[0].day = "Tuesday";
   p.sessions[0].placement = "separate_day";
 });
-await rail("27. same-visit cardio that pushes past the client's session cap", "C08", /exceeds the client's 60-min cap/, (p) => {
+await rail("27. same-visit cardio that pushes past the client's session cap", "C08", /exceeds the client's 60-min cap/, (p, ri) => {
   p.sessions[0] = { ...p.sessions[0], day: "Wednesday", placement: "after_resistance", minutes: 20 };
-  resync(p);
+  resync(p, ri);
 });
-await rail("28. weekly minutes above the coach's range", "C07A", /above the coach's 120–250 min\/week/, (p) => {
+await rail("28. weekly minutes above the coach's range", "C07A", /above the coach's 120–250 min\/week/, (p, ri) => {
   for (const s of p.sessions) s.minutes = 100;
-  resync(p);
+  resync(p, ri);
 });
-await rail("29. progression that jumps faster than the weekly cap", "C04", /raises minutes \d+% — the limit is 10%/, (p) => {
-  p.progression[1].minutes = Math.round(p.progression[0].minutes * 1.3);
+await rail("29. progression that jumps faster than the weekly cap (OPTIM's own totals)", "C04", /minutes rise \d+% .* the limit is 10% a week/, (p) => {
+  for (const x of p.progression[0].sessions) x.minutes = Math.round(x.minutes * 1.3);
 });
-await rail("30. progression week 1 that doesn't match the sessions", "C02", /progression week 1 says/, (p) => {
-  p.progression[0].minutes += 30;
+await rail("30. a progression week on a day the client isn't available", "C02", /week 3 Tuesday: Tuesday isn't one of the client's available days/, (p) => {
+  p.progression[1].sessions[0].day = "Tuesday";
 });
-await rail("31. progression weeks out of order / too short", "C02", /progression weeks must run|covers 2 weeks/, (p) => {
-  p.progression = [p.progression[0], { ...p.progression[1], week: 3 }];
+await rail("31. progression weeks out of order / too short", "C02", /progression weeks must run|covers 3 weeks/, (p) => {
+  p.progression = [p.progression[0], { ...p.progression[1], week: 4 }];
 });
 await rail("32. a step target the coach never set", "C01", /The coach sets no step target/, (p) => {
   p.steps = { target: [8000, 10000], why: "More steps." };
@@ -283,10 +291,10 @@ await rail("39. a monitoring measure OPTIM doesn't track", "C02", /isn't one OPT
 
 console.log("\n  contract, repair, artifact, isolation\n");
 await check("40. strict contract: warranted:false with sessions, unknown enums, out-of-range minutes are schema errors (nothing coerced)", () => {
-  const base = { status: "PLAN", plan: { warranted: false, role: "none", objective: { summary: "x", why: "x" }, intensityMethod: { primary: "rpe", why: "x" }, sessions: [], progression: [], placementWhy: "x", monitoring: { measures: [], reviewAfterWeeks: 4 }, assumptions: [], decisions: [{ topic: "warranted", decision: "x", because: "x", coach: [], client: [], evidence: [] }] } };
+  const base = { status: "PLAN", plan: { warranted: false, role: "none", dose: { vsCoachRange: "none", why: "x" }, objective: { summary: "x", why: "x" }, intensityMethod: { primary: "rpe", why: "x" }, sessions: [], progression: [], placementWhy: "x", monitoring: { measures: [], reviewAfterWeeks: 4 }, assumptions: [], decisions: [{ topic: "warranted", decision: "x", because: "x", coach: [], client: [], evidence: [] }] } };
   assert.ok(parseCardioOutput(base).ok);
   const withSessions = structuredClone(base) as unknown as { plan: { warranted: boolean; sessions: unknown[] } };
-  withSessions.plan.sessions = [{ day: "Monday", type: "steady", modality: "cardio.walking", minutes: 30, intensity: "easy", effort: [2, 3], placement: "separate_day", purpose: "Walk." }];
+  withSessions.plan.sessions = [{ day: "Monday", type: "steady", modality: "cardio.walking", minutes: 30, intensity: "easy", effort: [2, 3], placement: "separate_day", optional: false, purpose: "Walk." }];
   assert.ok(!parseCardioOutput(withSessions).ok);
   const badEnum = structuredClone(withSessions);
   badEnum.plan.warranted = true as never;
@@ -299,10 +307,11 @@ await check("40. strict contract: warranted:false with sessions, unknown enums, 
 });
 
 await check("41. 'no cardio now' is a valid, reviewable answer (limited recovery)", async () => {
-  const m = fakeModel(() => ({ status: "PLAN", plan: { warranted: false, role: "none", objective: { summary: "No added cardio for now.", why: "Sleep and stress already limit recovery; five lifting days." }, intensityMethod: { primary: "talk_test", why: "n/a" }, sessions: [], progression: [], placementWhy: "n/a", monitoring: { measures: ["recovery_rating"], reviewAfterWeeks: 4 }, assumptions: [], uncertainties: [{ about: "Sleep", impact: "Revisit when sleep improves." }], decisions: [{ topic: "warranted", decision: "No cardio yet", because: "Recovery is the limiter.", coach: [], client: [], evidence: [] }] } }));
+  const m = fakeModel(() => ({ status: "PLAN", plan: { warranted: false, role: "none", dose: { vsCoachRange: "none", why: "Recovery is the limiter." }, objective: { summary: "No added cardio for now.", why: "Sleep and stress already limit recovery; five lifting days." }, intensityMethod: { primary: "talk_test", why: "n/a" }, sessions: [], progression: [], placementWhy: "n/a", monitoring: { measures: ["recovery_rating"], reviewAfterWeeks: 4 }, assumptions: [], uncertainties: [{ about: "Sleep", impact: "Revisit when sleep improves." }], decisions: (["warranted", "dose", "recovery"] as const).map((topic) => ({ topic, decision: "No cardio yet", because: "Recovery is the limiter.", coach: [], client: [], evidence: [] })) } }));
   const r = planned(await runCardioReasoner({ input: S("C03").input(), model: m, nowIso: NOW, resistance: S("C03").resistance }));
   assert.equal(r.plan.sessions.length, 0);
   assert.equal(r.review.workload.weeklyMinutes.total, 0);
+  assert.ok(/No additional cardio proposed/.test(r.review.workload.statement));
 });
 
 await check("42. one bounded repair: validator errors are fed back once; a corrected second attempt is PLANNED, a repeated failure REJECTED", async () => {
@@ -357,7 +366,7 @@ await check("46. isolation: cardio preference and the cardio reasoner don't chan
 });
 
 await check("47. prompt: coach authority, safety first, no publication; cardio prompt separate from resistance and nutrition", async () => {
-  assert.ok(/never approve or publish/.test(CARDIO_SYSTEM_PROMPT) && /AUTHORITY/.test(CARDIO_SYSTEM_PROMPT) && /warranted:false is a valid answer/.test(CARDIO_SYSTEM_PROMPT));
+  assert.ok(/never approve or publish/.test(CARDIO_SYSTEM_PROMPT) && /AUTHORITY/.test(CARDIO_SYSTEM_PROMPT) && /warranted:false \("no additional cardio for now"/.test(CARDIO_SYSTEM_PROMPT) && /not a mandatory week-1 amount/.test(CARDIO_SYSTEM_PROMPT) && /never shorten, move or replace lifting/.test(CARDIO_SYSTEM_PROMPT));
   const { REASONER_SYSTEM_PROMPT: SYSTEM_PROMPT } = await import("../contract.ts");
   const { NUTRITION_SYSTEM_PROMPT } = await import("../nutrition/contract.ts");
   assert.notEqual(CARDIO_SYSTEM_PROMPT, SYSTEM_PROMPT);
@@ -387,6 +396,103 @@ await check("50. a proposed (not yet approved) resistance program is labelled as
   const m = fakeModel((ri) => scriptedCardio(ri as never));
   const r = planned(await runCardioReasoner({ input: S("C01").input(), model: m, nowIso: NOW, resistance: w }));
   assert.ok(/proposed program/.test(r.review.workload.statement));
+});
+
+
+console.log("\n  V1.1 — dose, inputs, workload, coherence\n");
+await check("51. dose: starting below the coach's range is allowed when stated and explained (deconditioned beginner)", async () => {
+  const p = planned((await run("C02")).r);
+  assert.equal(p.plan.dose.vsCoachRange, "below");
+  assert.ok(p.review.workload.weeklyMinutes.total < 120);
+});
+await rail("52. dose statement that contradicts week 1 (claims 'within' when below)", "C02", /dose.vsCoachRange is "within" but week 1 is \d+ min against the coach's 120–250 — that's "below"/, (p) => {
+  p.dose.vsCoachRange = "within";
+});
+await rail("53. a below-range dose without a 'dose' decision", "C02", /explain the dose decision/, (p) => {
+  p.decisions = p.decisions.filter((d: { topic: string }) => d.topic !== "dose");
+});
+await rail("54. limited recovery without a 'recovery' decision", "C03", /explain the recovery decision/, (p) => {
+  p.decisions = p.decisions.filter((d: { topic: string }) => d.topic !== "recovery");
+});
+await check("55. optional cardio stays optional: the role is the coach's 'optional_low_intensity', no other role's minutes are offered", async () => {
+  const { r, m } = await run("C13");
+  const p = planned(r);
+  const ri = m.lastInput as unknown as CardioReasoningInput;
+  assert.equal(p.plan.role, "optional_low_intensity");
+  assert.deepEqual(ri.coach.allowedRoles, ["optional_low_intensity"]);
+  assert.deepEqual(ri.bounds.minutesByRole, {}, "no fat-loss/health budget leaks into an optional-only method");
+  assert.ok(!ri.coach.rules.some((x) => /minutes/.test(x[0])), "minute rules of unused roles aren't offered");
+  assert.ok(ri.coach.roles[0].meaning.includes("never a required program"));
+});
+await rail("56. optional cardio turned into a required session", "C13", /optional, low-intensity extra — every session optional:true and easy/, (p) => {
+  p.sessions[0].optional = false;
+});
+await rail("57. optional low-intensity cardio at moderate intensity (in a later week)", "C13", /week 3 \w+: this coach's cardio is an optional, low-intensity extra/, (p) => {
+  p.progression[1].sessions[0].intensity = "moderate";
+});
+await rail("58. the V1 live C06 progression (150 min/week from 4 days with a 30-min cap) is rejected", "C06", /week 4 \w+: \d+ min exceeds the client's 30-min session cap/, (p) => {
+  p.progression[2].sessions = ["Monday", "Wednesday", "Friday", "Saturday"].map((day, k) => ({ day, type: "steady", modality: "cardio.walking", minutes: k < 2 ? 40 : 35, intensity: "moderate", placement: "separate_day", optional: false }));
+});
+await rail("59. a later-week session longer than the client's session cap", "C06", /week 4 \w+: 40 min exceeds the client's 30-min session cap/, (p) => {
+  p.progression[2].sessions[0].minutes = 40;
+});
+await rail("60. a later week that stacks cardio onto approved lifting past the cap (V1 live C01 week 4)", "C01", /week 4 Tuesday: lifting \(~60 min, approved — not changed\) \+ 25 min cardio exceeds the client's 75-min cap \(room for 15 min\)/, (p) => {
+  p.progression[2].sessions.push({ day: "Tuesday", type: "intervals", modality: "cardio.cycling_stationary", minutes: 25, intensity: "vigorous", placement: "after_resistance", optional: false });
+});
+await rail("61. hard leg-dominant cardio before a lower-body day in a LATER week", "C01", /week 3 Sunday: hard running the day before a lower-body strength day/, (p) => {
+  p.progression[1].sessions.push({ day: "Sunday", type: "intervals", modality: "cardio.running", minutes: 20, intensity: "vigorous", placement: "separate_day", optional: false });
+});
+await check("62. full-body lifting days count as lower-body loading: hard rowing the day before one is rejected for a muscle goal", async () => {
+  const fullBody = resistanceProgram([{ day: "Monday", exercises: ["Leg Press", "Lat Pulldown", "Dumbbell Shoulder Press"] }, { day: "Thursday", exercises: ["Romanian Deadlift", "Seated Cable Row", "Barbell Bench Press"] }]);
+  const m = fakeModel((ri) => scriptedCardio(ri as never, (p) => {
+    p.progression[1].sessions = [...p.progression[1].sessions.filter((x: { day: string }) => x.day !== "Wednesday"), { day: "Wednesday", type: "intervals", modality: "cardio.rowing", minutes: 20, intensity: "vigorous", placement: "separate_day", optional: false }];
+  }));
+  const r = await runCardioReasoner({ input: scenarioInput({ patch: { what_you_want: { primaryGoal: "build_muscle" } }, coach: cardioCoach() }), model: m, nowIso: NOW, resistance: fullBody, maxAttempts: 1 });
+  rejectedWith(r, /week 3 Wednesday: hard rowing machine the day before a lower-body strength day \(Thursday\)/);
+});
+await rail("63. a schedule conflict without a prepared coach decision", "C08", /Conflict "resistance_on_unavailable_day" .* needs a prepared coach decision/, (p) => {
+  p.coachDecisions = p.coachDecisions.filter((d: { conflict: string }) => d.conflict !== "resistance_on_unavailable_day");
+});
+await rail("64. a 'conflict' OPTIM didn't detect (invented)", "C01", /names conflict "client_hates_mondays", which OPTIM didn't detect/, (p) => {
+  p.coachDecisions = [{ conflict: "client_hates_mondays", question: "?", options: ["a", "b"], recommended: 0, why: "x" }];
+});
+await check("65. prepared coach decisions reach the review with their recommendation (never applied to the program)", async () => {
+  const p = planned((await run("C08")).r);
+  assert.equal(p.review.conflictDecisions.length, 2);
+  for (const d of p.review.conflictDecisions) assert.ok(d.recommended && d.options.length >= 2, d.conflict);
+  assert.deepEqual(p.run.snapshots.resistance, S("C08").resistance, "approved program snapshot unchanged");
+});
+await check("66. endurance method read from REAL calibration answers (layered days/volume/quality sessions), sports passed through", () => {
+  const e = readCardioMethod(enduranceCoach());
+  assert.ok(e.ok && e.method.endurance);
+  const en = e.method.endurance!;
+  assert.deepEqual([en.days?.keys[0], en.weeklyHours?.keys[0], en.hardSessions?.keys[0]], ["e_days.base", "e_weekly_volume.base", "e_quality_sessions.base"]);
+  assert.deepEqual(en.sports?.value, ["running"]);
+  assert.deepEqual(en.longSession?.value, { maxPercent: 40 });
+  assert.deepEqual(en.downEvery?.value, { min: 3, max: 4 });
+});
+await check("67. the client's discipline: one coached sport → known; several → unknown (never assumed)", async () => {
+  const one = (await run("C04")).m.lastInput as unknown as CardioReasoningInput;
+  assert.equal(one.endurance?.discipline, "running");
+  assert.ok(one.endurance?.disciplineModalities.includes("cardio.running"));
+  const s = S("C04");
+  const m = fakeModel((ri) => scriptedCardio(ri as never));
+  await runCardioReasoner({ input: scenarioInput({ patch: {}, coach: enduranceCoach({ endurance_sports: ["running", "cycling"] }), coachConfirmedGoal: s.input().goal.primary as never }), model: m, nowIso: NOW });
+  const many = m.lastInput as unknown as CardioReasoningInput;
+  assert.equal(many.endurance?.discipline, null);
+  assert.deepEqual(many.endurance?.disciplineModalities, []);
+});
+await rail("68. a long session over the coach's long-session share", "C04", /the longest session \(\d+ min\) is \d+% of the week — the coach caps it at 40%/, (p) => {
+  p.progression[0].sessions[0].minutes = 90;
+  for (const x of p.progression[0].sessions.slice(1)) x.minutes = 20;
+});
+await rail("69. no down week on the coach's cadence", "C04", /down week every 3–4 weeks/, (p) => {
+  p.progression = p.progression.map((w: { week: number; sessions: unknown[] }) => ({ ...w, sessions: structuredClone(p.progression[0].sessions) }));
+});
+await check("70. 'no additional cardio' with the coach's step target is a coherent plan", async () => {
+  const m = fakeModel(() => ({ status: "PLAN", plan: { warranted: false, role: "none", dose: { vsCoachRange: "none", why: "Steps only for now." }, objective: { summary: "No added sessions; steps.", why: "x" }, intensityMethod: { primary: "talk_test", why: "n/a" }, sessions: [], steps: { target: [7000, 9000], why: "Coach's target." }, progression: [], placementWhy: "n/a", monitoring: { measures: ["steps"], reviewAfterWeeks: 4 }, assumptions: [], decisions: (["warranted", "dose"] as const).map((topic) => ({ topic, decision: "x", because: "x", coach: [], client: [], evidence: [] })) } }));
+  const r = planned(await runCardioReasoner({ input: S("C13").input(), model: m, nowIso: NOW }));
+  assert.ok(!r.plan.warranted && r.plan.steps);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

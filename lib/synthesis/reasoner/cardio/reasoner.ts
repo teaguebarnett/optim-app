@@ -1,4 +1,4 @@
-// Cardio Reasoner V1 — the Fitness Reasoner's architecture applied to cardiovascular training.
+// Cardio Reasoner V1.1 — the Fitness Reasoner's architecture applied to cardiovascular training.
 //
 //   readiness (coach method, goal, no open health review) → routing (race/event & sport conditioning UNSUPPORTED —
 //   never routed into resistance planning) → coach scope (does this coach prescribe cardio?) → method complete?
@@ -22,7 +22,7 @@ import { readCardioMethod } from "../../cardio/method.ts";
 import { routeCardio } from "../../cardio/routing.ts";
 import { cardioSafety, type CardioSafety } from "../../cardio/safety.ts";
 import { modalityOptions, type ModalityOption } from "../../cardio/eligibility.ts";
-import { scheduleConflicts, type ResistanceWeek } from "../../cardio/schedule.ts";
+import { cardioCapacity, scheduleConflicts, type ResistanceWeek } from "../../cardio/schedule.ts";
 import { runModelAttempts, type ReasonerModel } from "../core.ts";
 import { sha256, type ReasonerAttempt, type ReasonerRunTotals } from "../run.ts";
 import { CARDIO_PROMPT_VERSION, CARDIO_SYSTEM_PROMPT, parseCardioOutput, type CardioPlan } from "./contract.ts";
@@ -40,6 +40,10 @@ export interface CardioReviewItems {
   screening: string[];
   warnings: string[];
   questions: string[];
+  /** Each schedule conflict with the model's prepared decision (options + recommendation) — never applied silently. */
+  conflictDecisions: Array<{ conflict: string; text: string; question: string | null; options: string[]; recommended: string | null; why: string | null }>;
+  /** OPTIM's week-by-week reading of the progression, rendered from its structure (not the model's wording). */
+  progression: string[];
   /** OPTIM's own accounting of the proposed week across cardio and resistance. */
   workload: CardioWorkload & { statement: string };
   basis: string[];
@@ -144,7 +148,8 @@ export async function runCardioReasoner(params: { input: SynthesisInput; model: 
   const usable = options.filter((o) => o.fit.state === "compatible");
   if (!usable.length) return needs("restrictions", [{ fact: "health_review.structuredLimitations", why: "The confirmed restrictions rule out every cardio modality OPTIM knows; the coach decides what's appropriate.", blockedDecision: "Which cardio modality to use.", providedBy: "coach" }]);
   const conflicts = scheduleConflicts(input.client, resistance);
-  const { reasoning, allowed } = buildCardioInput({ input, knowledge: CARDIO_KNOWLEDGE, method, purpose: route.purpose, hybrid: route.hybrid, resistance, options, safety, conflicts, promptVersion: CARDIO_PROMPT_VERSION });
+  const capacity = cardioCapacity(input.client, resistance);
+  const { reasoning, allowed } = buildCardioInput({ input, knowledge: CARDIO_KNOWLEDGE, method, purpose: route.purpose, hybrid: route.hybrid, resistance, capacity, options, safety, conflicts, promptVersion: CARDIO_PROMPT_VERSION });
   if (!reasoning.coach.allowedRoles.length) return finish({ status: "NOT_COACHED", message: `This coach's cardio roles (${method.roles.value.join(", ")}) don't cover what cardio would be for here (${route.purpose.replace(/_/g, " ")}); OPTIM proposes none rather than stretch the method.` }, { message: "No allowed role." });
   run.input = reasoning;
   run.hashes.input = sha256(reasoning);
@@ -178,8 +183,13 @@ export async function runCardioReasoner(params: { input: SynthesisInput; model: 
   const review: CardioReviewItems = {
     screening: safety.screening,
     warnings: safety.warnings,
-    questions: conflicts,
-    workload: { ...w, statement: `Week 1: ${w.weeklyMinutes.total} min of cardio (${w.weeklyMinutes.easy} easy, ${w.weeklyMinutes.moderate} moderate, ${w.weeklyMinutes.vigorous} vigorous; ≈${w.moderateEquivalent} moderate-equivalent min), ${w.hardSessions} hard session${w.hardSessions === 1 ? "" : "s"}, ${w.trainingDays} training day${w.trainingDays === 1 ? "" : "s"} counting resistance${resistance ? ` (${resistance.source === "approved_program" ? "approved" : "proposed"} program)` : " (no resistance program supplied)"}.` },
+    questions: conflicts.map((c) => c.text),
+    conflictDecisions: conflicts.map((c) => {
+      const d = done.plan.coachDecisions.find((x) => x.conflict === c.id);
+      return { conflict: c.id, text: c.text, question: d?.question ?? null, options: d?.options ?? [], recommended: d ? d.options[d.recommended] : null, why: d?.why ?? null };
+    }),
+    progression: w.weeks.map((x) => `Week ${x.week}: ${x.minutes.total} min over ${x.sessions} session${x.sessions === 1 ? "" : "s"} (${x.minutes.easy} easy / ${x.minutes.moderate} moderate / ${x.minutes.vigorous} vigorous), ${x.hardSessions} hard${x.optionalMinutes ? `, ${x.optionalMinutes} min optional` : ""}.`),
+    workload: { ...w, statement: `${done.plan.warranted ? "" : "No additional cardio proposed. "}Week 1: ${w.weeklyMinutes.total} min of cardio (${w.weeklyMinutes.easy} easy, ${w.weeklyMinutes.moderate} moderate, ${w.weeklyMinutes.vigorous} vigorous; ≈${w.moderateEquivalent} moderate-equivalent min), ${w.hardSessions} hard session${w.hardSessions === 1 ? "" : "s"}, ${w.trainingDays} training day${w.trainingDays === 1 ? "" : "s"} counting resistance${resistance ? ` (${resistance.source === "approved_program" ? "approved" : "proposed"} program)` : " (no resistance program supplied)"}.` },
     basis: [
       `Weekly minutes: the coach's ${Object.entries(reasoning.bounds.minutesByRole).map(([r, [a, b]]) => `${r.replace(/_/g, " ")} ${a}–${b}`).join(", ") || "method (no minute range stated)"} min/week.`,
       `Hard sessions ≤ ${reasoning.bounds.maxHardSessions}/week${method.endurance?.hardSessions ? " (coach)" : " (OPTIM default — internal heuristic)"}; weekly increase ≤ ${reasoning.bounds.maxWeeklyIncreasePct}%${method.endurance?.weeklyIncreasePct ? " (coach)" : " (OPTIM pacing default — not an injury-prevention rule)"}${reasoning.bounds.easyStartWeeks ? `; no hard sessions in the first ${reasoning.bounds.easyStartWeeks} weeks (new or returning client)` : ""}${reasoning.bounds.recoveryLimited ? "; no hard sessions while sleep or stress limits recovery (OPTIM heuristic)" : ""}.`,

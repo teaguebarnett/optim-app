@@ -52,10 +52,15 @@ export function plannedInvariants(r: CardioReasonerResult, i: SynthesisInput): s
     if (isHard(s) && ri.safety.noVigorous) out.push(`hard session despite safety.noVigorous (${s.day})`);
     if (s.hrPct && !ri.zones) out.push(`heart rate without zones (${s.day})`);
   }
-  const hard = p.plan.sessions.filter(isHard).length;
-  if (hard > ri.bounds.maxHardSessions) out.push(`${hard} hard sessions > ${ri.bounds.maxHardSessions}`);
+  const weeks = p.review.workload.weeks;
+  for (const w of weeks) if (w.hardSessions > ri.bounds.maxHardSessions) out.push(`week ${w.week}: ${w.hardSessions} hard sessions > ${ri.bounds.maxHardSessions}`);
   const range = ri.bounds.minutesByRole[p.plan.role];
-  if (range && p.plan.progression.some((w) => w.minutes > range[1])) out.push(`progression above the coach's ${range[1]} min/week`);
+  if (range && weeks.some((w) => w.minutes.total > range[1])) out.push(`a week above the coach's ${range[1]} min/week`);
+  const cap = ri.capacity.weeklyMaxMinutes;
+  if (cap !== null && weeks.some((w) => w.minutes.total > cap)) out.push(`a week doesn't fit the client's ${cap} min of capacity`);
+  if (p.plan.role === "optional_low_intensity" && [...p.plan.sessions, ...p.plan.progression.flatMap((w) => w.sessions)].some((x) => !x.optional)) out.push("optional cardio made mandatory");
+  for (const c of ri.conflicts) if (!p.plan.coachDecisions.some((d) => d.conflict === c.id)) out.push(`no prepared coach decision for ${c.id}`);
+  if (p.plan.dose.vsCoachRange === "below" && !p.plan.decisions.some((d) => d.topic === "dose")) out.push("below-range dose not explained");
   if (p.run.versions.coachMethod === null) out.push("no coach method recorded");
   return out;
 }
@@ -99,10 +104,11 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
     hard: (r) => {
       const p = planned(r);
       if (!p) return [];
-      return [...(p.plan.sessions.some(isHard) ? ["hard work for a new client in week 1"] : []), ...(p.plan.progression.filter((w) => w.week <= 2).some((w) => w.hardSessions > 0) ? ["hard sessions in the first 2 weeks"] : [])];
+      return [...(p.review.workload.weeks.filter((w) => w.week <= 2).some((w) => w.hardSessions > 0) ? ["hard sessions in the first 2 weeks"] : []), ...(p.run.input!.resistance!.days.every((d) => d.lowerBody) ? [] : ["full-body days not recognized as loading the legs"])];
     },
     quality: (r) => [
-      { check: "starts below the coach's full fat-loss range (builds up)", pass: r.review.workload.weeklyMinutes.total < 250 },
+      { check: "week 1 starts from the client's capacity, below the coach's 120-min fat-loss floor", pass: r.plan.dose.vsCoachRange === "below" && r.review.workload.weeklyMinutes.total < 120 },
+      { check: "no intervals before week 4 for a deconditioned beginner", pass: r.review.workload.weeks.filter((w) => w.week < 4).every((w) => w.hardSessions === 0) },
       { check: "walking or another low-impact modality", pass: r.plan.sessions.every((s) => (cardioModality(s.modality)?.demands.impact ?? "none") !== "high") },
     ],
   },
@@ -114,9 +120,14 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
     resistance: resistanceProgram([{ day: "Monday", exercises: LOWER }, { day: "Tuesday", exercises: UPPER }, { day: "Thursday", exercises: LOWER }, { day: "Friday", exercises: UPPER }, { day: "Saturday", exercises: ["Barbell Bench Press", "Leg Press", "Lat Pulldown"] }]),
     expected: ["PLANNED"],
     expectsModel: true,
-    hard: (r) => (planned(r)?.plan.sessions.some(isHard) ? ["hard cardio despite limited recovery"] : []),
+    hard: (r) => {
+      const p = planned(r);
+      if (!p) return [];
+      return [...(p.plan.sessions.some(isHard) ? ["hard cardio despite limited recovery"] : []), ...(p.plan.decisions.some((d) => d.topic === "recovery") ? [] : ["recovery decision missing"])];
+    },
     quality: (r) => [
-      { check: "considers whether cardio is warranted at all / keeps it light", pass: !r.plan.warranted || r.review.workload.weeklyMinutes.total <= 120 },
+      { check: "no added cardio, or a deliberately reduced dose (below the coach's range)", pass: !r.plan.warranted || r.plan.dose.vsCoachRange === "below" },
+      { check: "adds at most one training day to the 5 lifting days", pass: r.review.workload.trainingDays <= 6 && r.plan.sessions.filter((x) => x.placement === "separate_day").length <= 1 },
       { check: "names recovery as an uncertainty or coach question", pass: [...r.plan.uncertainties.map((u) => u.about + u.impact), ...r.plan.coachQuestions.map((q) => q.question)].some((t) => /sleep|recover|stress/i.test(t)) },
     ],
   },
@@ -131,13 +142,15 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
       const p = planned(r);
       if (!p) return [];
       const ri = p.run.input!;
-      return [...(ri.zones?.hrMaxEstimate === Math.round(208 - 0.7 * 41) ? [] : ["HRmax estimate isn't Tanaka's"]), ...(ri.bounds.maxWeeklyIncreasePct === 10 ? [] : ["coach's weekly-increase cap not applied"])];
+      return [...(ri.zones?.hrMaxEstimate === Math.round(208 - 0.7 * 41) ? [] : ["HRmax estimate isn't Tanaka's"]), ...(ri.bounds.maxWeeklyIncreasePct === 10 ? [] : ["coach's weekly-increase cap not applied"]), ...(ri.endurance?.discipline === "running" ? [] : ["the coach's sport wasn't passed to the model"])];
     },
     quality: (r) => {
       const m = r.review.workload.weeklyMinutes;
       return [
         { check: "mostly easy (polarized coach): ≥ 70% of minutes easy", pass: m.total > 0 && m.easy / m.total >= 0.7 },
         { check: "uses heart-rate zones (coach method)", pass: r.plan.intensityMethod.primary === "heart_rate" },
+        { check: "trains the coach's sport (running) in week 1", pass: r.plan.sessions.some((x) => x.modality === "cardio.running") },
+        { check: "down week on the coach's cadence (weeks 3–4)", pass: r.review.workload.weeks.some((w, k) => k > 0 && w.week >= 3 && w.week <= 4 && w.minutes.total < r.review.workload.weeks[k - 1].minutes.total) },
       ];
     },
   },
@@ -180,7 +193,10 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
       if (!p) return [];
       return [...(p.plan.sessions.some(isHard) ? ["hard work for a beginner"] : []), ...(p.run.input!.modalities.filter((m) => m.split("|")[6] === "assumed").length ? ["machines assumed outside a commercial gym"] : [])];
     },
-    quality: (r) => [{ check: "uses equipment-free cardio (walking/running) or flags the machine to confirm", pass: r.plan.sessions.every((s) => cardioModality(s.modality)?.equipmentAnyOf.includes("none")) || r.review.quality.some((q) => q.code === "equipment_unconfirmed") }],
+    quality: (r) => [
+      { check: "uses equipment-free cardio (walking/running) or flags the machine to confirm", pass: r.plan.sessions.every((s) => cardioModality(s.modality)?.equipmentAnyOf.includes("none")) || r.review.quality.some((q) => q.code === "equipment_unconfirmed") },
+      { check: "progression stays within 4 days × 30 min", pass: r.review.workload.weeks.every((w) => w.minutes.total <= 120) },
+    ],
   },
   {
     id: "C07A",
@@ -245,7 +261,7 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
       if (!p) return [];
       return [...(p.review.questions.some((q) => /Saturday/.test(q)) ? [] : ["Saturday conflict not surfaced"]), ...(p.review.questions.some((q) => /Monday/.test(q) && /cap/.test(q)) ? [] : ["Monday over-cap not surfaced"]), ...(p.plan.sessions.some((s) => s.day === "Monday" && s.placement === "after_resistance") ? ["cardio stacked onto an over-cap session"] : [])];
     },
-    quality: (r) => [{ check: "every conflict raised in coachQuestions", pass: r.run.input!.conflicts.every((c) => r.plan.coachQuestions.some((q) => q.question.includes(c.slice(0, 30)) || /saturday|cap|schedule/i.test(q.question))) }],
+    quality: (r) => [{ check: "every conflict has a prepared decision with a recommendation", pass: r.review.conflictDecisions.every((d) => d.recommended !== null && d.options.length >= 2) }],
   },
   {
     id: "C09",
@@ -281,7 +297,7 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
   },
   {
     id: "C13",
-    title: "Optional-low-intensity coach, fat-loss client: recovery-only cardio, steps from the coach",
+    title: "Optional-low-intensity coach, fat-loss client: optional easy cardio only, steps from the coach",
     category: "coach_scope",
     input: () => scenarioInput({ patch: person({ goal: "lose_fat" }), coach: cardioCoach({ t_cardio_roles: ["optional_low_intensity"], g_steps_target: range(7000, 10000, "steps/day") }) }),
     expected: ["PLANNED"],
@@ -289,8 +305,9 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
     hard: (r) => {
       const p = planned(r);
       if (!p) return [];
-      return [...(p.plan.role === "recovery" ? [] : [`role ${p.plan.role}, expected recovery`]), ...(p.plan.sessions.some(isHard) ? ["hard work for an optional-low-intensity coach"] : [])];
+      return [...(p.plan.role === "optional_low_intensity" ? [] : [`role ${p.plan.role}, expected optional_low_intensity`]), ...(p.plan.sessions.some(isHard) ? ["hard work for an optional-low-intensity coach"] : []), ...(p.run.input!.bounds.minutesByRole.fat_loss ? ["another role's minute budget was offered"] : [])];
     },
+    quality: (r) => [{ check: "keeps the optional extra small (≤ 90 min/week by the last week)", pass: r.review.workload.weeks.at(-1)!.minutes.total <= 90 }],
   },
 ];
 

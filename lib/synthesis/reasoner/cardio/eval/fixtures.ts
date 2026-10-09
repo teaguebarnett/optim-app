@@ -27,19 +27,24 @@ export function cardioCoach(over: Record<string, unknown> = {}): ConfirmedCoachM
   });
 }
 
-/** An endurance coach (time-based volume, polarized distribution, heart rate + RPE). */
+/** A running coach (endurance chapter as calibration stores it: layered days/volume/quality sessions; time-based
+ * volume, polarized, heart rate + RPE, long session ≤ 40% of the week, down week every 3–4 weeks). */
 export function enduranceCoach(over: Record<string, unknown> = {}): ConfirmedCoachMethod {
   return coachMethod({
     coaching_areas: ["endurance"],
-    e_discipline: ["running"],
+    endurance_sports: ["running"],
+    t_cardio_roles: undefined,
     e_volume_unit: "hours",
-    e_days: range(3, 5, "days/week"),
-    e_weekly_volume: range(2, 4, "hours/week"),
-    e_quality_sessions: range(1, 2, "sessions/week"),
+    e_days: layer(range(3, 5, "days/week")),
+    e_weekly_volume: layer(range(2, 4, "hours/week")),
+    e_quality_sessions: layer(range(1, 2, "sessions/week")),
     e_intensity_mix: "polarized",
     e_intensity_method: ["heart_rate", "rpe"],
     e_weekly_increase: range(5, 10, "% per week"),
+    e_long_basis: "percent_of_week",
+    e_long_percent: range(30, 40, "% of week"),
     e_down_weeks: "every_n",
+    e_down_every: range(3, 4, "weeks"),
     ...over,
   });
 }
@@ -72,51 +77,63 @@ export type WireCardio = Record<string, unknown> & { plan: Record<string, any> }
 
 const EFFORT = { easy: [2, 3], moderate: [4, 5], vigorous: [7, 8] } as const;
 const TALK = { easy: "full_conversation", moderate: "short_sentences", vigorous: "few_words" } as const;
-const ROLE_FOR: Record<string, string[]> = { fat_loss_support: ["fat_loss", "health", "recovery"], health: ["health", "conditioning", "recovery"], aerobic_base: ["aerobic_base", "conditioning", "health", "recovery"], resistance_support: ["conditioning", "health", "recovery"] };
+const ROLE_FOR: Record<string, string[]> = { fat_loss_support: ["fat_loss", "health", "optional_low_intensity"], health: ["health", "conditioning", "optional_low_intensity"], aerobic_base: ["aerobic_base", "conditioning", "health", "optional_low_intensity"], resistance_support: ["conditioning", "health", "optional_low_intensity"] };
+const five = (x: number) => Math.max(5, Math.floor(x / 5) * 5);
 
 /** A plausible, rail-respecting proposal built from the input (scripted model — rails only, not coaching quality). */
 export function scriptedCardio(ri: CardioReasoningInput, tweak?: (p: WireCardio["plan"]) => void): WireCardio {
   const b = ri.bounds;
   const role = ROLE_FOR[ri.purpose].find((r) => ri.coach.allowedRoles.includes(r)) ?? ri.coach.allowedRoles[0];
   const range = b.minutesByRole[role];
-  const beginner = b.easyStartWeeks > 0;
-  const start = Math.round(((range ? range[0] : 60) * (beginner ? 0.6 : 1)) / 5) * 5;
+  const optional = role === "optional_low_intensity";
+  const reduced = b.easyStartWeeks > 0 || b.recoveryLimited;
+  const start = five((range ? range[0] : 60) * (reduced ? 0.6 : 1));
   const res = new Map((ri.resistance?.days ?? []).map((d) => [d.day, d]));
+  const cap = new Map(ri.capacity.days.map((d) => [d.day, d]));
   const rows = ri.modalities.map((r) => r.split("|"));
   const eqRank = (s: string) => ({ available: 0, assumed: 1, unknown: 2 })[s as "available"] ?? 3;
   const ifRank = (s: string) => "NLMH".indexOf(s);
-  const steady = [...rows].sort((x, y) => eqRank(x[6]) - eqRank(y[6]) || ifRank(x[4]) - ifRank(y[4]))[0][0];
+  const disc = ri.endurance?.disciplineModalities.find((m) => rows.some((r) => r[0] === m));
+  const steady = disc ?? [...rows].sort((x, y) => eqRank(x[6]) - eqRank(y[6]) || ifRank(x[4]) - ifRank(y[4]))[0][0];
   const method = (["talk_test", "heart_rate", "rpe"] as const).find((m) => ri.coach.intensityMethods.includes(m) && (m !== "heart_rate" || ri.zones)) ?? "rpe";
-  // Days: non-resistance available days first, then resistance days (as a separate session).
   const free = b.availableDays.filter((d) => !res.has(d));
   const n = start >= 90 ? 3 : 2;
   const days = [...free, ...b.availableDays.filter((d) => res.has(d))].slice(0, n);
-  const minutes = Math.max(10, Math.floor(start / days.length / 5) * 5);
-  const intensity = role === "recovery" ? "easy" : "moderate";
+  const roomOf = (d: DayOfWeek) => cap.get(d)?.ownVisitMax ?? 180;
+  const base = Math.max(10, five(start / days.length));
+  const intensity = optional || role === "recovery" ? "easy" : "moderate";
   const strength = ["hypertrophy", "strength", "recomposition", "weight_gain"].includes(ri.goal.primary ?? "") || ri.hybrid;
-  const hardOk = b.maxHardSessions > 0 && !beginner && role !== "recovery" && (role === "conditioning" || role === "aerobic_base");
+  const hardOk = b.maxHardSessions > 0 && !reduced && (role === "conditioning" || role === "aerobic_base");
   const nextDay = (d: DayOfWeek) => DAY_ORDER[(DAY_ORDER.indexOf(d) + 1) % 7];
   const intervalModality = rows.filter((r) => r[2].includes("I")).sort((x, y) => (strength ? ifRank(x[4]) - ifRank(y[4]) : 0) || eqRank(x[6]) - eqRank(y[6]))[0]?.[0];
-  const sessions = days.map((day, i) => {
-    const hard = hardOk && i === 0 && intervalModality && !(strength && "MH".includes(cardioModality(intervalModality)!.lowerBodyInterference[0].toUpperCase()) && (res.get(day)?.lowerBody || res.get(nextDay(day))?.lowerBody));
-    const placement = res.has(day) ? "separate_session" : "separate_day";
-    if (hard) return { day, type: "intervals", modality: intervalModality, minutes: Math.max(minutes, 20), intensity: "vigorous", effort: [7, 8], ...(method === "heart_rate" && ri.zones ? { hrPct: ri.zones.bands.vigorous } : {}), intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] }, placement, purpose: "Raise aerobic capacity with short intervals." };
-    return { day, type: "steady", modality: steady, minutes, intensity, effort: EFFORT[intensity], ...(method === "talk_test" ? { talk: TALK[intensity] } : {}), ...(method === "heart_rate" && ri.zones ? { hrPct: ri.zones.bands[intensity] } : {}), placement, purpose: "Build aerobic base at a sustainable effort." };
+  const hardDay = hardOk && intervalModality ? days.find((d) => !(strength && "MH".includes(cardioModality(intervalModality)!.lowerBodyInterference[0].toUpperCase()) && (res.get(d)?.lowerBody || res.get(nextDay(d))?.lowerBody))) : undefined;
+  const placementOf = (d: DayOfWeek) => (res.has(d) ? "separate_session" : "separate_day");
+  const sessions = days.map((day) => {
+    const minutes = Math.min(roomOf(day), day === hardDay ? Math.max(base, 20) : base);
+    if (day === hardDay) return { day, type: "intervals", modality: intervalModality, minutes, intensity: "vigorous", effort: [7, 8], ...(method === "heart_rate" && ri.zones ? { hrPct: ri.zones.bands.vigorous } : {}), intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] }, placement: placementOf(day), optional: false, purpose: "Raise aerobic capacity with short intervals." };
+    return { day, type: "steady", modality: steady, minutes, intensity, effort: EFFORT[intensity], ...(method === "talk_test" ? { talk: TALK[intensity] } : {}), ...(method === "heart_rate" && ri.zones ? { hrPct: ri.zones.bands[intensity] } : {}), placement: placementOf(day), optional, purpose: "Build aerobic base at a sustainable effort." };
   });
-  const total = sessions.reduce((t, s) => t + s.minutes, 0);
-  const hard = sessions.filter((s) => s.type === "intervals" || s.intensity === "vigorous").length;
-  const cap = Math.min(b.maxWeeklyIncreasePct, 10) / 100;
-  const progression: Array<{ week: number; minutes: number; hardSessions: number; change: string }> = [];
-  for (let w = 1, m = total; w <= 6; w++) {
-    progression.push({ week: w, minutes: m, hardSessions: hard, change: w === 1 ? "Starting week." : "Add a few minutes to each session." });
-    m = Math.min(range ? range[1] : m, Math.floor(m * (1 + cap)));
+  const total = (ss: Array<{ minutes: number }>) => ss.reduce((t, s) => t + s.minutes, 0);
+  const inc = Math.min(b.maxWeeklyIncreasePct, 10) / 100;
+  const down = ri.endurance?.downEvery?.[1];
+  const ceiling = Math.min(range ? range[1] : Infinity, ri.capacity.weeklyMaxMinutes ?? Infinity);
+  const progression: Array<{ week: number; sessions: Array<Record<string, unknown>>; change: string }> = [];
+  let prev = sessions.map((s) => ({ day: s.day, type: s.type, modality: s.modality, minutes: s.minutes, intensity: s.intensity, placement: s.placement, optional: s.optional }));
+  for (let w = 2; w <= 6; w++) {
+    let next = prev.map((s) => ({ ...s, minutes: Math.min(roomOf(s.day as DayOfWeek), five(s.minutes * (1 + inc))) }));
+    if (total(next) > ceiling || total(next) <= total(prev)) next = prev.map((s) => ({ ...s }));
+    if (down && w === down) next = prev.map((s) => ({ ...s, minutes: five(s.minutes * 0.8) }));
+    progression.push({ week: w, sessions: next, change: down && w === down ? "Down week." : "Add a few minutes where there's room." });
+    prev = next;
   }
   const steps = ri.coach.rules.find((r) => r[1] === "steps/day")?.[2] as number[] | undefined;
   const fact = Object.keys(ri.client.facts)[0];
   const refs = { coach: ri.coach.rules[0] ? [ri.coach.rules[0][0]] : [], client: fact ? [fact] : [], evidence: ri.evidence[0] ? [ri.evidence[0].ref] : [] };
+  const week1 = total(sessions);
   const plan: WireCardio["plan"] = {
     warranted: true,
     role,
+    dose: { vsCoachRange: !range ? "no_coach_range" : week1 < range[0] ? "below" : "within", why: reduced ? "Scripted: starts below the coach's range for this client's capacity/recovery." : "Scripted." },
     objective: { summary: `Scripted ${role.replace(/_/g, " ")} cardio.`, why: "Scripted." },
     intensityMethod: { primary: method, why: "Scripted: the coach's method." },
     sessions,
@@ -127,8 +144,9 @@ export function scriptedCardio(ri: CardioReasoningInput, tweak?: (p: WireCardio[
     adjustments: [{ signal: "Lifting performance drops for two weeks", afterWeeks: 2, what: "minutes", direction: "decrease", change: "Cut cardio minutes by a quarter." }],
     assumptions: ["Scripted assumption."],
     uncertainties: [{ about: "Current aerobic fitness", impact: "Week 1 may be too easy or too hard; the talk test corrects it." }],
-    coachQuestions: ri.conflicts.map((c) => ({ question: c, why: "Schedule conflict." })),
-    decisions: (["warranted", "role", "intensity", "schedule", "progression", ...(ri.resistance?.days.length ? ["interference"] : [])] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", ...refs })),
+    coachQuestions: [],
+    coachDecisions: ri.conflicts.map((c) => ({ conflict: c.id, question: c.text, options: ["Keep the approved program as is", "Move or shorten it (coach decides)"], recommended: 0, why: "Scripted." })),
+    decisions: (["warranted", "dose", "role", "intensity", "schedule", "progression", ...(ri.resistance?.days.length ? ["interference"] : []), ...(b.recoveryLimited ? ["recovery"] : [])] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", ...refs })),
   };
   tweak?.(plan);
   return { status: "PLAN", plan };
