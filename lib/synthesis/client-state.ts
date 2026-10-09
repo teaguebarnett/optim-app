@@ -51,6 +51,9 @@ export interface ClientState {
     recentConsistency: Fact<string>;
     /** How often they actually train now (not how often they could). */
     currentSessionsPerWeek: Fact<number>;
+    /** Cardio Reasoner V1 — how the client feels about cardio (enjoys / neutral / avoids). Not part of the resistance
+     * planning-state fingerprint (planning-state.ts reads explicit fields only). */
+    cardioPreference: Fact<string>;
     notes: Fact<string>;
   };
   equipment: {
@@ -216,6 +219,7 @@ export function deriveClientState(src: ClientStateSources): ClientState {
       experience: str("starting_point", "trainingExperience"),
       recentConsistency: str("starting_point", "recentConsistency"),
       currentSessionsPerWeek: num("starting_point", "weeklyFrequency"),
+      cardioPreference: str("fuel_recovery", "cardioPreference"),
       notes: str("starting_point", "trainingNotes"),
     },
     equipment: {

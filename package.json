@@ -109,7 +109,9 @@
     "verify:constraint-revalidation": "node --experimental-strip-types lib/synthesis/reasoner/verify-constraint-revalidation.mts",
     "verify:resynthesis-lifecycle": "node --experimental-strip-types lib/synthesis/reasoner/verify-resynthesis-lifecycle.mts",
     "verify:nutrition-reasoner": "node --experimental-strip-types lib/synthesis/reasoner/nutrition/verify-nutrition-reasoner.mts",
-    "eval:nutrition-reasoner": "node --experimental-strip-types lib/synthesis/reasoner/nutrition/eval/run-eval.mts"
+    "eval:nutrition-reasoner": "node --experimental-strip-types lib/synthesis/reasoner/nutrition/eval/run-eval.mts",
+    "verify:cardio-reasoner": "node --experimental-strip-types lib/synthesis/reasoner/cardio/verify-cardio-reasoner.mts",
+    "eval:cardio-reasoner": "node --experimental-strip-types lib/synthesis/reasoner/cardio/eval/run-eval.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",
