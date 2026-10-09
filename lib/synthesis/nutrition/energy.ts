@@ -1,8 +1,9 @@
 // Nutrition Reasoner V1 — deterministic energy and protein bounds. OPTIM computes; the Reasoner decides inside.
 //
 //   resting expenditure  Mifflin–St Jeor (sourced: concept.nutrition.energy_requirements#energy.ree_equation)
-//   maintenance          × activity multiplier RANGE — an internal heuristic (energy.activity_multipliers,
-//                        source_needed), always a range, corrected later by the bodyweight trend
+//   maintenance          × daily-activity multiplier RANGE — an internal heuristic (energy.activity_multipliers,
+//                        source_needed) — plus training cost from Compendium MET ranges (training_energy_cost):
+//                        (MET − 1) × kg × hours per session, averaged over the week. Always a range.
 //   goal band            maintenance ± the COACH's own rate (% bodyweight/week), sized with a static
 //                        energy-per-kg approximation (energy.energy_per_kg, source_needed)
 //   floor                never below predicted resting expenditure — an internal safety heuristic
@@ -29,8 +30,16 @@ export interface TrainingContext {
 
 /** Internal heuristic multipliers by daily activity outside training (source_needed). */
 const ACTIVITY: Record<string, [number, number]> = { mostly_sedentary: [1.2, 1.3], lightly_active: [1.3, 1.45], very_active: [1.45, 1.65] };
-/** Per weekly training hour, added to the multiplier (internal heuristic; endurance work costs more per hour). */
-const PER_TRAINING_HOUR: Record<TrainingContext["kind"], [number, number]> = { resistance: [0.02, 0.04], mixed: [0.03, 0.05], endurance: [0.04, 0.07] };
+/** Compendium MET ranges by training kind (concept.nutrition.training_energy_cost): resistance 02054–02050, mixed =
+ * circuit 02035–02040, endurance = running 12020–12070. Never a single value. */
+export const TRAINING_MET: Record<TrainingContext["kind"], [number, number]> = { resistance: [3.5, 6], mixed: [5, 7.5], endurance: [7.5, 11] };
+
+/** One session's energy cost above rest, kcal: (MET − 1) × kg × hours (1 MET = 1 kcal/kg/hour). */
+export function sessionKcal(t: TrainingContext, kg: number): { low: number; high: number } {
+  const [m0, m1] = TRAINING_MET[t.kind];
+  const h = t.minutesPerSession / 60;
+  return { low: Math.round(((m0 - 1) * kg * h) / 10) * 10, high: Math.round(((m1 - 1) * kg * h) / 10) * 10 };
+}
 
 const r50 = (n: number) => Math.round(n / 50) * 50;
 const r5 = (n: number) => Math.round(n / 5) * 5;
@@ -38,6 +47,10 @@ const r5 = (n: number) => Math.round(n / 5) * 5;
 export interface EnergyEstimate {
   /** Resting expenditure range (kcal/day): a range when sex is unknown, ± the equation's error otherwise. */
   restingKcal: { low: number; high: number };
+  /** One training session's cost above rest (Compendium MET range); null without a training context. */
+  sessionKcal: { low: number; high: number } | null;
+  /** kcal/day that corresponds to 1% bodyweight change per week (static approximation). */
+  kcalPerPctPerWeek: number;
   activityFactor: { low: number; high: number; basis: string[] };
   maintenanceKcal: { low: number; high: number };
   /** The band a target may lie in for this goal and the coach's rate; null when the goal doesn't set one. */
@@ -78,11 +91,11 @@ export function estimateEnergy(params: { client: ClientState; goal: GoalClass | 
   const [a0, a1] = (activity && ACTIVITY[activity]) || [1.2, 1.5];
   basis.push(activity && ACTIVITY[activity] ? `daily activity: ${activity.replace(/_/g, " ")}` : "daily activity not reported — widest range");
   const t = params.training;
-  const hours = t ? (t.sessionsPerWeek * t.minutesPerSession) / 60 : 0;
-  const [h0, h1] = t ? PER_TRAINING_HOUR[t.kind] : [0, 0];
-  if (t) basis.push(`${t.sessionsPerWeek} ${t.kind} sessions/week × ~${t.minutesPerSession} min (${t.source === "approved_program" ? "approved program" : "client's current habit"})`);
-  const factor = { low: +(a0 + hours * h0).toFixed(2), high: +(a1 + hours * h1).toFixed(2), basis };
-  const maintenance = { low: r50(resting[0] * factor.low), high: r50(resting[1] * factor.high) };
+  const session = t ? sessionKcal(t, kg) : null;
+  const perDayTraining = t && session ? { low: (session.low * Math.min(7, t.sessionsPerWeek)) / 7, high: (session.high * Math.min(7, t.sessionsPerWeek)) / 7 } : { low: 0, high: 0 };
+  if (t && session) basis.push(`${t.sessionsPerWeek} ${t.kind} sessions/week × ~${t.minutesPerSession} min (${t.source === "approved_program" ? "approved program" : "client's current habit"}): ${session.low}–${session.high} kcal per session above rest (Compendium ${TRAINING_MET[t.kind][0]}–${TRAINING_MET[t.kind][1]} MET)`);
+  const factor = { low: a0, high: a1, basis };
+  const maintenance = { low: r50(resting[0] * factor.low + perDayTraining.low), high: r50(resting[1] * factor.high + perDayTraining.high) };
   const floorKcal = r50(resting[0]);
 
   // Goal band from the coach's rate (% bodyweight/week), set around the CENTRAL maintenance estimate: the range above
@@ -106,18 +119,21 @@ export function estimateEnergy(params: { client: ClientState; goal: GoalClass | 
   } else if (g === "strength") {
     targetBand = band(mid, mid * 1.1, `central maintenance (~${r50(mid)} kcal) to a small surplus (up to 10%) supporting strength training`);
   } else if (g) {
-    targetBand = band(mid * 0.95, mid * 1.05, `central maintenance (~${r50(mid)} kcal) ± 5%${params.minor ? " — OPTIM never sets an energy deficit for a minor" : ""}`);
+    // A minor's band never starts below their own central maintenance estimate (no deficit, ever).
+    targetBand = band(params.minor ? mid : mid * 0.95, mid * 1.05, params.minor ? `central maintenance (~${r50(mid)} kcal) to +5% — OPTIM never sets an energy deficit for a minor` : `central maintenance (~${r50(mid)} kcal) ± 5%`);
   }
   if (targetBand && targetBand.low > targetBand.high) targetBand = { ...targetBand, low: targetBand.high };
   return {
     ok: true,
     estimate: {
       restingKcal: { low: r50(resting[0]), high: r50(resting[1]) },
+      sessionKcal: session,
+      kcalPerPctPerWeek: Math.round((kg * KCAL_PER_KG) / 7 / 100),
       activityFactor: factor,
       maintenanceKcal: maintenance,
       targetBand,
       floorKcal,
-      heuristics: ["Activity multipliers are an internal heuristic (no verified source); the bodyweight trend corrects them.", `Energy per kg of change is a static approximation (~${KCAL_PER_KG} kcal/kg) that overstates long-term change.`, "Never below predicted resting expenditure — internal safety heuristic."],
+      heuristics: ["Daily-activity multipliers are an internal heuristic (no verified source); training cost uses Compendium MET ranges; the bodyweight trend corrects both.", `Energy per kg of change is a static approximation (~${KCAL_PER_KG} kcal/kg) that overstates long-term change.`, "Never below predicted resting expenditure — a minimum OPTIM never crosses, not evidence that a target is safe. Clients under 18 are never given a deficit: anything below their own central maintenance estimate goes to human review."],
     },
   };
 }
@@ -135,4 +151,24 @@ export function proteinGrams(params: { client: ClientState; method: NutritionMet
   const grams = p.basis === "fixed_grams" ? { low: r5(p.range.min), high: r5(p.range.max) } : { low: r5(p.range.min * perUnit), high: r5(p.range.max * perUnit) };
   const kg = weightLb ? weightLb * KG_PER_LB : null;
   return { ok: true, grams, perKg: kg ? { low: +(grams.low / kg).toFixed(2), high: +(grams.high / kg).toFixed(2) } : null, basis: `${p.range.min}–${p.range.max} ${p.unit || p.basis.replace(/_/g, " ")}${ref ? ` × ${ref} lb${p.basis.startsWith("per_kg") ? " (in kg)" : ""}` : ""}` };
+}
+
+/** The weekly bodyweight change an energy range implies against OPTIM's maintenance estimate — a CALCULATED estimate
+ * (static energy-per-kg approximation), never a promise. `central` uses central maintenance; `plausible` spans the
+ * maintenance uncertainty. Negative = loss. % bodyweight per week. */
+export function impliedRate(e: EnergyEstimate, kcal: { min: number; max: number }): { central: { low: number; high: number }; plausible: { low: number; high: number } } {
+  const mid = (e.maintenanceKcal.low + e.maintenanceKcal.high) / 2;
+  const pct = (kcalDelta: number) => +(kcalDelta / e.kcalPerPctPerWeek).toFixed(2);
+  return { central: { low: pct(kcal.min - mid), high: pct(kcal.max - mid) }, plausible: { low: pct(kcal.min - e.maintenanceKcal.high), high: pct(kcal.max - e.maintenanceKcal.low) } };
+}
+
+/** Material contradictions between the client's stated schedule and the training the nutrition must support. */
+export function scheduleConflicts(c: ClientState, t: TrainingContext | null): string[] {
+  if (!t || t.source !== "approved_program") return [];
+  const out: string[] = [];
+  const len = isKnown(c.schedule.maxSessionLength) ? c.schedule.maxSessionLength.value : null;
+  if (len && !len.openEnded && t.minutesPerSession > len.minutes) out.push(`The approved program's sessions run ~${t.minutesPerSession} min, but the client reported a ${len.minutes}-min maximum — the training energy cost depends on which is current.`);
+  const days = isKnown(c.schedule.availableDays) ? c.schedule.availableDays.value.length : null;
+  if (days !== null && t.sessionsPerWeek > days) out.push(`The approved program has ${t.sessionsPerWeek} sessions/week, but the client reported ${days} available day(s).`);
+  return out;
 }

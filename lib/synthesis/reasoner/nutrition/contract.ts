@@ -7,13 +7,15 @@
 import { arr, int, label, obj, oneOf, optStr, pair, SchemaError, str, strList } from "../contract.ts";
 import { NUTRITION_APPROACHES, type NutritionApproach } from "../../nutrition/method.ts";
 
-export const NUTRITION_PROMPT_VERSION = "reasoner-nutrition-v1.0.0";
+export const NUTRITION_PROMPT_VERSION = "reasoner-nutrition-v1.1.1";
 
 export const NUTRITION_FOCI = ["fat_loss", "muscle_gain", "recomposition", "maintenance", "performance", "health"] as const;
 export const NUTRITION_TOPICS = ["objective", "energy", "protein", "carbs_fat", "meal_structure", "timing", "food_selection", "monitoring", "adjustment", "other"] as const;
 export const DAY_STRATEGIES = ["same_calories_shift_carbs", "higher_on_training_days", "fuel_for_session", "identical_every_day"] as const;
 
 export type Grams = { min: number; max: number };
+export const ADJUSTMENT_DIRECTIONS = ["increase", "decrease", "none"] as const;
+export type AdjustmentDirection = (typeof ADJUSTMENT_DIRECTIONS)[number];
 
 export interface NutritionMealSlot {
   name: string;
@@ -38,7 +40,9 @@ export interface NutritionPlan {
   objective: { focus: (typeof NUTRITION_FOCI)[number]; summary: string; rationale: string };
   approach: { id: NutritionApproach; rationale: string };
   /** target = a kcal range; baseline_first = establish current intake/trend before a number; none = no calorie target. */
-  energy: { mode: "target" | "baseline_first" | "none"; kcal: Grams | null; rationale: string };
+  /** rate: the intended weekly bodyweight change, % bodyweight/week, signed (negative = loss) — validated against
+   * OPTIM's calculation from kcal, never trusted as written (V1.1). */
+  energy: { mode: "target" | "baseline_first" | "none"; kcal: Grams | null; rate: Grams | null; rationale: string };
   dayVariation: { strategy: (typeof DAY_STRATEGIES)[number]; trainingDayKcal: Grams | null; restDayKcal: Grams | null; note: string | null } | null;
   protein: { grams: Grams | null; rationale: string };
   carbohydrate: { grams: Grams | null; rationale: string };
@@ -50,7 +54,9 @@ export interface NutritionPlan {
   hydration: string;
   supplements: Array<{ name: string; why: string }>;
   monitoring: { measures: string[]; cadence: string; reviewAfterWeeks: number };
-  adjustments: Array<{ signal: string; afterWeeks: number; lever: string; change: string }>;
+  /** V1.1: direction (of energy intake) and kcal (magnitude per day) are the adjustment's meaning; `change` is only its
+   * explanation. Safety and lever checks read the structure, never the wording. */
+  adjustments: Array<{ signal: string; afterWeeks: number; lever: string; direction: AdjustmentDirection; kcal: Grams | null; change: string }>;
   assumptions: string[];
   uncertainties: Array<{ about: string; impact: string }>;
   coachQuestions: Array<{ question: string; why: string }>;
@@ -90,7 +96,7 @@ export function parseNutritionOutput(raw: unknown): { ok: true; output: Nutritio
     const plan: NutritionPlan = {
       objective: { focus: oneOf(ob.focus, "objective.focus", NUTRITION_FOCI), summary: str(ob.summary, "objective.summary", 240), rationale: str(ob.why, "objective.why", 500) },
       approach: { id: oneOf(ap.id, "approach.id", NUTRITION_APPROACHES), rationale: str(ap.why, "approach.why", 400) },
-      energy: { mode: oneOf(en.mode, "energy.mode", ["target", "baseline_first", "none"] as const), kcal: kcal(en.kcal, "energy.kcal"), rationale: str(en.why, "energy.why", 500) },
+      energy: { mode: oneOf(en.mode, "energy.mode", ["target", "baseline_first", "none"] as const), kcal: kcal(en.kcal, "energy.kcal"), rate: en.rate === undefined || en.rate === null ? null : pair(en.rate, "energy.rate", -2, 2, false), rationale: str(en.why, "energy.why", 500) },
       dayVariation: dv ? { strategy: oneOf(dv.strategy, "dayVariation.strategy", DAY_STRATEGIES), trainingDayKcal: kcal(dv.trainingDayKcal, "dayVariation.trainingDayKcal"), restDayKcal: kcal(dv.restDayKcal, "dayVariation.restDayKcal"), note: optStr(dv.note, "dayVariation.note", 300) } : null,
       protein: { grams: grams(pr.g, "protein.g", 400), rationale: str(pr.why, "protein.why", 400) },
       carbohydrate: { grams: grams(cb.g, "carbohydrate.g", 1200), rationale: str(cb.why, "carbohydrate.why", 400) },
@@ -120,7 +126,7 @@ export function parseNutritionOutput(raw: unknown): { ok: true; output: Nutritio
       monitoring: { measures: strList(mo.measures, "monitoring.measures", 8, 40), cadence: str(mo.cadence, "monitoring.cadence", 200), reviewAfterWeeks: int(mo.reviewAfterWeeks, "monitoring.reviewAfterWeeks", 1, 12) },
       adjustments: arr(p.adjustments, "plan.adjustments", 6).map((x, i) => {
         const a = obj(x, `adjustments[${i}]`);
-        return { signal: str(a.signal, `adjustments[${i}].signal`, 240), afterWeeks: int(a.afterWeeks, `adjustments[${i}].afterWeeks`, 1, 12), lever: str(a.lever, `adjustments[${i}].lever`, 40), change: str(a.change, `adjustments[${i}].change`, 240) };
+        return { signal: str(a.signal, `adjustments[${i}].signal`, 240), afterWeeks: int(a.afterWeeks, `adjustments[${i}].afterWeeks`, 1, 12), lever: str(a.lever, `adjustments[${i}].lever`, 40), direction: oneOf(a.direction, `adjustments[${i}].direction`, ADJUSTMENT_DIRECTIONS), kcal: a.kcal === undefined || a.kcal === null ? null : pair(a.kcal, `adjustments[${i}].kcal`, 1, 1000, true), change: str(a.change, `adjustments[${i}].change`, 240) };
       }),
       assumptions: strList(p.assumptions, "plan.assumptions", 10, 300),
       uncertainties: (p.uncertainties === undefined ? [] : arr(p.uncertainties, "plan.uncertainties", 10)).map((x, i) => {
@@ -156,12 +162,15 @@ AUTHORITY — higher always wins
 
 DESIGN PRINCIPLES
 - Decide the objective and strategy first, then numbers, then structure. Explain the 3–6 decisions a coach would question.
-- Energy: "target" gives a kcal RANGE (≤ 300 kcal wide) chosen inside bounds.energyKcal from the goal, rate and uncertainty; "baseline_first" when the coach adjusts from current intake that isn't known (say how to establish it); "none" when the coach sets no calorie targets or the approach is habit-based/portion-based without numbers. Estimates are ranges, never precision.
-- Protein, carbohydrate, fat: ranges in grams/day when the approach uses them (full_macros: all three; calories_protein / meal_plan: protein, others optional; portion_guides / habit_based: none — express guidance through meals, portions and habits). Macros must be arithmetically consistent with the energy range (4/4/9 kcal per g). Fat never pushed below what the evidence supports.
-- Training: say how nutrition supports this client's training load and recovery (around-session timing, carbohydrate for higher-volume work).
+- Energy: "target" gives a kcal RANGE (≤ 300 kcal wide) chosen inside bounds.energyKcal — the WEEKLY-AVERAGE daily intake — from the goal, rate and uncertainty; "baseline_first" when the coach adjusts from current intake that isn't known (say how to establish it); "none" when the coach sets no calorie targets or the approach is habit-based/portion-based without numbers. Estimates are ranges, never precision.
+- Rate: give "rate" — the weekly bodyweight change you intend, % bodyweight/week, negative for loss — consistent with your kcal: OPTIM computes the change as (kcal − bounds.centralMaintenanceKcal) ÷ bounds.kcalPerPctPerWeek and rejects a rate that doesn't match. Don't restate numeric rates in prose; OPTIM shows the coach its own calculation and its uncertainty. No rate for "none".
+- Protein, carbohydrate, fat: ranges in grams/day when the approach uses them (full_macros: all three; calories_protein / meal_plan: protein, others optional; portion_guides / habit_based: none — express guidance through meals, portions and habits). Macros must FIT the energy range (4/4/9 kcal per g): the total of all three minimums must not fall below the energy minimum, and the total of all three maximums must not exceed the energy maximum, each within bounds.macroToleranceKcal; flexibility means trading carbohydrate and fat within the same calories, not ranges wide enough to change the calories. Fat never pushed below what the evidence supports.
+- Training: say how nutrition supports this client's training load and recovery (around-session timing, carbohydrate for higher-volume work). bounds.sessionKcal is one session's cost above rest (Compendium MET range). With the coach's "higher_on_training_days" or "fuel_for_session", give trainingDayKcal and restDayKcal so that (a) their difference reflects bounds.sessionKcal for this session (not a token amount) and (b) their weekly average — training.sessionsPerWeek training days, the rest rest days — stays inside the energy range; individual days may sit above and below it. Address every item in training.conflicts in "coachQuestions".
 - Meals: perDay inside the coach's range (if set) and the client's schedule; each slot has a timing RELATIVE to the day or training (no invented clock times), an "intent" (WHY the meal exists — never a food list) and food ids from "foods". Structure vs flexibility follows the approach and the client's predictability and obstacles.
 - Foods: choose practical food ids from "foods" (prep effort matters for busy clients); substitutions swap like for like (same role) and stay inside restrictions. Never state grams, calories or macros for an individual food — OPTIM has no verified food values; portions come from the food's own household portion.
-- Monitoring: measures from the coach's list; reviewAfterWeeks inside the coach's data threshold. Adjustments: what signal over how many weeks moves which lever (the coach's levers, in their order), by a modest, specific step — proposals for the coach, never automatic changes.
+- Monitoring: measures from the coach's list; reviewAfterWeeks inside the coach's data threshold. Adjustments: what signal over how many weeks moves which lever (the coach's levers, in their order), by a modest, specific step — proposals for the coach, never automatic changes. Each adjustment states its "direction" — the effect on ENERGY INTAKE: "increase", "decrease" or "none" (activity, habit or appetite levers change no intake) — and, when intake changes in a numeric strategy, "kcal": [min,max] per day as positive numbers. Levers mean what they say: add_calories and calorie_dense only increase; habits, steps, cardio, training_volume, reduce_activity and appetite_adherence change no intake; calories may go either way. To slow a gain that runs too fast when the coach lists no lever for it, use lever "calories" with direction "decrease". The structure is the adjustment; "change" only explains it.
+- Ranges are checked at their WORST CASE, never clipped: an energy range must lie wholly inside bounds.energyKcal and at or above bounds.floorKcal; a "decrease" adjustment lands at (energy kcal minimum − adjustment kcal maximum), which must stay at or above bounds.floorKcal — e.g. energy [1450,1650] with kcal [100,150] reaches 1300; an "increase" lands at (energy kcal maximum + adjustment kcal maximum). bounds.floorKcal (predicted resting expenditure) is a minimum OPTIM never crosses, not evidence that a target is safe; where a decrease would cross it, use a lever that changes no intake or a smaller amount.
+- Clients under 18 (safety.minor): never propose an intake decrease, a fat-loss focus, or energy (including the weekly average of day targets, at its worst case) below bounds.minorNoDeficitKcal — this client's own central maintenance estimate. Fuel training and growth; if a decrease might ever be warranted (e.g. gain faster than intended), put it in "coachQuestions" for the coach and a qualified professional to decide, not in "adjustments".
 - Uncertainty: name what you assumed and what could make the estimate wrong. Ask the coach what you need ("coachQuestions") — a missing fact that changes the strategy materially is NEEDS_INPUT; otherwise prepare the useful partial strategy and ask.
 - Never invent client facts. Medical questions go to the coach.
 
@@ -169,7 +178,7 @@ OUTPUT — one JSON object, no prose. Keep text short (one sentence per field).
 {"status":"PLAN","plan":{
  "objective":{"focus":"fat_loss"|"muscle_gain"|"recomposition"|"maintenance"|"performance"|"health","summary":str,"why":str},
  "approach":{"id":<one of coach.approaches>,"why":str},
- "energy":{"mode":"target"|"baseline_first"|"none","kcal":[min,max] (target only),"why":str},
+ "energy":{"mode":"target"|"baseline_first"|"none","kcal":[min,max] (target only),"rate":[min,max] (% bodyweight/week, negative = loss; omit for "none"),"why":str},
  "dayVariation":{"strategy":<coach training/rest strategy>,"trainingDayKcal":[min,max] or omit,"restDayKcal":[min,max] or omit,"note":str or omit} (only when the coach has a training/rest strategy and energy is a target),
  "protein":{"g":[min,max] or null,"why":str},"carbohydrate":{"g":[min,max] or null,"why":str},"fat":{"g":[min,max] or null,"why":str},
  "meals":{"perDay":int,"why":str,"slots":[{"name":str,"timing":str,"intent":str,"foods":[food ids],"proteinFocus":bool}]},
@@ -177,7 +186,7 @@ OUTPUT — one JSON object, no prose. Keep text short (one sentence per field).
  "foods":{"emphasize":[food ids],"substitutions":[{"for":<food id>,"use":[food ids],"why":str}]},
  "habits":[≤6 str],"hydration":str,"supplements":[{"name":str,"why":str}],
  "monitoring":{"measures":[coach measure ids],"cadence":str,"reviewAfterWeeks":int},
- "adjustments":[{"signal":str,"afterWeeks":int,"lever":<coach lever id or "none">,"change":str}],
+ "adjustments":[{"signal":str,"afterWeeks":int,"lever":<coach lever id, "calories", or "none">,"direction":"increase"|"decrease"|"none","kcal":[min,max] (when intake changes in a numeric strategy),"change":str}],
  "assumptions":[str],"uncertainties":[{"about":str,"impact":str}],"coachQuestions":[{"question":str,"why":str}],
  "decisions":[≤12 {"topic":"objective"|"energy"|"protein"|"carbs_fat"|"meal_structure"|"timing"|"food_selection"|"monitoring"|"adjustment"|"other","decision":str,"because":str,"coach":[keys],"client":[client.facts keys],"evidence":[refs]}]
 }}

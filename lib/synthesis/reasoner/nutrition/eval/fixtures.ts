@@ -72,14 +72,33 @@ export function scriptedNutrition(ri: NutritionReasoningInput, tweak?: (p: WireN
   const goal = ri.goal.primary;
   const focus = goal === "fat_loss" ? "fat_loss" : goal === "hypertrophy" || goal === "weight_gain" || goal === "strength" ? "muscle_gain" : goal === "recomposition" ? "recomposition" : goal === "maintenance" ? "maintenance" : goal === "general_fitness" ? "health" : "performance";
   const coachKey = ruleKey(ri, "nutrition approaches") ?? ri.coach.rules[0]?.[0];
+  // A decrease that would cross a floor isn't proposed — the next coach lever that changes no intake is used instead.
+  const adjustment = () => {
+    // Worst case: a decrease lands at energy minimum − 150. Minors never get a decrease.
+    const floor = ri.bounds.floorKcal ?? 0;
+    const lever = levers.find((l) => leverDirection(l, goal) !== "decrease" || (!ri.safety.minor && (!kcal || kcal[0] - 150 >= floor))) ?? "none";
+    const direction = leverDirection(lever, goal);
+    return { signal: "the weekly average moves outside the expected rate", afterWeeks: th[0], lever, direction, ...(direction !== "none" ? { kcal: [100, 150] } : {}), change: "Adjust by a modest step." };
+  };
+  // V1.1: the stated rate is the one the energy implies; day targets keep the weekly average and size to the session.
+  const central = ri.bounds.centralMaintenanceKcal;
+  const kpp = ri.bounds.kcalPerPctPerWeek;
+  const rate = kcal && central && kpp ? [+((kcal[0] - central) / kpp).toFixed(2), +((kcal[1] - central) / kpp).toFixed(2)] : null;
+  const dayKcal = (strategy: string, k: number[]) => {
+    if (strategy === "same_calories_shift_carbs" || strategy === "identical_every_day") return { trainingDayKcal: k, restDayKcal: k };
+    const n = Math.min(6, Math.max(1, ri.training?.sessionsPerWeek ?? 3));
+    const d = ri.bounds.sessionKcal ? Math.round((ri.bounds.sessionKcal[0] + ri.bounds.sessionKcal[1]) / 2) : 300;
+    const rest = k.map((x) => Math.round(x - (n / 7) * d));
+    return { trainingDayKcal: rest.map((x) => x + d), restDayKcal: rest };
+  };
   const fact = Object.keys(ri.client.facts)[0];
   const ev = ri.evidence[0]?.ref;
   const refs = { coach: coachKey ? [coachKey] : [], client: fact ? [fact] : [], evidence: ev ? [ev] : [] };
   const plan: WireNutrition["plan"] = {
     objective: { focus, summary: `Scripted ${focus.replace(/_/g, " ")} strategy.`, why: "Scripted." },
     approach: { id: approach, why: "Scripted: the coach's first numeric approach." },
-    energy: { mode, ...(kcal ? { kcal } : {}), why: mode === "baseline_first" ? "Two weeks of normal eating, logged, sets the baseline." : "Scripted." },
-    ...(strategy && kcal ? { dayVariation: { strategy, ...(strategy === "same_calories_shift_carbs" ? { trainingDayKcal: kcal, restDayKcal: kcal } : {}), note: "Scripted." } } : {}),
+    energy: { mode, ...(kcal ? { kcal } : {}), ...(rate ? { rate } : {}), why: mode === "baseline_first" ? "Two weeks of normal eating, logged, sets the baseline." : "Scripted." },
+    ...(strategy && kcal ? { dayVariation: { strategy, ...dayKcal(strategy, kcal), note: "Scripted." } } : {}),
     protein: { g: p, why: "Scripted." },
     carbohydrate: { g: approach === "full_macros" ? carbs : null, why: "Scripted." },
     fat: { g: approach === "full_macros" ? fat : null, why: "Scripted." },
@@ -90,7 +109,7 @@ export function scriptedNutrition(ri: NutritionReasoningInput, tweak?: (p: WireN
     hydration: "Drink to thirst and replace sweat losses around training.",
     supplements: [],
     monitoring: { measures, cadence: "Weekly check-in.", reviewAfterWeeks: th[0] },
-    adjustments: mode === "target" ? [{ signal: "the weekly average moves outside the expected rate", afterWeeks: th[0], lever: levers[0] ?? "none", change: "Adjust by about 100–150 kcal/day." }] : [],
+    adjustments: mode === "target" ? [adjustment()] : [],
     assumptions: ["Scripted assumption."],
     uncertainties: [{ about: "Energy expenditure", impact: "The estimate may be off; the trend corrects it." }],
     coachQuestions: [],
@@ -98,4 +117,11 @@ export function scriptedNutrition(ri: NutritionReasoningInput, tweak?: (p: WireN
   };
   tweak?.(plan);
   return { status: "PLAN", plan };
+}
+
+/** The intake direction a lever implies for a goal (scripted model only). */
+function leverDirection(lever: string, goal: string | null): "increase" | "decrease" | "none" {
+  if (lever === "add_calories" || lever === "calorie_dense") return "increase";
+  if (lever === "calories") return goal === "fat_loss" ? "decrease" : "increase";
+  return "none";
 }

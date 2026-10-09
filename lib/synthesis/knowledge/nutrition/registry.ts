@@ -7,7 +7,7 @@ import type { FitnessKnowledgeRegistry } from "../types.ts";
 import { NUTRITION_CONCEPTS, NUTRITION_POPULATIONS } from "./concepts.ts";
 import { ALL_NUTRITION_SOURCES } from "./sources.ts";
 
-export const NUTRITION_KNOWLEDGE_VERSION = "nutrition-0.1.0";
+export const NUTRITION_KNOWLEDGE_VERSION = "nutrition-0.2.0";
 
 export const NUTRITION_KNOWLEDGE: FitnessKnowledgeRegistry = createKnowledgeRegistry({
   version: NUTRITION_KNOWLEDGE_VERSION,

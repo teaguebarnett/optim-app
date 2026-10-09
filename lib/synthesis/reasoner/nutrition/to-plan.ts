@@ -9,6 +9,7 @@
 
 import type { AssignedNutritionPlan } from "../../../types.ts";
 import { food } from "../../knowledge/nutrition/foods.ts";
+import { adjustmentSummary } from "./validate.ts";
 import type { NutritionPlan } from "./contract.ts";
 
 const mid = (r: { min: number; max: number }) => Math.round((r.min + r.max) / 2);
@@ -40,7 +41,7 @@ export function toAssignedNutritionPlanDraft(plan: NutritionPlan): { ok: true; c
       supplementGuidance: plan.supplements.map((s) => `${s.name}: ${s.why}`).join(" "),
       adherenceStrategy: plan.habits.join(" "),
       metricsToMonitor: plan.monitoring.measures,
-      weeklyAdjustmentRule: plan.adjustments.map((a) => `If ${a.signal} for ${a.afterWeeks} week(s): ${a.change}`).join(" "),
+      weeklyAdjustmentRule: plan.adjustments.map((a) => `If ${a.signal} (${a.afterWeeks} wk): ${adjustmentSummary(a, plan.energy.kcal)}`).join(" "),
       sourceStrategyLabel: `Nutrition Reasoner proposal — ${plan.objective.summary}`,
     },
   };

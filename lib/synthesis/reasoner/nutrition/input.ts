@@ -12,9 +12,9 @@ import type { NutritionMethod } from "../../nutrition/method.ts";
 import type { EnergyEstimate, TrainingContext } from "../../nutrition/energy.ts";
 import type { NutritionSafety } from "../../nutrition/safety.ts";
 
-export const NUTRITION_REASONER_VERSION = "nutrition-reasoner-v1.0.0";
+export const NUTRITION_REASONER_VERSION = "nutrition-reasoner-v1.1.1";
 
-export const NUTRITION_TOPICS_RETRIEVED = ["energy_requirements", "rate_of_loss", "rate_of_gain", "protein", "protein_distribution", "carbohydrate", "dietary_fat", "recomposition", "diet_quality", "hydration", "adherence", "supplements", "energy_availability"];
+export const NUTRITION_TOPICS_RETRIEVED = ["energy_requirements", "training_energy_cost", "rate_of_loss", "rate_of_gain", "protein", "protein_distribution", "carbohydrate", "dietary_fat", "recomposition", "diet_quality", "hydration", "adherence", "supplements", "energy_availability"];
 
 export const FOOD_ROW_LEGEND = "id|name|roles|prep (none / minimal / cook)|household portion";
 
@@ -23,13 +23,21 @@ export interface NutritionReasoningInput {
   goal: { primary: string | null; secondary: string[]; success: string | null; targetWeightLb: number | null };
   coach: { method: string; scope: "full" | "guidance"; approaches: string[]; rules: Array<[string, string, unknown]>; wontAdvise: string[] };
   client: { facts: Record<string, unknown>; missing: string[] };
-  training: TrainingContext | null;
+  training: (TrainingContext & { conflicts: string[] }) | null;
   bounds: {
     energyKcal: [number, number] | null;
     energyRule: string | null;
     maintenanceKcal: [number, number] | null;
     restingKcal: [number, number] | null;
     floorKcal: number | null;
+    /** V1.1 — the weekly-change calculation, day-target sizing, macro fit and the minor floor, all computed by OPTIM. */
+    centralMaintenanceKcal: number | null;
+    kcalPerPctPerWeek: number | null;
+    sessionKcal: [number, number] | null;
+    macroToleranceKcal: number | null;
+    /** Minors only: OPTIM's central maintenance estimate for THIS client — intake below it is a restriction that goes
+     * to qualified human review. A detection line, never a "safe minimum". */
+    minorNoDeficitKcal: number | null;
     activityBasis: string[];
     proteinG: [number, number] | null;
     proteinPerKg: [number, number] | null;
@@ -42,6 +50,12 @@ export interface NutritionReasoningInput {
   foodsLegend: string;
   foods: string[];
 }
+
+/** How far the totals of the macro minimums/maximums may sit outside the energy range (rounding and food variance). */
+export const macroTolerance = (kcalMid: number) => Math.max(100, Math.round(kcalMid * 0.05));
+/** Minors: the client's own central maintenance estimate. Intake below it — or any decrease — is a restriction OPTIM
+ * never prescribes autonomously; it is routed to qualified human review (no universal calorie minimum is involved). */
+export const minorNoDeficit = (e: EnergyEstimate) => Math.round((e.maintenanceKcal.low + e.maintenanceKcal.high) / 2 / 50) * 50;
 
 export interface NutritionAllowed {
   coachRuleKeys: Set<string>;
@@ -62,6 +76,7 @@ export function buildNutritionInput(params: {
   protein: { grams: { low: number; high: number }; perKg: { low: number; high: number } | null; basis: string } | null;
   training: TrainingContext | null;
   safety: NutritionSafety;
+  conflicts: string[];
   promptVersion: string;
   notes: string[];
 }): { reasoning: NutritionReasoningInput; allowed: NutritionAllowed; evidenceRefs: string[] } {
@@ -117,13 +132,18 @@ export function buildNutritionInput(params: {
     goal: { primary: goalClass, secondary: input.goal.secondary.map((s) => s.class), success: isKnown(input.goal.successDefinition) ? input.goal.successDefinition.value : null, targetWeightLb: isKnown(c.goals.targetWeightLb) ? c.goals.targetWeightLb.value : null },
     coach: { method: `v${method.version}`, scope: method.scope, approaches: method.approaches.value, rules, wontAdvise: method.wontAdvise.value },
     client: { facts, missing },
-    training: params.training,
+    training: params.training ? { ...params.training, conflicts: params.conflicts } : null,
     bounds: {
       energyKcal: e?.targetBand ? [e.targetBand.low, e.targetBand.high] : null,
       energyRule: e?.targetBand?.rule ?? null,
       maintenanceKcal: e ? [e.maintenanceKcal.low, e.maintenanceKcal.high] : null,
       restingKcal: e ? [e.restingKcal.low, e.restingKcal.high] : null,
       floorKcal: e?.floorKcal ?? null,
+      centralMaintenanceKcal: e ? Math.round((e.maintenanceKcal.low + e.maintenanceKcal.high) / 2) : null,
+      kcalPerPctPerWeek: e?.kcalPerPctPerWeek ?? null,
+      sessionKcal: e?.sessionKcal ? [e.sessionKcal.low, e.sessionKcal.high] : null,
+      macroToleranceKcal: e?.targetBand ? macroTolerance((e.targetBand.low + e.targetBand.high) / 2) : null,
+      minorNoDeficitKcal: params.safety.minor && e ? minorNoDeficit(e) : null,
       activityBasis: e?.activityFactor.basis ?? [],
       proteinG: p ? [p.grams.low, p.grams.high] : null,
       proteinPerKg: p?.perKg ? [p.perKg.low, p.perKg.high] : null,

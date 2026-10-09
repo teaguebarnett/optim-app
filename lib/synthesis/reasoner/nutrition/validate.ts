@@ -6,7 +6,8 @@ import { citationErrors } from "../expand.ts";
 import { food } from "../../knowledge/nutrition/foods.ts";
 import type { NutritionMethod } from "../../nutrition/method.ts";
 import type { NutritionAllowed, NutritionReasoningInput } from "./input.ts";
-import type { Grams, NutritionPlan } from "./contract.ts";
+import { macroTolerance } from "./input.ts";
+import type { AdjustmentDirection, Grams, NutritionPlan } from "./contract.ts";
 
 export interface NutritionQualityFinding {
   code: string;
@@ -24,6 +25,34 @@ const FORBIDDEN: Array<[RegExp, string]> = [
 ];
 
 const within = (r: Grams, lo: number, hi: number, tol = 0) => r.min >= lo - tol && r.max <= hi + tol;
+const mid = (r: Grams) => (r.min + r.max) / 2;
+const pct = (r: Grams) => `${r.min > 0 ? "+" : ""}${r.min.toFixed(2)} to ${r.max > 0 ? "+" : ""}${r.max.toFixed(2)}`;
+
+/** What each lever can mean for ENERGY INTAKE (calibration lever vocabularies). The structure is the meaning: a lever
+ * that only adds intake can never carry a decrease, whatever the explanation says. */
+export const LEVER_DIRECTIONS: Record<string, AdjustmentDirection[]> = {
+  calories: ["increase", "decrease"],
+  add_calories: ["increase"],
+  calorie_dense: ["increase", "none"],
+  habits: ["none"],
+  steps: ["none"],
+  cardio: ["none"],
+  training_volume: ["none"],
+  reduce_activity: ["none"],
+  appetite_adherence: ["none"],
+  none: ["none"],
+};
+/** Largest single adjustment step OPTIM accepts (kcal/day) — "modest, specific steps". */
+export const MAX_ADJUSTMENT_KCAL = 500;
+
+/** The coach-facing meaning of an adjustment, rendered from its STRUCTURE (never from the model's wording). */
+export function adjustmentSummary(a: NutritionPlan["adjustments"][number], kcal: Grams | null): string {
+  if (a.direction === "none") return `No change to energy intake (lever: ${a.lever.replace(/_/g, " ")}).`;
+  const verb = a.direction === "increase" ? "Increase" : "Decrease";
+  if (!a.kcal) return `${verb} intake (lever: ${a.lever.replace(/_/g, " ")}) — by portion, not a kcal amount.`;
+  const after = kcal ? (a.direction === "increase" ? ` → about ${kcal.min + a.kcal.min}–${kcal.max + a.kcal.max} kcal` : ` → about ${kcal.min - a.kcal.max}–${kcal.max - a.kcal.min} kcal`) : "";
+  return `${verb} intake by ${a.kcal.min}–${a.kcal.max} kcal/day${after} (lever: ${a.lever.replace(/_/g, " ")}).`;
+}
 const fmt = (r: Grams) => `${r.min}–${r.max}`;
 
 function texts(plan: NutritionPlan): string[] {
@@ -39,9 +68,20 @@ function texts(plan: NutritionPlan): string[] {
   ].filter(Boolean);
 }
 
-export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: NutritionReasoningInput; allowed: NutritionAllowed; method: NutritionMethod; weightKg: number | null; goal: string | null }): { ok: boolean; errors: string[]; quality: NutritionQualityFinding[] } {
+/**
+ * errors       — contract, coach-method, numeric and provenance violations: the output is rejected (repair feedback).
+ * restrictions — for a client under 18, anything restrictive (a fat-loss focus, energy below their own central
+ *                maintenance, any intake decrease). OPTIM never prescribes these autonomously: they are repair
+ *                feedback while attempts remain, and otherwise route the proposal to qualified human review.
+ * quality      — never blocks; shown to the coach.
+ */
+export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: NutritionReasoningInput; allowed: NutritionAllowed; method: NutritionMethod; weightKg: number | null; goal: string | null }): { ok: boolean; errors: string[]; restrictions: string[]; quality: NutritionQualityFinding[] } {
   const { plan, reasoning: ri, allowed, method } = params;
   const errors: string[] = [];
+  const restrictions: string[] = [];
+  const minor = ri.safety.minor;
+  const noDeficit = ri.bounds.minorNoDeficitKcal;
+  const FLOOR_NOTE = "a minimum OPTIM never crosses — not evidence that a target is safe";
   const quality: NutritionQualityFinding[] = [];
   const b = ri.bounds;
   const numeric = NUMERIC_APPROACHES.has(plan.approach.id);
@@ -52,7 +92,7 @@ export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: 
   // Objective follows the goal.
   const expected: Record<string, string[]> = { fat_loss: ["fat_loss"], weight_gain: ["muscle_gain"], hypertrophy: ["muscle_gain"], recomposition: ["recomposition"], maintenance: ["maintenance", "health"], strength: ["muscle_gain", "performance", "maintenance"], endurance: ["performance"], event_performance: ["performance"], sport_performance: ["performance"], general_fitness: ["health", "maintenance"] };
   if (params.goal && expected[params.goal] && !expected[params.goal].includes(plan.objective.focus)) errors.push(`Objective "${plan.objective.focus}" doesn't match the client's ${params.goal.replace(/_/g, " ")} goal (expected ${expected[params.goal].join(" or ")}).`);
-  if (ri.safety.minor && plan.objective.focus === "fat_loss") errors.push("The client is a minor: no fat-loss strategy.");
+  if (minor && plan.objective.focus === "fat_loss") restrictions.push("A fat-loss focus for a client under 18.");
 
   // Energy — the coach's calorie method and OPTIM's bounds decide what's allowed.
   const cm = method.calorieMethod?.value ?? null;
@@ -68,9 +108,23 @@ export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: 
     else {
       if (!within(e.kcal, b.energyKcal[0], b.energyKcal[1], 25)) errors.push(`energy.kcal ${fmt(e.kcal)} is outside OPTIM's bounds ${b.energyKcal[0]}–${b.energyKcal[1]} (${b.energyRule}).`);
       if (e.kcal.max - e.kcal.min > 300) errors.push(`energy.kcal ${fmt(e.kcal)} is wider than 300 kcal — narrow it to a usable target range.`);
-      if (b.floorKcal !== null && e.kcal.min < b.floorKcal) errors.push(`energy.kcal ${fmt(e.kcal)} goes below predicted resting expenditure (${b.floorKcal} kcal).`);
+      if (b.floorKcal !== null && e.kcal.min < b.floorKcal) errors.push(`energy.kcal ${fmt(e.kcal)} goes below predicted resting expenditure (${b.floorKcal} kcal — ${FLOOR_NOTE}).`);
     }
   }
+
+  if (minor && noDeficit !== null && e.kcal && e.kcal.min < noDeficit) restrictions.push(`Energy ${fmt(e.kcal)} kcal reaches below this client's central maintenance estimate (~${noDeficit} kcal) — a deficit for a client under 18.`);
+
+  // Weight-change rate — OPTIM's calculation from the chosen energy, not the model's arithmetic.
+  const directional = params.goal === "fat_loss" || params.goal === "weight_gain" || params.goal === "hypertrophy";
+  const coachRate = method.rate?.value ?? null;
+  const signedCoach = coachRate ? (params.goal === "fat_loss" ? { min: -coachRate.max, max: -coachRate.min } : { min: coachRate.min, max: coachRate.max }) : null;
+  let implied: Grams | null = null;
+  if (e.mode === "target" && e.kcal && b.centralMaintenanceKcal && b.kcalPerPctPerWeek) {
+    implied = { min: +((e.kcal.min - b.centralMaintenanceKcal) / b.kcalPerPctPerWeek).toFixed(2), max: +((e.kcal.max - b.centralMaintenanceKcal) / b.kcalPerPctPerWeek).toFixed(2) };
+    if (!e.rate && directional) errors.push(`Give energy.rate (% bodyweight/week, negative = loss): ${fmt(e.kcal)} kcal against central maintenance ~${b.centralMaintenanceKcal} kcal is ${pct(implied)}%/week (${b.kcalPerPctPerWeek} kcal/day ≈ 1%/week).`);
+    if (e.rate && Math.abs(mid(e.rate) - mid(implied)) > 0.15) errors.push(`energy.rate ${pct(e.rate)}%/week doesn't match the energy target: ${fmt(e.kcal)} kcal against central maintenance ~${b.centralMaintenanceKcal} kcal is ${pct(implied)}%/week (${b.kcalPerPctPerWeek} kcal/day ≈ 1%/week).`);
+  }
+  if (e.rate && signedCoach && (e.rate.min < signedCoach.min - 0.05 || e.rate.max > signedCoach.max + 0.05)) errors.push(`energy.rate ${pct(e.rate)}%/week is outside the coach's rate (${pct(signedCoach)}%/week).`);
 
   // Training / rest days — the coach's strategy, only with an energy target.
   const dv = plan.dayVariation;
@@ -81,7 +135,26 @@ export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: 
     if (e.mode !== "target" && (dv.trainingDayKcal || dv.restDayKcal)) errors.push("Training/rest-day kcal need an energy target.");
     if (dv.trainingDayKcal && dv.restDayKcal && dv.trainingDayKcal.min < dv.restDayKcal.min) errors.push("Training-day energy can't be below rest-day energy.");
     if (dv.strategy === "same_calories_shift_carbs" && (dv.trainingDayKcal || dv.restDayKcal) && e.kcal && [dv.trainingDayKcal, dv.restDayKcal].some((x) => x && (Math.abs(x.min - e.kcal!.min) > 25 || Math.abs(x.max - e.kcal!.max) > 25))) errors.push("The coach keeps calories the same on training and rest days (carbs shift) — day kcal must equal the energy target.");
-    for (const x of [dv.trainingDayKcal, dv.restDayKcal]) if (x && b.floorKcal !== null && x.min < b.floorKcal) errors.push(`A day target (${fmt(x)}) goes below predicted resting expenditure (${b.floorKcal} kcal).`);
+    for (const x of [dv.trainingDayKcal, dv.restDayKcal]) if (x && b.floorKcal !== null && x.min < b.floorKcal) errors.push(`A day target (${fmt(x)}) goes below predicted resting expenditure (${b.floorKcal} kcal — ${FLOOR_NOTE}).`);
+    // Days that differ: the energy range is the WEEKLY average, and the difference is sized to the session's cost.
+    const sessions = ri.training ? Math.min(7, ri.training.sessionsPerWeek) : null;
+    if ((dv.strategy === "higher_on_training_days" || dv.strategy === "fuel_for_session") && e.mode === "target" && e.kcal) {
+      if (!dv.trainingDayKcal || !dv.restDayKcal) errors.push(`The coach's "${dv.strategy}" strategy needs trainingDayKcal and restDayKcal.`);
+      else if (sessions !== null && sessions > 0 && sessions < 7) {
+        const td = mid(dv.trainingDayKcal);
+        const rd = mid(dv.restDayKcal);
+        const avg = (sessions * td + (7 - sessions) * rd) / 7;
+        if (avg < e.kcal.min - 50 || avg > e.kcal.max + 50) errors.push(`Training and rest days average ${Math.round(avg)} kcal over the week (${sessions} training days) — outside the energy range ${fmt(e.kcal)}, which is the weekly average.`);
+        // Worst case across the full ranges: the lowest weekly average the day targets allow.
+        const worstAvg = (sessions * dv.trainingDayKcal.min + (7 - sessions) * dv.restDayKcal.min) / 7;
+        if (minor && noDeficit !== null && worstAvg < noDeficit) restrictions.push(`Training/rest day targets can average ~${Math.round(worstAvg)} kcal over the week — below this client's central maintenance estimate (~${noDeficit} kcal), a deficit for a client under 18.`);
+        if (b.sessionKcal) {
+          const lo = Math.round(b.sessionKcal[0] * 0.5);
+          const hi = Math.round(b.sessionKcal[1] * 1.25);
+          if (td - rd < lo || td - rd > hi) errors.push(`Training days are ${Math.round(td - rd)} kcal above rest days, but one session costs about ${b.sessionKcal[0]}–${b.sessionKcal[1]} kcal above rest (Compendium MET range) — size the difference to the session (${lo}–${hi} kcal).`);
+        }
+      }
+    }
   }
 
   // Protein — the coach's basis and amount, as OPTIM computed them.
@@ -96,10 +169,21 @@ export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: 
   const fg = plan.fat.grams;
   if (!numeric && (cg || fg)) errors.push(`The "${plan.approach.id}" approach doesn't use gram targets — carbohydrate.g and fat.g must be null.`);
   if (plan.approach.id === "full_macros" && (!cg || !fg || !pg)) errors.push("Full macro targets need protein.g, carbohydrate.g and fat.g.");
-  if (pg && cg && fg && e.kcal) {
-    const lo = 4 * pg.min + 4 * cg.min + 9 * fg.min;
-    const hi = 4 * pg.max + 4 * cg.max + 9 * fg.max;
-    if (hi < e.kcal.min * 0.92 || lo > e.kcal.max * 1.08) errors.push(`Macros add up to ${Math.round(lo)}–${Math.round(hi)} kcal, inconsistent with energy ${fmt(e.kcal)} (4/4/9 kcal per g).`);
+  // Macros FIT the energy prescription (not merely overlap it): the minimums together can't total less than the energy
+  // minimum and the maximums together can't total more than the energy maximum, within a stated tolerance; and the
+  // midpoints agree. Flexibility is trading carbohydrate and fat within the same calories.
+  if (pg && e.kcal) {
+    const tol = b.macroToleranceKcal ?? macroTolerance(mid(e.kcal));
+    if (cg && fg) {
+      const lo = 4 * pg.min + 4 * cg.min + 9 * fg.min;
+      const hi = 4 * pg.max + 4 * cg.max + 9 * fg.max;
+      if (lo < e.kcal.min - tol || hi > e.kcal.max + tol) errors.push(`Macro ranges total ${Math.round(lo)}–${Math.round(hi)} kcal; they must fit inside energy ${fmt(e.kcal)} (±${tol} kcal) — narrow carbohydrate and fat so they trade within the same calories.`);
+      const ms = 4 * mid(pg) + 4 * mid(cg) + 9 * mid(fg);
+      if (Math.abs(ms - mid(e.kcal)) > tol) errors.push(`Macro midpoints total ${Math.round(ms)} kcal, not the energy midpoint ${Math.round(mid(e.kcal))} kcal (±${tol}).`);
+    } else {
+      const lo = 4 * pg.min + 4 * (cg?.min ?? 0) + 9 * (fg?.min ?? 0);
+      if (lo > e.kcal.max + tol) errors.push(`The given macro minimums alone total ${Math.round(lo)} kcal — above energy ${fmt(e.kcal)}.`);
+    }
   }
   if (fg && e.kcal && fg.min * 9 < e.kcal.min * 0.15) errors.push(`fat.g ${fmt(fg)} puts fat below 15% of energy — under what the evidence supports (concept.nutrition.dietary_fat).`);
   if (fg && params.weightKg && (params.goal === "hypertrophy" || params.goal === "weight_gain") && fg.min < params.weightKg * 0.5 - 2) errors.push(`fat.g ${fmt(fg)} is below ~0.5 g/kg while gaining (concept.nutrition.dietary_fat#fat.gaining).`);
@@ -149,10 +233,27 @@ export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: 
   if (!mo.measures.length) errors.push("monitoring.measures must name how progress is judged.");
   const th = method.dataThresholdWeeks?.value;
   if (th && (mo.reviewAfterWeeks < th.min || mo.reviewAfterWeeks > (th.max ?? th.min))) errors.push(`monitoring.reviewAfterWeeks ${mo.reviewAfterWeeks} is outside the coach's ${th.min}–${th.max} weeks of data before a change.`);
+  // Adjustments are validated by their STRUCTURE — lever, direction of energy intake, kcal magnitude — and their
+  // numerical effect, never by their wording (V1.1: a reduction worded as "trimming" escaped a word-based rule).
   for (const [i, a] of plan.adjustments.entries()) {
-    if (a.lever !== "none" && allowed.levers.size && !allowed.levers.has(a.lever)) errors.push(`adjustments[${i}].lever "${a.lever}" isn't one of the coach's levers (${[...allowed.levers].join(", ")}).`);
-    if (th && a.afterWeeks < th.min) errors.push(`adjustments[${i}] acts after ${a.afterWeeks} week(s) — the coach wants at least ${th.min} weeks of data.`);
-    if (ri.safety.minor && /\b(reduc|cut|lower|deficit|decreas)\w*\b/i.test(a.change) && /\b(calor|kcal|intake|food|carb|fat)\w*/i.test(a.change)) errors.push(`adjustments[${i}] reduces intake for a minor — not allowed.`);
+    const at = `adjustments[${i}]`;
+    const coachLevers = [...allowed.levers];
+    const noCoachLeverFor = (d: AdjustmentDirection) => !coachLevers.some((l) => (LEVER_DIRECTIONS[l] ?? ["increase", "decrease", "none"]).includes(d));
+    const genericCalories = a.lever === "calories" && a.direction !== "none" && noCoachLeverFor(a.direction);
+    if (a.lever !== "none" && coachLevers.length && !allowed.levers.has(a.lever) && !genericCalories) errors.push(`${at}.lever "${a.lever}" isn't one of the coach's levers (${coachLevers.join(", ")}).`);
+    const means = LEVER_DIRECTIONS[a.lever];
+    if (means && !means.includes(a.direction)) errors.push(`${at}: lever "${a.lever}" ${means.length === 1 && means[0] === "none" ? "changes no energy intake" : `can only ${means.filter((d) => d !== "none").join(" or ")} intake`} — it can't carry direction "${a.direction}".`);
+    if (a.direction === "none" && a.kcal) errors.push(`${at}: direction "none" changes no intake, so it has no kcal amount.`);
+    if (a.direction !== "none" && numeric && e.mode === "target" && !a.kcal) errors.push(`${at}: an intake ${a.direction} in a numeric strategy needs "kcal" (per-day amount).`);
+    if (a.kcal && a.kcal.max > MAX_ADJUSTMENT_KCAL) errors.push(`${at}: ${fmt(a.kcal)} kcal/day isn't a modest step (max ${MAX_ADJUSTMENT_KCAL}).`);
+    // Worst case across the full ranges: a decrease lands at (energy minimum − kcal maximum).
+    if (a.direction === "decrease" && a.kcal && e.kcal && !minor) {
+      const after = e.kcal.min - a.kcal.max;
+      if (b.floorKcal !== null && after < b.floorKcal) errors.push(`${at}: at its worst case (energy minimum ${e.kcal.min} − ${a.kcal.max}) this decrease reaches ~${after} kcal — below predicted resting expenditure (${b.floorKcal} kcal, ${FLOOR_NOTE}). Size kcal so energy minimum − kcal maximum stays at or above it, or use a lever that changes no intake.`);
+    }
+    // Under 18: no autonomous intake decrease of any size or wording — it goes to qualified human review.
+    if (minor && a.direction === "decrease") restrictions.push(`${at} decreases intake for a client under 18 ("${a.change.slice(0, 80)}").`);
+    if (th && a.afterWeeks < th.min) errors.push(`${at} acts after ${a.afterWeeks} week(s) — the coach wants at least ${th.min} weeks of data.`);
   }
   if (!plan.adjustments.length && e.mode === "target") errors.push("An energy target needs at least one adjustment rule (signal, weeks, lever, change).");
 
@@ -168,6 +269,16 @@ export function validateNutritionPlan(params: { plan: NutritionPlan; reasoning: 
   }
   const rate = method.rate?.value;
   if (params.goal === "fat_loss" && rate && rate.max > 1) quality.push({ code: "rate_above_evidence", severity: "warning", message: `The coach's loss rate reaches ${rate.max}%/week — above the 0.5–1%/week recommended to retain muscle.` });
+  // Model-written weekly rates in prose are not trusted: any number outside what OPTIM can account for is flagged.
+  const kgNow = params.weightKg;
+  const known: number[] = [0.25, 0.5, 0.7, 1, 1.4, ...(coachRate ? [coachRate.min, coachRate.max] : []), ...(e.rate ? [Math.abs(e.rate.min), Math.abs(e.rate.max)] : []), ...(implied ? [Math.abs(implied.min), Math.abs(implied.max)] : [])];
+  const lo = Math.min(...known) - 0.1;
+  const hi = Math.max(...known) + 0.1;
+  const stated: number[] = [];
+  for (const m of all.matchAll(/(\d+(?:\.\d+)?)\s*(?:[–-]|to)\s*(\d+(?:\.\d+)?)\s*%[^.\n]{0,25}?(?:\/|per |a )\s*(?:wk|week)|(\d+(?:\.\d+)?)\s*%[^.\n]{0,25}?(?:\/|per |a )\s*(?:wk|week)/gi)) stated.push(...[m[1], m[2], m[3]].filter(Boolean).map(Number));
+  if (kgNow) for (const m of all.matchAll(/(\d+(?:\.\d+)?)\s*(?:[–-]|to)?\s*(\d+(?:\.\d+)?)?\s*(lb|kg)s?\s*(?:\/|per |a )\s*(?:wk|week)/gi)) for (const v of [m[1], m[2]].filter(Boolean).map(Number)) stated.push(+((m[3].toLowerCase() === "lb" ? v * 0.45359237 : v) / kgNow * 100).toFixed(2));
+  const odd = stated.filter((v) => v < lo || v > hi);
+  if (odd.length) quality.push({ code: "prose_rate_unverified", severity: "warning", message: `The explanation states weekly rates (${odd.map((v) => `${v}%`).join(", ")}) that don't match OPTIM's calculation${implied ? ` (${pct(implied)}%/week)` : ""} or the coach's rate — rely on OPTIM's estimate.` });
   if (plan.decisions.some((d) => !d.coachRuleKeys.length && !d.clientFactRefs.length && !d.knowledgeRefs.length)) quality.push({ code: "unattributed_decision", severity: "warning", message: "A decision cites no coach rule, client fact or evidence." });
-  return { ok: errors.length === 0, errors, quality };
+  return { ok: errors.length === 0, errors, restrictions, quality };
 }

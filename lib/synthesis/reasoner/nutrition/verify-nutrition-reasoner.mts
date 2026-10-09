@@ -52,8 +52,8 @@ console.log("\nNutrition Reasoner V1\n");
 await check("1. Nutrition Knowledge V1: validated by the shared registry, every external source verified, numbers only on sourced claims", () => {
   assert.equal(NUTRITION_KNOWLEDGE.version, NUTRITION_KNOWLEDGE_VERSION);
   assert.equal(FOUNDATION_KNOWLEDGE_VERSION, "0.5.0", "Fitness Knowledge (and resistance planning state) untouched");
-  for (const s of ALL_NUTRITION_SOURCES) if (s.type !== "internal_curation") assert.ok(s.pmid && s.doi && s.citation && s.verifiedVia?.includes("E-utilities"), s.id);
-  const topics = ["energy_requirements", "rate_of_loss", "rate_of_gain", "protein", "protein_distribution", "carbohydrate", "dietary_fat", "recomposition", "diet_quality", "hydration", "adherence", "supplements", "energy_availability"];
+  for (const s of ALL_NUTRITION_SOURCES) if (s.type !== "internal_curation") assert.ok(s.citation && (s.pmid ? s.doi && s.verifiedVia?.includes("E-utilities") : s.url && s.verifiedVia?.includes("pacompendium.com")), s.id);
+  const topics = ["energy_requirements", "training_energy_cost", "rate_of_loss", "rate_of_gain", "protein", "protein_distribution", "carbohydrate", "dietary_fat", "recomposition", "diet_quality", "hydration", "adherence", "supplements", "energy_availability"];
   for (const t of topics) assert.ok(NUTRITION_KNOWLEDGE.concept(t), t);
   for (const c of NUTRITION_KNOWLEDGE.concepts()) for (const cl of c.claims) if (cl.parameters) assert.equal(cl.evidence.status, "sourced", `${c.id}#${cl.id}`);
   const needed = NUTRITION_KNOWLEDGE.sourceNeeded().map((x) => x.claimId);
@@ -152,7 +152,7 @@ await check("7. Energy rails: outside OPTIM's bounds, too wide, below the floor,
 
 await check("8. Macro rails: protein inside the coach's range, arithmetic consistent, fat not below the evidence, no grams for habit coaches", async () => {
   rejectedWith((await run("N02", (p, ri) => (p.protein.g = [ri.bounds.proteinG![1] + 20, ri.bounds.proteinG![1] + 40]))).r, /outside the coach's .* g\/day/);
-  rejectedWith((await run("N02", (p) => (p.carbohydrate.g = [50, 60]))).r, /Macros add up to .* inconsistent/);
+  rejectedWith((await run("N02", (p) => (p.carbohydrate.g = [50, 60]))).r, /Macro ranges total .* must fit inside energy/);
   rejectedWith((await run("N01", (p) => (p.fat.g = [15, 20]))).r, /below 15% of energy/);
   rejectedWith((await run("N08", (p) => (p.protein.g = [100, 120]))).r, /doesn't use gram targets/);
   rejectedWith((await run("N02", (p) => (p.fat.g = null))).r, /Full macro targets need/);
@@ -186,7 +186,9 @@ await check("11. Safety-language rails: punitive compensation, detox/crash tacti
   rejectedWith((await run("N01", (p) => p.habits.push("Start with a 3-day juice cleanse."))).r, /crash, detox or starvation/);
   rejectedWith((await run("N01", (p) => p.habits.push("Skip breakfast to save calories."))).r, /skipping meals/);
   rejectedWith((await run("N01", (p) => p.habits.push("One cheat meal a week."))).r, /moralized food language/);
-  rejectedWith((await run("N20", (p) => (p.adjustments = [{ signal: "weight rises", afterWeeks: 2, lever: "calories", change: "Reduce calories by 200 kcal." }]))).r, /reduces intake for a minor/);
+  // Minor safety is structural and numeric now — see test 18 for the adversarial set.
+  // Under 18, a decrease is never prescribed: it routes to human review (test 18 has the adversarial set).
+  assert.equal((await run("N20", (p) => (p.adjustments = [{ signal: "weight rises", afterWeeks: 2, lever: "calories", direction: "decrease", kcal: [200, 250], change: "Reduce calories by 200 kcal." }]))).r.status, "NEEDS_COACH_REVIEW");
 });
 
 await check("12. Structure and provenance rails: Meal Intent, no invented clock times, objective follows the goal, namespaced citations, required decisions", async () => {
@@ -226,7 +228,7 @@ await check("14. Proposal is reviewable and replayable: deterministic review ite
   const round = JSON.parse(JSON.stringify(p.run));
   assert.deepEqual(round.result.plan, p.plan, "run serializes losslessly (replay without a model call)");
   assert.equal(p.run.schema, "optim.nutrition-reasoner-run.v1");
-  assert.deepEqual([p.run.versions.knowledge, p.run.versions.prompt], [NUTRITION_KNOWLEDGE_VERSION, "reasoner-nutrition-v1.0.0"]);
+  assert.deepEqual([p.run.versions.knowledge, p.run.versions.prompt, p.run.versions.reasoner], [NUTRITION_KNOWLEDGE_VERSION, "reasoner-nutrition-v1.1.1", "nutrition-reasoner-v1.1.1"]);
   assert.ok(p.run.hashes.input && p.run.hashes.systemPrompt && p.run.energy && p.run.safety);
   const unclear = await runNutritionReasoner({ input: scenarioInput({ patch: { fuel_recovery: { typicalSleep: "7_8", hasDietaryRestrictions: "yes", dietaryRestrictionsDetail: "No nightshades" } }, coach: nutritionCoach() }), model: fakeModel((ri) => scriptedNutrition(ri as never)), nowIso: NOW });
   assert.ok(planned(unclear).review.questions.some((q) => /couldn't map the client's restriction/.test(q)), "an uninterpreted restriction is a coach question");
@@ -256,6 +258,131 @@ await check("16. One reasoning infrastructure: both domains run the shared core 
   for (const f of ["../reasoner.ts", "./reasoner.ts"]) assert.ok(/runModelAttempts(<[^>]+>)?\(/.test(readFileSync(new URL(f, import.meta.url), "utf8")), f);
   assert.ok(NUTRITION_SYSTEM_PROMPT.indexOf("Safety") < NUTRITION_SYSTEM_PROMPT.indexOf('"coach": this coach') && NUTRITION_SYSTEM_PROMPT.indexOf('"coach": this coach') < NUTRITION_SYSTEM_PROMPT.indexOf('"client" facts'));
   assert.match(NUTRITION_SYSTEM_PROMPT, /Never state grams, calories or macros for an individual food/);
+});
+
+// ---------------------------------------------------------------------------
+// V1.1 — integrity and safety hardening (live-eval weaknesses, fixed at their source)
+// ---------------------------------------------------------------------------
+const adj = (o: Record<string, unknown>) => ({ signal: "weekly average moves", afterWeeks: 3, change: "Explained in words.", ...o });
+
+await check("17. Adjustment direction is structural: levers mean what they say; the summary comes from the structure, not the words", async () => {
+  // The live N02/N06/N10 defect: a reduction filed under add_calories.
+  rejectedWith((await run("N02", (p) => p.adjustments.push(adj({ lever: "add_calories", direction: "decrease", kcal: [100, 150], change: "Pull back 150 kcal." })))).r, /lever "add_calories" can only increase intake — it can't carry direction "decrease"/);
+  rejectedWith((await run("N01", (p) => p.adjustments.push(adj({ lever: "steps", direction: "decrease", kcal: [100, 150] })))).r, /lever "steps" changes no energy intake/);
+  rejectedWith((await run("N01", (p) => p.adjustments.push(adj({ lever: "steps", direction: "none", kcal: [100, 150] })))).r, /direction "none" changes no intake, so it has no kcal amount/);
+  rejectedWith((await run("N01", (p) => p.adjustments.push(adj({ lever: "calories", direction: "increase" })))).r, /needs "kcal"/);
+  rejectedWith((await run("N02", (p) => p.adjustments.push(adj({ lever: "add_calories", direction: "increase", kcal: [600, 700] })))).r, /isn't a modest step/);
+  // Slowing a gain that runs too fast: the coach's gain levers have no decrease, so the generic "calories" lever is allowed.
+  const slow = await run("N02", (p) => p.adjustments.push(adj({ lever: "calories", direction: "decrease", kcal: [100, 150], change: "Add a little less food." })));
+  const ok = planned(slow.r);
+  // …and the coach reads its meaning from the structure, even when the wording says "add".
+  assert.ok(ok.review.adjustments.some((x) => /Decrease intake by 100–150 kcal\/day → about \d+–\d+ kcal \(lever: calories\)/.test(x)), ok.review.adjustments.join(" | "));
+  // But "calories" isn't a loophole where the coach has a lever for that direction (fat loss lists calories itself; gain lists add_calories).
+  rejectedWith((await run("N02", (p) => p.adjustments.push(adj({ lever: "calories", direction: "increase", kcal: [100, 150] })))).r, /lever "calories" isn't one of the coach's levers/);
+});
+
+await check("18. Under 18: no autonomous calorie reduction, however worded — repaired away, or routed to qualified human review; never PLANNED", async () => {
+  const s20 = S("N20");
+  const minorRun = (tweak: (p: WireNutrition["plan"], ri: NutritionReasoningInput) => void, maxAttempts = 2, fixOnRepair = false) => {
+    const m = fakeModel((ri, attempt) => scriptedNutrition(ri as never, fixOnRepair && attempt > 1 ? undefined : (p) => tweak(p, ri as never)));
+    return runNutritionReasoner({ input: s20.input(), model: m, nowIso: NOW, runId: "minor", maxAttempts }).then((r) => ({ r, m }));
+  };
+  // Nine wordings of the same reduction — identical structure, so identical outcome: never a plan.
+  const wordings = ["Trim about 150 kcal/day.", "Shave a little off dinner.", "Ease back on portions slightly.", "Pull back toward the lower end.", "Dial things down a notch.", "Take out a cupped hand of rice.", "Bring intake down a touch.", "Add a little less at dinner.", "Keep everything the same, just smaller."];
+  for (const change of wordings) {
+    const { r, m } = await minorRun((p) => p.adjustments.push(adj({ lever: "calories", direction: "decrease", kcal: [100, 150], change })));
+    assert.equal(r.status, "NEEDS_COACH_REVIEW", change);
+    assert.equal(m.calls, 2, "one validator-guided repair, then routed");
+    assert.ok(r.status === "NEEDS_COACH_REVIEW" && r.restrictions.some((x) => /decreases intake for a client under 18/.test(x)));
+    assert.ok(m.lastUserMessage.includes("raise it in coachQuestions"), "the repair is told to route it to the coach");
+  }
+  // Size doesn't matter (a 10 kcal or portion-only decrease is still a restriction) — no calorie minimum is consulted.
+  assert.equal((await minorRun((p) => p.adjustments.push(adj({ lever: "calories", direction: "decrease", kcal: [10, 20] })))).r.status, "NEEDS_COACH_REVIEW");
+  // A portion-only decrease also breaks the numeric contract, so it is REJECTED — still never a plan, restriction named.
+  const portion = (await minorRun((p) => p.adjustments.push(adj({ lever: "calories", direction: "decrease", change: "Slightly smaller portions." })))).r;
+  assert.ok(portion.status === "REJECTED" && portion.errors.some((x) => /decreases intake for a client under 18/.test(x)), portion.status);
+  // Hiding it under another lever fails on lever meaning (an error, not a plan).
+  rejectedWith((await minorRun((p) => p.adjustments.push(adj({ lever: "habits", direction: "decrease", kcal: [100, 150] })), 1)).r, /lever "habits" changes no energy intake/);
+  // Energy below the client's own central maintenance, or day targets averaging below it at their worst case: routed.
+  const below = await minorRun((p, ri) => { const nd = ri.bounds.minorNoDeficitKcal!; p.energy.kcal = [nd - 50, nd + 100]; p.energy.rate = null; });
+  assert.ok(["NEEDS_COACH_REVIEW", "REJECTED"].includes(below.r.status) && below.r.status !== "PLANNED");
+  const nf = nutritionCoach({ n_training_rest: "higher_on_training_days" });
+  const days = await runNutritionReasoner({ input: (() => { const i = s20.input(); return { ...i, coach: { ...i.coach!, method: nf } }; })(), model: fakeModel((ri) => scriptedNutrition(ri as never, (p) => { const r = ri as unknown as NutritionReasoningInput; const nd = r.bounds.minorNoDeficitKcal!; const n = r.training!.sessionsPerWeek; const d = Math.round((r.bounds.sessionKcal![0] + r.bounds.sessionKcal![1]) / 2); p.energy.kcal = [nd, nd + 150]; p.dayVariation = { strategy: "higher_on_training_days", trainingDayKcal: [Math.round(nd - (n / 7) * d) + d - 300, Math.round(nd - (n / 7) * d) + d + 150], restDayKcal: [Math.round(nd - (n / 7) * d) - 300, Math.round(nd - (n / 7) * d) + 150] }; })), nowIso: NOW, maxAttempts: 1 });
+  assert.ok(days.status !== "PLANNED", `day targets with a worst-case weekly average below maintenance must not be PLANNED (${days.status})`);
+  // The repair can genuinely fix it: dropping the decrease yields a plan with no restriction.
+  const fixed = await minorRun((p) => p.adjustments.push(adj({ lever: "calories", direction: "decrease", kcal: [100, 150], change: "Trim a bit." })), 2, true);
+  const fp = planned(fixed.r);
+  assert.ok(!fp.plan.adjustments.some((a) => a.direction === "decrease"));
+  // Increases and fueling stay available for a minor.
+  planned((await minorRun((p) => p.adjustments.push(adj({ lever: "calories", direction: "increase", kcal: [100, 150] })))).r);
+  // NEEDS_COACH_REVIEW is never mapped onto the assignable contract by status: it isn't a prescription.
+  const routed = (await minorRun((p) => p.adjustments.push(adj({ lever: "calories", direction: "decrease", kcal: [100, 150] })))).r;
+  assert.ok(routed.status === "NEEDS_COACH_REVIEW" && routed.run.status === "NEEDS_COACH_REVIEW" && routed.run.result.restrictions!.length > 0);
+});
+
+await check("22. Adults: worst-case numeric checks across the full ranges; the floor is a minimum, never presented as proof of safety; one repair can fix it", async () => {
+  // Exact live V1.1 N01 shape: energy 1450–1650, decrease 100–150 → worst case 1300 < 1400.
+  const bad = (p: WireNutrition["plan"], ri: NutritionReasoningInput) => { const f = ri.bounds.floorKcal!; p.energy.kcal = [f + 50, f + 250]; p.energy.rate = [+((f + 50 - ri.bounds.centralMaintenanceKcal!) / ri.bounds.kcalPerPctPerWeek!).toFixed(2), +((f + 250 - ri.bounds.centralMaintenanceKcal!) / ri.bounds.kcalPerPctPerWeek!).toFixed(2)]; p.adjustments = [adj({ lever: "calories", direction: "decrease", kcal: [100, 150], change: "Never below the floor." })]; };
+  const once = await run("N01", bad, 1);
+  rejectedWith(once.r, /at its worst case \(energy minimum \d+ − 150\) this decrease reaches ~\d+ kcal — below predicted resting expenditure \(\d+ kcal, a minimum OPTIM never crosses — not evidence that a target is safe\)/);
+  // The worst-case rule is given to the model up front, with the arithmetic.
+  assert.match(NUTRITION_SYSTEM_PROMPT, /a "decrease" adjustment lands at \(energy kcal minimum − adjustment kcal maximum\)/);
+  assert.match(NUTRITION_SYSTEM_PROMPT, /not evidence that a target is safe/);
+  // One validator-guided repair (as authorized) fixes it; the model isn't silently clipped.
+  const s1 = S("N01");
+  const m = fakeModel((ri, attempt) => scriptedNutrition(ri as never, attempt === 1 ? (p) => bad(p, ri as never) : undefined));
+  const repaired = await runNutritionReasoner({ input: s1.input(), model: m, nowIso: NOW, maxAttempts: 2 });
+  const rp = planned(repaired);
+  assert.equal(m.calls, 2);
+  assert.ok(m.lastUserMessage.includes("Size kcal so energy minimum − kcal maximum stays at or above it"));
+  for (const a of rp.plan.adjustments) if (a.direction === "decrease" && a.kcal && rp.plan.energy.kcal) assert.ok(rp.plan.energy.kcal.min - a.kcal.max >= rp.run.input!.bounds.floorKcal!, "worst case respected in the accepted plan");
+  // Adults aren't routed to review for decreases above the floor — the coach's own levers apply.
+  planned((await run("N04", (p) => p.adjustments.push(adj({ lever: "calories", direction: "decrease", kcal: [100, 150], change: "Trim about 150 kcal/day." })))).r);
+});
+
+await check("19. Macros must fit the energy prescription — the live N06/N20 ranges are rejected; tight live ranges pass", async () => {
+  // Exact live N06 ranges at its live energy (2300–2450): totals 2160–2680 kcal.
+  rejectedWith((await run("N06", (p) => { p.energy.kcal = [2300, 2450]; p.protein.g = [125, 140]; p.carbohydrate.g = [280, 350]; p.fat.g = [60, 80]; })).r, /Macro ranges total 2160–2680 kcal; they must fit inside energy 2300–2450/);
+  // Exact live N20 ranges (calories_protein with optional carbs/fat given as numbers).
+  rejectedWith((await run("N20", (p) => { p.energy.kcal = [2600, 2800]; p.protein.g = [120, 145]; p.carbohydrate.g = [330, 430]; p.fat.g = [55, 80]; })).r, /Macro ranges total 2295–3020 kcal/);
+  // Midpoints must agree too, not just the extremes.
+  // Extremes inside the tolerance, but every combination sits at the bottom of the range: the midpoints disagree.
+  rejectedWith((await run("N02", (p) => { const k = p.energy.kcal as number[]; p.protein.g = [110, 110]; p.fat.g = [70, 70]; p.carbohydrate.g = [Math.ceil((k[0] - 130 - 1070) / 4), Math.floor((k[0] - 100 - 1070) / 4)]; })).r, /Macro midpoints total \d+ kcal, not the energy midpoint/);
+  // Legitimate flexibility (carbs and fat trading within the same calories, totals inside the range) passes.
+  planned((await run("N02")).r);
+});
+
+await check("20. Training days: the energy range is the weekly average and the training/rest difference is sized to the session's cost; schedule contradictions are found deterministically", async () => {
+  // Exact live N05 day targets: +100–150 kcal for a 6 × 90 min mixed program.
+  const live = await run("N05", (p) => { p.energy.kcal = [2950, 3200]; p.dayVariation = { strategy: "fuel_for_session", trainingDayKcal: [3050, 3200], restDayKcal: [2950, 3050] }; });
+  rejectedWith(live.r, /one session costs about \d+–\d+ kcal above rest \(Compendium MET range\)/);
+  const sized = planned((await run("N05")).r);
+  const dv = sized.plan.dayVariation!;
+  assert.ok(dv.trainingDayKcal!.min - dv.restDayKcal!.min >= sized.run.energy!.sessionKcal!.low * 0.5, "the scripted plan sizes the difference to the session");
+  // Weekly average outside the energy range is rejected even with a sensible difference.
+  rejectedWith((await run("N05", (p) => { const k = p.energy.kcal as number[]; p.dayVariation = { strategy: "fuel_for_session", trainingDayKcal: [k[0] + 600, k[1] + 600], restDayKcal: [k[0], k[1]] }; })).r, /average \d+ kcal over the week/);
+  // The 60-min intake vs 90-min program contradiction: deterministic coach question, and the model is told.
+  const conflict = await run("N05");
+  assert.ok(planned(conflict.r).review.questions.some((q) => /~90 min, but the client reported a 60-min maximum/.test(q)));
+  assert.ok((conflict.m.lastInput as unknown as NutritionReasoningInput).training!.conflicts.length === 1);
+  // Session cost comes from the Compendium MET range, not a fixed increment: (5–7.5 − 1) × kg × 1.5 h.
+  const kg = 170 * 0.45359237;
+  assert.deepEqual(sized.run.energy!.sessionKcal, { low: Math.round((4 * kg * 1.5) / 10) * 10, high: Math.round((6.5 * kg * 1.5) / 10) * 10 });
+});
+
+await check("21. Weight-change rates: OPTIM calculates them; a stated rate must match; prose rates are flagged, never trusted", async () => {
+  rejectedWith((await run("N01", (p) => (p.energy.rate = [-1.2, -1.0]))).r, /energy.rate .* doesn't match the energy target: \d+–\d+ kcal against central maintenance/);
+  rejectedWith((await run("N02", (p) => (p.energy.rate = null))).r, /Give energy.rate/);
+  rejectedWith((await run("N01", (p, ri) => { p.energy.kcal = [ri.bounds.energyKcal![0], ri.bounds.energyKcal![0] + 100]; const r = (ri.bounds.energyKcal![0] + 50 - ri.bounds.centralMaintenanceKcal!) / ri.bounds.kcalPerPctPerWeek!; p.energy.rate = [r - 0.3, r + 0.3]; })).r, /outside the coach's rate|doesn't match/);
+  const p1 = planned((await run("N01")).r);
+  assert.ok(p1.review.rate && /about -\d\.\d\d to -\d\.\d\d% bodyweight\/week; with the maintenance uncertainty, anywhere from/.test(p1.review.rate.statement) && /not a guarantee/.test(p1.review.rate.statement), p1.review.rate?.statement);
+  assert.ok(p1.review.rate!.plausiblePct[0] < p1.review.rate!.centralPct[0] && p1.review.rate!.plausiblePct[1] > p1.review.rate!.centralPct[1], "uncertainty is wider than the central estimate");
+  // A prose rate that matches nothing OPTIM can account for is flagged for the coach (non-blocking).
+  const prose = planned((await run("N01", (p) => (p.objective.why = "Aim to lose about 2.5% bodyweight per week."))).r);
+  assert.ok(prose.review.quality.some((q) => q.code === "prose_rate_unverified" && /2.5%/.test(q.message)));
+  const lbProse = planned((await run("N01", (p) => (p.energy.why = "Expect roughly 4 lb per week early on."))).r);
+  assert.ok(lbProse.review.quality.some((q) => q.code === "prose_rate_unverified"));
+  assert.ok(!planned((await run("N01")).r).review.quality.some((q) => q.code === "prose_rate_unverified"), "the coach's own rate quoted in prose isn't flagged");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
