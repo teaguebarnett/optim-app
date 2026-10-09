@@ -4,13 +4,16 @@
 // safety gate, the approved resistance week (never changed), the knowledge-backed intensity anchors, and provenance.
 // V1.1: EVERY week is checked (not just week 1) and OPTIM totals each week itself; the dose is stated relative to the
 // coach's range; optional cardio stays optional; schedule conflicts need prepared coach decisions.
+// V1.2: deload weeks never become the progression baseline; growth for recovery-limited clients and optional cardio is
+// gated (recovery improving / coach confirming); limited recovery changes the prescription's structure (a stated
+// strategy; no new training day without a prepared coach decision); an optional dose never rests on minute guidance.
 
 import { citationErrors } from "../expand.ts";
 import { DAY_ORDER } from "../../client-state.ts";
 import { cardioModality } from "../../knowledge/cardio/modalities.ts";
 import type { DayOfWeek } from "../../../types.ts";
 import type { CardioAllowed, CardioReasoningInput } from "./input.ts";
-import type { CardioPlan, CardioSession, CardioWeekSession } from "./contract.ts";
+import { DECISION_TOPICS, type CardioPlan, type CardioSession, type CardioWeekSession } from "./contract.ts";
 
 export interface CardioQualityFinding {
   code: string;
@@ -27,6 +30,8 @@ const nextDay = (d: DayOfWeek) => DAY_ORDER[(DAY_ORDER.indexOf(d) + 1) % 7];
 
 export interface WeekLoad {
   week: number;
+  deload: boolean;
+  gate: CardioPlan["progression"][number]["gate"];
   sessions: number;
   minutes: { easy: number; moderate: number; vigorous: number; total: number };
   hardSessions: number;
@@ -45,17 +50,17 @@ export interface CardioWorkload {
   weeks: WeekLoad[];
 }
 
-const weekLoad = (week: number, sessions: CardioWeekSession[]): WeekLoad => {
+const weekLoad = (week: number, sessions: CardioWeekSession[], deload = false, gate: WeekLoad["gate"] = "none"): WeekLoad => {
   const m = { easy: 0, moderate: 0, vigorous: 0, total: 0 };
   for (const s of sessions) {
     m[s.intensity] += s.minutes;
     m.total += s.minutes;
   }
-  return { week, sessions: sessions.length, minutes: m, hardSessions: sessions.filter(isHard).length, optionalMinutes: sessions.filter((s) => s.optional).reduce((t, s) => t + s.minutes, 0) };
+  return { week, deload, gate, sessions: sessions.length, minutes: m, hardSessions: sessions.filter(isHard).length, optionalMinutes: sessions.filter((s) => s.optional).reduce((t, s) => t + s.minutes, 0) };
 };
 
 export function cardioWorkload(plan: CardioPlan, ri: CardioReasoningInput): CardioWorkload {
-  const weeks = [weekLoad(1, plan.sessions), ...plan.progression.map((w) => weekLoad(w.week, w.sessions))];
+  const weeks = [weekLoad(1, plan.sessions), ...plan.progression.map((w) => weekLoad(w.week, w.sessions, w.deload, w.gate))];
   const w1 = weeks[0];
   const res = new Map((ri.resistance?.days ?? []).map((d) => [d.day, d]));
   const days = new Set<DayOfWeek>([...(ri.resistance?.days ?? []).map((d) => d.day), ...plan.sessions.map((s) => s.day)]);
@@ -132,8 +137,12 @@ export function validateCardioPlan(params: { plan: CardioPlan; reasoning: Cardio
   const strengthPriority = ["hypertrophy", "strength", "recomposition", "weight_gain"].includes(ri.goal.primary ?? "") || ri.hybrid;
   const enduranceDays = ri.coach.rules.find((r) => r[1] === "endurance days/week")?.[2] as number[] | undefined;
   const lowInterferenceOffered = [...allowed.modalities.values()].some((o) => o.modality.lowerBodyInterference === "low" || o.modality.lowerBodyInterference === "none");
-  const weeks: Array<{ week: number; sessions: CardioWeekSession[] }> = [{ week: 1, sessions: plan.sessions }, ...plan.progression];
-  let prev: WeekLoad | null = null;
+  const weeks: Array<{ week: number; sessions: CardioWeekSession[]; deload: boolean; gate: WeekLoad["gate"] }> = [{ week: 1, sessions: plan.sessions, deload: false, gate: "none" }, ...plan.progression];
+  /** The most recent NON-deload week — the baseline growth is measured from (week 1 is the first). */
+  let baseline: WeekLoad | null = null;
+  const decided = new Set(plan.coachDecisions.map((d) => d.about));
+  const lifting = new Set((ri.resistance?.days ?? []).map((d) => d.day));
+  const w1Load = workload.weeks[0];
   for (const w of weeks) {
     const W = `week ${w.week}`;
     const days = new Set<DayOfWeek>();
@@ -174,17 +183,28 @@ export function validateCardioPlan(params: { plan: CardioPlan; reasoning: Cardio
     const longest = Math.max(0, ...w.sessions.map((s) => s.minutes));
     if (ls && "maxMinutes" in ls && longest > ls.maxMinutes) err(`${W}: a ${longest}-min session exceeds the coach's ${ls.maxMinutes}-min long-session cap.`);
     if (ls && "maxPercent" in ls && load.sessions > 1 && longest > (load.minutes.total * ls.maxPercent) / 100 + 1) err(`${W}: the longest session (${longest} min) is ${Math.round((longest / load.minutes.total) * 100)}% of the week — the coach caps it at ${ls.maxPercent}%.`);
-    if (prev && prev.minutes.total > 0) {
-      const inc = ((load.minutes.total - prev.minutes.total) / prev.minutes.total) * 100;
-      if (inc > b.maxWeeklyIncreasePct + 0.5) err(`${W}: minutes rise ${Math.round(inc)}% (${prev.minutes.total} → ${load.minutes.total}) — the limit is ${b.maxWeeklyIncreasePct}% a week.`);
+    // Progression against the established baseline: a deload is lighter than it and never replaces it; above the
+    // baseline, growth is capped (coach's weekly increase, else OPTIM's pacing default).
+    if (w.deload && baseline && load.minutes.total >= baseline.minutes.total) err(`${W}: marked as a deload but isn't lighter than the baseline (week ${baseline.week}, ${baseline.minutes.total} min).`);
+    if (!w.deload && baseline && baseline.minutes.total > 0 && load.minutes.total > baseline.minutes.total) {
+      const inc = ((load.minutes.total - baseline.minutes.total) / baseline.minutes.total) * 100;
+      if (inc > b.maxWeeklyIncreasePct + 0.5) err(`${W}: ${load.minutes.total} min is ${Math.round(inc)}% above the established baseline (week ${baseline.week}, ${baseline.minutes.total} min) — the limit is ${b.maxWeeklyIncreasePct}%.`);
     }
-    prev = load;
+    // Gated growth: recovery-limited clients grow only when recovery improves (or the coach confirms).
+    if (w.week > 1 && b.recoveryLimited && load.minutes.total > w1Load.minutes.total && w.gate === "none") err(`${W}: grows above week 1 (${w1Load.minutes.total} → ${load.minutes.total} min) for a recovery-limited client — gate it on "recovery_improved" (or "coach_confirmed").`);
+    // Optional cardio the coach never sized: it grows only once the coach confirms a dose.
+    if (w.week > 1 && plan.role === "optional_low_intensity" && !range && load.optionalMinutes > w1Load.optionalMinutes) {
+      if (w.gate !== "coach_confirmed") err(`${W}: optional cardio grows (${w1Load.optionalMinutes} → ${load.optionalMinutes} min) but the coach never set an amount — keep it flat or gate it on "coach_confirmed".`);
+      if (!decided.has("optional_dose")) err(`${W}: growing optional cardio needs a prepared "optional_dose" coach decision.`);
+    }
+    if (w.gate === "coach_confirmed" && !plan.coachDecisions.length) err(`${W}: gate "coach_confirmed" needs the coach decision it depends on in coachDecisions.`);
+    if (!w.deload) baseline = load;
   }
   // Down weeks on the coach's cadence (every a–b weeks): a week lighter than the one before it, by week b.
   const de = ri.endurance?.downEvery;
   if (plan.warranted && de && workload.weeks.length >= de[1]) {
-    const down = workload.weeks.some((w, k) => k > 0 && w.week >= de[0] && w.week <= de[1] && w.minutes.total < workload.weeks[k - 1].minutes.total);
-    if (!down) err(`The coach programs a down week every ${de[0]}–${de[1]} weeks — make one of weeks ${de[0]}–${de[1]} lighter than the week before.`);
+    const down = workload.weeks.some((w) => w.deload && w.week >= de[0] && w.week <= de[1]);
+    if (!down) err(`The coach programs a down week every ${de[0]}–${de[1]} weeks — mark one of weeks ${de[0]}–${de[1]} as a deload ("deload":true, lighter than the baseline).`);
   }
   if (range && plan.warranted && workload.weeks.at(-1)!.minutes.total < range[0]) quality.push({ code: "below_coach_range", severity: "info", message: `The plan ends at ${workload.weeks.at(-1)!.minutes.total} min/week, below the coach's ${range[0]}–${range[1]} for ${plan.role.replace(/_/g, " ")} — deliberate (see dose), for the coach to confirm.` });
   if (ri.endurance?.disciplineModalities.length && plan.warranted && !plan.sessions.some((s) => ri.endurance!.disciplineModalities.includes(s.modality))) quality.push({ code: "discipline_not_trained", severity: "warning", message: `No week-1 session trains the client's discipline (${ri.endurance.discipline}).` });
@@ -196,10 +216,32 @@ export function validateCardioPlan(params: { plan: CardioPlan; reasoning: Cardio
   for (const x of plan.monitoring.measures) if (!b.measures.includes(x)) err(`Measure "${x}" isn't one OPTIM tracks (${b.measures.join(", ")}).`);
   if (plan.warranted && !plan.monitoring.measures.length) err("monitoring.measures must name how progress is judged.");
 
-  // Schedule conflicts: a prepared coach decision for each — never resolved by changing the approved program.
+  // Limited recovery changes the prescription's STRUCTURE: a stated strategy that the sessions actually follow, and no
+  // new training day without a prepared coach decision.
+  const allSessions = weeks.flatMap((w) => w.sessions.map((x) => ({ ...x, week: w.week })));
+  const newDays = [...new Set(allSessions.filter((x) => !lifting.has(x.day)).map((x) => x.day))];
+  if (b.recoveryLimited) {
+    const st = plan.recoveryStrategy;
+    if (!st) err('Recovery is limited — state "recoveryStrategy" (no_additional_cardio, existing_training_days, reduced_dose or coach_decision).');
+    if (st === "no_additional_cardio" && plan.warranted) err('recoveryStrategy "no_additional_cardio" means warranted:false.');
+    if (st !== "no_additional_cardio" && st && !plan.warranted) err('A plan with no cardio uses recoveryStrategy "no_additional_cardio".');
+    if (st === "existing_training_days" && !ri.resistance?.days.length) err('recoveryStrategy "existing_training_days" needs a known resistance program — none was supplied.');
+    if (st === "existing_training_days" && newDays.length) err(`recoveryStrategy "existing_training_days" but cardio is on ${newDays.join(", ")}, where the client doesn't already train.`);
+    if (st === "reduced_dose" && plan.dose.vsCoachRange === "within") err('recoveryStrategy "reduced_dose" but week 1 sits inside the coach\'s range — reduce it or choose another strategy.');
+    if (newDays.length && !(st === "coach_decision" && decided.has("added_training_day"))) err(`Cardio on ${newDays.join(", ")} adds training day(s) for a recovery-limited client${ri.resistance ? "" : " (no resistance program is known, so every cardio day may be new)"} — use existing training days, reduce or drop the cardio, or prepare an "added_training_day" coach decision (recoveryStrategy "coach_decision").`);
+    if (st === "coach_decision" && !decided.has("added_training_day")) err('recoveryStrategy "coach_decision" needs the prepared "added_training_day" coach decision.');
+  }
+  // An optional dose the coach never set can't rest on minute guidance (another role's volume, not this coach's).
+  if (plan.role === "optional_low_intensity" && !range) {
+    const minuteRefs = new Set(ri.evidence.filter((e) => Object.values(e.params ?? {}).some((x) => /min\/week/.test((x as { unit?: string }).unit ?? ""))).map((e) => e.ref));
+    for (const d of plan.decisions) if (d.topic === "dose" && d.knowledgeRefs.some((r) => minuteRefs.has(r))) err(`The optional cardio dose cites weekly-minute guidance (${d.knowledgeRefs.filter((r) => minuteRefs.has(r)).join(", ")}) — the coach set no amount for optional cardio; offer a small amount or prepare an "optional_dose" coach decision.`);
+  }
+
+  // Prepared coach decisions: one per schedule conflict (never resolved by changing the approved program), plus the
+  // decisions OPTIM may require.
   const conflictIds = new Set<string>(ri.conflicts.map((c) => c.id));
-  for (const c of ri.conflicts) if (!plan.coachDecisions.some((d) => d.conflict === c.id)) err(`Conflict "${c.id}" (${c.text}) needs a prepared coach decision in coachDecisions.`);
-  for (const d of plan.coachDecisions) if (!conflictIds.has(d.conflict)) err(`coachDecisions names conflict "${d.conflict}", which OPTIM didn't detect (known: ${[...conflictIds].join(", ") || "none"}) — put other questions in coachQuestions.`);
+  for (const c of ri.conflicts) if (!decided.has(c.id)) err(`Conflict "${c.id}" (${c.text}) needs a prepared coach decision in coachDecisions.`);
+  for (const d of plan.coachDecisions) if (!conflictIds.has(d.about) && !(DECISION_TOPICS as readonly string[]).includes(d.about)) err(`coachDecisions is about "${d.about}", which OPTIM didn't detect (known: ${[...conflictIds, ...DECISION_TOPICS].join(", ")}) — put other questions in coachQuestions.`);
 
   // Provenance and the decisions a coach will question.
   for (const d of plan.decisions) for (const e of [...citationErrors("coach", d.coachRuleKeys, allowed), ...citationErrors("client", d.clientFactRefs, allowed), ...citationErrors("evidence", d.knowledgeRefs, allowed)]) err(e);

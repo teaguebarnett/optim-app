@@ -1,0 +1,33 @@
+{
+ "calls": 3,
+ "inputTokens": 21612,
+ "outputTokens": 15824,
+ "latencyMs": 174052,
+ "entries": [
+  {
+   "at": "2026-10-09T21:36:00.501Z",
+   "scenario": "C03",
+   "inputTokens": 7297,
+   "outputTokens": 5513,
+   "latencyMs": 61272,
+   "usd": 0.17431
+  },
+  {
+   "at": "2026-10-09T21:37:05.306Z",
+   "scenario": "C04",
+   "inputTokens": 7391,
+   "outputTokens": 5897,
+   "latencyMs": 64784,
+   "usd": 0.18438
+  },
+  {
+   "at": "2026-10-09T21:37:53.321Z",
+   "scenario": "C13",
+   "inputTokens": 6924,
+   "outputTokens": 4414,
+   "latencyMs": 47996,
+   "usd": 0.14497
+  }
+ ],
+ "usd": 0.50366
+}

@@ -98,16 +98,19 @@ export function scriptedCardio(ri: CardioReasoningInput, tweak?: (p: WireCardio[
   const method = (["talk_test", "heart_rate", "rpe"] as const).find((m) => ri.coach.intensityMethods.includes(m) && (m !== "heart_rate" || ri.zones)) ?? "rpe";
   const free = b.availableDays.filter((d) => !res.has(d));
   const n = start >= 90 ? 3 : 2;
-  const days = [...free, ...b.availableDays.filter((d) => res.has(d))].slice(0, n);
-  const roomOf = (d: DayOfWeek) => cap.get(d)?.ownVisitMax ?? 180;
-  const base = Math.max(10, five(start / days.length));
+  // Recovery-limited: short sessions folded into days the client already lifts (no new training day).
+  const foldable = b.availableDays.filter((d) => res.has(d) && (cap.get(d)?.sameVisitMax ?? 0) >= 10).slice(0, 3);
+  const folded = b.recoveryLimited && foldable.length ? foldable : null;
+  const days = folded ?? [...free, ...b.availableDays.filter((d) => res.has(d))].slice(0, n);
+  const roomOf = (d: DayOfWeek) => (folded ? (cap.get(d)?.sameVisitMax ?? 0) : (cap.get(d)?.ownVisitMax ?? 180));
+  const base = Math.max(10, five(start / Math.max(1, days.length)));
   const intensity = optional || role === "recovery" ? "easy" : "moderate";
   const strength = ["hypertrophy", "strength", "recomposition", "weight_gain"].includes(ri.goal.primary ?? "") || ri.hybrid;
   const hardOk = b.maxHardSessions > 0 && !reduced && (role === "conditioning" || role === "aerobic_base");
   const nextDay = (d: DayOfWeek) => DAY_ORDER[(DAY_ORDER.indexOf(d) + 1) % 7];
   const intervalModality = rows.filter((r) => r[2].includes("I")).sort((x, y) => (strength ? ifRank(x[4]) - ifRank(y[4]) : 0) || eqRank(x[6]) - eqRank(y[6]))[0]?.[0];
   const hardDay = hardOk && intervalModality ? days.find((d) => !(strength && "MH".includes(cardioModality(intervalModality)!.lowerBodyInterference[0].toUpperCase()) && (res.get(d)?.lowerBody || res.get(nextDay(d))?.lowerBody))) : undefined;
-  const placementOf = (d: DayOfWeek) => (res.has(d) ? "separate_session" : "separate_day");
+  const placementOf = (d: DayOfWeek) => (folded ? "after_resistance" : res.has(d) ? "separate_session" : "separate_day");
   const sessions = days.map((day) => {
     const minutes = Math.min(roomOf(day), day === hardDay ? Math.max(base, 20) : base);
     if (day === hardDay) return { day, type: "intervals", modality: intervalModality, minutes, intensity: "vigorous", effort: [7, 8], ...(method === "heart_rate" && ri.zones ? { hrPct: ri.zones.bands.vigorous } : {}), intervals: { rounds: 6, workSeconds: 60, recoverySeconds: 90, workEffort: [7, 8], recoveryEffort: [2, 3] }, placement: placementOf(day), optional: false, purpose: "Raise aerobic capacity with short intervals." };
@@ -117,18 +120,21 @@ export function scriptedCardio(ri: CardioReasoningInput, tweak?: (p: WireCardio[
   const inc = Math.min(b.maxWeeklyIncreasePct, 10) / 100;
   const down = ri.endurance?.downEvery?.[1];
   const ceiling = Math.min(range ? range[1] : Infinity, ri.capacity.weeklyMaxMinutes ?? Infinity);
-  const progression: Array<{ week: number; sessions: Array<Record<string, unknown>>; change: string }> = [];
+  const progression: Array<{ week: number; sessions: Array<Record<string, unknown>>; deload: boolean; gate: string; change: string }> = [];
+  const flat = optional && !range; // the coach never sized optional cardio: keep it flat
   let prev = sessions.map((s) => ({ day: s.day, type: s.type, modality: s.modality, minutes: s.minutes, intensity: s.intensity, placement: s.placement, optional: s.optional }));
   for (let w = 2; w <= 6; w++) {
     let next = prev.map((s) => ({ ...s, minutes: Math.min(roomOf(s.day as DayOfWeek), five(s.minutes * (1 + inc))) }));
-    if (total(next) > ceiling || total(next) <= total(prev)) next = prev.map((s) => ({ ...s }));
-    if (down && w === down) next = prev.map((s) => ({ ...s, minutes: five(s.minutes * 0.8) }));
-    progression.push({ week: w, sessions: next, change: down && w === down ? "Down week." : "Add a few minutes where there's room." });
+    if (flat || total(next) > ceiling || total(next) <= total(prev)) next = prev.map((s) => ({ ...s }));
+    const isDown = !!down && w === down;
+    if (isDown) next = prev.map((s) => ({ ...s, minutes: five(s.minutes * 0.8) }));
+    const grows = total(next) > total(sessions);
+    progression.push({ week: w, sessions: next, deload: isDown, gate: b.recoveryLimited && grows ? "recovery_improved" : "none", change: isDown ? "Down week." : "Add a few minutes where there's room." });
     prev = next;
   }
   const steps = ri.coach.rules.find((r) => r[1] === "steps/day")?.[2] as number[] | undefined;
   const fact = Object.keys(ri.client.facts)[0];
-  const refs = { coach: ri.coach.rules[0] ? [ri.coach.rules[0][0]] : [], client: fact ? [fact] : [], evidence: ri.evidence[0] ? [ri.evidence[0].ref] : [] };
+  const refs = { coach: ri.coach.rules[0] ? [ri.coach.rules[0][0]] : [], client: fact ? [fact] : [], evidence: ri.evidence.filter((e) => !e.params)[0] ? [ri.evidence.filter((e) => !e.params)[0].ref] : [] };
   const week1 = total(sessions);
   const plan: WireCardio["plan"] = {
     warranted: true,
@@ -145,7 +151,8 @@ export function scriptedCardio(ri: CardioReasoningInput, tweak?: (p: WireCardio[
     assumptions: ["Scripted assumption."],
     uncertainties: [{ about: "Current aerobic fitness", impact: "Week 1 may be too easy or too hard; the talk test corrects it." }],
     coachQuestions: [],
-    coachDecisions: ri.conflicts.map((c) => ({ conflict: c.id, question: c.text, options: ["Keep the approved program as is", "Move or shorten it (coach decides)"], recommended: 0, why: "Scripted." })),
+    ...(b.recoveryLimited ? { recoveryStrategy: "existing_training_days" } : {}),
+    coachDecisions: ri.conflicts.map((c) => ({ about: c.id, question: c.text, options: ["Keep the approved program as is", "Move or shorten it (coach decides)"], recommended: 0, why: "Scripted." })),
     decisions: (["warranted", "dose", "role", "intensity", "schedule", "progression", ...(ri.resistance?.days.length ? ["interference"] : []), ...(b.recoveryLimited ? ["recovery"] : [])] as const).map((topic) => ({ topic, decision: `Scripted ${topic}`, because: "Scripted.", ...refs })),
   };
   tweak?.(plan);

@@ -14,7 +14,7 @@ import type { ModalityOption } from "../../cardio/eligibility.ts";
 import type { CardioCapacity, ResistanceWeek, ScheduleConflict } from "../../cardio/schedule.ts";
 import { CARDIO_MEASURES, type CardioPlan } from "./contract.ts";
 
-export const CARDIO_REASONER_VERSION = "cardio-reasoner-v1.1.0";
+export const CARDIO_REASONER_VERSION = "cardio-reasoner-v1.2.0";
 export const CARDIO_TOPICS_RETRIEVED = ["dose", "intensity", "interval_training", "concurrent_training", "progression", "weight_management", "screening"];
 export const MODALITY_ROW_LEGEND = "id|name|types (S steady, I intervals)|impact|lower-body interference (N/L/M/H)|skill|equipment state (available / assumed: standard commercial-gym machine / unknown: coach confirms)|fit (- fits the confirmed restrictions; U uncertain — not offered)";
 

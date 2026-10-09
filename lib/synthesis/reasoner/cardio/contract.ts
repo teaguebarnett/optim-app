@@ -9,11 +9,17 @@ import { arr, int, label, obj, oneOf, optStr, pair, SchemaError, str, strList } 
 import { DAY_ORDER } from "../../client-state.ts";
 import type { DayOfWeek } from "../../../types.ts";
 
-export const CARDIO_PROMPT_VERSION = "reasoner-cardio-v1.1.0";
+export const CARDIO_PROMPT_VERSION = "reasoner-cardio-v1.2.0";
 
 /** optional_low_intensity is the coach's "optional, low-intensity extra" — never turned into required sessions. */
 export const CARDIO_PLAN_ROLES = ["fat_loss", "health", "conditioning", "aerobic_base", "optional_low_intensity", "recovery", "none"] as const;
 export const DOSE_VS_RANGE = ["within", "below", "no_coach_range", "none"] as const;
+/** V1.2 — how a recovery-limited plan protects recovery (required when OPTIM flags limited recovery). */
+export const RECOVERY_STRATEGIES = ["no_additional_cardio", "existing_training_days", "reduced_dose", "coach_decision"] as const;
+/** V1.2 — what a later week's growth depends on: nothing, the client's recovery improving, or the coach confirming. */
+export const WEEK_GATES = ["none", "recovery_improved", "coach_confirmed"] as const;
+/** V1.2 — decisions OPTIM may require beyond schedule conflicts. */
+export const DECISION_TOPICS = ["optional_dose", "added_training_day"] as const;
 export const SESSION_TYPES = ["steady", "intervals"] as const;
 export const INTENSITIES = ["easy", "moderate", "vigorous"] as const;
 export const TALK_LEVELS = ["full_conversation", "short_sentences", "few_words"] as const;
@@ -64,16 +70,21 @@ export interface CardioPlan {
   intensityMethod: { primary: "talk_test" | "rpe" | "heart_rate" | "simple_words"; rationale: string };
   sessions: CardioSession[];
   steps: { target: Num2; rationale: string } | null;
-  /** Weeks 2..N, each with its full sessions (week 1 = the sessions above). Totals are OPTIM's arithmetic. */
-  progression: Array<{ week: number; sessions: CardioWeekSession[]; change: string }>;
+  /** Weeks 2..N, each with its full sessions (week 1 = the sessions above). Totals are OPTIM's arithmetic. A deload week
+   * never becomes the baseline later weeks are measured from; `gate` is what the week's growth depends on. */
+  progression: Array<{ week: number; sessions: CardioWeekSession[]; deload: boolean; gate: (typeof WEEK_GATES)[number]; change: string }>;
+  /** Required when recovery is limited: how the prescription itself protects recovery. */
+  recoveryStrategy: (typeof RECOVERY_STRATEGIES)[number] | null;
   placementRationale: string;
   monitoring: { measures: string[]; reviewAfterWeeks: number };
   adjustments: Array<{ signal: string; afterWeeks: number; what: (typeof CHANGE_WHAT)[number]; direction: (typeof CHANGE_DIRECTION)[number]; change: string }>;
   assumptions: string[];
   uncertainties: Array<{ about: string; impact: string }>;
   coachQuestions: Array<{ question: string; why: string }>;
-  /** One prepared decision per schedule conflict OPTIM detected — the approved program is never changed silently. */
-  coachDecisions: Array<{ conflict: string; question: string; options: string[]; recommended: number; why: string }>;
+  /** Prepared coach decisions: one per schedule conflict OPTIM detected (by its id), plus "optional_dose" (an optional
+   * cardio amount the coach never set) and "added_training_day" (a new training day despite limited recovery). The
+   * approved program is never changed silently. */
+  coachDecisions: Array<{ about: string; question: string; options: string[]; recommended: number; why: string }>;
   decisions: Array<{ topic: (typeof CARDIO_TOPICS)[number]; decision: string; because: string; coachRuleKeys: string[]; clientFactRefs: string[]; knowledgeRefs: string[] }>;
 }
 
@@ -141,9 +152,12 @@ export function parseCardioOutput(raw: unknown): { ok: true; output: CardioOutpu
             const sat = `${at}.sessions[${j}]`;
             return { day: oneOf(s.day, `${sat}.day`, DAY_ORDER), type: oneOf(s.type, `${sat}.type`, SESSION_TYPES), modality: str(s.modality, `${sat}.modality`, 60), minutes: int(s.minutes, `${sat}.minutes`, 5, 180), intensity: oneOf(s.intensity, `${sat}.intensity`, INTENSITIES), placement: oneOf(s.placement, `${sat}.placement`, PLACEMENTS), optional: bool(s.optional, `${sat}.optional`) };
           }),
+          deload: bool(w.deload, `${at}.deload`),
+          gate: oneOf(w.gate, `${at}.gate`, WEEK_GATES),
           change: str(w.change, `${at}.change`, 240),
         };
       }),
+      recoveryStrategy: p.recoveryStrategy === undefined || p.recoveryStrategy === null ? null : oneOf(p.recoveryStrategy, "plan.recoveryStrategy", RECOVERY_STRATEGIES),
       placementRationale: str(p.placementWhy, "plan.placementWhy", 500),
       monitoring: { measures: strList(mo.measures, "monitoring.measures", 6, 40), reviewAfterWeeks: int(mo.reviewAfterWeeks, "monitoring.reviewAfterWeeks", 1, 12) },
       adjustments: arr(p.adjustments ?? [], "plan.adjustments", 6).map((x, i) => {
@@ -164,7 +178,7 @@ export function parseCardioOutput(raw: unknown): { ok: true; output: CardioOutpu
         const options = strList(d.options, `coachDecisions[${i}].options`, 4, 200);
         if (options.length < 2) throw new SchemaError(`coachDecisions[${i}].options needs at least two options`);
         const recommended = int(d.recommended, `coachDecisions[${i}].recommended`, 0, options.length - 1);
-        return { conflict: str(d.conflict, `coachDecisions[${i}].conflict`, 60), question: str(d.question, `coachDecisions[${i}].question`, 300), options, recommended, why: str(d.why, `coachDecisions[${i}].why`, 400) };
+        return { about: str(d.about, `coachDecisions[${i}].about`, 60), question: str(d.question, `coachDecisions[${i}].question`, 300), options, recommended, why: str(d.why, `coachDecisions[${i}].why`, 400) };
       }),
       decisions: arr(p.decisions, "plan.decisions", 12).map((x, i) => {
         const d = obj(x, `decisions[${i}]`);
@@ -194,7 +208,8 @@ DOSE — start from THIS client, not from a template
 - First decide whether added cardio is warranted now. warranted:false ("no additional cardio for now", optionally with the coach's step target) is a valid, often correct answer — e.g. when recovery is the limiter, lifting already fills the week, or the client's capacity is very low. Then role, dose, sessions.
 - A coach's minute range is where cardio for that role should head, not a mandatory week-1 amount. Never exceed its top. Start below it ("dose.vsCoachRange":"below") when the client's current capacity (experience, recent consistency, current sessions/week, daily activity, cardio preference), recovery (sleep, stress, existing lifting load) or available time justify it — explain which in "dose.why" and in a "dose" decision. Use "within" when week 1 is inside the range, "no_coach_range" when the role has none, "none" when not warranted.
 - "optional_low_intensity" means the coach's optional, low-intensity extra: every session optional:true, easy, and kept small — never a required program.
-- When "bounds.recoveryLimited" is true, explain in a "recovery" decision how the plan protects recovery (or why no cardio is added). Your prescription must agree with your own reasoning: if you say recovery is limited, the dose must reflect it.
+- OPTIONAL CARDIO WITHOUT A COACH DOSE ("optional_low_intensity" with no minutes): offer something small and keep it flat — don't size it from health or fat-loss minute guidance (that's another role's volume, not this coach's). If you think more would help, keep the weeks flat and prepare an "optional_dose" coach decision (options with minutes, your recommendation); any week that grows needs gate "coach_confirmed".
+- RECOVERY-LIMITED ("bounds.recoveryLimited"): the prescription itself must protect recovery, not just mention it. Choose "recoveryStrategy": "no_additional_cardio" (warranted:false), "existing_training_days" (short sessions only on days the client already trains — after lifting where "capacity" allows), "reduced_dose" (below the coach's range, no new training day), or "coach_decision" (only if a new training day is genuinely the best option: prepare an "added_training_day" coach decision). Never add a training day without that decision. Any later week that grows above week 1 must carry gate "recovery_improved" (or "coach_confirmed"), so growth happens only when recovery allows. Explain the choice in a "recovery" decision; your prescription must agree with your reasoning.
 
 INTENSITY
 - Anchor every session with the coach's intensity method (talk test or perceived effort when the coach set none; heart rate only if the coach uses it AND "zones" are provided). Effort (0–10) must match the label: easy 1–3, moderate 4–6, vigorous 7–9. The talk test isn't practical for intervals — anchor them with effort or heart rate.
@@ -203,11 +218,12 @@ INTENSITY
 FITTING THE WEEK
 - Days: only "bounds.availableDays", one cardio session per day. Each session must fit "capacity": a non-lifting day or a second visit ≥3 h from lifting ("separate_session") holds at most ownVisitMax minutes; cardio after lifting in the same visit ("after_resistance") at most sameVisitMax (0 = no room). A non-lifting day uses "separate_day".
 - Interference: when the goal includes muscle or strength, no hard cardio on a modality with moderate/high lower-body interference on, or the day before, a day with lowerBody:true (lower or full-body lifting); prefer low-interference modalities.
-- Every item in "conflicts" needs one entry in "coachDecisions" (its id, the question, 2–4 concrete options, your recommended option index, why). Don't resolve it yourself by changing the approved program.
+- Every item in "conflicts" needs one entry in "coachDecisions" ("about": its id; the question, 2–4 concrete options, your recommended option index, why). Don't resolve it yourself by changing the approved program.
 - Endurance coaches: train the client's discipline when it is known ("endurance.discipline"); if the coach coaches several sports and the client's isn't known, don't assume one — choose general aerobic work and ask.
 
 PROGRESSION — individualized and feasible
-- Give weeks 2..N (N = 4–8) with every session spelled out. OPTIM totals each week itself and checks each one like week 1: days, capacity, interference, hard sessions, the coach's range top, the weekly increase (≤ "bounds.maxWeeklyIncreasePct"%), long-session cap and down weeks (when the coach sets them). Holding steady is a valid progression; grow only what this client can absorb.
+- Give weeks 2..N (N = 4–8) with every session spelled out. OPTIM totals each week itself and checks each one like week 1: days, capacity, interference, hard sessions, the coach's range top, long-session cap and down weeks (when the coach sets them). Holding steady is a valid progression; grow only what this client can absorb.
+- Deloads: mark a planned lighter week "deload":true (lighter than the week before it). Growth is measured from the most recent NON-deload week (week 1 is the first baseline), so returning to that baseline after a deload is fine; anything above it may rise at most "bounds.maxWeeklyIncreasePct"% over it. The client's pre-plan cardio baseline isn't known — if week 1's size depends on it, say so in "uncertainties".
 - Equipment: a modality whose equipment is "unknown" may be planned, but say what the coach must confirm; "assumed" means a standard commercial-gym machine. Never invent client facts.
 
 OUTPUT — one JSON object, no prose. Keep text short.
@@ -218,12 +234,13 @@ OUTPUT — one JSON object, no prose. Keep text short.
  "intensityMethod":{"primary":"talk_test"|"rpe"|"heart_rate"|"simple_words","why":str},
  "sessions":[{"day":"Monday","type":"steady"|"intervals","modality":<modality id>,"minutes":int,"intensity":"easy"|"moderate"|"vigorous","effort":[lo,hi],"talk":"full_conversation"|"short_sentences"|"few_words" or omit,"hrPct":[lo,hi] or omit,"intervals":{"rounds":int,"workSeconds":int,"recoverySeconds":int,"workEffort":[lo,hi],"recoveryEffort":[lo,hi]} or omit,"placement":"separate_day"|"after_resistance"|"separate_session","optional":bool,"purpose":str,"note":str or omit}],
  "steps":{"target":[lo,hi],"why":str} or omit (only if the coach sets steps),
- "progression":[{"week":2,"sessions":[{"day","type","modality","minutes","intensity","placement","optional"}],"change":str}, ...],
+ "progression":[{"week":2,"sessions":[{"day","type","modality","minutes","intensity","placement","optional"}],"deload":bool,"gate":"none"|"recovery_improved"|"coach_confirmed","change":str}, ...],
+ "recoveryStrategy":"no_additional_cardio"|"existing_training_days"|"reduced_dose"|"coach_decision" (required when bounds.recoveryLimited; else omit),
  "placementWhy":str,
  "monitoring":{"measures":[<from bounds.measures>],"reviewAfterWeeks":int},
  "adjustments":[{"signal":str,"afterWeeks":int,"what":"minutes"|"intensity"|"frequency"|"modality","direction":"increase"|"decrease"|"hold","change":str}],
  "assumptions":[str],"uncertainties":[{"about":str,"impact":str}],"coachQuestions":[{"question":str,"why":str}],
- "coachDecisions":[{"conflict":<conflict id>,"question":str,"options":[str,...],"recommended":int,"why":str}],
+ "coachDecisions":[{"about":<conflict id>|"optional_dose"|"added_training_day","question":str,"options":[str,...],"recommended":int,"why":str}],
  "decisions":[≤12 {"topic":"warranted"|"dose"|"recovery"|"role"|"modality"|"intensity"|"schedule"|"interference"|"progression"|"monitoring"|"other","decision":str,"because":str,"coach":[keys],"client":[client.facts keys],"evidence":[refs]}]
 }}
 or {"status":"NEEDS_INPUT","needsInput":[{"fact":str,"why":str,"blockedDecision":str,"providedBy":"client"|"coach"|"either"}],"summary":str}

@@ -1,4 +1,4 @@
-// Cardio Reasoner V1.1 — the Fitness Reasoner's architecture applied to cardiovascular training.
+// Cardio Reasoner V1.2 — the Fitness Reasoner's architecture applied to cardiovascular training.
 //
 //   readiness (coach method, goal, no open health review) → routing (race/event & sport conditioning UNSUPPORTED —
 //   never routed into resistance planning) → coach scope (does this coach prescribe cardio?) → method complete?
@@ -40,10 +40,13 @@ export interface CardioReviewItems {
   screening: string[];
   warnings: string[];
   questions: string[];
-  /** Each schedule conflict with the model's prepared decision (options + recommendation) — never applied silently. */
-  conflictDecisions: Array<{ conflict: string; text: string; question: string | null; options: string[]; recommended: string | null; why: string | null }>;
+  /** Every prepared coach decision (schedule conflicts, an optional dose, an added training day) with its options and
+   * recommendation — never applied silently. */
+  coachDecisions: Array<{ about: string; text: string; question: string | null; options: string[]; recommended: string | null; why: string | null }>;
   /** OPTIM's week-by-week reading of the progression, rendered from its structure (not the model's wording). */
   progression: string[];
+  /** V1.2 — how the plan protects a recovery-limited client. */
+  recoveryStrategy?: CardioPlan["recoveryStrategy"];
   /** OPTIM's own accounting of the proposed week across cardio and resistance. */
   workload: CardioWorkload & { statement: string };
   basis: string[];
@@ -184,11 +187,17 @@ export async function runCardioReasoner(params: { input: SynthesisInput; model: 
     screening: safety.screening,
     warnings: safety.warnings,
     questions: conflicts.map((c) => c.text),
-    conflictDecisions: conflicts.map((c) => {
-      const d = done.plan.coachDecisions.find((x) => x.conflict === c.id);
-      return { conflict: c.id, text: c.text, question: d?.question ?? null, options: d?.options ?? [], recommended: d ? d.options[d.recommended] : null, why: d?.why ?? null };
-    }),
-    progression: w.weeks.map((x) => `Week ${x.week}: ${x.minutes.total} min over ${x.sessions} session${x.sessions === 1 ? "" : "s"} (${x.minutes.easy} easy / ${x.minutes.moderate} moderate / ${x.minutes.vigorous} vigorous), ${x.hardSessions} hard${x.optionalMinutes ? `, ${x.optionalMinutes} min optional` : ""}.`),
+    coachDecisions: [
+      ...conflicts.map((c) => {
+        const d = done.plan.coachDecisions.find((x) => x.about === c.id);
+        return { about: c.id, text: c.text, question: d?.question ?? null, options: d?.options ?? [], recommended: d ? d.options[d.recommended] : null, why: d?.why ?? null };
+      }),
+      ...done.plan.coachDecisions
+        .filter((d) => !conflicts.some((c) => c.id === d.about))
+        .map((d) => ({ about: d.about, text: d.about === "optional_dose" ? "The coach hasn't set an amount for optional cardio." : "A new training day for a recovery-limited client.", question: d.question, options: d.options, recommended: d.options[d.recommended], why: d.why })),
+    ],
+    progression: w.weeks.map((x) => `Week ${x.week}${x.deload ? " (deload)" : ""}: ${x.minutes.total} min over ${x.sessions} session${x.sessions === 1 ? "" : "s"} (${x.minutes.easy} easy / ${x.minutes.moderate} moderate / ${x.minutes.vigorous} vigorous), ${x.hardSessions} hard${x.optionalMinutes ? `, ${x.optionalMinutes} min optional` : ""}${x.gate === "recovery_improved" ? " — only if recovery has improved" : x.gate === "coach_confirmed" ? " — only once the coach confirms" : ""}.`),
+    ...(done.plan.recoveryStrategy ? { recoveryStrategy: done.plan.recoveryStrategy } : {}),
     workload: { ...w, statement: `${done.plan.warranted ? "" : "No additional cardio proposed. "}Week 1: ${w.weeklyMinutes.total} min of cardio (${w.weeklyMinutes.easy} easy, ${w.weeklyMinutes.moderate} moderate, ${w.weeklyMinutes.vigorous} vigorous; ≈${w.moderateEquivalent} moderate-equivalent min), ${w.hardSessions} hard session${w.hardSessions === 1 ? "" : "s"}, ${w.trainingDays} training day${w.trainingDays === 1 ? "" : "s"} counting resistance${resistance ? ` (${resistance.source === "approved_program" ? "approved" : "proposed"} program)` : " (no resistance program supplied)"}.` },
     basis: [
       `Weekly minutes: the coach's ${Object.entries(reasoning.bounds.minutesByRole).map(([r, [a, b]]) => `${r.replace(/_/g, " ")} ${a}–${b}`).join(", ") || "method (no minute range stated)"} min/week.`,

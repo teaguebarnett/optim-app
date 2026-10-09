@@ -1,0 +1,25 @@
+{
+ "calls": 2,
+ "inputTokens": 14688,
+ "outputTokens": 12000,
+ "latencyMs": 136354,
+ "entries": [
+  {
+   "at": "2026-10-09T21:52:37.356Z",
+   "scenario": "C03",
+   "inputTokens": 7297,
+   "outputTokens": 5783,
+   "latencyMs": 66008,
+   "usd": 0.18106
+  },
+  {
+   "at": "2026-10-09T21:53:47.726Z",
+   "scenario": "C04",
+   "inputTokens": 7391,
+   "outputTokens": 6217,
+   "latencyMs": 70346,
+   "usd": 0.19238
+  }
+ ],
+ "usd": 0.37344
+}

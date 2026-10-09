@@ -59,7 +59,7 @@ export function plannedInvariants(r: CardioReasonerResult, i: SynthesisInput): s
   const cap = ri.capacity.weeklyMaxMinutes;
   if (cap !== null && weeks.some((w) => w.minutes.total > cap)) out.push(`a week doesn't fit the client's ${cap} min of capacity`);
   if (p.plan.role === "optional_low_intensity" && [...p.plan.sessions, ...p.plan.progression.flatMap((w) => w.sessions)].some((x) => !x.optional)) out.push("optional cardio made mandatory");
-  for (const c of ri.conflicts) if (!p.plan.coachDecisions.some((d) => d.conflict === c.id)) out.push(`no prepared coach decision for ${c.id}`);
+  for (const c of ri.conflicts) if (!p.plan.coachDecisions.some((d) => d.about === c.id)) out.push(`no prepared coach decision for ${c.id}`);
   if (p.plan.dose.vsCoachRange === "below" && !p.plan.decisions.some((d) => d.topic === "dose")) out.push("below-range dose not explained");
   if (p.run.versions.coachMethod === null) out.push("no coach method recorded");
   return out;
@@ -127,7 +127,8 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
     },
     quality: (r) => [
       { check: "no added cardio, or a deliberately reduced dose (below the coach's range)", pass: !r.plan.warranted || r.plan.dose.vsCoachRange === "below" },
-      { check: "adds at most one training day to the 5 lifting days", pass: r.review.workload.trainingDays <= 6 && r.plan.sessions.filter((x) => x.placement === "separate_day").length <= 1 },
+      { check: "no new training day without a prepared coach decision", pass: !r.plan.sessions.some((x) => x.placement === "separate_day") || r.plan.coachDecisions.some((d) => d.about === "added_training_day") },
+      { check: "any growth is gated on recovery improving (or the coach)", pass: r.review.workload.weeks.every((w) => w.week === 1 || w.minutes.total <= r.review.workload.weeks[0].minutes.total || w.gate !== "none") },
       { check: "names recovery as an uncertainty or coach question", pass: [...r.plan.uncertainties.map((u) => u.about + u.impact), ...r.plan.coachQuestions.map((q) => q.question)].some((t) => /sleep|recover|stress/i.test(t)) },
     ],
   },
@@ -261,7 +262,7 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
       if (!p) return [];
       return [...(p.review.questions.some((q) => /Saturday/.test(q)) ? [] : ["Saturday conflict not surfaced"]), ...(p.review.questions.some((q) => /Monday/.test(q) && /cap/.test(q)) ? [] : ["Monday over-cap not surfaced"]), ...(p.plan.sessions.some((s) => s.day === "Monday" && s.placement === "after_resistance") ? ["cardio stacked onto an over-cap session"] : [])];
     },
-    quality: (r) => [{ check: "every conflict has a prepared decision with a recommendation", pass: r.review.conflictDecisions.every((d) => d.recommended !== null && d.options.length >= 2) }],
+    quality: (r) => [{ check: "every conflict has a prepared decision with a recommendation", pass: r.review.coachDecisions.every((d) => d.recommended !== null && d.options.length >= 2) }],
   },
   {
     id: "C09",
@@ -307,7 +308,10 @@ export const CARDIO_SCENARIOS: CardioScenario[] = [
       if (!p) return [];
       return [...(p.plan.role === "optional_low_intensity" ? [] : [`role ${p.plan.role}, expected optional_low_intensity`]), ...(p.plan.sessions.some(isHard) ? ["hard work for an optional-low-intensity coach"] : []), ...(p.run.input!.bounds.minutesByRole.fat_loss ? ["another role's minute budget was offered"] : [])];
     },
-    quality: (r) => [{ check: "keeps the optional extra small (≤ 90 min/week by the last week)", pass: r.review.workload.weeks.at(-1)!.minutes.total <= 90 }],
+    quality: (r) => [
+      { check: "optional cardio stays flat unless the coach confirms a dose (optional_dose decision)", pass: r.review.workload.weeks.every((w) => w.optionalMinutes <= r.review.workload.weeks[0].optionalMinutes || (w.gate === "coach_confirmed" && r.plan.coachDecisions.some((d) => d.about === "optional_dose"))) },
+      { check: "dose not sized from weekly-minute guidance", pass: !r.plan.decisions.some((d) => d.topic === "dose" && d.knowledgeRefs.some((x) => /fatloss\.dose|dose\.acsm|dose\.who/.test(x))) },
+    ],
   },
 ];
 

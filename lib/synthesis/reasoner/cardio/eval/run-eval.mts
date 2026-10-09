@@ -29,8 +29,8 @@ const maxAttempts = Number(arg("--max-attempts") ?? 2);
 const only = arg("--only") ? new Set(arg("--only")!.split(",")) : null;
 if (live && !ledgerPath) throw new Error("--live requires --ledger <file> so live calls are metered.");
 if (live && !(maxUsd && maxUsd > 0)) throw new Error("--live requires --max-usd <dollars> so spend is capped.");
-// Input estimate for the worst-case guard: measured with count_tokens on the largest scenario input (V1.1: 6,829 tokens).
-const meter = live ? createLedger(ledgerPath!, maxCalls, { maxUsd: maxUsd!, inputTokensEstimate: 7000 }) : null;
+// Input estimate for the worst-case guard: measured with count_tokens on the largest scenario input (V1.2: 7,391 tokens).
+const meter = live ? createLedger(ledgerPath!, maxCalls, { maxUsd: maxUsd!, inputTokensEstimate: 7500 }) : null;
 
 const selected = CARDIO_SCENARIOS.filter((s) => !only || only.has(s.id));
 if (live) {
@@ -42,7 +42,7 @@ if (live) {
     process.exit(2);
   }
 }
-console.log(`\nCardio Reasoner V1.1 — evaluation (${live ? "LIVE, medium effort" : "offline, scripted model"}; ${selected.length} scenarios)\n`);
+console.log(`\nCardio Reasoner V1.2 — evaluation (${live ? "LIVE, medium effort" : "offline, scripted model"}; ${selected.length} scenarios)\n`);
 
 interface Row { s: CardioScenario; r: CardioReasonerResult; hard: string[]; quality: Array<{ check: string; pass: boolean }> }
 const rows: Row[] = [];
@@ -93,8 +93,9 @@ if (pack) {
       `**Objective:** ${p.objective.summary} — _${p.objective.rationale}_`,
       `| Day | Type | Modality | Min | Intensity | Effort | Talk | HR % | Intervals | Placement | Optional | Purpose |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n${p.sessions.map((x) => `| ${x.day} | ${x.type} | ${name(x.modality)} | ${x.minutes} | ${x.intensity} | ${r2(x.effort)} | ${x.talk ?? "—"} | ${r2(x.hrPct)} | ${x.intervals ? `${x.intervals.rounds}×${x.intervals.workSeconds}s/${x.intervals.recoverySeconds}s @${r2(x.intervals.workEffort)}/${r2(x.intervals.recoveryEffort)}` : "—"} | ${x.placement} | ${x.optional ? "yes" : "no"} | ${x.purpose}${x.note ? ` (${x.note})` : ""} |`).join("\n")}`,
       p.steps ? `**Steps:** ${r2(p.steps.target)} — _${p.steps.rationale}_` : "",
-      `**Progression (OPTIM's totals):**\n${r.review.progression.map((x) => `- ${x}`).join("\n")}\n\n${p.progression.map((w) => `- W${w.week}: ${w.sessions.map((x) => `${x.day.slice(0, 3)} ${name(x.modality)} ${x.minutes}′ ${x.intensity}${x.type === "intervals" ? " intervals" : ""}${x.optional ? " (optional)" : ""}${x.placement !== "separate_day" ? ` [${x.placement}]` : ""}`).join(", ") || "—"} — _${w.change}_`).join("\n")}`,
-      r.review.conflictDecisions.length ? `**Prepared coach decisions:**\n${r.review.conflictDecisions.map((d) => `- ${d.text} → ${d.question ?? "—"} Options: ${d.options.map((o, k) => `(${k + 1}) ${o}`).join(" ")} · Recommended: ${d.recommended ?? "—"} — _${d.why ?? ""}_`).join("\n")}` : "",
+      `**Progression (OPTIM's totals):**\n${r.review.progression.map((x) => `- ${x}`).join("\n")}\n\n${p.progression.map((w) => `- W${w.week}: ${w.deload ? "(deload) " : ""}${w.gate !== "none" ? `[gate: ${w.gate}] ` : ""}${w.sessions.map((x) => `${x.day.slice(0, 3)} ${name(x.modality)} ${x.minutes}′ ${x.intensity}${x.type === "intervals" ? " intervals" : ""}${x.optional ? " (optional)" : ""}${x.placement !== "separate_day" ? ` [${x.placement}]` : ""}`).join(", ") || "—"} — _${w.change}_`).join("\n")}`,
+      r.review.recoveryStrategy ? `**Recovery strategy:** ${r.review.recoveryStrategy}` : "",
+      r.review.coachDecisions.length ? `**Prepared coach decisions:**\n${r.review.coachDecisions.map((d) => `- [${d.about}] ${d.text} → ${d.question ?? "—"} Options: ${d.options.map((o, k) => `(${k + 1}) ${o}`).join(" ")} · Recommended: ${d.recommended ?? "—"} — _${d.why ?? ""}_`).join("\n")}` : "",
       `**Placement:** ${p.placementRationale}`,
       `**Monitoring:** ${p.monitoring.measures.join(", ")}; review after ${p.monitoring.reviewAfterWeeks} wk`,
       `**Adjustments:**\n${p.adjustments.map((a) => `- ${a.signal} (${a.afterWeeks} wk) → ${a.direction} ${a.what}: ${a.change}`).join("\n") || "—"}`,
@@ -105,6 +106,6 @@ if (pack) {
       `**OPTIM review:** ${r.review.workload.statement}${r.review.withheld.length ? ` Withheld: ${r.review.withheld.map((w) => `${w.modality} (${w.why})`).join("; ")}.` : ""}${r.review.quality.length ? `\nQuality flags: ${r.review.quality.map((q) => `${q.code}: ${q.message}`).join(" | ")}` : ""}${r.review.questions.length ? `\nOPTIM questions: ${r.review.questions.join(" | ")}` : ""}`,
     ].filter(Boolean).join("\n\n");
   });
-  writeFileSync(pack, [`# Cardio Reasoner V1.1 — review pack`, `Generated ${new Date().toISOString().slice(0, 10)} · ${live ? "live model (production model, medium effort)" : "scripted model (rails only — not for coaching review)"}.`, ...pages].join("\n\n"));
+  writeFileSync(pack, [`# Cardio Reasoner V1.2 — review pack`, `Generated ${new Date().toISOString().slice(0, 10)} · ${live ? "live model (production model, medium effort)" : "scripted model (rails only — not for coaching review)"}.`, ...pages].join("\n\n"));
 }
 if (failures || stopped) process.exit(1);

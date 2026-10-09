@@ -1,5 +1,7 @@
 # Cardio Reasoner V1.1 — checkpoint status
 
+> Superseded by V1.2 — see `../cardio-reasoner-v1.2/STATUS.md`. The three blockers below are resolved there.
+
 **Status: LIMITED-LIVE VERIFIED development checkpoint. Not production-ready.**
 Branch `cardio-reasoner-v1` (not merged, not deployed). Prompt `reasoner-cardio-v1.1.0`, reasoner
 `cardio-reasoner-v1.1.0`, knowledge `cardio-0.1.0`, model `claude-opus-5` at medium effort. Builds on V1
