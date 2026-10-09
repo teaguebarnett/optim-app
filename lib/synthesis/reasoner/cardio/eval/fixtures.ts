@@ -49,22 +49,18 @@ export function enduranceCoach(over: Record<string, unknown> = {}): ConfirmedCoa
   });
 }
 
+/** Program content in the universal grammar: day → exercise names (catalog names) and minutes. */
+export function programContent(days: Array<{ day: DayOfWeek; exercises: string[]; minutes?: number }>, weeks = 1): UniversalTrainingProgramContent {
+  const week = (n: number) => ({ weekNumber: n, days: DAY_ORDER.map((d) => {
+    const spec = days.find((x) => x.day === d);
+    return spec ? { dayOfWeek: d, type: "training", sessions: [{ id: `s-${n}-${d}`, name: d, focus: "", estimatedDurationMin: spec.minutes ?? 60, blocks: [{ id: `b-${n}-${d}`, kind: "straight", order: 1, items: spec.exercises.map((nm, i) => ({ id: `i-${n}-${d}-${i}`, order: i + 1, name: nm, category: "strength", prescription: {} })) }] }] } : { dayOfWeek: d, type: "rest" };
+  }) });
+  return { schemaVersion: 2, id: "prog-eval", workspaceId: "ws-eval", clientId: "client-eval", coachId: "coach-eval", name: "Eval program", durationWeeks: Math.max(weeks, 8), weeks: Array.from({ length: weeks }, (_, k) => week(k + 1)) } as unknown as UniversalTrainingProgramContent;
+}
+
 /** A resistance week in the universal grammar: day → exercise names (catalog names) and minutes. */
 export function resistanceProgram(days: Array<{ day: DayOfWeek; exercises: string[]; minutes?: number }>, source: ResistanceWeek["source"] = "approved_program"): ResistanceWeek {
-  const content = {
-    schemaVersion: 2,
-    id: "prog-eval",
-    workspaceId: "ws-eval",
-    clientId: "client-eval",
-    coachId: "coach-eval",
-    name: "Eval program",
-    durationWeeks: 8,
-    weeks: [{ weekNumber: 1, days: DAY_ORDER.map((d) => {
-      const spec = days.find((x) => x.day === d);
-      return spec ? { dayOfWeek: d, type: "training", sessions: [{ id: `s-${d}`, name: d, focus: "", estimatedDurationMin: spec.minutes ?? 60, blocks: [{ id: `b-${d}`, kind: "straight", order: 1, items: spec.exercises.map((n, i) => ({ id: `i-${d}-${i}`, order: i + 1, name: n, category: "strength", prescription: {} })) }] }] } : { dayOfWeek: d, type: "rest" };
-    }) }],
-  } as unknown as UniversalTrainingProgramContent;
-  return resistanceWeekFromContent(content, FOUNDATION_KNOWLEDGE, source);
+  return resistanceWeekFromContent(programContent(days), FOUNDATION_KNOWLEDGE, source);
 }
 
 export const LOWER = ["Leg Press", "Romanian Deadlift", "Walking Lunge", "Leg Curl"];

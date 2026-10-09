@@ -6,6 +6,7 @@ import type { ClientState } from "../client-state.ts";
 import type { DayOfWeek } from "../../types.ts";
 import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import type { UniversalTrainingProgramContent } from "../../training/types.ts";
+import type { PlanSpecification } from "../plan-spec.ts";
 
 export interface ResistanceDay {
   day: DayOfWeek;
@@ -42,6 +43,19 @@ export function resistanceWeekFromContent(content: UniversalTrainingProgramConte
     days.push({ day: d.dayOfWeek as DayOfWeek, focus, lowerBody: major || lowerItems.length >= 2, lowerExercises: lowerItems.map((i) => i.name), minutes: sessions.reduce((t, s) => t + (s.estimatedDurationMin ?? 60), 0) });
   }
   return { source, days };
+}
+
+/** The same week from a PROPOSED resistance plan (the Fitness Reasoner's specification) — Unified Program U1. */
+export function resistanceWeekFromSpec(spec: PlanSpecification, knowledge: FitnessKnowledgeRegistry): ResistanceWeek {
+  const days: ResistanceDay[] = (spec.resistance?.value.sessions ?? []).map((s) => {
+    const patterns = s.exercises.map((e) => knowledge.getExercise(e.exerciseId)?.patterns ?? []);
+    const lower = s.exercises.filter((_, k) => patterns[k].some((p) => LOWER.has(p)));
+    const major = patterns.some((ps) => ps.some((p) => MAJOR_LOWER.has(p)));
+    const share = s.exercises.length ? lower.length / s.exercises.length : 0;
+    const focus: ResistanceDay["focus"] = lower.length === 0 ? "upper" : share >= 0.6 ? "lower" : "full_body";
+    return { day: s.day, focus, lowerBody: major || lower.length >= 2, lowerExercises: lower.map((e) => knowledge.getExercise(e.exerciseId)?.name ?? e.exerciseId), minutes: s.estimatedMinutes };
+  });
+  return { source: "proposed_program", days };
 }
 
 export interface ScheduleConflict {

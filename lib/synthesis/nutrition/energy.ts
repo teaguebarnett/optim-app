@@ -24,8 +24,9 @@ export interface TrainingContext {
   sessionsPerWeek: number;
   minutesPerSession: number;
   kind: "resistance" | "endurance" | "mixed";
-  /** Where it came from: an approved program, or the client's current habit. */
-  source: "approved_program" | "client_current";
+  /** Where it came from: an approved program, a program proposed alongside this strategy (Unified Program U1 — not yet
+   * approved), or the client's current habit. */
+  source: "approved_program" | "proposed_program" | "client_current";
 }
 
 /** Internal heuristic multipliers by daily activity outside training (source_needed). */
@@ -93,7 +94,7 @@ export function estimateEnergy(params: { client: ClientState; goal: GoalClass | 
   const t = params.training;
   const session = t ? sessionKcal(t, kg) : null;
   const perDayTraining = t && session ? { low: (session.low * Math.min(7, t.sessionsPerWeek)) / 7, high: (session.high * Math.min(7, t.sessionsPerWeek)) / 7 } : { low: 0, high: 0 };
-  if (t && session) basis.push(`${t.sessionsPerWeek} ${t.kind} sessions/week × ~${t.minutesPerSession} min (${t.source === "approved_program" ? "approved program" : "client's current habit"}): ${session.low}–${session.high} kcal per session above rest (Compendium ${TRAINING_MET[t.kind][0]}–${TRAINING_MET[t.kind][1]} MET)`);
+  if (t && session) basis.push(`${t.sessionsPerWeek} ${t.kind} sessions/week × ~${t.minutesPerSession} min (${t.source === "approved_program" ? "approved program" : t.source === "proposed_program" ? "proposed program, not yet approved" : "client's current habit"}): ${session.low}–${session.high} kcal per session above rest (Compendium ${TRAINING_MET[t.kind][0]}–${TRAINING_MET[t.kind][1]} MET)`);
   const factor = { low: a0, high: a1, basis };
   const maintenance = { low: r50(resting[0] * factor.low + perDayTraining.low), high: r50(resting[1] * factor.high + perDayTraining.high) };
   const floorKcal = r50(resting[0]);
@@ -164,11 +165,12 @@ export function impliedRate(e: EnergyEstimate, kcal: { min: number; max: number 
 
 /** Material contradictions between the client's stated schedule and the training the nutrition must support. */
 export function scheduleConflicts(c: ClientState, t: TrainingContext | null): string[] {
-  if (!t || t.source !== "approved_program") return [];
+  if (!t || t.source === "client_current") return [];
   const out: string[] = [];
   const len = isKnown(c.schedule.maxSessionLength) ? c.schedule.maxSessionLength.value : null;
-  if (len && !len.openEnded && t.minutesPerSession > len.minutes) out.push(`The approved program's sessions run ~${t.minutesPerSession} min, but the client reported a ${len.minutes}-min maximum — the training energy cost depends on which is current.`);
+  const which = t.source === "approved_program" ? "approved" : "proposed";
+  if (len && !len.openEnded && t.minutesPerSession > len.minutes) out.push(`The ${which} program's sessions run ~${t.minutesPerSession} min, but the client reported a ${len.minutes}-min maximum — the training energy cost depends on which is current.`);
   const days = isKnown(c.schedule.availableDays) ? c.schedule.availableDays.value.length : null;
-  if (days !== null && t.sessionsPerWeek > days) out.push(`The approved program has ${t.sessionsPerWeek} sessions/week, but the client reported ${days} available day(s).`);
+  if (days !== null && t.sessionsPerWeek > days) out.push(`The ${which} program has ${t.sessionsPerWeek} sessions/week, but the client reported ${days} available day(s).`);
   return out;
 }
