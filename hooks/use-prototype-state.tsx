@@ -1,5 +1,8 @@
 "use client";
 
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { shouldRebind, UNBOUND, writeOwner, type ClientBinding } from "@/lib/production/client-ownership";
 import {
   createContext,
   useCallback,
@@ -197,6 +200,40 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
   const initialPathname = usePathname();
 
   // ---------------------------------------------------------------------
+  // Cross-client data integrity (U3A closure). This provider lives in the
+  // root layout, so it survives sign-in, sign-out and account switches. Its
+  // state is therefore BOUND to the identity it was hydrated for
+  // (bindingRef), every write declares that owner (the server refuses a
+  // mismatch — see lib/production/client-ownership.ts), and any auth change
+  // to a different user discards the state and re-hydrates (`rebind`).
+  // Bumping hydrationEpoch re-runs the bootstrap below; its cleanup cancels
+  // the previous run, so a hydration started under the old cookie can never
+  // land after the switch.
+  // ---------------------------------------------------------------------
+  const bindingRef = useRef<ClientBinding>(UNBOUND);
+  const [hydrationEpoch, setHydrationEpoch] = useState(0);
+  // Defined before the escalation effect that resets it; filled below.
+  const escalatedReportIdsRef = useRef<Set<string>>(new Set());
+  const rebind = useCallback(() => {
+    bindingRef.current = UNBOUND;
+    escalatedReportIdsRef.current = new Set();
+    setIsHydrated(false);
+    setSupabaseContext(null);
+    setSupabaseNotProvisioned(false);
+    setSupabaseProgramNotAssigned(false);
+    dispatch({ type: "HYDRATE", payload: createInitialState() });
+    setHydrationEpoch((e) => e + 1);
+  }, []);
+
+  useEffect(() => {
+    if (appMode !== "supabase") return;
+    const { data } = getSupabaseBrowserClient().auth.onAuthStateChange((event: AuthChangeEvent, session: Session | null) => {
+      if (shouldRebind(bindingRef.current, event, session?.user?.id ?? null)) rebind();
+    });
+    return () => data.subscription.unsubscribe();
+  }, [appMode, rebind]);
+
+  // ---------------------------------------------------------------------
   // Phase 6.0B — Supabase mode bootstrap. Entirely separate from the demo
   // bootstrap below: never reads localStorage, never waits on the demo
   // PlatformStateProvider, and never falls back to seeded/demo content —
@@ -221,16 +258,20 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
         result = await getMySupabaseAppStateAction();
       } catch {
         if (cancelled) return;
+        bindingRef.current = { userId: null, owner: null };
         setSupabaseNotProvisioned(true);
         setIsHydrated(true);
         return;
       }
       if (cancelled) return;
       if (result.kind === "not_provisioned") {
+        bindingRef.current = { userId: result.userId, owner: null };
         setSupabaseNotProvisioned(true);
         setIsHydrated(true);
         return;
       }
+      // Bound to exactly the client this state was built for.
+      bindingRef.current = { userId: result.userId, owner: { clientProfileId: result.state.clientId, workspaceId: result.state.workspaceId } };
       dispatch({ type: "HYDRATE", payload: result.state });
       setSupabaseProgramNotAssigned(result.programNotYetAssigned);
       const sessionWasStarted =
@@ -271,7 +312,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
     return () => {
       cancelled = true;
     };
-  }, [appMode]);
+  }, [appMode, hydrationEpoch]);
 
   // Phase 6.0B — Supabase mode's own autosave: persists today's real
   // { training, nutrition, weight } snapshot (the exact same pure builder
@@ -293,11 +334,19 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
     // same override the Training page itself uses to render for this
     // client in the first place.
     if (appMode !== "supabase" || !isHydrated || supabaseNotProvisioned || (supabaseProgramNotAssigned && !state.assignedUniversalProgram)) return;
+    // Only the bound client's own state is ever written, and the write says whose it is.
+    const owner = writeOwner(state, bindingRef.current);
+    if (!owner) return;
     const record = buildDailyRecordFromLiveState(state, state.programEnrollment, "live");
     saveMySupabaseDailyActivityAction({
       dateIso: state.dateIso,
       programAssignmentId: null,
       content: { training: record.training, nutrition: record.nutrition, weight: record.weight },
+      owner,
+    }).then((result) => {
+      // The session now belongs to someone else (another tab signed in, or a switch raced this save): nothing was
+      // written; drop this state and load the signed-in client's own — unless that already happened.
+      if (!result.ok && bindingRef.current.owner === owner) rebind();
     }).catch((err) => {
       // A failed autosave must never be silently swallowed into "looks
       // saved" — surfaced to the console for now; a visible toast/error
@@ -305,7 +354,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
       // slice's core persistence correctness.
       console.error("Supabase daily activity autosave failed:", err);
     });
-  }, [appMode, state, isHydrated, supabaseNotProvisioned, supabaseProgramNotAssigned]);
+  }, [appMode, state, isHydrated, supabaseNotProvisioned, supabaseProgramNotAssigned, rebind]);
 
   // Phase 7A — Supabase mode's own acute-pain-report persistence: fires
   // AFTER lib/state.ts's REPORT_PAIN reducer case has already, synchronously,
@@ -320,9 +369,10 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
   // report on a rare reload-mid-request is a minor, honest annoyance, never
   // a safety issue, and far preferable to a design that could silently drop
   // a genuinely new report.
-  const escalatedReportIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (appMode !== "supabase" || !isHydrated) return;
+    const owner = writeOwner(state, bindingRef.current);
+    if (!owner) return;
     const newReports = state.workoutSession.painReports.filter((r) => !escalatedReportIdsRef.current.has(r.id));
     for (const report of newReports) {
       escalatedReportIdsRef.current.add(report.id);
@@ -337,8 +387,12 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
         symptomQuality: report.symptomQuality ?? "normal-fatigue",
         itemName: item?.name,
         note: report.note,
-      })
+      }, owner)
         .then((result) => {
+          if (result.ownerMismatch) {
+            if (bindingRef.current.owner === owner) rebind();
+            return;
+          }
           dispatch({ type: "SET_PAIN_ESCALATION_STATUS", painReportId: report.id, escalationCreated: result.escalationCreated });
         })
         .catch((err) => {
@@ -350,7 +404,7 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
           dispatch({ type: "SET_PAIN_ESCALATION_STATUS", painReportId: report.id, escalationCreated: false });
         });
     }
-  }, [appMode, isHydrated, state.workoutSession.painReports, state.workoutSession.resolvedSession]);
+  }, [appMode, isHydrated, state, rebind]);
 
   // One combined bootstrap — reads perspective, which client is currently
   // active, and that client's own AppState together, so there is never an

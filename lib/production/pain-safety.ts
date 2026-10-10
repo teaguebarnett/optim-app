@@ -20,6 +20,7 @@
 // (20260912000018_health_safety_escalations.sql) for why no new table
 // exists for this.
 
+import { ownerMatches, type ClientOwner } from "./client-ownership";
 import "server-only";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "./auth.ts";
@@ -51,6 +52,8 @@ export interface AcutePainReportResult {
    * notified unless this is true. */
   escalationCreated: boolean;
   escalationId: string | null;
+  /** Cross-client integrity — the report came from another client's retained state; nothing was created. */
+  ownerMismatch?: true;
 }
 
 /** The one real Supabase-mode write for an acute pain report. Always
@@ -60,8 +63,10 @@ export interface AcutePainReportResult {
  * facing error over and above the report itself (the safety gate already
  * fired client-side regardless) — instead returns an honest
  * escalationCreated: false so the caller can render truthful copy. */
-export async function reportAcutePainForClient(input: AcutePainReportInput): Promise<AcutePainReportResult> {
+export async function reportAcutePainForClient(input: AcutePainReportInput, owner: ClientOwner): Promise<AcutePainReportResult> {
   const identity = await resolveOwnClientIdentity();
+  // Never file one client's pain report under another client (see lib/production/client-ownership.ts).
+  if (!ownerMatches(owner, identity)) return { escalationCreated: false, escalationId: null, ownerMismatch: true };
   const supabase = await getSupabaseServerClient();
   const summary = buildPainSummary(input);
 
