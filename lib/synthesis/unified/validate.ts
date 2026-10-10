@@ -61,6 +61,55 @@ export function validateCrossDomain(p: {
   if (p.approved && sha256(p.approved.content) !== p.approvedHashBefore) out.errors.push("The approved resistance program changed during planning — approved prescriptions are never modified.");
   if (p.existing && sha256(p.existing.content) !== p.existingHashBefore) out.errors.push("The coach's pending resistance draft changed during planning — it's used unchanged, never edited here.");
 
+  // X5 / X6 / X9 — the week-level checks (shared with review revalidation).
+  const wk = weekChecks({ input, week: p.week, workload: p.workload, recoveryLimited: p.recoveryLimited, nutritionDayVariation: (r.nutrition && (r.nutrition.status === "PLANNED" || r.nutrition.status === "NEEDS_COACH_REVIEW") ? r.nutrition.plan.dayVariation?.strategy : null) ?? null });
+  out.errors.push(...wk.errors);
+  out.findings.push(...wk.findings);
+  out.decisions.push(...wk.decisions);
+
+  // X7 — the domains' directions agree: cardio for fat loss next to a nutrition surplus contradicts the program.
+  const n = r.nutrition && (r.nutrition.status === "PLANNED" || r.nutrition.status === "NEEDS_COACH_REVIEW") ? r.nutrition : null;
+  const c = r.cardio && r.cardio.status === "PLANNED" ? r.cardio : null;
+  const energy = n?.run.energy ?? null;
+  const kcal = n?.plan.energy.mode === "target" ? n.plan.energy.kcal : null;
+  const direction = energy && kcal ? (kcal.min > energy.maintenanceKcal.high ? "surplus" : kcal.max < energy.maintenanceKcal.low ? "deficit" : "near_maintenance") : null;
+  if (c?.plan.warranted && c.plan.role === "fat_loss" && direction === "surplus") out.errors.push(`Cardio is prescribed for fat loss while nutrition targets a surplus (${kcal!.min}–${kcal!.max} kcal vs maintenance ${energy!.maintenanceKcal.low}–${energy!.maintenanceKcal.high}).`);
+  if (n && c?.plan.warranted && n.plan.objective.focus === "muscle_gain" && c.plan.role === "fat_loss") out.errors.push("Nutrition is set for muscle gain while cardio is set for fat loss.");
+
+  // X8 — no false precision: nutrition's energy covers the lifting component; the cardio is stated, not blended in.
+  if (n && c?.plan.warranted && kcal) {
+    const m = c.review.workload.weeklyMinutes;
+    const t = r.nutrition!.run.training;
+    out.uncertainties.push(`Nutrition's energy estimate covers ${t ? `${t.sessionsPerWeek} × ${t.minutesPerSession}-min lifting sessions` : "no structured training"}; the proposed ${m.total} min/week of cardio (${m.easy} easy, ${m.moderate} moderate, ${m.vigorous} vigorous) isn't added to it — the weekly bodyweight trend decides any adjustment.`);
+    out.findings.push({ code: "energy_excludes_cardio", severity: "info", message: "Cardio's energy cost isn't included in the nutrition target (stated, not estimated)." });
+  }
+
+  // X10 — progression alignment: a lifting deload while cardio builds is worth the coach's eye.
+  const rDeloads = new Set((r.resistance?.status === "PLANNED" ? r.resistance.spec.resistance?.value.weeks ?? [] : []).filter((w) => w.kind === "deload").map((w) => w.week));
+  const cWeeks = c?.review.workload.weeks ?? [];
+  for (const w of rDeloads) {
+    const cw = cWeeks.find((x) => x.week === w);
+    const prev = cWeeks.find((x) => x.week === w - 1);
+    if (cw && prev && cw.minutes.total > prev.minutes.total) out.alignment.push(`Week ${w}: lifting deloads while cardio rises (${prev.minutes.total} → ${cw.minutes.total} min) — consider holding cardio that week.`);
+    else if (cw) out.alignment.push(`Week ${w}: lifting deloads; cardio ${cw.deload ? "deloads too" : "holds or eases"}.`);
+  }
+  for (const a of out.alignment.filter((x) => /rises/.test(x))) out.findings.push({ code: "deload_misaligned", severity: "info", message: a });
+  return out;
+}
+
+/** X5 / X6 / X9 — the checks that need only the coordinated week: it fits the client's days and time, recovery across
+ * domains, and which days count as training days for nutrition. Shared by U1 validation (over the domains' outputs)
+ * and Gate U3B review revalidation (over the coach-edited drafts), so both apply exactly the same rules. */
+export function weekChecks(p: {
+  input: SynthesisInput;
+  week: ProgramDay[];
+  workload: ProgramWorkload;
+  recoveryLimited: boolean;
+  /** The nutrition strategy's day-variation (e.g. "higher_on_training_days"), when nutrition varies by day. */
+  nutritionDayVariation: string | null;
+}): Pick<CrossDomainResult, "errors" | "findings" | "decisions"> {
+  const { input } = p;
+  const out: Pick<CrossDomainResult, "errors" | "findings" | "decisions"> = { errors: [], findings: [], decisions: [] };
   // X5 — the combined week fits the client's time.
   const len = isKnown(input.client.schedule.maxSessionLength) ? input.client.schedule.maxSessionLength.value : null;
   const cap = len && !len.openEnded ? len.minutes : null;
@@ -87,38 +136,30 @@ export function validateCrossDomain(p: {
     out.decisions.push({ source: "program", about: "no_rest_day", question: "With limited recovery, this program trains every day. Keep it, or protect a rest day?", options: ["Protect a rest day (move or drop the lightest session)", "Keep 7 training days"], recommended: "Protect a rest day (move or drop the lightest session)", why: "Sleep or stress already limits recovery; the combined week leaves none." });
   }
 
-  // X7 — the domains' directions agree: cardio for fat loss next to a nutrition surplus contradicts the program.
-  const n = r.nutrition && (r.nutrition.status === "PLANNED" || r.nutrition.status === "NEEDS_COACH_REVIEW") ? r.nutrition : null;
-  const c = r.cardio && r.cardio.status === "PLANNED" ? r.cardio : null;
-  const energy = n?.run.energy ?? null;
-  const kcal = n?.plan.energy.mode === "target" ? n.plan.energy.kcal : null;
-  const direction = energy && kcal ? (kcal.min > energy.maintenanceKcal.high ? "surplus" : kcal.max < energy.maintenanceKcal.low ? "deficit" : "near_maintenance") : null;
-  if (c?.plan.warranted && c.plan.role === "fat_loss" && direction === "surplus") out.errors.push(`Cardio is prescribed for fat loss while nutrition targets a surplus (${kcal!.min}–${kcal!.max} kcal vs maintenance ${energy!.maintenanceKcal.low}–${energy!.maintenanceKcal.high}).`);
-  if (n && c?.plan.warranted && n.plan.objective.focus === "muscle_gain" && c.plan.role === "fat_loss") out.errors.push("Nutrition is set for muscle gain while cardio is set for fat loss.");
-
-  // X8 — no false precision: nutrition's energy covers the lifting component; the cardio is stated, not blended in.
-  if (n && c?.plan.warranted && kcal) {
-    const m = c.review.workload.weeklyMinutes;
-    const t = r.nutrition!.run.training;
-    out.uncertainties.push(`Nutrition's energy estimate covers ${t ? `${t.sessionsPerWeek} × ${t.minutesPerSession}-min lifting sessions` : "no structured training"}; the proposed ${m.total} min/week of cardio (${m.easy} easy, ${m.moderate} moderate, ${m.vigorous} vigorous) isn't added to it — the weekly bodyweight trend decides any adjustment.`);
-    out.findings.push({ code: "energy_excludes_cardio", severity: "info", message: "Cardio's energy cost isn't included in the nutrition target (stated, not estimated)." });
-  }
-
   // X9 — which days are "training days" for nutrition is a whole-program question.
   const cardioOnlyDays = p.week.filter((d) => d.cardio && !d.resistance).map((d) => d.day);
-  if (n?.plan.dayVariation && ["higher_on_training_days", "fuel_for_session"].includes(n.plan.dayVariation.strategy) && cardioOnlyDays.length) {
+  if (p.nutritionDayVariation && ["higher_on_training_days", "fuel_for_session"].includes(p.nutritionDayVariation) && cardioOnlyDays.length) {
     out.decisions.push({ source: "program", about: "nutrition_training_days", question: `Nutrition varies by training day. Do cardio-only days (${cardioOnlyDays.join(", ")}) count as training days?`, options: [`Lifting days only (${p.workload.resistanceDays})`, `Lifting and cardio days (${p.workload.trainingDays})`], recommended: `Lifting days only (${p.workload.resistanceDays})`, why: "The nutrition strategy was prepared for the lifting sessions; easy cardio days rarely need the higher day." });
   }
 
-  // X10 — progression alignment: a lifting deload while cardio builds is worth the coach's eye.
-  const rDeloads = new Set((r.resistance?.status === "PLANNED" ? r.resistance.spec.resistance?.value.weeks ?? [] : []).filter((w) => w.kind === "deload").map((w) => w.week));
-  const cWeeks = c?.review.workload.weeks ?? [];
-  for (const w of rDeloads) {
-    const cw = cWeeks.find((x) => x.week === w);
-    const prev = cWeeks.find((x) => x.week === w - 1);
-    if (cw && prev && cw.minutes.total > prev.minutes.total) out.alignment.push(`Week ${w}: lifting deloads while cardio rises (${prev.minutes.total} → ${cw.minutes.total} min) — consider holding cardio that week.`);
-    else if (cw) out.alignment.push(`Week ${w}: lifting deloads; cardio ${cw.deload ? "deloads too" : "holds or eases"}.`);
-  }
-  for (const a of out.alignment.filter((x) => /rises/.test(x))) out.findings.push({ code: "deload_misaligned", severity: "info", message: a });
   return out;
+}
+
+/** The coordinated week's workload (shared by U1 assembly and U3B review, so both count it the same way). */
+export function workloadOf(week: ProgramDay[]): ProgramWorkload {
+  const cm = { easy: 0, moderate: 0, vigorous: 0, total: 0 };
+  for (const d of week) if (d.cardio) {
+    cm[d.cardio.intensity] += d.cardio.minutes;
+    cm.total += d.cardio.minutes;
+  }
+  const trainingDays = week.filter((d) => d.resistance || d.cardio).length;
+  return {
+    resistanceDays: week.filter((d) => d.resistance).length,
+    resistanceMinutes: week.reduce((t, d) => t + (d.resistance?.minutes ?? 0), 0),
+    cardioMinutes: cm,
+    hardCardioSessions: week.filter((d) => d.cardio && (d.cardio.type === "intervals" || d.cardio.intensity === "vigorous")).length,
+    trainingDays,
+    restDays: 7 - trainingDays,
+    totalMinutes: week.reduce((t, d) => t + d.totalMinutes, 0),
+  };
 }

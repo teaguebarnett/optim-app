@@ -30,6 +30,8 @@ import {
   setProgramStartDateAction,
 } from "@/app/actions/production-programs";
 import { ProgramProposalReview } from "@/components/coach/program-proposal-review";
+import { UnifiedProposalReview } from "@/components/coach/unified-proposal-review";
+import { getUnifiedReviewAction } from "@/app/actions/unified-review";
 import { LiveNutritionAssignmentForm, type NutritionAssignResult } from "@/components/coach/live-nutrition-assignment-form";
 import { LiveStartDateForm, type SaveResult } from "@/components/coach/live-start-date-form";
 import { LiveProposalGenerateForm } from "@/components/coach/live-proposal-generate-form";
@@ -96,6 +98,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
   const [limitationsState, plannerView] = onboardingComplete
     ? await Promise.all([soft("limitations state", () => getLimitationsState({ workspaceId: detail.workspaceId, clientProfileId: clientId })), soft("planner preview", () => previewResistancePlanAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }))])
     : [null, null];
+  // Gate U3B — the client's unified program proposal, when one is reviewable (additive: a failure hides the card).
+  const unifiedReview = onboardingComplete ? await soft("unified review", () => getUnifiedReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId })) : null;
   const limitationOptions = allRestrictionOptions(FOUNDATION_KNOWLEDGE).map((o) => ({ id: o.id, group: o.group, label: o.label, help: o.help, dimension: dimensionOf(o.id, FOUNDATION_KNOWLEDGE) }));
   const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
@@ -289,6 +293,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
         </Card>
 
         {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
+
+        {unifiedReview ? <UnifiedProposalReview key={unifiedReview.rowId} initial={unifiedReview} workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
 
         {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}
 

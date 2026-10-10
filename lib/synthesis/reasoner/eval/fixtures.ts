@@ -60,7 +60,7 @@ export function coachMethod(over: Record<string, unknown> = {}): ConfirmedCoachM
   return { versionId: "mv-eval-7", version: 7, source: "calibration", confirmedAtIso: NOW, operatingModel: om, aiAuthority: built.aiAuthority };
 }
 
-const BASE = {
+export const BASE_INTAKE_ANSWERS = {
   about_you: { age: 30, sex: "female", heightFeet: 5, heightInchesRemainder: 6, weightLb: 150, weightDirection: "stable" },
   your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"] },
   starting_point: { trainingExperience: "comfortable_common", recentConsistency: "very_consistent", weeklyFrequency: 4 },
@@ -72,7 +72,7 @@ export type Patch = Record<string, Record<string, unknown> | undefined>;
 
 export function scenarioInput(opts: { patch?: Patch; coach?: ConfirmedCoachMethod | null; restrictions?: CoachStructuredRestriction[]; healthReview?: HealthReviewRecord | null; coachConfirmedGoal?: GoalSpec; coachConfirmedTargets?: PerformanceTargetValue[]; clientId?: string; /** Coach-confirmed specific equipment (apparatus id → state). */ equipment?: Record<string, "available" | "unavailable"> } = {}): SynthesisInput {
   const id = opts.clientId ?? "client-eval";
-  const answers = structuredClone(BASE) as Record<string, Record<string, unknown>>;
+  const answers = structuredClone(BASE_INTAKE_ANSWERS) as Record<string, Record<string, unknown>>;
   for (const [step, values] of Object.entries(opts.patch ?? {})) {
     if (values === undefined) delete answers[step];
     else answers[step] = { ...(answers[step] ?? {}), ...values };

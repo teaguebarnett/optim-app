@@ -9,9 +9,9 @@ import { DAY_ORDER } from "../client-state.ts";
 import { sha256 } from "../reasoner/run.ts";
 import { cardioModality } from "../knowledge/cardio/modalities.ts";
 import type { UniversalTrainingProgramContent } from "../../training/types.ts";
-import type { DomainId, DomainOutcome, ProgramDay, ProgramWorkload, UnifiedDecision, UnifiedProgramProposal, UnifiedStatus } from "./contract.ts";
+import type { DomainId, DomainOutcome, ProgramDay, UnifiedDecision, UnifiedProgramProposal, UnifiedStatus } from "./contract.ts";
 import type { DomainResults } from "./orchestrate.ts";
-import { validateCrossDomain } from "./validate.ts";
+import { validateCrossDomain, workloadOf } from "./validate.ts";
 
 /** Same definition the Cardio Reasoner uses (bounds.recoveryLimited): short sleep, or sleep/stress named as an obstacle. */
 export function recoverySignals(input: SynthesisInput): string[] {
@@ -61,21 +61,7 @@ export function assembleUnified(a: {
     const longest = sameVisit ? res!.minutes + car!.minutes : Math.max(res?.minutes ?? 0, car?.minutes ?? 0);
     return { day, available: avail.has(day), resistance: res, cardio: car, visits, longestVisitMinutes: longest, totalMinutes: (res?.minutes ?? 0) + (car?.minutes ?? 0) };
   });
-  const cm = { easy: 0, moderate: 0, vigorous: 0, total: 0 };
-  for (const d of week) if (d.cardio) {
-    cm[d.cardio.intensity] += d.cardio.minutes;
-    cm.total += d.cardio.minutes;
-  }
-  const trainingDays = week.filter((d) => d.resistance || d.cardio).length;
-  const workload: ProgramWorkload = {
-    resistanceDays: week.filter((d) => d.resistance).length,
-    resistanceMinutes: week.reduce((t, d) => t + (d.resistance?.minutes ?? 0), 0),
-    cardioMinutes: cm,
-    hardCardioSessions: week.filter((d) => d.cardio && (d.cardio.type === "intervals" || d.cardio.intensity === "vigorous")).length,
-    trainingDays,
-    restDays: 7 - trainingDays,
-    totalMinutes: week.reduce((t, d) => t + d.totalMinutes, 0),
-  };
+  const workload = workloadOf(week);
 
   const signals = recoverySignals(input);
   const recoveryLimited = signals.length > 0;

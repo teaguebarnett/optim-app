@@ -130,7 +130,15 @@ export interface TrainingItemPatch {
    * genuinely shared with power/mobility, so only these two are new. */
   contactsValue?: number;
   side?: "left" | "right" | "alternating" | "bilateral";
+  /** Gate U3B — cardio effort on the CR10 scale (continuous / interval work bouts). Label and talk-test anchor follow
+   * the edited band, so a coach-set effort is never left wearing the old label. */
+  effortLow?: number;
+  effortHigh?: number;
 }
+
+/** CR10 bands the Cardio Reasoner prescribes on (reasoner/cardio/validate.ts EFFORT_BANDS) and their talk-test anchors. */
+const CR10_LABEL = (mid: number): "easy" | "moderate" | "vigorous" => (mid <= 3 ? "easy" : mid <= 6 ? "moderate" : "vigorous");
+const TALK_FOR_LABEL = { easy: "full_conversation", moderate: "short_sentences", vigorous: "few_words" } as const;
 
 function applyPatchToPrescription(prescription: Prescription, patch: TrainingItemPatch): Prescription {
   const next: Prescription = { ...prescription };
@@ -172,6 +180,13 @@ function applyPatchToPrescription(prescription: Prescription, patch: TrainingIte
   }
   if (patch.contactsValue !== undefined) next.contacts = patch.contactsValue;
   if (patch.side !== undefined) next.side = patch.side;
+  if (patch.effortLow !== undefined || patch.effortHigh !== undefined) {
+    const low = patch.effortLow ?? prescription.effort?.low ?? patch.effortHigh!;
+    const high = patch.effortHigh ?? prescription.effort?.high ?? low;
+    const label = CR10_LABEL((low + high) / 2);
+    const keepTalk = !!prescription.effort?.talkTest && prescription.family === "continuous";
+    next.effort = { scale: "cr10", low, high, label, ...(keepTalk ? { talkTest: TALK_FOR_LABEL[label] } : {}) };
+  }
   return next;
 }
 
