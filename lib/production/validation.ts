@@ -28,6 +28,7 @@
 
 import { InvalidPersistedContentError } from "./errors.ts";
 import type { ClientAssignedProgram, AssignedNutritionPlan, Exercise, Workout, ProgramDay, ProgramWeek } from "../types";
+import { NUTRITION_PLAN_APPROACHES, NUMERIC_NUTRITION_APPROACHES } from "../types.ts";
 import type { TrainingDaySnapshot, NutritionDaySnapshot, WeightSnapshot } from "../history/types";
 import type { CoachPlaybookContent } from "../coach/playbook";
 import type {
@@ -500,15 +501,71 @@ export function validateClientAssignedProgramContent(raw: unknown): ClientAssign
 
 /** Validates a nutrition_plan_versions.content payload into a real
  * AssignedNutritionPlan. */
+const TARGET_KEYS = ["calories", "proteinG", "carbsG", "fatG"] as const;
+function validateCompleteTargets(raw: unknown, field: string, what: string): void {
+  if (!isRecord(raw)) fail(what, `"${field}" is not an object`);
+  for (const k of TARGET_KEYS) requireNumber(raw[k], `${field}.${k}`, what);
+}
+/** A prescribed target is a real positive number, or null = not prescribed. Never 0 standing in for "not set". */
+function validatePrescribed(raw: unknown, field: string, what: string): Record<(typeof TARGET_KEYS)[number], number | null> {
+  if (!isRecord(raw)) fail(what, `"${field}" is not an object`);
+  const out = {} as Record<(typeof TARGET_KEYS)[number], number | null>;
+  for (const k of TARGET_KEYS) {
+    const v = raw[k];
+    if (v === null) out[k] = null;
+    else if (typeof v === "number" && Number.isFinite(v) && v > 0) out[k] = v;
+    else fail(what, `"${field}.${k}" must be a positive number or null (not prescribed), got ${JSON.stringify(v)}`);
+  }
+  return out;
+}
+
+/** Gate U3A — the coach's method: only prescribed targets, consistent with the approach and energy mode. */
+function validateNutritionPlanMethod(raw: unknown, targets: unknown, what: string): void {
+  if (!isRecord(raw)) fail(what, `"method" is not an object`);
+  if (raw.schema !== 1) fail(what, `"method.schema" must be 1`);
+  const approach = requireOneOf(raw.approach, NUTRITION_PLAN_APPROACHES, "method.approach", what);
+  const mode = requireOneOf(raw.energyMode, ["target", "baseline_first", "none"] as const, "method.energyMode", what);
+  const p = validatePrescribed(raw.prescribed, "method.prescribed", what);
+  for (const f of ["trainingDay", "restDay"] as const) if (raw[f] !== null && raw[f] !== undefined) validatePrescribed(raw[f], `method.${f}`, what);
+  for (const f of ["habits"] as const) requireArray(raw[f], `method.${f}`, what).forEach((x, i) => requireString(x, `method.${f}[${i}]`, what));
+  requireArray(raw.meals, "method.meals", what).forEach((m, i) => {
+    if (!isRecord(m)) fail(what, `"method.meals[${i}]" is not an object`);
+    for (const k of ["name", "timing", "intent"]) requireString(m[k], `method.meals[${i}].${k}`, what);
+    requireArray(m.foods, `method.meals[${i}].foods`, what);
+  });
+  requireArray(raw.substitutions, "method.substitutions", what);
+  if (!isRecord(raw.monitoring)) fail(what, `"method.monitoring" is not an object`);
+  requireArray(raw.adjustments, "method.adjustments", what);
+  const numeric = NUMERIC_NUTRITION_APPROACHES.has(approach);
+  const all = TARGET_KEYS.every((k) => p[k] !== null);
+  if (!numeric) {
+    if (mode !== "none") fail(what, `a "${approach}" plan has no calorie numbers — energyMode must be "none"`);
+    if (TARGET_KEYS.some((k) => p[k] !== null)) fail(what, `a "${approach}" plan prescribes no numeric targets`);
+    if (!(raw.habits as unknown[]).length && !(raw.meals as unknown[]).length) fail(what, `a "${approach}" plan needs its habits or meal guidance`);
+  } else if (mode === "none") fail(what, `a "${approach}" plan prescribes calories or starts with a baseline — energyMode can't be "none"`);
+  if (mode === "baseline_first") {
+    if (p.calories !== null) fail(what, `a baseline-first plan sets calories after the baseline — "method.prescribed.calories" must be null`);
+    if (!isRecord(raw.baseline)) fail(what, `a baseline-first plan needs "method.baseline"`);
+    requireString(raw.baseline.instruction, "method.baseline.instruction", what);
+  }
+  if (mode === "target" && p.calories === null) fail(what, `a "${approach}" plan with energyMode "target" must prescribe calories`);
+  if (approach === "full_macros" && mode === "target" && !all) fail(what, `a full-macro plan prescribes calories, protein, carbs and fat`);
+  if (approach === "calories_protein" && (p.carbsG !== null || p.fatG !== null)) fail(what, `a calories-and-protein plan prescribes no carb or fat targets`);
+  // The flat `targets` set exists exactly when all four are prescribed — and then it IS the prescription.
+  if (all) {
+    validateCompleteTargets(targets, "targets", what);
+    for (const k of TARGET_KEYS) if ((targets as Record<string, number>)[k] !== p[k]) fail(what, `"targets.${k}" must equal "method.prescribed.${k}"`);
+  } else if (targets !== null) fail(what, `"targets" must be null when the method doesn't prescribe all four targets (no invented values)`);
+}
+
 export function validateAssignedNutritionPlanContent(raw: unknown): AssignedNutritionPlan {
   const what = "nutrition plan version";
   if (!isRecord(raw)) fail(what, "content is not an object");
   requireString(raw.id, "id", what);
-  if (!isRecord(raw.targets)) fail(what, `"targets" is not an object`);
-  requireNumber(raw.targets.calories, "targets.calories", what);
-  requireNumber(raw.targets.proteinG, "targets.proteinG", what);
-  requireNumber(raw.targets.carbsG, "targets.carbsG", what);
-  requireNumber(raw.targets.fatG, "targets.fatG", what);
+  if (raw.method === undefined) {
+    // Legacy (pre-U3A) plans: the complete four-number targets, exactly as before.
+    validateCompleteTargets(raw.targets, "targets", what);
+  } else validateNutritionPlanMethod(raw.method, raw.targets, what);
   if (typeof raw.usesTrainingRestSplit !== "boolean") fail(what, `"usesTrainingRestSplit" must be a boolean`);
   return raw as unknown as AssignedNutritionPlan;
 }

@@ -38,7 +38,7 @@ import { deriveLifecycle } from "../coach/roster";
 import type { RosterRow } from "../coach/roster";
 import type { ClientLifecycleStatus } from "../coach/types";
 import type { ProgramEnrollment } from "../scheduling/types";
-import type { NutritionTargets } from "../types";
+import type { NutritionTargets, PrescribedNutritionTargets } from "../types";
 
 export { deriveLifecycle };
 
@@ -220,7 +220,8 @@ export interface LiveClientDetail {
   activeProgram: { versionId: string; versionNumber: number; name: string; durationWeeks: number } | null;
   /** targets are the assigned published version's own saved values —
    * never a form default. Null means nutrition is genuinely not assigned. */
-  activeNutrition: { versionId: string; versionNumber: number; targets: NutritionTargets } | null;
+  /** targets: the complete four-number set, or null when the coach's method prescribes fewer (U3A). */
+  activeNutrition: { versionId: string; versionNumber: number; targets: NutritionTargets | null; prescribed: PrescribedNutritionTargets } | null;
   /** Where `timezone` came from: the client's own device, the coach, or
    * nowhere yet (null — `timezone` is then only the schema's 'UTC'
    * default and must not be shown or used as the client's zone). */
@@ -282,7 +283,7 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
     timezoneSource: (enrollment?.timezone_source as "client_detected" | "coach_override" | null | undefined) ?? null,
     onboarding: onboarding ? { currentStepIndex: onboarding.current_step_index as number, answers: onboarding.answers, completedAtIso: onboarding.completed_at as string | null } : null,
     activeProgram: program ? { versionId: program.versionId, versionNumber: program.versionNumber, name: program.content.name, durationWeeks: program.content.durationWeeks } : null,
-    activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber, targets: nutrition.content.targets } : null,
+    activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber, targets: nutrition.content.targets, prescribed: nutrition.content.method?.prescribed ?? nutrition.content.targets! } : null,
   };
 }
 

@@ -119,6 +119,8 @@ export function buildDailyRecordFromLiveState(state: AppState, enrollment: Progr
     meals,
     periodsInPlan,
     targetsSnapshot: state.nutritionTargets ? deepClone(state.nutritionTargets) : null,
+    // U3A — a method plan's prescribed targets (calories and protein, …), so history judges against what was set.
+    ...(!state.nutritionTargets && state.assignedNutritionPlan?.method ? { prescribedSnapshot: deepClone(state.assignedNutritionPlan.method.prescribed) } : {}),
   };
 
   const cardioOption =

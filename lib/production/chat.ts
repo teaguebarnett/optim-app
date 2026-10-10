@@ -27,6 +27,7 @@
 // caller was independently proven to hold staff authority in — never on a
 // value the browser supplied. RLS is the backstop, not the primary gate.
 
+import { summarizeNutritionPlan } from "../nutrition/plan-display.ts";
 import "server-only";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import { getSupabaseAdminClient } from "../supabase/admin.ts";
@@ -371,10 +372,15 @@ export async function assembleAssistantContext(params: {
       ? `Week ${weekNumber} of ${programContext.assignedProgram.durationWeeks} (${(phase ?? "active_program").replaceAll("_", " ")})`
       : null;
 
-  const targets = programContext.nutritionPlan?.targets;
+  const plan = programContext.nutritionPlan;
+  const targets = plan?.targets;
+  // U3A — a method plan states exactly what's prescribed, and what isn't (so the Assistant never invents carbs/fat).
+  const methodSummary = plan?.method ? summarizeNutritionPlan(plan) : null;
   const nutritionTargetsSummary = targets
     ? `${targets.calories} kcal, ${targets.proteinG}g protein, ${targets.carbsG}g carbs, ${targets.fatG}g fat`
-    : null;
+    : methodSummary
+      ? `${methodSummary.approach}${methodSummary.targets.length ? ` — ${methodSummary.targets.join(", ")}` : " — no calorie or macro numbers"}; anything not listed here is NOT prescribed, so don't quote a number for it${methodSummary.note ? `. ${methodSummary.note}` : ""}`
+      : null;
 
   // Authority is resolved from the COACH's own persisted settings inside
   // the Playbook, for this specific client — never from anything the client

@@ -3,6 +3,7 @@
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { shouldRebind, UNBOUND, writeOwner, type ClientBinding } from "@/lib/production/client-ownership";
+import { resolveDisplayTargets } from "@/lib/nutrition/plan-display";
 import {
   createContext,
   useCallback,
@@ -489,10 +490,11 @@ export function PrototypeStateProvider({ children, appMode = "demo" }: { childre
     () => (state.nutritionTargets ? computeRemaining(nutritionTotals, state.nutritionTargets) : null),
     [nutritionTotals, state.nutritionTargets]
   );
-  const nutritionMessage = useMemo(
-    () => nutritionStatusMessage(nutritionTotals, state.meals, state.nutritionTargets),
-    [nutritionTotals, state.meals, state.nutritionTargets]
-  );
+  // U3A — judged only against what the coach prescribed (a method plan may set calories/protein only, or nothing).
+  const nutritionMessage = useMemo(() => {
+    const display = resolveDisplayTargets({ nutritionTargets: state.nutritionTargets, assignedNutritionPlan: state.assignedNutritionPlan });
+    return nutritionStatusMessage(nutritionTotals, state.meals, state.nutritionTargets ?? (display.planAssigned ? display : null));
+  }, [nutritionTotals, state.meals, state.nutritionTargets, state.assignedNutritionPlan]);
   const dailyCompletionPercent = useMemo(() => computeDailyCompletionPercent(state), [state]);
 
   const setPerspective = useCallback((next: DevPerspective) => {

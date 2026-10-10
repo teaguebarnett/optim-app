@@ -285,12 +285,15 @@ export function useProgramComposer(clientId: ClientProfileId) {
 
   const previewNutritionRevision = useCallback(
     (instruction: string) => {
-      if (!assignedNutritionPlan) return null;
+      // The quick macro-revision tool edits complete four-number targets only; a method-based plan (U3A — e.g. calories
+      // and protein, habits) is revised through coach review instead, never by inventing the missing targets.
+      if (!assignedNutritionPlan || !assignedNutritionPlan.targets) return null;
+      const targets = assignedNutritionPlan.targets;
       const plan = interpretNutritionRevisionInstruction(instruction);
       const prescription: CompleteNutritionPrescription = {
         sourceStrategyKind: "best_fit",
         label: assignedNutritionPlan.sourceStrategyLabel,
-        targets: assignedNutritionPlan.targets,
+        targets,
         usesTrainingRestSplit: assignedNutritionPlan.usesTrainingRestSplit,
         trainingDayTargets: assignedNutritionPlan.trainingDayTargets,
         restDayTargets: assignedNutritionPlan.restDayTargets,

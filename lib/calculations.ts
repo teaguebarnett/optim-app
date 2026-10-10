@@ -145,12 +145,22 @@ export function findEarliestIncompleteMealBefore(
  * plan is assigned (AppState.nutritionTargets === null). */
 export const NUTRITION_NOT_ASSIGNED_LABEL = "Nutrition not assigned";
 
-export function nutritionStatusMessage(totals: MacroValues, meals: AppState["meals"], targets: NutritionTargets | null = NUTRITION_TARGETS): string {
-  // No assigned targets: never judge progress against invented numbers.
+/** Per-field targets (U3A): a method plan may prescribe some (calories and protein) or none (habits, portions,
+ * baseline first). `null` targets = no nutrition plan assigned at all. */
+export type StatusTargets = { calories: number | null; proteinG: number | null };
+
+export function nutritionStatusMessage(totals: MacroValues, meals: AppState["meals"], targets: NutritionTargets | StatusTargets | null = NUTRITION_TARGETS): string {
+  // No assigned plan: never judge progress against invented numbers.
   if (!targets) return `${NUTRITION_NOT_ASSIGNED_LABEL} yet — your coach will set your daily targets.`;
   const remainingMeals = countRemainingMeals(meals);
+  // A plan without a calorie target (habits, portions, baseline first): no calorie judgement, ever.
+  if (targets.calories === null) {
+    if (totals.calories === 0) return "Your coach's nutrition guidance is set for today.";
+    if (targets.proteinG !== null && totals.proteinG / targets.proteinG < 0.55 && remainingMeals <= 1) return "Protein is slightly behind — the next meal is a good chance to close the gap.";
+    return remainingMeals === 1 ? "One planned meal remaining." : "Logged — keep following your coach's guidance.";
+  }
   const calorieRatio = totals.calories / targets.calories;
-  const proteinRatio = totals.proteinG / targets.proteinG;
+  const proteinRatio = targets.proteinG !== null ? totals.proteinG / targets.proteinG : 1;
 
   // Phase 4.4B-2.1 correction — the true zero/unentered state must never
   // claim progress that hasn't happened. "Off to a strong start" falsely

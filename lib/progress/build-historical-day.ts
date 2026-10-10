@@ -217,7 +217,7 @@ function buildNutritionSection(record: DailyRecord | null, timeZone: string): Hi
     mealPlanOutcome: mealPlan.outcome,
     meals: mealModels,
     totals: allKnown ? totals : null,
-    targets: targetsSnapshot,
+    targets: targetsSnapshot ?? (record.nutrition.prescribedSnapshot ? { calories: record.nutrition.prescribedSnapshot.calories, proteinG: record.nutrition.prescribedSnapshot.proteinG } : null),
     calorieResult: deriveCalorieTargetMet(record),
     proteinResult: deriveProteinTargetMet(record),
   };

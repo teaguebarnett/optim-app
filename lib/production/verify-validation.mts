@@ -129,7 +129,7 @@ const VALID_NUTRITION = {
 
 check("a genuinely valid AssignedNutritionPlan payload round-trips cleanly", () => {
   const result = validateAssignedNutritionPlanContent(VALID_NUTRITION);
-  assert.equal(result.targets.calories, 2200);
+  assert.equal(result.targets!.calories, 2200);
 });
 
 check("rejects a payload with non-numeric targets", () => {

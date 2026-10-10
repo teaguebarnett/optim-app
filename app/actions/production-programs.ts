@@ -1275,7 +1275,7 @@ export async function createPublishAndAssignNutritionAction(params: {
   // A resubmission of the targets already assigned (double click, retry,
   // stale tab) must not publish another identical version.
   const active = await getActiveNutritionAssignment(params.clientProfileId);
-  if (active && nutritionTargetsEqual(active.content.targets, checked.targets)) {
+  if (active && active.content.targets && nutritionTargetsEqual(active.content.targets, checked.targets)) {
     return { assignmentId: active.assignmentId, versionId: active.versionId, versionNumber: active.versionNumber, unchanged: true };
   }
   const content = {

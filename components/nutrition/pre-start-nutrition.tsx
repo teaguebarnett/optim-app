@@ -1,4 +1,5 @@
 import { CalendarClock, MessageCircle } from "lucide-react";
+import { NO_TARGET_LABEL, resolveDisplayTargets, targetText } from "@/lib/nutrition/plan-display";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
@@ -23,9 +24,11 @@ export function PreStartNutrition({ timing, state }: { timing: ProgramTiming; st
   const days = timing.daysUntilStart ?? 0;
   const startLabel = formatLongDateLabel(state.programEnrollment.startDateIso);
   const targets = state.nutritionTargets;
+  // U3A — a method plan (e.g. calories and protein) shows only what's prescribed.
+  const display = resolveDisplayTargets(state);
   // With no assigned targets there is no nutrition plan to "start" — name
   // the program start instead of implying one exists.
-  const subject = targets ? "Your nutrition plan" : "Your program";
+  const subject = display.planAssigned ? "Your nutrition plan" : "Your program";
   const relative = days === 1 ? `${subject} starts tomorrow.` : days > 1 ? `${subject} starts in ${days} days.` : `${subject} starts today.`;
 
   return (
@@ -52,12 +55,12 @@ export function PreStartNutrition({ timing, state }: { timing: ProgramTiming; st
       <Card className="space-y-3">
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Daily calories</span>
-          <span className="font-medium text-off-white">{targets ? `${targets.calories} cal` : NUTRITION_NOT_ASSIGNED_LABEL}</span>
+          <span className="font-medium text-off-white">{targetText(display.calories, display.planAssigned, NUTRITION_NOT_ASSIGNED_LABEL, (n) => `${n} cal`)}</span>
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Macros</span>
           <span className="font-medium text-off-white">
-            {targets ? `${targets.proteinG}P / ${targets.carbsG}C / ${targets.fatG}F` : NUTRITION_NOT_ASSIGNED_LABEL}
+            {targets ? `${targets.proteinG}P / ${targets.carbsG}C / ${targets.fatG}F` : [display.proteinG !== null ? `${display.proteinG}P` : null, display.carbsG !== null ? `${display.carbsG}C` : null, display.fatG !== null ? `${display.fatG}F` : null].filter(Boolean).join(" / ") || (display.planAssigned ? NO_TARGET_LABEL : NUTRITION_NOT_ASSIGNED_LABEL)}
           </span>
         </div>
       </Card>

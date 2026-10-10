@@ -26,7 +26,7 @@ import { reasonerResultToProgramContent } from "../synthesis/reasoner/to-program
 import { toAssignedNutritionPlanDraft } from "../synthesis/reasoner/nutrition/to-plan.ts";
 import { cardioOnlyProgram, cardioToSessions, mergeCardioIntoProgram } from "../synthesis/unified/cardio-content.ts";
 import type { UnifiedProgramProposal, UnifiedStatus } from "../synthesis/unified/contract.ts";
-import { validateUniversalTrainingProgramContent } from "./validation.ts";
+import { validateAssignedNutritionPlanContent, validateUniversalTrainingProgramContent } from "./validation.ts";
 import { insertDraftNutritionVersion, insertDraftProgramVersion } from "./draft-versions.ts";
 
 export const UNIFIED_STALE_AFTER_MS = 10 * 60_000;
@@ -185,6 +185,12 @@ export async function completeUnifiedProposal(
       if (mapped.ok && n.status === "PLANNED") {
         // Proposed, not approved: approvedAtIso stays empty until a coach approves (Gate U3 stamps it).
         const content: AssignedNutritionPlan = { id: `nutrition-unified-${rowId}`, ...mapped.content, approvedAtIso: "" };
+        // U3A — the same production validator every nutrition read uses: method-faithful, no invented targets.
+        try {
+          validateAssignedNutritionPlanContent(content);
+        } catch (err) {
+          return fail("content_invalid", (err as Error).message, { t: trainingVersionId, n: null });
+        }
         try {
           const { versionId } = await insertDraftNutritionVersion(supabase, userId, { workspaceId: p.workspaceId, title: `${p.title} — nutrition`, content });
           nutritionVersionId = versionId;

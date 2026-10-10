@@ -115,6 +115,7 @@
     "verify:unified-program": "node --experimental-strip-types lib/synthesis/unified/verify-unified-program.mts",
     "eval:unified-program": "node --experimental-strip-types lib/synthesis/unified/eval/run-eval.mts",
     "verify:unified-drafts": "node --experimental-strip-types lib/synthesis/unified/verify-unified-drafts.mts",
+    "verify:nutrition-plan-contract": "node --experimental-strip-types lib/nutrition/verify-nutrition-plan-contract.mts",
     "verify:client-ownership": "node --experimental-strip-types lib/production/verify-client-ownership.mts",
     "e2e:client-ownership": "node --experimental-strip-types scripts/e2e-client-ownership.mts",
     "e2e:unified-drafts": "node --experimental-strip-types scripts/e2e-unified-drafts.mts"

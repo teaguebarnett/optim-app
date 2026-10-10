@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveDisplayTargets, targetText } from "@/lib/nutrition/plan-display";
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AlertTriangle, ArrowLeft, Check, Sparkles, Wand2, Layers, Zap } from "lucide-react";
@@ -585,10 +586,18 @@ function ActiveClientComposer({ composer, clientId, clientName, onBack }: { comp
         <Card>
           <p className="text-subheading text-off-white">{nutritionName ?? composer.assignedNutritionPlan.sourceStrategyLabel}</p>
           <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
-            <NutritionStat label="Calories" value={`${composer.assignedNutritionPlan.targets.calories} kcal`} />
-            <NutritionStat label="Protein" value={`${composer.assignedNutritionPlan.targets.proteinG}g`} />
-            <NutritionStat label="Carbs" value={`${composer.assignedNutritionPlan.targets.carbsG}g`} />
-            <NutritionStat label="Fat" value={`${composer.assignedNutritionPlan.targets.fatG}g`} />
+            {(() => {
+              // U3A — only what the coach prescribed; an unprescribed macro reads "No target", never a made-up number.
+              const t = resolveDisplayTargets({ nutritionTargets: composer.assignedNutritionPlan.targets, assignedNutritionPlan: composer.assignedNutritionPlan });
+              return (
+                <>
+                  <NutritionStat label="Calories" value={targetText(t.calories, true, "", (n) => `${n} kcal`)} />
+                  <NutritionStat label="Protein" value={targetText(t.proteinG, true, "", (n) => `${n}g`)} />
+                  <NutritionStat label="Carbs" value={targetText(t.carbsG, true, "", (n) => `${n}g`)} />
+                  <NutritionStat label="Fat" value={targetText(t.fatG, true, "", (n) => `${n}g`)} />
+                </>
+              );
+            })()}
           </div>
         </Card>
       ) : null}

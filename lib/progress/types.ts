@@ -380,7 +380,8 @@ export interface HistoricalNutritionModel {
   totals: MacroValues | null;
   /** Null when no targets were in effect (no record, or no nutrition
    * assigned that day) — never zeros standing in for missing. */
-  targets: MacroValues | null;
+  /** U3A — per-field: a method plan may prescribe calories/protein only (null = not prescribed that day). */
+  targets: { calories: number | null; proteinG: number | null } | null;
   calorieResult: TargetMetResult;
   proteinResult: TargetMetResult;
 }

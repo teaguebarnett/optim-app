@@ -13,7 +13,8 @@ import { FOUNDATION_KNOWLEDGE } from "../lib/synthesis/knowledge/registry.ts";
 import { sha256 } from "../lib/synthesis/reasoner/run.ts";
 import { beginUnifiedProposal, completeUnifiedProposal, unifiedIdempotencyKey, type UnifiedArtifacts, type UnifiedRow } from "../lib/production/unified-drafts.ts";
 import { insertDraftProgramVersion } from "../lib/production/draft-versions.ts";
-import { validateSession, validateUniversalTrainingProgramContent } from "../lib/production/validation.ts";
+import { validateAssignedNutritionPlanContent, validateSession, validateUniversalTrainingProgramContent } from "../lib/production/validation.ts";
+import { summarizeNutritionPlan } from "../lib/nutrition/plan-display.ts";
 import { createInitialState, reducer, buildStartedWorkoutSession } from "../lib/state.ts";
 import { describeContinuousTarget } from "../lib/workout/continuous.ts";
 import { describeIntervalOverview, describeIntervalPhaseTarget } from "../lib/workout/interval.ts";
@@ -241,7 +242,22 @@ const MV2 = await methodRow(wsA, coachA.id, { ...proteinCoach, version: 8 });
 const npInput = withMethod(scenarioInput({ clientId: CLIENT, coach: proteinCoach, patch: { what_you_want: { primaryGoal: "build_muscle" }, your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"], preferredTrainingTime: ["evening", "morning"] } } }), MV2);
 const r5 = await persist(coachA.session, coachA.id, { ws: wsA, client: CLIENT, title: "Unified calories-protein", input: npInput, methodVersionId: MV2 });
 const row5 = await must(coachA.session.from("unified_program_proposals").select("status, nutrition_plan_version_id, nutrition_strategy, training_program_version_id").eq("id", r5.rowId!).single(), "row5");
-check("a calories-and-protein strategy isn't forced into fake macros: no nutrition draft, strategy kept with the reason", !row5.nutrition_plan_version_id && /stores single calorie and macro targets/.test(row5.nutrition_strategy?.reason ?? "") && !!row5.nutrition_strategy?.strategy && !!row5.training_program_version_id, row5);
+// Gate U3A — a calories-and-protein strategy is a real nutrition DRAFT now, with no invented carb/fat targets.
+const nv5 = await must(coachA.session.from("nutrition_plan_versions").select("status, content").eq("id", row5.nutrition_plan_version_id).single(), "nv5");
+const c5 = validateAssignedNutritionPlanContent(nv5.content);
+check("calories-and-protein (the iCloud coach's method) persists as a nutrition DRAFT: calories + protein prescribed, carbs/fat null, no flat four-number targets", nv5.status === "draft" && c5.targets === null && c5.method?.approach === "calories_protein" && typeof c5.method.prescribed.calories === "number" && typeof c5.method.prescribed.proteinG === "number" && c5.method.prescribed.carbsG === null && c5.method.prescribed.fatG === null && !row5.nutrition_strategy, { content: nv5.content?.method, row5 });
+check("…and displays only what was prescribed (calories, protein — never carbs/fat)", summarizeNutritionPlan(c5).targets.length === 2 && summarizeNutritionPlan(c5).targets.every((t) => /kcal|protein/.test(t)));
+for (const [label, over, approach, mode] of [["habit-based", { n_approach: ["habit_based"], n_calorie_method: "no_calorie_targets", n_protein_basis: "no_target", n_protein_amount: undefined }, "habit_based", "none"], ["baseline-first", { n_approach: ["calories_protein"], n_calorie_method: "current_intake" }, "calories_protein", "baseline_first"]] as const) {
+  const coach = fullCoach(over as Record<string, unknown>);
+  const mv = await methodRow(wsA, coachA.id, { ...coach, version: label === "habit-based" ? 10 : 11 });
+  const inp = withMethod(scenarioInput({ clientId: CLIENT, coach, patch: { what_you_want: { primaryGoal: label === "habit-based" ? "health_consistency" : "build_muscle" }, about_you: { age: 34, sex: "male", heightFeet: 5, heightInchesRemainder: 10, weightLb: 215, weightDirection: "stable" }, your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"], preferredTrainingTime: ["evening", "morning"] } } }), mv);
+  const r = await persist(coachA.session, coachA.id, { ws: wsA, client: CLIENT, title: `Unified ${label}`, input: inp, methodVersionId: mv });
+  const row = await must(coachA.session.from("unified_program_proposals").select("status, nutrition_plan_version_id").eq("id", r.rowId!).single(), `row ${label}`);
+  const nv = row.nutrition_plan_version_id ? await must(coachA.session.from("nutrition_plan_versions").select("status, content").eq("id", row.nutrition_plan_version_id).single(), `nv ${label}`) : null;
+  const c = nv ? validateAssignedNutritionPlanContent(nv.content) : null;
+  const numbers = c ? Object.values(c.method!.prescribed).filter((v) => v !== null).length : -1;
+  check(`${label} persists as a nutrition DRAFT faithful to the method (${approach}, energy ${mode}${mode === "none" ? ", no numbers at all" : ", calories set after the baseline"})`, !!c && nv.status === "draft" && c.targets === null && c.method?.approach === approach && c.method.energyMode === mode && c.method.prescribed.calories === null && (mode === "none" ? numbers === 0 : !!c.method.baseline?.instruction), { status: row.status, method: c?.method });
+}
 const cardioOff = fullCoach({ t_cardio_roles: ["fat_loss"] });
 const MV3 = await methodRow(wsA, coachA.id, { ...cardioOff, version: 9 });
 const coInput = withMethod(scenarioInput({ clientId: CLIENT, coach: cardioOff, patch: { what_you_want: { primaryGoal: "build_muscle", secondaryGoals: ["get_stronger"] }, your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"], preferredTrainingTime: ["evening", "morning"] } } }), MV3);

@@ -297,8 +297,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
           {detail.activeNutrition ? (
             <p className="mb-2 text-sm text-neutral">
               Assigned: <span className="text-off-white">v{detail.activeNutrition.versionNumber}</span> ·{" "}
-              {detail.activeNutrition.targets.calories} kcal · {detail.activeNutrition.targets.proteinG}g protein · {detail.activeNutrition.targets.carbsG}g carbs ·{" "}
-              {detail.activeNutrition.targets.fatG}g fat
+              {/* U3A — only the targets the coach prescribed (a calories-and-protein or habit plan shows fewer, never invented ones). */}
+              {[detail.activeNutrition.prescribed.calories !== null ? `${detail.activeNutrition.prescribed.calories} kcal` : null, detail.activeNutrition.prescribed.proteinG !== null ? `${detail.activeNutrition.prescribed.proteinG}g protein` : null, detail.activeNutrition.prescribed.carbsG !== null ? `${detail.activeNutrition.prescribed.carbsG}g carbs` : null, detail.activeNutrition.prescribed.fatG !== null ? `${detail.activeNutrition.prescribed.fatG}g fat` : null].filter(Boolean).join(" · ") || "Guidance-based plan (no numeric targets)"}
             </p>
           ) : (
             <p className="mb-2 text-sm text-neutral">

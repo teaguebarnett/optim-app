@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveDisplayTargets } from "@/lib/nutrition/plan-display";
 import { useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { TaskShell } from "@/components/today/task-shell";
@@ -32,10 +33,12 @@ export function DailyCompletionTask({ state }: { state: DailyTaskState }) {
   }
 
   // No assigned targets: report what was logged, never a % of an invented target.
-  const proteinTarget = appState.nutritionTargets?.proteinG ?? null;
+  // U3A — a method plan's prescribed protein counts; a plan without a protein target says so (not "unassigned").
+  const display = resolveDisplayTargets(appState);
+  const proteinTarget = display.proteinG;
   const proteinStatus =
     proteinTarget === null
-      ? `${Math.round(nutritionTotals.proteinG)}g logged — no target assigned`
+      ? `${Math.round(nutritionTotals.proteinG)}g logged — ${display.planAssigned ? "no protein target" : "no target assigned"}`
       : nutritionTotals.proteinG >= proteinTarget
         ? "Target reached"
         : `${Math.round((nutritionTotals.proteinG / proteinTarget) * 100)}% of target`;

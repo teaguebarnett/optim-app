@@ -140,9 +140,54 @@ export interface NutritionTargets {
  * with `AppState.nutritionTargets` on every write so nothing regresses.
  * Undefined means this client has never had an OPTIM-generated nutrition
  * plan approved (e.g. manually configured, or pre-Phase-5.5A). */
+/** Gate U3A — the coach's nutrition approach (the Coach Brain's n_approach vocabulary). */
+export const NUTRITION_PLAN_APPROACHES = ["full_macros", "calories_protein", "meal_plan", "portion_guides", "habit_based"] as const;
+export type NutritionPlanApproach = (typeof NUTRITION_PLAN_APPROACHES)[number];
+/** Numeric approaches: prescribe calories (or a baseline first); the others guide through portions or habits. */
+export const NUMERIC_NUTRITION_APPROACHES: ReadonlySet<NutritionPlanApproach> = new Set(["full_macros", "calories_protein", "meal_plan"]);
+
+/** Gate U3A — ONLY the targets the coach prescribed. `null` = deliberately not prescribed (never 0, never derived). */
+export interface PrescribedNutritionTargets {
+  calories: number | null;
+  proteinG: number | null;
+  carbsG: number | null;
+  fatG: number | null;
+}
+
+/** Gate U3A — how a plan faithfully expresses the coach's method. Present on every plan made since U3A; absent on
+ * legacy plans (which are full calorie + macro plans by construction). Strategy, numbers, meals, substitutions and
+ * monitoring are kept distinct; intake actually eaten lives in daily records, never here. */
+export interface NutritionPlanMethod {
+  schema: 1;
+  approach: NutritionPlanApproach;
+  /** target: numeric targets apply now · baseline_first: the client logs normal eating first, targets come after ·
+   * none: no calorie numbers (portions / habits). */
+  energyMode: "target" | "baseline_first" | "none";
+  prescribed: PrescribedNutritionTargets;
+  /** Training-day / rest-day targets when the coach varies intake by day (only what's prescribed). */
+  trainingDay: PrescribedNutritionTargets | null;
+  restDay: PrescribedNutritionTargets | null;
+  /** The proposed ranges the single numbers came from (provenance for the coach; the client sees the numbers). */
+  ranges: { calories: [number, number] | null; proteinG: [number, number] | null; carbsG: [number, number] | null; fatG: [number, number] | null };
+  baseline: { instruction: string } | null;
+  habits: string[];
+  /** Meals and MealIntent — why each meal exists, with suggested foods (names), never fixed clock times. */
+  meals: Array<{ name: string; timing: string; intent: string; foods: string[] }>;
+  /** Coach-approved substitutions. */
+  substitutions: Array<{ for: string; use: string[]; why: string }>;
+  monitoring: { measures: string[]; cadence: string; reviewAfterWeeks: number };
+  /** Future adjustments, as approved (wording rendered from the structured proposal). */
+  adjustments: Array<{ signal: string; afterWeeks: number; change: string }>;
+}
+
 export interface AssignedNutritionPlan {
   id: string;
-  targets: NutritionTargets;
+  /** The complete four-number target set — present only when calories, protein, carbs and fat are ALL prescribed
+   * (every legacy plan; full-macro plans). `null` when the coach's method prescribes fewer (U3A): the method's
+   * `prescribed` targets hold what was actually set. */
+  targets: NutritionTargets | null;
+  /** Gate U3A — the coach's method; absent only on legacy (pre-U3A) plans. */
+  method?: NutritionPlanMethod;
   usesTrainingRestSplit: boolean;
   trainingDayTargets?: NutritionTargets;
   restDayTargets?: NutritionTargets;

@@ -13,6 +13,7 @@
 // failure handling" discipline the rest of this codebase already follows —
 // never a simulated/fabricated AI call.
 
+import { resolveDisplayTargets } from "../nutrition/plan-display.ts";
 import { resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
 import { deriveProgramWeek } from "../scheduling/enrollment.ts";
 import { localDateDayOfWeek, resolveClientLocalDateIso } from "../shared/local-date.ts";
@@ -109,6 +110,9 @@ export interface GenerateDailyBriefingInput extends ShouldHoldBriefingInput {
   workoutFocus?: string;
   automation: BriefingAutomationSetting;
   nowIso: string;
+  /** U3A — false when the client's plan prescribes no protein target (habit/portion plans, or no plan): the rest-day
+   * step then never asks them to hit one. Omitted = true (unchanged copy). */
+  hasProteinTarget?: boolean;
 }
 
 /**
@@ -127,7 +131,9 @@ export function generateDailyBriefing(input: GenerateDailyBriefingInput): DailyB
     : "Recovery day — no training scheduled.";
   const actionStep = input.isTrainingDay
     ? "Show up and get your first working set in — everything else follows from there."
-    : "Prioritize sleep and hit your protein target.";
+    : input.hasProteinTarget === false
+      ? "Prioritize sleep and recovery."
+      : "Prioritize sleep and hit your protein target.";
   const todaysEdgeText = `${focusLine} ${actionStep}`;
 
   const hold = shouldHoldBriefingForReview(input);
@@ -241,6 +247,7 @@ export function resolveBriefingGenerationInput(
   const availability = resolveWorkoutAvailabilityForDay(dayOfWeek, clientDeclaredRest, clientAppState.assignedProgram, weekNumber);
   const isTrainingDay = !clientDeclaredRest && availability.scheduleEntry?.type === "training";
 
+  const nutritionDisplay = resolveDisplayTargets(clientAppState);
   const unresolvedReviews = clientAppState.reviewRequests.filter((r) => r.status !== "resolved");
   const hasPainFlag = unresolvedReviews.some((r) => r.kind === "pain-report");
   const hasUnapprovedProgramChange = unresolvedReviews.some((r) => r.kind === "program-change-request");
@@ -258,6 +265,8 @@ export function resolveBriefingGenerationInput(
     hasUnapprovedProgramChange,
     hasLowConfidenceSignal: false,
     nowIso,
+    // U3A — only an ASSIGNED plan that sets no protein target changes the copy (unassigned clients: unchanged).
+    hasProteinTarget: !(nutritionDisplay.planAssigned && nutritionDisplay.proteinG === null),
   };
 }
 

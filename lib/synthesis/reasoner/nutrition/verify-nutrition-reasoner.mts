@@ -236,18 +236,21 @@ await check("14. Proposal is reviewable and replayable: deterministic review ite
   assert.ok(planned(lowP).review.quality.every((q) => q.severity === "warning" || q.severity === "info"));
 });
 
-await check("15. Proposed ≠ approved: maps onto the existing nutrition contract only when it can; nothing is persisted or published", async () => {
+await check("15. Proposed ≠ approved: maps onto the nutrition contract (every method since U3A, no invented targets); nothing is persisted or published", async () => {
   const full = planned((await run("N02")).r);
   const d = toAssignedNutritionPlanDraft(full.plan);
   assert.ok(d.ok);
   if (d.ok) {
     assert.ok(!("approvedAtIso" in d.content) && !("id" in d.content), "a draft carries no approval");
-    assert.equal(d.content.targets.calories, Math.round((full.plan.energy.kcal!.min + full.plan.energy.kcal!.max) / 2));
+    assert.equal(d.content.targets!.calories, Math.round((full.plan.energy.kcal!.min + full.plan.energy.kcal!.max) / 2));
     assert.ok(d.content.mealStructureDescription.includes(full.plan.meals.slots[0].intent), "Meal Intent carried into the existing contract");
     assert.equal(d.content.hydrationOzPerDay, 0, "words are never turned into invented numbers");
   }
+  // Gate U3A: a habit-based strategy IS representable now — with no numeric targets at all (never fabricated).
   const habit = toAssignedNutritionPlanDraft(planned((await run("N08")).r).plan);
-  assert.ok(!habit.ok && /can't be stored as an assigned plan yet/.test(habit.reason));
+  assert.ok(habit.ok && habit.content.targets === null && habit.content.method?.approach === "habit_based" && Object.values(habit.content.method.prescribed).every((v) => v === null));
+  const { validateAssignedNutritionPlanContent } = await import("../../../production/validation.ts");
+  if (habit.ok) validateAssignedNutritionPlanContent({ id: "x", ...habit.content, approvedAtIso: "" });
   for (const f of ["reasoner.ts", "input.ts", "validate.ts", "to-plan.ts", "contract.ts"]) {
     const src = readFileSync(new URL(`./${f}`, import.meta.url), "utf8");
     assert.ok(!/supabase|production\/|revalidatePath|publish\w*\(/i.test(src), `${f}: no persistence or publication`);

@@ -100,9 +100,8 @@ export function deriveCalorieTargetMet(
   tolerance: NutritionToleranceConfig = DEFAULT_NUTRITION_TOLERANCE
 ): TargetMetResult {
   const { totals, allKnown } = sumKnownActualMacros(record);
-  const snapshot = record.nutrition.targetsSnapshot;
-  if (!allKnown || !snapshot) return "insufficient_data";
-  const target = snapshot.calories;
+  const target = record.nutrition.targetsSnapshot?.calories ?? record.nutrition.prescribedSnapshot?.calories ?? null;
+  if (!allKnown || target === null) return "insufficient_data";
   return Math.abs(totals.calories - target) <= tolerance.calorieToleranceKcal ? "met" : "not_met";
 }
 
@@ -113,8 +112,7 @@ export function deriveProteinTargetMet(
   tolerance: NutritionToleranceConfig = DEFAULT_NUTRITION_TOLERANCE
 ): TargetMetResult {
   const { totals, allKnown } = sumKnownActualMacros(record);
-  const snapshot = record.nutrition.targetsSnapshot;
-  if (!allKnown || !snapshot) return "insufficient_data";
-  const target = snapshot.proteinG;
+  const target = record.nutrition.targetsSnapshot?.proteinG ?? record.nutrition.prescribedSnapshot?.proteinG ?? null;
+  if (!allKnown || target === null) return "insufficient_data";
   return totals.proteinG >= target - tolerance.proteinToleranceG ? "met" : "not_met";
 }

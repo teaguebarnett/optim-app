@@ -1,5 +1,6 @@
 "use client";
 
+import { NO_TARGET_LABEL } from "@/lib/nutrition/plan-display";
 import { ChevronRight } from "lucide-react";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { MACRO_ACCENTS, macroRemainingCaption } from "@/lib/nutrition/view-model";
@@ -12,6 +13,8 @@ interface MacroTileProps {
   consumed: number;
   /** Null = no nutrition assigned: no target, no progress, no remaining. */
   target: number | null;
+  /** U3A — a plan is assigned but this macro isn't prescribed ("No target", not "not assigned"). */
+  planAssigned?: boolean;
   onOpen: () => void;
 }
 
@@ -21,7 +24,7 @@ interface MacroTileProps {
  * tappable surface that opens MacroDetailSheet for education + coach-curated
  * sources.
  */
-export function MacroTile({ macroKey, label, consumed, target, onOpen }: MacroTileProps) {
+export function MacroTile({ macroKey, label, consumed, target, planAssigned = false, onOpen }: MacroTileProps) {
   const percent = target !== null && target > 0 ? (consumed / target) * 100 : 0;
   const accent = MACRO_ACCENTS[macroKey];
 
@@ -41,7 +44,7 @@ export function MacroTile({ macroKey, label, consumed, target, onOpen }: MacroTi
         <span className="text-meta text-neutral">{target !== null ? `/${target}g` : "g"}</span>
       </div>
       <ProgressBar percent={percent} color={accent} />
-      <span className="text-meta text-neutral">{target !== null ? macroRemainingCaption(consumed, target) : NUTRITION_NOT_ASSIGNED_LABEL}</span>
+      <span className="text-meta text-neutral">{target !== null ? macroRemainingCaption(consumed, target) : planAssigned ? NO_TARGET_LABEL : NUTRITION_NOT_ASSIGNED_LABEL}</span>
     </button>
   );
 }

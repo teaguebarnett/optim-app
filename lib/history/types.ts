@@ -19,7 +19,7 @@ import type {
   MealIntent,
   MealPeriod,
   MealSelectionSource,
-  NutritionTargets,
+  NutritionTargets, PrescribedNutritionTargets,
   PainReport,
   PhotoMealEstimateSnapshot,
   RpeValue,
@@ -140,6 +140,9 @@ export interface NutritionDaySnapshot {
    * days. Null when no nutrition was assigned that day — never zeros or
    * demo defaults; target-met results then read as insufficient data. */
   targetsSnapshot: NutritionTargets | null;
+  /** Gate U3A — for a method plan (e.g. calories and protein) that day: only the prescribed targets (null = not
+   * prescribed). Absent on legacy days and when targetsSnapshot holds the complete set. Additive. */
+  prescribedSnapshot?: PrescribedNutritionTargets | null;
 }
 
 // ---------------------------------------------------------------------------

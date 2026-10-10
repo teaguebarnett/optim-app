@@ -1,4 +1,5 @@
 import { CalendarClock, MessageCircle } from "lucide-react";
+import { NO_TARGET_LABEL, resolveDisplayTargets, targetText } from "@/lib/nutrition/plan-display";
 import Link from "next/link";
 import { Avatar } from "@/components/ui/avatar";
 import { Card } from "@/components/ui/card";
@@ -37,6 +38,8 @@ export function PreStartToday({ timing, state, todaysEdgeText }: { timing: Progr
   const startLabel = formatFriendlyDate(state.programEnrollment.startDateIso);
   const relative = days === 1 ? "Your program starts tomorrow." : days > 1 ? `Your program starts in ${days} days.` : "Your program starts today.";
   const targets = state.nutritionTargets;
+  // U3A — a method plan (e.g. calories and protein) shows only what's prescribed.
+  const display = resolveDisplayTargets(state);
 
   return (
     <div className="px-4 pb-6 pt-5">
@@ -79,12 +82,12 @@ export function PreStartToday({ timing, state, todaysEdgeText }: { timing: Progr
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Daily calories</span>
-          <span className="font-medium text-off-white">{targets ? `${targets.calories} cal` : NUTRITION_NOT_ASSIGNED_LABEL}</span>
+          <span className="font-medium text-off-white">{targetText(display.calories, display.planAssigned, NUTRITION_NOT_ASSIGNED_LABEL, (n) => `${n} cal`)}</span>
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-neutral">Macros</span>
           <span className="font-medium text-off-white">
-            {targets ? `${targets.proteinG}P / ${targets.carbsG}C / ${targets.fatG}F` : NUTRITION_NOT_ASSIGNED_LABEL}
+            {targets ? `${targets.proteinG}P / ${targets.carbsG}C / ${targets.fatG}F` : [display.proteinG !== null ? `${display.proteinG}P` : null, display.carbsG !== null ? `${display.carbsG}C` : null, display.fatG !== null ? `${display.fatG}F` : null].filter(Boolean).join(" / ") || (display.planAssigned ? NO_TARGET_LABEL : NUTRITION_NOT_ASSIGNED_LABEL)}
           </span>
         </div>
         <div className="flex items-center justify-between text-sm">

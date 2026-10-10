@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveDisplayTargets } from "@/lib/nutrition/plan-display";
 import { useState } from "react";
 import { Camera, ChevronRight } from "lucide-react";
 import { FuelOverview } from "@/components/nutrition/fuel-overview";
@@ -61,13 +62,14 @@ export function NutritionScreen() {
       )
     : [];
 
-  const targets = state.nutritionTargets;
+  // U3A — what the coach prescribed (the complete set, or only the method's targets).
+  const display = resolveDisplayTargets(state);
 
   const statusLine = deriveNutritionStatusLine({
     state,
     dailyPlan,
     totals: nutritionTotals,
-    targets,
+    targets: display.planAssigned ? display : null,
     now: new Date(),
   });
 
@@ -82,7 +84,7 @@ export function NutritionScreen() {
 
       <FuelOverview
         totals={nutritionTotals}
-        targets={targets}
+        targets={display}
         onOpenMacro={setActiveMacro}
         statusLine={statusLine}
       />
@@ -128,7 +130,8 @@ export function NutritionScreen() {
           open={!!activeMacro}
           onClose={() => setActiveMacro(null)}
           consumed={nutritionTotals[MACRO_FIELD[activeMacro]]}
-          target={targets ? targets[MACRO_FIELD[activeMacro]] : null}
+          target={display[MACRO_FIELD[activeMacro]]}
+          planAssigned={display.planAssigned}
         />
       ) : null}
 

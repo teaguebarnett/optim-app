@@ -1,5 +1,6 @@
 "use client";
 
+import { NO_TARGET_LABEL } from "@/lib/nutrition/plan-display";
 import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Sheet } from "@/components/ui/sheet";
@@ -18,6 +19,8 @@ interface MacroDetailSheetProps {
   consumed: number;
   /** Null = no nutrition assigned (see AppState.nutritionTargets). */
   target: number | null;
+  /** U3A — a plan is assigned but this macro isn't prescribed. */
+  planAssigned?: boolean;
 }
 
 /**
@@ -27,7 +30,7 @@ interface MacroDetailSheetProps {
  * guide", per the product spec. Progressive disclosure happens inside this
  * one sheet (a view toggle) rather than stacking a second Sheet instance.
  */
-export function MacroDetailSheet({ macro, open, onClose, consumed, target }: MacroDetailSheetProps) {
+export function MacroDetailSheet({ macro, open, onClose, consumed, target, planAssigned = false }: MacroDetailSheetProps) {
   const [showFull, setShowFull] = useState(false);
   const content = MACRO_EDUCATION[macro];
   const accent = MACRO_ACCENTS[macro];
@@ -54,11 +57,11 @@ export function MacroDetailSheet({ macro, open, onClose, consumed, target }: Mac
               </div>
               <div className="text-right">
                 <p className="text-label text-neutral">Target</p>
-                <p className="mt-1 text-heading text-neutral">{target !== null ? `${target}g` : "Not assigned"}</p>
+                <p className="mt-1 text-heading text-neutral">{target !== null ? `${target}g` : planAssigned ? NO_TARGET_LABEL : "Not assigned"}</p>
               </div>
             </div>
             <ProgressBar percent={percent} color={accent} trackClassName="mt-1.5" />
-            <p className="mt-2 text-meta text-neutral">{target !== null ? macroRemainingCaption(consumed, target) : `${NUTRITION_NOT_ASSIGNED_LABEL} — your coach will set this target.`}</p>
+            <p className="mt-2 text-meta text-neutral">{target !== null ? macroRemainingCaption(consumed, target) : planAssigned ? "Your coach's plan doesn't set a target for this — log it if you like." : `${NUTRITION_NOT_ASSIGNED_LABEL} — your coach will set this target.`}</p>
           </div>
 
           <DetailSection heading="What it does" body={content.whatItDoes} />

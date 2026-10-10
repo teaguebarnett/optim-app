@@ -296,7 +296,7 @@ check("applyNutritionRevisionApproval writes only the client's nutrition plan, s
   const revisedPrescription = {
     sourceStrategyKind: "best_fit" as const,
     label: existingPlan.sourceStrategyLabel,
-    targets: { calories: existingPlan.targets.calories + 100, proteinG: existingPlan.targets.proteinG + 20, carbsG: existingPlan.targets.carbsG, fatG: existingPlan.targets.fatG },
+    targets: { calories: existingPlan.targets!.calories + 100, proteinG: existingPlan.targets!.proteinG + 20, carbsG: existingPlan.targets!.carbsG, fatG: existingPlan.targets!.fatG },
     usesTrainingRestSplit: existingPlan.usesTrainingRestSplit,
     trainingDayTargets: existingPlan.trainingDayTargets,
     restDayTargets: existingPlan.restDayTargets,
@@ -329,7 +329,7 @@ check("applyNutritionRevisionApproval writes only the client's nutrition plan, s
   });
 
   const afterState = loadClientAppState(CLIENT_ID)!;
-  assert.equal(afterState.assignedNutritionPlan!.targets.calories, existingPlan.targets.calories + 100);
+  assert.equal(afterState.assignedNutritionPlan!.targets!.calories, existingPlan.targets!.calories + 100);
   assert.deepEqual(afterState.programEnrollment, enrollmentBefore);
   assert.equal(afterState.chatMessages.length, chatCountBefore + 1);
   assert.equal(afterState.chatMessages.at(-1)?.text, "Teague approved an update to your nutrition targets.");

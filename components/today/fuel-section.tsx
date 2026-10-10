@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { resolveDisplayTargets, targetText } from "@/lib/nutrition/plan-display";
 import { ChevronRight } from "lucide-react";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { usePrototypeState } from "@/hooks/use-prototype-state";
@@ -33,8 +34,9 @@ export function FuelSection() {
   const { state, nutritionTotals, nutritionMessage } = usePrototypeState();
   // Null = no nutrition assigned: logged intake still shows, but no ring
   // progress or macro fill is computed against a target that doesn't exist.
-  const targets = state.nutritionTargets;
-  const percent = targets ? Math.round((nutritionTotals.calories / targets.calories) * 100) : 0;
+  // U3A — only prescribed targets (a calories-and-protein or habit plan shows fewer, never invented ones).
+  const display = resolveDisplayTargets(state);
+  const percent = display.calories ? Math.round((nutritionTotals.calories / display.calories) * 100) : 0;
 
   return (
     <Link href="/plan?tab=nutrition" className="block p-4">
@@ -47,13 +49,14 @@ export function FuelSection() {
         <ProgressRing percent={percent} size={62} strokeWidth={6} color="var(--pc-brass)" />
         <div className="shrink-0">
           <p className="text-metric text-off-white">{nutritionTotals.calories}</p>
-          <p className="text-meta text-neutral">{targets ? `of ${targets.calories} cal` : NUTRITION_NOT_ASSIGNED_LABEL}</p>
+          <p className="text-meta text-neutral">{targetText(display.calories, display.planAssigned, NUTRITION_NOT_ASSIGNED_LABEL, (n) => `of ${n} cal`)}</p>
         </div>
 
         <div className="ml-auto min-w-0 flex-1 space-y-1.5 pl-2">
           {MACRO_META.map((macro) => {
             const consumed = nutritionTotals[macro.key];
-            const macroPercent = targets ? Math.max(0, Math.min(100, (consumed / targets[macro.key]) * 100)) : 0;
+            const macroTarget = display[macro.key];
+            const macroPercent = macroTarget ? Math.max(0, Math.min(100, (consumed / macroTarget) * 100)) : 0;
             return (
               <div key={macro.key} className="flex items-center gap-2">
                 <span className="w-3 shrink-0 text-label text-neutral">{macro.label}</span>

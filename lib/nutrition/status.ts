@@ -27,7 +27,8 @@ export function deriveNutritionStatusLine(params: {
   dailyPlan: DailyPlanResult;
   totals: MacroValues;
   /** Null = no nutrition assigned; target-based lines are skipped. */
-  targets: MacroValues | null;
+  /** Null = no nutrition assigned; per-field null = not prescribed by the coach's method (U3A). */
+  targets: { calories: number | null; proteinG: number | null } | null;
   now: Date;
 }): string {
   const { state, dailyPlan, totals, targets, now } = params;
@@ -60,7 +61,7 @@ export function deriveNutritionStatusLine(params: {
   }
 
   const resolvedCount = orderedPeriods.filter((p) => isMealResolved(p, state)).length;
-  const proteinRatio = targets && targets.proteinG > 0 ? totals.proteinG / targets.proteinG : 1;
+  const proteinRatio = targets && targets.proteinG ? totals.proteinG / targets.proteinG : 1;
   if (targets && resolvedCount >= MIN_RESOLVED_FOR_PROTEIN_CHECK && proteinRatio < PROTEIN_BEHIND_RATIO) {
     return "Protein is running behind pace today — worth prioritizing at your next meal.";
   }

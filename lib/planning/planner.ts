@@ -12,6 +12,7 @@
 // client didn't actually do — see the adaptability rules in the Phase 3
 // spec this implements.
 
+import { resolveDisplayTargets } from "../nutrition/plan-display.ts";
 import { cardioPrescriptionForClient, MEAL_OPTIONS, resolveWorkoutAvailabilityForDay } from "../mock-data.ts";
 import { resolvePlannedDateTime } from "./training-plan.ts";
 import { comfortableTrainingWindow, mealTimingProfileForMacros, mealTimingProfileForOption } from "./meal-timing.ts";
@@ -429,9 +430,10 @@ function evaluateSnackRecommendation(state: AppState, totals: MacroValues, now: 
   // Null targets (no nutrition assigned): the gap-closing reason below is
   // skipped entirely rather than computed against invented numbers. The
   // meal-timing reasons don't depend on targets and still apply.
-  const targets = state.nutritionTargets;
-  const remainingCalRatio = targets ? Math.max(0, targets.calories - totals.calories) / targets.calories : null;
-  const remainingProteinRatio = targets ? Math.max(0, targets.proteinG - totals.proteinG) / targets.proteinG : null;
+  // U3A — per field: a calories-and-protein plan steers by both; a habit/portion plan by neither (never invented).
+  const targets = resolveDisplayTargets(state);
+  const remainingCalRatio = targets.calories ? Math.max(0, targets.calories - totals.calories) / targets.calories : null;
+  const remainingProteinRatio = targets.proteinG ? Math.max(0, targets.proteinG - totals.proteinG) / targets.proteinG : null;
 
   const resolvedMealTimes: number[] = (["breakfast", "postWorkout", "lunch", "dinner"] as MealPeriod[])
     .map((period) => state.meals[period])

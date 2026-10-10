@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveDisplayTargets } from "@/lib/nutrition/plan-display";
 import type { ReactNode } from "react";
 import { Sheet } from "@/components/ui/sheet";
 import { SKIP_REASON_LABELS } from "@/components/ui/reason-picker";
@@ -30,6 +31,7 @@ function mealDescription(period: MealPeriod, selection: MealSelection | undefine
  */
 export function ReviewTodaySheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, nutritionTotals, dailyPlan } = usePrototypeState();
+  const display = resolveDisplayTargets(state);
   const session = state.workoutSession;
   const summary = session.summary;
 
@@ -81,11 +83,12 @@ export function ReviewTodaySheet({ open, onClose }: { open: boolean; onClose: ()
             </>
           ) : (
             <>
-              <Row label="Targets" value={NUTRITION_NOT_ASSIGNED_LABEL} />
-              <Row label="Calories" value={`${nutritionTotals.calories} logged`} />
-              <Row label="Protein" value={`${nutritionTotals.proteinG}g logged`} />
-              <Row label="Carbs" value={`${nutritionTotals.carbsG}g logged`} />
-              <Row label="Fat" value={`${nutritionTotals.fatG}g logged`} />
+              {/* U3A — a method plan shows its prescribed targets; the rest is logged intake only. */}
+              {!display.planAssigned ? <Row label="Targets" value={NUTRITION_NOT_ASSIGNED_LABEL} /> : null}
+              <Row label="Calories" value={display.calories !== null ? `${nutritionTotals.calories} / ${display.calories}` : `${nutritionTotals.calories} logged`} />
+              <Row label="Protein" value={display.proteinG !== null ? `${nutritionTotals.proteinG}g / ${display.proteinG}g` : `${nutritionTotals.proteinG}g logged`} />
+              <Row label="Carbs" value={display.carbsG !== null ? `${nutritionTotals.carbsG}g / ${display.carbsG}g` : `${nutritionTotals.carbsG}g logged`} />
+              <Row label="Fat" value={display.fatG !== null ? `${nutritionTotals.fatG}g / ${display.fatG}g` : `${nutritionTotals.fatG}g logged`} />
             </>
           )}
         </Section>
