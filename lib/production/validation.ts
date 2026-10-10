@@ -195,6 +195,21 @@ function validatePrescriptionIntervalField(raw: unknown, field: string, what: st
   requireNumber(raw.seconds, `${field}.seconds`, what);
 }
 
+const EFFORT_LABELS = ["easy", "moderate", "vigorous"] as const;
+const TALK_TEST_LEVELS = ["full_conversation", "short_sentences", "few_words"] as const;
+/** Gate U2 — CR10 cardio effort: a real 0–10 band, never a resistance RPE stand-in. */
+function validatePrescriptionEffort(raw: unknown, field: string, what: string): void {
+  if (!isRecord(raw)) fail(what, `"${field}" is not an object`);
+  if (raw.scale !== "cr10") fail(what, `"${field}.scale" must be "cr10"`);
+  for (const k of ["low", "high"] as const) {
+    const v = raw[k];
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 10) fail(what, `"${field}.${k}" must be a number from 0 to 10, got ${JSON.stringify(v)}`);
+  }
+  if ((raw.low as number) > (raw.high as number)) fail(what, `"${field}.low" can't exceed "${field}.high"`);
+  if (raw.label !== undefined) requireOneOf(raw.label, EFFORT_LABELS, `${field}.label`, what);
+  if (raw.talkTest !== undefined) requireOneOf(raw.talkTest, TALK_TEST_LEVELS, `${field}.talkTest`, what);
+}
+
 function validatePrescription(raw: unknown, what: string): Prescription {
   if (!isRecord(raw)) fail(what, "prescription is not an object");
   requireOneOf(raw.family, EXECUTION_FAMILIES, "prescription.family", what);
@@ -204,6 +219,15 @@ function validatePrescription(raw: unknown, what: string): Prescription {
   if (raw.load !== undefined) validatePrescriptionLoad(raw.load, what);
   if (raw.rpe !== undefined) requireNumber(raw.rpe, "prescription.rpe", what);
   if (raw.rir !== undefined) requireNumber(raw.rir, "prescription.rir", what);
+  // Gate U2 — cardio effort lives only on aerobic families; resistance keeps its own RPE/RIR semantics.
+  if (raw.effort !== undefined) {
+    if (raw.family !== "continuous" && raw.family !== "interval") fail(what, `"prescription.effort" (CR10 cardio effort) is only valid for continuous or interval prescriptions, not "${String(raw.family)}"`);
+    validatePrescriptionEffort(raw.effort, "prescription.effort", what);
+  }
+  if (raw.recoveryEffort !== undefined) {
+    if (raw.family !== "interval") fail(what, `"prescription.recoveryEffort" is only valid for interval prescriptions`);
+    validatePrescriptionEffort(raw.recoveryEffort, "prescription.recoveryEffort", what);
+  }
   if (raw.duration !== undefined) validatePrescriptionDuration(raw.duration, what);
   if (raw.distance !== undefined) validatePrescriptionDistance(raw.distance, what);
   if (raw.pace !== undefined) validatePrescriptionPace(raw.pace, what);
@@ -362,6 +386,7 @@ export function validateSession(raw: unknown, what: string): Session {
   requireNumber(raw.estimatedDurationMin, "session.estimatedDurationMin", what);
   if (raw.warmupOverview !== undefined) requireString(raw.warmupOverview, "session.warmupOverview", what);
   if (raw.coachNote !== undefined) requireString(raw.coachNote, "session.coachNote", what);
+  if (raw.optional !== undefined) requireBoolean(raw.optional, "session.optional", what);
   const blocks = requireArray(raw.blocks, "session.blocks", what);
   if (blocks.length === 0) fail(what, `"session.blocks" must have at least one block`);
   blocks.forEach((b) => validateBlock(b, what));

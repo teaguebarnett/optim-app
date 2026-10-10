@@ -5,7 +5,7 @@
 // no UI/network/AI dependency — mirrors the discipline of
 // lib/workout/effort-policy.ts and rest-policy.ts.
 
-import type { Prescription, PrescriptionDistance, PrescriptionHeartRate, PrescriptionPace } from "../training/types.ts";
+import type { Prescription, PrescriptionDistance, PrescriptionEffort, PrescriptionHeartRate, PrescriptionPace } from "../training/types.ts";
 
 // ---------------------------------------------------------------------------
 // Display formatting — coaching language only, never backend terminology
@@ -41,6 +41,15 @@ export function formatHeartRate(heartRate: PrescriptionHeartRate): string {
  * field is present (Phase 4 spec sections 3/8). Order is deliberately
  * duration/distance/pace first (the "what and how much"), then heart
  * rate/effort (the "how hard"), matching how a coach would say it aloud. */
+const TALK_LABEL: Record<NonNullable<PrescriptionEffort["talkTest"]>, string> = { full_conversation: "you can hold a full conversation", short_sentences: "you can speak in short sentences", few_words: "only a few words at a time" };
+
+/** Gate U2 — CR10 cardio effort, e.g. "Easy — effort 2–3/10 (you can hold a full conversation)". */
+export function formatEffort(effort: PrescriptionEffort): string {
+  const band = effort.low === effort.high ? `${effort.low}` : `${effort.low}–${effort.high}`;
+  const label = effort.label ? `${effort.label[0].toUpperCase()}${effort.label.slice(1)} — ` : "";
+  return `${label}effort ${band}/10${effort.talkTest ? ` (${TALK_LABEL[effort.talkTest]})` : ""}`;
+}
+
 export function describeContinuousTarget(prescription: Prescription): string[] {
   const parts: string[] = [];
   if (prescription.duration) parts.push(formatDurationMinutes(prescription.duration.seconds));
@@ -50,6 +59,7 @@ export function describeContinuousTarget(prescription: Prescription): string[] {
   if (prescription.power) parts.push(`${prescription.power.watts} W`);
   if (prescription.cadence !== undefined) parts.push(`Cadence ${prescription.cadence}`);
   if (prescription.rpe !== undefined) parts.push(`Target RPE ${prescription.rpe}`);
+  if (prescription.effort) parts.push(formatEffort(prescription.effort));
   if (prescription.completionTarget) parts.push(prescription.completionTarget);
   return parts;
 }
@@ -65,6 +75,8 @@ export interface ContinuousCaptureFields {
   distance: boolean;
   heartRate: boolean;
   rpe: boolean;
+  /** Gate U2 — the session was prescribed by CR10 effort; capture the client's perceived effort on that scale. */
+  effort: boolean;
 }
 
 export function continuousCaptureFields(prescription: Prescription): ContinuousCaptureFields {
@@ -73,6 +85,7 @@ export function continuousCaptureFields(prescription: Prescription): ContinuousC
     distance: prescription.distance !== undefined,
     heartRate: prescription.heartRate !== undefined,
     rpe: prescription.rpe !== undefined,
+    effort: prescription.effort !== undefined,
   };
 }
 

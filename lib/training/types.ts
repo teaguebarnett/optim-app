@@ -95,6 +95,19 @@ export interface PrescriptionInterval {
 
 export type PrescriptionSide = "left" | "right" | "alternating" | "bilateral";
 
+/** Gate U2 — perceived effort for cardiovascular work on the CR10 scale (0–10), the scale the Cardio Reasoner prescribes
+ * on. Distinct from `rpe`, whose RpeValue (6–10) is the resistance-training effort scale and can't express easy or
+ * moderate aerobic work: easy cardio is never forced into a fake resistance RPE. Continuous and interval families only
+ * (validated). `label` and `talkTest` are the coach-facing anchors; `low`/`high` are the numeric band. */
+export interface PrescriptionEffort {
+  scale: "cr10";
+  low: number;
+  high: number;
+  label?: "easy" | "moderate" | "vigorous";
+  /** Talk-test anchor for steady work (valid for walking, cycling, elliptical…; not used for intervals). */
+  talkTest?: "full_conversation" | "short_sentences" | "few_words";
+}
+
 export interface Prescription {
   family: ExecutionFamily;
   sets?: number;
@@ -117,6 +130,11 @@ export interface Prescription {
   reps?: PrescriptionReps;
   load?: PrescriptionLoad;
   rpe?: RpeValue;
+  /** Gate U2 — cardio effort on the CR10 scale (see PrescriptionEffort). Continuous / interval only. Purely additive
+   * (jsonb content; no migration). For an interval prescription this is the WORK bouts' effort. */
+  effort?: PrescriptionEffort;
+  /** Gate U2 — an interval prescription's RECOVERY effort (CR10). */
+  recoveryEffort?: PrescriptionEffort;
   rir?: number;
   duration?: PrescriptionDuration;
   distance?: PrescriptionDistance;
@@ -249,6 +267,9 @@ export interface Session {
   estimatedDurationMin: number;
   warmupOverview?: string;
   coachNote?: string;
+  /** Gate U2 — an optional extra the client may skip (e.g. the coach's "optional, low-intensity" cardio). Absent =
+   * a normal, prescribed session. Additive; existing sessions are unaffected. */
+  optional?: boolean;
   blocks: Block[];
 }
 
@@ -467,6 +488,9 @@ export interface UniversalTrainingProgramContent {
   name: string;
   durationWeeks: number;
   weeks: UniversalProgramWeek[];
+  /** Gate U2 — set on a draft built from a Unified Program proposal: which proposal, and which domain runs, produced
+   * it. Informational provenance only (like reasonerProvenance); nothing in execution reads it. */
+  unifiedProvenance?: { proposalRunId: string; unifiedVersion: string; resistance: { source: "approved_program" | "proposed_program" | "existing_draft" | "none"; versionId?: string; runId?: string }; cardio: { runId: string; promptVersion: string; weeks: number } | null };
   /** Phase 6B — a concise, real (never fabricated post-hoc) explanation of
    * why generation chose this structure for this client, surfaced for
    * coach review (spec: "generated program proposals retain enough

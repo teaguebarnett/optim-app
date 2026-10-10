@@ -26,7 +26,7 @@ import { cardioCapacity, scheduleConflicts, type ResistanceWeek } from "../../ca
 import { runModelAttempts, type ReasonerModel } from "../core.ts";
 import { sha256, type ReasonerAttempt, type ReasonerRunTotals } from "../run.ts";
 import { CARDIO_PROMPT_VERSION, CARDIO_SYSTEM_PROMPT, parseCardioOutput, type CardioPlan } from "./contract.ts";
-import { buildCardioInput, CARDIO_REASONER_VERSION, type CardioReasoningInput } from "./input.ts";
+import { allowedRoles, buildCardioInput, CARDIO_REASONER_VERSION, type CardioReasoningInput } from "./input.ts";
 import { validateCardioPlan, type CardioQualityFinding, type CardioWorkload } from "./validate.ts";
 
 export const CARDIO_RUN_SCHEMA = "optim.cardio-reasoner-run.v1";
@@ -136,6 +136,9 @@ export async function runCardioReasoner(params: { input: SynthesisInput; model: 
   if (!read.ok && read.reason === "not_coached") return finish({ status: "NOT_COACHED", message: read.message }, { message: read.message });
   if (!read.ok) return needs("method", read.missing.map((m) => ({ fact: `coach_brain.${m.key}`, why: m.why, blockedDecision: "The cardio proposal.", providedBy: "coach" as const })), "The coach's cardio method is incomplete.");
   const method = read.method;
+  // Applicability BEFORE cardio-specific safety (Gate U2 closure): if none of this coach's cardio roles applies to this
+  // goal, no cardio is planned — so no cardio clearance is demanded either.
+  if (!allowedRoles(method, route.purpose).length) return finish({ status: "NOT_COACHED", message: `This coach's cardio roles (${method.roles.value.join(", ")}) don't cover what cardio would be for here (${route.purpose.replace(/_/g, " ")}); OPTIM proposes none rather than stretch the method.` }, { message: "No allowed role." });
 
   // 4. Safety gate — before any paid call.
   const safety = cardioSafety(input.client, input.goal);

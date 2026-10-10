@@ -27,6 +27,7 @@ import "server-only";
 import { getSupabaseServerClient } from "../supabase/server";
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "./auth";
 import { UnauthorizedError } from "./errors";
+import { insertDraftNutritionVersion, insertDraftProgramVersion } from "./draft-versions";
 import {
   validateTrainingProgramVersionContent,
   validateAssignedNutritionPlanContent,
@@ -310,43 +311,8 @@ export async function createDraftProgramVersion(params: {
 }): Promise<{ programId: string; versionId: string; versionNumber: number }> {
   const ctx = await requireCoachAuthority(params.workspaceId);
   const supabase = await getSupabaseServerClient();
-
-  let programId = params.programId;
-  if (!programId) {
-    const { data, error } = await supabase
-      .from("training_programs")
-      .insert({ workspace_id: params.workspaceId, created_by: ctx.userId, title: params.title })
-      .select("id")
-      .single();
-    if (error) throw new Error(`createDraftProgramVersion (program) failed: ${error.message}`);
-    programId = data.id as string;
-  }
-
-  const { data: existingVersions, error: versionsError } = await supabase
-    .from("training_program_versions")
-    .select("version_number")
-    .eq("program_id", programId)
-    .order("version_number", { ascending: false })
-    .limit(1);
-  if (versionsError) throw new Error(`createDraftProgramVersion (version lookup) failed: ${versionsError.message}`);
-  const nextVersionNumber = (existingVersions?.[0]?.version_number ?? 0) + 1;
-
-  const { data: versionRow, error: insertError } = await supabase
-    .from("training_program_versions")
-    .insert({
-      program_id: programId,
-      workspace_id: params.workspaceId,
-      version_number: nextVersionNumber,
-      status: "draft",
-      content: params.content,
-      created_by: ctx.userId,
-      proposed_for_client_profile_id: params.proposedForClientProfileId ?? null,
-    })
-    .select("id")
-    .single();
-  if (insertError) throw new Error(`createDraftProgramVersion (version insert) failed: ${insertError.message}`);
-
-  return { programId, versionId: versionRow.id as string, versionNumber: nextVersionNumber };
+  // Gate U2 — the insert itself is shared with unified-proposal persistence (same code path, same RLS).
+  return insertDraftProgramVersion(supabase, ctx.userId, params);
 }
 
 export interface ProgramProposalVersionRow {
@@ -575,42 +541,7 @@ export async function createDraftNutritionVersion(params: {
 }): Promise<{ planId: string; versionId: string }> {
   const ctx = await requireCoachAuthority(params.workspaceId);
   const supabase = await getSupabaseServerClient();
-
-  let planId = params.planId;
-  if (!planId) {
-    const { data, error } = await supabase
-      .from("nutrition_plans")
-      .insert({ workspace_id: params.workspaceId, created_by: ctx.userId, title: params.title })
-      .select("id")
-      .single();
-    if (error) throw new Error(`createDraftNutritionVersion (plan) failed: ${error.message}`);
-    planId = data.id as string;
-  }
-
-  const { data: existingVersions, error: versionsError } = await supabase
-    .from("nutrition_plan_versions")
-    .select("version_number")
-    .eq("plan_id", planId)
-    .order("version_number", { ascending: false })
-    .limit(1);
-  if (versionsError) throw new Error(`createDraftNutritionVersion (version lookup) failed: ${versionsError.message}`);
-  const nextVersionNumber = (existingVersions?.[0]?.version_number ?? 0) + 1;
-
-  const { data: versionRow, error: insertError } = await supabase
-    .from("nutrition_plan_versions")
-    .insert({
-      plan_id: planId,
-      workspace_id: params.workspaceId,
-      version_number: nextVersionNumber,
-      status: "draft",
-      content: params.content,
-      created_by: ctx.userId,
-    })
-    .select("id")
-    .single();
-  if (insertError) throw new Error(`createDraftNutritionVersion (version insert) failed: ${insertError.message}`);
-
-  return { planId, versionId: versionRow.id as string };
+  return insertDraftNutritionVersion(supabase, ctx.userId, params);
 }
 
 export async function publishNutritionVersion(params: { workspaceId: string; versionId: string }): Promise<void> {

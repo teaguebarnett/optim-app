@@ -156,6 +156,13 @@ export function validateCardioPlan(params: { plan: CardioPlan; reasoning: Cardio
       if (!opt) err(mod ? `${at}: ${mod.name} doesn't fit the client's confirmed restrictions (or its fit is uncertain) — use a listed modality.` : `${at}: "${s.modality}" isn't a known modality.`);
       if (mod && s.type === "intervals" && !mod.supports.includes("intervals")) err(`${at}: ${mod.name} isn't used for intervals.`);
       if (s.type === "intervals" && s.intensity !== "vigorous") err(`${at}: intervals are vigorous work — label them "vigorous".`);
+      // V1.3 — every week's interval session carries its structure (executable content needs it); it must fit.
+      if (w.week > 1 && s.type === "intervals") {
+        const iv = (s as CardioWeekSession).intervals;
+        if (!iv) err(`${at}: an interval session needs its structure (rounds, workSeconds, recoverySeconds) in every week.`);
+        else if ((iv.rounds * (iv.workSeconds + iv.recoverySeconds)) / 60 > s.minutes) err(`${at}: ${iv.rounds} × (${iv.workSeconds}+${iv.recoverySeconds} s) doesn't fit in ${s.minutes} min.`);
+      }
+      if (w.week > 1 && s.type === "steady" && (s as CardioWeekSession).intervals) err(`${at}: a steady session has no interval structure.`);
       if (isHard(s) && ri.safety.noVigorous) err(`${at}: no vigorous or interval work for this client until the coach confirms the reported medication/condition.`);
       if (plan.role === "optional_low_intensity" && (!s.optional || s.intensity !== "easy")) err(`${at}: this coach's cardio is an optional, low-intensity extra — every session optional:true and easy.`);
       // Placement and capacity against the APPROVED lifting (never changed).

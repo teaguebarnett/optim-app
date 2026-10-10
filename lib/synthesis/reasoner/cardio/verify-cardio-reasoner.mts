@@ -56,7 +56,7 @@ const rail = (name: string, id: string, re: RegExp, tweak: (p: WireCardio["plan"
 /** Keep the progression consistent with a changed week 1 (hold it for weeks 2–4) so a rail test fails only for its
  * own reason; and keep the dose statement consistent with week 1's minutes. */
 const resync = (p: WireCardio["plan"], ri?: CardioReasoningInput) => {
-  const compact = (p.sessions as Array<Record<string, unknown>>).map((x) => ({ day: x.day, type: x.type, modality: x.modality, minutes: x.minutes, intensity: x.intensity, placement: x.placement, optional: x.optional }));
+  const compact = (p.sessions as Array<Record<string, unknown>>).map((x) => { const iv = x.intervals as { rounds: number; workSeconds: number; recoverySeconds: number } | undefined; return { day: x.day, type: x.type, modality: x.modality, minutes: x.minutes, intensity: x.intensity, placement: x.placement, optional: x.optional, intervals: iv ? { rounds: iv.rounds, workSeconds: iv.workSeconds, recoverySeconds: iv.recoverySeconds } : null }; });
   p.progression = [2, 3, 4].map((week) => ({ week, sessions: compact.map((x) => ({ ...x })), deload: false, gate: "none", change: "Hold." }));
   if (ri) {
     const total = compact.reduce((t, x) => t + (x.minutes as number), 0);
@@ -572,6 +572,13 @@ await check("83. optional growth gated on a prepared 'optional_dose' decision is
 });
 await rail("84. an optional dose sized from fat-loss minute guidance (another role's volume)", "C13", /optional cardio dose cites weekly-minute guidance \(concept\.cardio\.weight_management#fatloss\.dose\)/, (p) => {
   p.decisions.find((d: { topic: string }) => d.topic === "dose").evidence = ["concept.cardio.weight_management#fatloss.dose"];
+});
+
+await rail("85. V1.3: a later-week interval session without its structure (not executable)", "C01", /an interval session needs its structure .* in every week/, (p) => {
+  p.progression[1].sessions.push({ day: "Sunday", type: "intervals", modality: "cardio.cycling_stationary", minutes: 20, intensity: "vigorous", placement: "separate_day", optional: false });
+});
+await rail("86. V1.3: a later-week interval structure that doesn't fit its minutes", "C01", /week 3 Sunday: 12 × \(60\+60 s\) doesn't fit in 20 min/, (p) => {
+  p.progression[1].sessions.push({ day: "Sunday", type: "intervals", modality: "cardio.cycling_stationary", minutes: 20, intensity: "vigorous", placement: "separate_day", optional: false, intervals: { rounds: 12, workSeconds: 60, recoverySeconds: 60 } });
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

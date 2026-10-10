@@ -8,7 +8,7 @@ import { runUnifiedProgram, trainingContextFor, type DomainResults } from "./orc
 import { validateCrossDomain } from "./validate.ts";
 import type { ProgramDay, UnifiedProgramProposal } from "./contract.ts";
 import { sha256 } from "../reasoner/run.ts";
-import { NOW, routerModel } from "./eval/fixtures.ts";
+import { NOW, routerModel, scenarioInput, fullCoach, restrict, programContent, LOWER, UPPER } from "./eval/fixtures.ts";
 import { UNIFIED_SCENARIOS, scenarioHard } from "./eval/scenarios.ts";
 import { scriptedCardio } from "../reasoner/cardio/eval/fixtures.ts";
 import { scriptedOutput } from "../reasoner/eval/fixtures.ts";
@@ -234,6 +234,128 @@ await check("21. a second visit in a day for a client with one training time bec
   const d = u.decisions.find((x) => x.about === "second_visit");
   assert.ok(d && d.options.length >= 2 && d.recommended, JSON.stringify(u.decisions));
   assert.equal(u.status, "NEEDS_COACH_DECISION");
+});
+
+console.log("\n  safety alignment with the canonical coach health-review policy (U2 closure)\n");
+const DOC = "No squats or lower body compounds like leg press; no bracing; no ab work.";
+const reviewed = (status: string, extra: Record<string, unknown> = {}) => ({ clientId: "client-eval", workspaceId: "ws-eval", status, reasons: ["Flagged being advised to limit or avoid exercise."], createdAtIso: NOW, updatedAtIso: NOW, documentedLimitations: DOC, ...extra }) as never;
+const structuredNone = { schema: 1, sourceText: DOC, restrictions: [], noExerciseRestrictions: true, confirmedBy: "coach-eval", confirmedAtIso: NOW, interpretation: { interpreter: { kind: "manual", reason: "x" }, proposedOptionIds: [], removedOptionIds: [], addedOptionIds: [], clarifications: [] } };
+const confirmedTags = restrict([{ kind: "avoid_movement_pattern", pattern: "squat" }, { kind: "avoid_movement_pattern", pattern: "hinge" }, { kind: "avoid_demand", demand: "bracing", atOrAbove: "high" }]).map((r) => ({ ...r, interprets: ["client-eval:coach_documented_limitation"] }));
+const person = (goal: string, screen: string[], more: Record<string, unknown> = {}) => ({ what_you_want: { primaryGoal: goal, secondaryGoals: [] }, health_finish: { hasInjuryHistory: false, safetyScreen: screen }, your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"], preferredTrainingTime: ["evening", "morning"] }, ...more });
+const go = async (input: ReturnType<typeof scenarioInput>, opts: Partial<Parameters<typeof runUnifiedProgram>[0]> = {}, model = routerModel()) => ({ u: await runUnifiedProgram({ input, model, nowIso: NOW, maxAttempts: 1, ...opts }), model });
+
+await check("22. reviewed limitations (proceed_with_limitations, restrictions confirmed): lifting and nutrition proceed within the confirmed limits; cardio's screen escalation blocks ONLY cardio, with a prepared clearance decision", async () => {
+  const input = scenarioInput({ coach: fullCoach(), patch: person("get_stronger", ["advised_limit"]), healthReview: reviewed("proceed_with_limitations"), restrictions: confirmedTags });
+  const { u, model } = await go(input);
+  assert.deepEqual([u.domains.resistance.status, u.domains.cardio.status, u.domains.nutrition.status], ["PROPOSED", "ESCALATE", "PROPOSED"], JSON.stringify(Object.values(u.domains).map((d) => d.reasons)));
+  assert.equal(model.calls.cardio, 0, "cardio was never planned");
+  assert.ok(u.decisions.some((d) => d.about === "cardio_clearance") && u.status === "NEEDS_COACH_DECISION", u.status);
+  assert.ok(/isn't a clearance for cardio/.test(u.domains.cardio.reasons.join(" ")));
+  const r = (await import("../reasoner/eval/fixtures.ts")).scriptedOutput;
+  void r;
+});
+
+await check("23. the confirmed restrictions still bind lifting (no squat/hinge in the proposed plan)", async () => {
+  const input = scenarioInput({ coach: fullCoach(), patch: person("get_stronger", ["advised_limit"]), healthReview: reviewed("proceed_with_limitations"), restrictions: confirmedTags });
+  let resistance: unknown = null;
+  await runUnifiedProgram({ input, model: routerModel(), nowIso: NOW, maxAttempts: 1, onResults: (x) => (resistance = x.resistance) });
+  const res = resistance as { status: string; spec: { resistance: { value: { sessions: Array<{ exercises: Array<{ exerciseId: string }> }> } } } };
+  assert.equal(res.status, "PLANNED");
+  const { FOUNDATION_KNOWLEDGE } = await import("../knowledge/registry.ts");
+  const patterns = res.spec.resistance.value.sessions.flatMap((s) => s.exercises.flatMap((e) => FOUNDATION_KNOWLEDGE.getExercise(e.exerciseId)?.patterns ?? []));
+  assert.ok(!patterns.includes("squat") && !patterns.includes("hinge"), patterns.join(","));
+});
+
+await check("24. unresolved health concern: screen flagged and no coach review → the whole program stops (no domain proposed), 0 model calls, no clearance invented", async () => {
+  const { u, model } = await go(scenarioInput({ coach: fullCoach(), patch: person("get_stronger", ["advised_limit"]) }));
+  assert.equal(model.calls.resistance + model.calls.cardio + model.calls.nutrition, 0);
+  assert.ok(["ESCALATE", "INCOMPLETE", "NEEDS_INPUT"].includes(u.status), u.status);
+  assert.ok(!Object.values(u.domains).some((d) => d.status === "PROPOSED"));
+  assert.ok(!u.decisions.some((d) => d.about === "cardio_clearance"), "a clearance decision only exists under a resolved review");
+  // Without cardio in play, the canonical readiness (open health review) is what stops it.
+  const noCardio = await go(scenarioInput({ coach: fullCoach({ t_cardio_roles: ["fat_loss"] }), patch: person("build_muscle", ["advised_limit"]) }));
+  assert.equal(noCardio.model.calls.resistance + noCardio.model.calls.nutrition, 0);
+  assert.ok(Object.values(noCardio.u.domains).some((d) => d.reasons.some((r) => /health_review/.test(r))), JSON.stringify(Object.values(noCardio.u.domains).map((d) => d.reasons)));
+});
+
+await check("25. a structured confirmation that contradicts the review it confirms ('no exercise restrictions' vs documented exercises) stops planning with a coach decision — never treated as clearance", async () => {
+  const input = scenarioInput({ coach: fullCoach(), patch: person("build_muscle", ["advised_limit", "joint_muscular"]), healthReview: reviewed("proceed_with_limitations", { structuredLimitations: structuredNone }) });
+  assert.equal(input.client.health.review.structuredStatus, "current");
+  const { u, model } = await go(input);
+  assert.equal(model.calls.resistance + model.calls.cardio + model.calls.nutrition, 0);
+  assert.equal(u.status, "NEEDS_INPUT");
+  assert.ok(u.decisions.some((d) => d.about === "confirm_structured_limitations"));
+  assert.ok(/squat/.test(u.domains.resistance.reasons.join(" ")));
+});
+
+await check("26. cardio not applicable to this goal (the real client's setup): no cardio planning and no cardio clearance demanded, even with a flagged screen", async () => {
+  const input = scenarioInput({ coach: fullCoach({ t_cardio_roles: ["fat_loss"] }), patch: person("build_muscle", ["advised_limit"]), healthReview: reviewed("proceed_with_limitations"), restrictions: confirmedTags });
+  const { u, model } = await go(input);
+  assert.equal(u.domains.cardio.status, "NOT_COACHED");
+  assert.equal(model.calls.cardio, 0);
+  assert.ok(!u.decisions.some((d) => d.about === "cardio_clearance") && /no cardio-specific clearance/.test(u.domains.cardio.summary));
+  assert.equal(u.domains.resistance.status, "PROPOSED");
+});
+
+await check("27. domain-specific: a cardio text flag (heart condition) still stops the whole program when cardio applies (unchanged), but isn't evaluated when cardio doesn't apply", async () => {
+  const heart = { what_you_want: { primaryGoal: "get_stronger", secondaryGoals: [], successDefinition: "get fit again after my heart attack" } };
+  const applies = await go(scenarioInput({ coach: fullCoach(), patch: { ...person("get_stronger", ["none"]), ...heart } }));
+  assert.equal(applies.u.status, "ESCALATE");
+  assert.equal(applies.model.calls.resistance, 0);
+  const notApplies = await go(scenarioInput({ coach: fullCoach({ t_cardio_roles: ["none"] }), patch: { ...person("get_stronger", ["none"]), ...heart } }));
+  assert.equal(notApplies.u.domains.cardio.status, "NOT_COACHED");
+  assert.notEqual(notApplies.u.status, "ESCALATE", "a non-applicable domain doesn't block the program");
+});
+
+await check("28. multi-domain escalation: a resolved review covers the cardio screen, but nutrition's population escalation (pregnancy) still stops the whole program", async () => {
+  const input = scenarioInput({ coach: fullCoach(), patch: person("get_stronger", ["advised_limit"], { health_finish: { hasInjuryHistory: true, injuryRestrictions: "I'm pregnant, 20 weeks", safetyScreen: ["advised_limit"] } }), healthReview: reviewed("proceed_with_limitations"), restrictions: confirmedTags });
+  const { u, model } = await go(input);
+  assert.equal(u.status, "ESCALATE");
+  assert.equal(model.calls.resistance + model.calls.cardio + model.calls.nutrition, 0);
+  assert.ok(u.escalations.some((e) => e.source === "nutrition") || u.escalations.some((e) => e.source === "cardio"), JSON.stringify(u.escalations));
+});
+
+await check("29. a pending lifting draft that no longer fits the confirmed restrictions isn't used (prepared decision, 0 calls); a fitting one is used unchanged", async () => {
+  const input = scenarioInput({ coach: fullCoach({ t_cardio_roles: ["fat_loss"] }), patch: person("build_muscle", ["advised_limit"]), healthReview: reviewed("proceed_with_limitations"), restrictions: confirmedTags });
+  const bad = { ...programContent([{ day: "Monday", exercises: ["Barbell Back Squat", "Lat Pulldown"] }, { day: "Thursday", exercises: UPPER }], 8), clientId: "client-eval" } as never;
+  const r1 = await go(input, { existingResistanceDraft: { versionId: "v-bad", content: bad } });
+  assert.equal(r1.u.domains.resistance.status, "NEEDS_INPUT", JSON.stringify(r1.u.domains.resistance));
+  assert.ok(r1.u.decisions.some((d) => d.about === "pending_draft_conflicts"));
+  assert.equal(r1.model.calls.resistance + r1.model.calls.nutrition, 0);
+  // Supported/machine variants (a standing barbell overhead press has HIGH bracing — correctly excluded by "no high bracing").
+  const good = { ...programContent([{ day: "Monday", exercises: ["Machine Chest Press", "Chest-Supported Row", "Machine Shoulder Press"] }, { day: "Thursday", exercises: ["Leg Curl", "Leg Extension"] }], 8), clientId: "client-eval" } as never;
+  const r2 = await go(input, { existingResistanceDraft: { versionId: "v-good", content: good } });
+  assert.equal(r2.u.domains.resistance.status, "PROPOSED", JSON.stringify(r2.u.domains.resistance.reasons));
+  assert.equal(r2.model.calls.resistance, 0, "used unchanged, not regenerated");
+});
+
+await check("30. an approved program that conflicts with current restrictions is never changed — the conflict becomes a coach decision", async () => {
+  const input = scenarioInput({ coach: fullCoach({ t_cardio_roles: ["fat_loss"] }), patch: person("build_muscle", ["advised_limit"]), healthReview: reviewed("proceed_with_limitations"), restrictions: confirmedTags });
+  const approved = { ...programContent([{ day: "Monday", exercises: LOWER }, { day: "Thursday", exercises: UPPER }], 8), clientId: "client-eval" } as never;
+  const before = JSON.stringify(approved);
+  const { u } = await go(input, { approvedResistance: { versionId: "v-appr", content: approved } });
+  assert.equal(JSON.stringify(approved), before);
+  assert.ok(u.decisions.some((d) => d.about === "approved_program_conflicts") && u.domains.resistance.status === "APPROVED_EXISTING");
+});
+
+await check("31. exercises the documented limitations name but the confirmed restrictions allow (pulldowns, pushdowns, single-leg calf raises) are flagged for explicit coach review — never declared safe, restrictions unchanged", async () => {
+  const realDoc = "no squats, or lower body compounds like leg press, RDLs, or single leg pushing motions. No movements that involve bracing like high effort lat pull downs or tricep push downs. no ab workouts.";
+  const tags = restrict([{ kind: "avoid_movement_pattern", pattern: "squat" }, { kind: "avoid_movement_pattern", pattern: "hinge" }, { kind: "avoid_movement_pattern", pattern: "single_leg" }, { kind: "avoid_demand", demand: "bracing", atOrAbove: "moderate" }]).map((r) => ({ ...r, interprets: ["client-eval:coach_documented_limitation"] }));
+  const input = scenarioInput({ coach: fullCoach({ t_cardio_roles: ["fat_loss"] }), patch: person("build_muscle", ["advised_limit"]), healthReview: reviewed("proceed_with_limitations", { documentedLimitations: realDoc }), restrictions: tags });
+  const constraintsBefore = JSON.stringify(input.constraints);
+  // (Lat Pulldown's fit is uncertain in this fixture's context, which would correctly withhold the draft — its name match is asserted directly below.)
+  const draft = { ...programContent([{ day: "Monday", exercises: ["Cable Triceps Pushdown", "Machine Chest Press"] }, { day: "Thursday", exercises: ["Leg Curl", "Single-Leg Calf Raise", "Seated Calf Raise"] }], 8), clientId: "client-eval" } as never;
+  const { u, model } = await go(input, { existingResistanceDraft: { versionId: "v-doc", content: draft } });
+  assert.equal(u.domains.resistance.status, "PROPOSED", JSON.stringify(u.domains.resistance.reasons));
+  const d = u.decisions.find((x) => x.about === "documented_limitation_exercise_review");
+  assert.ok(d && /Cable Triceps Pushdown/.test(d.question) && /Single-Leg Calf Raise/.test(d.question), d?.question);
+  const { documentedExerciseMentions } = await import("./safety.ts");
+  assert.equal(documentedExerciseMentions("Lat Pulldown", realDoc), "lat pulldown");
+  assert.ok(!/Leg Curl|Seated Calf Raise|Machine Chest Press/.test(d!.question), "no false positives");
+  assert.equal(d!.recommended, null, "OPTIM doesn't recommend whether they're safe");
+  assert.equal(u.status, "NEEDS_COACH_DECISION");
+  assert.equal(JSON.stringify(input.constraints), constraintsBefore, "confirmed restrictions unchanged");
+  assert.equal(model.calls.resistance, 0);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

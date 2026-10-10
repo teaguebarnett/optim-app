@@ -40,6 +40,9 @@ export function assembleUnified(a: {
   escalations: UnifiedProgramProposal["escalations"];
   approved: { versionId: string; content: UniversalTrainingProgramContent } | null;
   approvedHashBefore: string | null;
+  /** Gate U2 — a pending (not approved) resistance draft used unchanged as the proposed lifting. */
+  existing?: { versionId: string; content: UniversalTrainingProgramContent } | null;
+  existingHashBefore?: string | null;
 }): UnifiedProgramProposal {
   const { input, results: r, domains } = a;
   const avail = new Set(isKnown(input.client.schedule.availableDays) ? input.client.schedule.availableDays.value : []);
@@ -76,13 +79,14 @@ export function assembleUnified(a: {
 
   const signals = recoverySignals(input);
   const recoveryLimited = signals.length > 0;
-  const x = a.status ? { errors: [], findings: [], decisions: [], uncertainties: [], alignment: [] } : validateCrossDomain({ input, domains, results: r, week, workload, recoveryLimited, approved: a.approved, approvedHashBefore: a.approvedHashBefore });
+  const x = a.status ? { errors: [], findings: [], decisions: [], uncertainties: [], alignment: [] } : validateCrossDomain({ input, domains, results: r, week, workload, recoveryLimited, approved: a.approved, approvedHashBefore: a.approvedHashBefore, existing: a.existing ?? null, existingHashBefore: a.existingHashBefore ?? null });
 
   // Objective — the goal, then each domain's part in it (only domains that produced something).
   const goal = input.goal.primary?.class ?? null;
   const success = isKnown(input.goal.successDefinition) ? input.goal.successDefinition.value : null;
   const byDomain: UnifiedProgramProposal["objective"]["byDomain"] = {};
-  if (resistance) byDomain.resistance = `${resistance.spec.weeklyStructure.value.name}: ${resistance.spec.frequency.value} sessions/week (${resistance.spec.resistance?.value.emphasis.primary ?? "general"} emphasis).`;
+  if (a.existing && domains.resistance.status === "PROPOSED") byDomain.resistance = domains.resistance.summary;
+  else if (resistance) byDomain.resistance = `${resistance.spec.weeklyStructure.value.name}: ${resistance.spec.frequency.value} sessions/week (${resistance.spec.resistance?.value.emphasis.primary ?? "general"} emphasis).`;
   else if (domains.resistance.status === "APPROVED_EXISTING") byDomain.resistance = domains.resistance.summary;
   if (r.cardio?.status === "PLANNED") byDomain.cardio = r.cardio.plan.warranted ? r.cardio.plan.objective.summary : `No additional cardio for now — ${r.cardio.plan.objective.rationale}`;
   if (nutrition) byDomain.nutrition = nutrition.plan.objective.summary;
@@ -91,7 +95,7 @@ export function assembleUnified(a: {
 
   // Progression and monitoring, rendered from each domain's structure.
   const progression: UnifiedProgramProposal["progression"] = {
-    resistance: resistance ? (resistance.spec.resistance?.value.weeks ?? []).map((w) => `Week ${w.week}: ${w.kind}${w.note ? ` — ${w.note}` : ""}`) : domains.resistance.status === "APPROVED_EXISTING" && a.approved ? [`Approved program: ${a.approved.content.durationWeeks} weeks, unchanged.`] : [],
+    resistance: resistance ? (resistance.spec.resistance?.value.weeks ?? []).map((w) => `Week ${w.week}: ${w.kind}${w.note ? ` — ${w.note}` : ""}`) : domains.resistance.status === "APPROVED_EXISTING" && a.approved ? [`Approved program: ${a.approved.content.durationWeeks} weeks, unchanged.`] : a.existing ? [`Pending draft: ${a.existing.content.durationWeeks} weeks, unchanged (not regenerated).`] : [],
     cardio: cardio ? cardio.review.progression : [],
     nutrition: nutrition ? [...nutrition.review.adjustments, `Review after ${nutrition.plan.monitoring.reviewAfterWeeks} weeks (${nutrition.plan.monitoring.cadence}).`] : [],
     alignment: x.alignment,
@@ -124,7 +128,8 @@ export function assembleUnified(a: {
   const acknowledged = (d: DomainOutcome) => d.domain === "resistance" && d.reasons.some((x) => /coach chose to proceed without it/.test(x));
   let status: UnifiedStatus;
   if (a.status) status = a.status;
-  else if (a.escalations.length || Object.values(domains).some((d) => d.status === "ESCALATE")) status = "ESCALATE";
+  // A domain escalated under a resolved canonical review (with its prepared clearance decision) doesn't stop the program.
+  else if (a.escalations.length || Object.values(domains).some((d) => d.status === "ESCALATE" && !decisions.some((x) => x.about === `${d.domain}_clearance`))) status = "ESCALATE";
   else if (Object.values(domains).some((d) => MISSING.has(d.status) && !acknowledged(d))) status = "INCOMPLETE";
   else if (x.errors.length) status = "INCOHERENT";
   else if (!Object.values(domains).some((d) => PRODUCED.has(d.status))) status = "NEEDS_INPUT";
@@ -157,6 +162,7 @@ export function assembleUnified(a: {
       goalContract: sha256(input.goal),
       coachMethod: input.coach ? { versionId: input.coach.versionId, version: input.coach.version } : null,
       approvedResistance: a.approved ? { versionId: a.approved.versionId, contentHash: a.approvedHashBefore! } : null,
+      existingResistanceDraft: a.existing ? { versionId: a.existing.versionId, contentHash: a.existingHashBefore! } : null,
       domainRuns,
       modelCalls: Object.values(domainRuns).reduce((t, x) => t + (x?.calls ?? 0), 0),
     },

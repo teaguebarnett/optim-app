@@ -18,7 +18,7 @@
 // timer tick, so a backgrounded tab can never silently skip a round.
 
 import type { IntervalRoundActual, Prescription } from "../training/types.ts";
-import { formatDistance, formatHeartRate, formatPace } from "./continuous.ts";
+import { formatDistance, formatEffort, formatHeartRate, formatPace } from "./continuous.ts";
 
 export type IntervalPhaseKind = "work" | "recovery";
 
@@ -96,6 +96,7 @@ export function describeIntervalOverview(prescription: Prescription): string[] {
   if (work && recovery) parts.push(`${work} / ${recovery}`);
   else if (work) parts.push(work);
   if (prescription.rpe !== undefined) parts.push(`Target RPE ${prescription.rpe}`);
+  if (prescription.effort) parts.push(`Work: ${formatEffort(prescription.effort)}`);
   if (prescription.pace) parts.push(`Target pace ${formatPace(prescription.pace)}`);
   if (prescription.heartRate) parts.push(`Target HR ${formatHeartRate(prescription.heartRate)}`);
   return parts;
@@ -111,9 +112,11 @@ export function describeIntervalPhaseTarget(prescription: Prescription, phase: I
     if (prescription.pace) parts.push(`Target pace ${formatPace(prescription.pace)}`);
     if (prescription.heartRate) parts.push(`Target HR ${formatHeartRate(prescription.heartRate)}`);
     if (prescription.rpe !== undefined) parts.push(`Target RPE ${prescription.rpe}`);
+    if (prescription.effort) parts.push(formatEffort(prescription.effort));
   } else {
     if (prescription.recoveryInterval) parts.push(formatIntervalSeconds(prescription.recoveryInterval.seconds));
     if (prescription.recoveryDistance) parts.push(formatDistance(prescription.recoveryDistance));
+    if (prescription.recoveryEffort) parts.push(formatEffort(prescription.recoveryEffort));
     if (parts.length === 0) parts.push("Easy — recover");
   }
   return parts;

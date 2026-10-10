@@ -53,9 +53,9 @@ export function enduranceCoach(over: Record<string, unknown> = {}): ConfirmedCoa
 export function programContent(days: Array<{ day: DayOfWeek; exercises: string[]; minutes?: number }>, weeks = 1): UniversalTrainingProgramContent {
   const week = (n: number) => ({ weekNumber: n, days: DAY_ORDER.map((d) => {
     const spec = days.find((x) => x.day === d);
-    return spec ? { dayOfWeek: d, type: "training", sessions: [{ id: `s-${n}-${d}`, name: d, focus: "", estimatedDurationMin: spec.minutes ?? 60, blocks: [{ id: `b-${n}-${d}`, kind: "straight", order: 1, items: spec.exercises.map((nm, i) => ({ id: `i-${n}-${d}-${i}`, order: i + 1, name: nm, category: "strength", prescription: {} })) }] }] } : { dayOfWeek: d, type: "rest" };
+    return spec ? { dayOfWeek: d, type: "training", sessions: [{ id: `s-${n}-${d}`, name: d, focus: "", estimatedDurationMin: spec.minutes ?? 60, blocks: [{ id: `b-${n}-${d}`, kind: "straight", order: 1, items: spec.exercises.map((nm, i) => ({ id: `i-${n}-${d}-${i}`, order: i + 1, name: nm, category: "resistance", prescription: { family: "resistance", sets: 3, reps: { low: 8, high: 10 } } })) }] }] } : { dayOfWeek: d, type: "rest" };
   }) });
-  return { schemaVersion: 2, id: "prog-eval", workspaceId: "ws-eval", clientId: "client-eval", coachId: "coach-eval", name: "Eval program", durationWeeks: Math.max(weeks, 8), weeks: Array.from({ length: weeks }, (_, k) => week(k + 1)) } as unknown as UniversalTrainingProgramContent;
+  return { schemaVersion: 2, id: "prog-eval", workspaceId: "ws-eval", clientId: "client-eval", coachId: "coach-eval", name: "Eval program", durationWeeks: Math.max(weeks, 8), weeks: Array.from({ length: weeks }, (_, k) => week(k + 1)), status: "draft", createdAtIso: "2026-10-01T00:00:00.000Z", updatedAtIso: "2026-10-01T00:00:00.000Z" } as unknown as UniversalTrainingProgramContent;
 }
 
 /** A resistance week in the universal grammar: day → exercise names (catalog names) and minutes. */
@@ -118,7 +118,7 @@ export function scriptedCardio(ri: CardioReasoningInput, tweak?: (p: WireCardio[
   const ceiling = Math.min(range ? range[1] : Infinity, ri.capacity.weeklyMaxMinutes ?? Infinity);
   const progression: Array<{ week: number; sessions: Array<Record<string, unknown>>; deload: boolean; gate: string; change: string }> = [];
   const flat = optional && !range; // the coach never sized optional cardio: keep it flat
-  let prev = sessions.map((s) => ({ day: s.day, type: s.type, modality: s.modality, minutes: s.minutes, intensity: s.intensity, placement: s.placement, optional: s.optional }));
+  let prev = sessions.map((s) => ({ day: s.day, type: s.type, modality: s.modality, minutes: s.minutes, intensity: s.intensity, placement: s.placement, optional: s.optional, intervals: "intervals" in s && s.intervals ? { rounds: s.intervals.rounds, workSeconds: s.intervals.workSeconds, recoverySeconds: s.intervals.recoverySeconds } : null }));
   for (let w = 2; w <= 6; w++) {
     let next = prev.map((s) => ({ ...s, minutes: Math.min(roomOf(s.day as DayOfWeek), five(s.minutes * (1 + inc))) }));
     if (flat || total(next) > ceiling || total(next) <= total(prev)) next = prev.map((s) => ({ ...s }));

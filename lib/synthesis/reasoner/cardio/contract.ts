@@ -9,7 +9,7 @@ import { arr, int, label, obj, oneOf, optStr, pair, SchemaError, str, strList } 
 import { DAY_ORDER } from "../../client-state.ts";
 import type { DayOfWeek } from "../../../types.ts";
 
-export const CARDIO_PROMPT_VERSION = "reasoner-cardio-v1.2.0";
+export const CARDIO_PROMPT_VERSION = "reasoner-cardio-v1.3.0";
 
 /** optional_low_intensity is the coach's "optional, low-intensity extra" — never turned into required sessions. */
 export const CARDIO_PLAN_ROLES = ["fat_loss", "health", "conditioning", "aerobic_base", "optional_low_intensity", "recovery", "none"] as const;
@@ -59,6 +59,8 @@ export interface CardioWeekSession {
   intensity: (typeof INTENSITIES)[number];
   placement: (typeof PLACEMENTS)[number];
   optional: boolean;
+  /** V1.3 (Gate U2) — an interval session's structure in every week, so it can become an executable session. */
+  intervals: { rounds: number; workSeconds: number; recoverySeconds: number } | null;
 }
 
 export interface CardioPlan {
@@ -150,7 +152,8 @@ export function parseCardioOutput(raw: unknown): { ok: true; output: CardioOutpu
           sessions: arr(w.sessions, `${at}.sessions`, 7).map((y, j) => {
             const s = obj(y, `${at}.sessions[${j}]`);
             const sat = `${at}.sessions[${j}]`;
-            return { day: oneOf(s.day, `${sat}.day`, DAY_ORDER), type: oneOf(s.type, `${sat}.type`, SESSION_TYPES), modality: str(s.modality, `${sat}.modality`, 60), minutes: int(s.minutes, `${sat}.minutes`, 5, 180), intensity: oneOf(s.intensity, `${sat}.intensity`, INTENSITIES), placement: oneOf(s.placement, `${sat}.placement`, PLACEMENTS), optional: bool(s.optional, `${sat}.optional`) };
+            const iv = s.intervals === undefined || s.intervals === null ? null : obj(s.intervals, `${sat}.intervals`);
+            return { day: oneOf(s.day, `${sat}.day`, DAY_ORDER), type: oneOf(s.type, `${sat}.type`, SESSION_TYPES), modality: str(s.modality, `${sat}.modality`, 60), minutes: int(s.minutes, `${sat}.minutes`, 5, 180), intensity: oneOf(s.intensity, `${sat}.intensity`, INTENSITIES), placement: oneOf(s.placement, `${sat}.placement`, PLACEMENTS), optional: bool(s.optional, `${sat}.optional`), intervals: iv ? { rounds: int(iv.rounds, `${sat}.intervals.rounds`, 2, 30), workSeconds: int(iv.workSeconds, `${sat}.intervals.workSeconds`, 10, 600), recoverySeconds: int(iv.recoverySeconds, `${sat}.intervals.recoverySeconds`, 10, 600) } : null };
           }),
           deload: bool(w.deload, `${at}.deload`),
           gate: oneOf(w.gate, `${at}.gate`, WEEK_GATES),
@@ -234,7 +237,7 @@ OUTPUT — one JSON object, no prose. Keep text short.
  "intensityMethod":{"primary":"talk_test"|"rpe"|"heart_rate"|"simple_words","why":str},
  "sessions":[{"day":"Monday","type":"steady"|"intervals","modality":<modality id>,"minutes":int,"intensity":"easy"|"moderate"|"vigorous","effort":[lo,hi],"talk":"full_conversation"|"short_sentences"|"few_words" or omit,"hrPct":[lo,hi] or omit,"intervals":{"rounds":int,"workSeconds":int,"recoverySeconds":int,"workEffort":[lo,hi],"recoveryEffort":[lo,hi]} or omit,"placement":"separate_day"|"after_resistance"|"separate_session","optional":bool,"purpose":str,"note":str or omit}],
  "steps":{"target":[lo,hi],"why":str} or omit (only if the coach sets steps),
- "progression":[{"week":2,"sessions":[{"day","type","modality","minutes","intensity","placement","optional"}],"deload":bool,"gate":"none"|"recovery_improved"|"coach_confirmed","change":str}, ...],
+ "progression":[{"week":2,"sessions":[{"day","type","modality","minutes","intensity","placement","optional","intervals":{"rounds","workSeconds","recoverySeconds"} (required when type is intervals; omit otherwise)}],"deload":bool,"gate":"none"|"recovery_improved"|"coach_confirmed","change":str}, ...],
  "recoveryStrategy":"no_additional_cardio"|"existing_training_days"|"reduced_dose"|"coach_decision" (required when bounds.recoveryLimited; else omit),
  "placementWhy":str,
  "monitoring":{"measures":[<from bounds.measures>],"reviewAfterWeeks":int},

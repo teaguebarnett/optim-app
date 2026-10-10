@@ -113,7 +113,9 @@
     "verify:cardio-reasoner": "node --experimental-strip-types lib/synthesis/reasoner/cardio/verify-cardio-reasoner.mts",
     "eval:cardio-reasoner": "node --experimental-strip-types lib/synthesis/reasoner/cardio/eval/run-eval.mts",
     "verify:unified-program": "node --experimental-strip-types lib/synthesis/unified/verify-unified-program.mts",
-    "eval:unified-program": "node --experimental-strip-types lib/synthesis/unified/eval/run-eval.mts"
+    "eval:unified-program": "node --experimental-strip-types lib/synthesis/unified/eval/run-eval.mts",
+    "verify:unified-drafts": "node --experimental-strip-types lib/synthesis/unified/verify-unified-drafts.mts",
+    "e2e:unified-drafts": "node --experimental-strip-types scripts/e2e-unified-drafts.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",

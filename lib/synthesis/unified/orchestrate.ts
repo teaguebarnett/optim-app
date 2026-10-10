@@ -25,13 +25,12 @@ import { runNutritionReasoner, type NutritionReasonerResult } from "../reasoner/
 import type { ReasonerModel } from "../reasoner/core.ts";
 import { sha256 } from "../reasoner/run.ts";
 import { readCardioMethod } from "../cardio/method.ts";
-import { cardioSafety } from "../cardio/safety.ts";
 import { resistanceWeekFromContent, resistanceWeekFromSpec, type ResistanceWeek } from "../cardio/schedule.ts";
 import { readNutritionMethod } from "../nutrition/method.ts";
-import { nutritionSafety } from "../nutrition/safety.ts";
 import type { TrainingContext } from "../nutrition/energy.ts";
 import { UNIFIED_SCHEMA, UNIFIED_VERSION, type DomainId, type DomainOutcome, type DomainRunRef, type UnifiedDecision, type UnifiedProgramProposal } from "./contract.ts";
 import { assembleUnified } from "./assemble.ts";
+import { assessUnifiedSafety, documentedExerciseReview, resistanceContentFit } from "./safety.ts";
 
 export interface UnifiedParams {
   input: SynthesisInput;
@@ -39,11 +38,16 @@ export interface UnifiedParams {
   nowIso: string;
   /** A coach-approved resistance program: fixed input, never regenerated or changed. */
   approvedResistance?: { versionId: string; content: UniversalTrainingProgramContent } | null;
+  /** Gate U2 — the coach's existing PENDING (not approved) resistance draft, used as the proposed lifting without
+   * regenerating it (no model call). Never changed; its version is recorded. Ignored when an approved program is given. */
+  existingResistanceDraft?: { versionId: string; content: UniversalTrainingProgramContent } | null;
   /** The coach's answer to "resistance can't be produced — proceed with cardio and nutrition around the client's
    * current training?" (a prepared decision on an earlier run). Never assumed. */
   proceedWithoutResistance?: boolean;
   maxAttempts?: number;
   runId?: string;
+  /** Gate U2 — receives the domain results the proposal was assembled from (persistence builds drafts from them). */
+  onResults?: (results: DomainResults) => void;
 }
 
 export interface DomainResults {
@@ -118,6 +122,8 @@ export async function runUnifiedProgram(params: UnifiedParams): Promise<UnifiedP
   const { input } = params;
   const runId = params.runId ?? randomUUID();
   const approvedHashBefore = params.approvedResistance ? sha256(params.approvedResistance.content) : null;
+  const existing = !params.approvedResistance && params.existingResistanceDraft ? params.existingResistanceDraft : null;
+  const existingHashBefore = existing ? sha256(existing.content) : null;
   const base = { schema: UNIFIED_SCHEMA, version: UNIFIED_VERSION, runId, createdAtIso: params.nowIso } as const;
   const none: DomainResults = { resistance: null, cardio: null, nutrition: null, resistanceWeek: null, training: null };
   const approved = params.approvedResistance ?? null;
@@ -137,22 +143,31 @@ export async function runUnifiedProgram(params: UnifiedParams): Promise<UnifiedP
   const scope = domainScope(input);
   const notCoached = (d: DomainId) => outcome(d, "NOT_COACHED", d === "resistance" ? "This coach doesn't program resistance training." : d === "cardio" ? "This coach doesn't prescribe cardio — none is proposed." : "This coach doesn't coach nutrition — no strategy is proposed.");
 
-  // 3. Safety gate across domains: a screen that stops one domain stops the program.
-  const cs = cardioSafety(input.client, input.goal);
-  const ns = scope.nutrition ? nutritionSafety(input.client, input.goal) : { escalations: [] };
-  const escalations = [...cs.escalations.map((e) => ({ source: "cardio" as DomainId, code: e.code, why: e.why })), ...ns.escalations.map((e) => ({ source: "nutrition" as DomainId, code: e.code, why: e.why }))];
+  // 3. Safety, aligned with the canonical coach health-review policy (safety.ts): program-wide escalations stop
+  //    everything; a review-integrity problem stops planning until the coach re-confirms; cardio's screen escalations
+  //    under a RESOLVED review block only cardio; non-applicable domains are never invoked.
+  const safety = assessUnifiedSafety(input, scope);
+  const cardioBlocked = safety.domainEscalations.some((e) => e.source === "cardio");
+  const cardioActive = scope.cardio && safety.cardioApplicable && !cardioBlocked;
+  const cardioOff = (): DomainOutcome => (cardioBlocked ? outcome("cardio", "ESCALATE", "Cardio waits for clearance; the rest of the program proceeds under the coach's health review.", safety.domainEscalations.filter((e) => e.source === "cardio").map((e) => e.why)) : outcome("cardio", "NOT_COACHED", safety.cardioNotApplicableReason ?? "This coach doesn't prescribe cardio — none is proposed."));
+  const escalations = safety.programEscalations;
   if (escalations.length) {
-    const st = (d: DomainId): DomainOutcome => (!scope[d] ? notCoached(d) : escalations.some((e) => e.source === d) ? outcome(d, "ESCALATE", "Escalated to the coach before any model call.", escalations.filter((e) => e.source === d).map((e) => e.why)) : outcome(d, "HELD", "Not run — a safety screen stopped the program before any model call.", escalations.map((e) => e.why)));
+    const st = (d: DomainId): DomainOutcome => (d === "cardio" && !safety.cardioApplicable ? cardioOff() : !scope[d] ? notCoached(d) : escalations.some((e) => e.source === d) ? outcome(d, "ESCALATE", "Escalated to the coach before any model call.", escalations.filter((e) => e.source === d).map((e) => e.why)) : outcome(d, "HELD", "Not run — a safety screen stopped the program before any model call.", escalations.map((e) => e.why)));
     return assembleUnified({ ...base, status: "ESCALATE", input, scope, domains: { resistance: st("resistance"), cardio: st("cardio"), nutrition: st("nutrition") }, results: none, programDecisions: [], escalations, approved: null, approvedHashBefore });
+  }
+  if (safety.integrity.length) {
+    const why = safety.integrity.map((x) => x.why);
+    const st = (d: DomainId): DomainOutcome => (d === "cardio" && !cardioActive ? cardioOff() : !scope[d] ? notCoached(d) : outcome(d, "HELD", "Not run — the coach's health-review restrictions must be re-confirmed first (no model call was made).", why));
+    return assembleUnified({ ...base, status: "NEEDS_INPUT", input, scope, domains: { resistance: st("resistance"), cardio: st("cardio"), nutrition: st("nutrition") }, results: none, programDecisions: safety.integrity.map((x) => x.decision), escalations: [], approved: null, approvedHashBefore });
   }
 
   // 4. Deterministic preflight: every coached domain run WITHOUT a model reaches all its pre-model gates.
   const pre: Partial<Record<DomainId, DomainOutcome>> = {};
-  if (scope.resistance && !approved) {
+  if (scope.resistance && !approved && !existing) {
     const r0 = await runFitnessReasoner({ input, model: null, nowIso: params.nowIso, runId: `${runId}:resistance:preflight` });
     if (decided(r0.status, (r0 as { attempts?: number }).attempts)) pre.resistance = resistanceOutcome(r0);
   }
-  if (scope.cardio) {
+  if (cardioActive) {
     const c0 = await runCardioReasoner({ input, model: null, nowIso: params.nowIso, runId: `${runId}:cardio:preflight` });
     if (decided(c0.status, (c0 as { attempts?: number }).attempts)) pre.cardio = cardioOutcome(c0);
   }
@@ -160,9 +175,22 @@ export async function runUnifiedProgram(params: UnifiedParams): Promise<UnifiedP
     const n0 = await runNutritionReasoner({ input, model: null, nowIso: params.nowIso, runId: `${runId}:nutrition:preflight` });
     if (decided(n0.status, (n0 as { attempts?: number }).attempts)) pre.nutrition = nutritionOutcome(n0);
   }
+  // A pending lifting draft is used only if it still fits the CURRENT confirmed restrictions (canonical currentFit).
+  const programDecisions0: UnifiedDecision[] = [...safety.domainDecisions];
+  if (scope.resistance && existing) {
+    const problems = resistanceContentFit(existing.content, input, FOUNDATION_KNOWLEDGE);
+    if (problems.length) {
+      pre.resistance = outcome("resistance", "NEEDS_INPUT", "The pending resistance draft no longer fits the client's current confirmed restrictions, so it isn't used.", problems.map((x) => `${x.exercise}: ${x.why}`));
+      programDecisions0.push({ source: "resistance", about: "pending_draft_conflicts", question: `The pending lifting draft includes exercises that don't fit the current confirmed restrictions (${problems.map((x) => x.exercise).join(", ")}). How should lifting proceed?`, options: ["Prepare a revised resistance proposal under the current restrictions", "Edit the pending draft to remove them"], recommended: "Prepare a revised resistance proposal under the current restrictions", why: "Restrictions confirmed after the draft was made must still be respected." });
+    }
+  }
+  if (scope.resistance && approved) {
+    const problems = resistanceContentFit(approved.content, input, FOUNDATION_KNOWLEDGE);
+    if (problems.length) programDecisions0.push({ source: "resistance", about: "approved_program_conflicts", question: `The approved lifting program includes exercises that don't fit the current confirmed restrictions (${problems.map((x) => x.exercise).join(", ")}). OPTIM hasn't changed it. Review it?`, options: ["Revise the approved program (a new version for review)", "Keep it as approved (your decision is recorded)"], recommended: "Revise the approved program (a new version for review)", why: "Approved prescriptions are never changed automatically." });
+  }
   const resistanceUnavailable = pre.resistance && pre.resistance.status !== "PROPOSED";
   const blockers = (Object.values(pre) as DomainOutcome[]).filter((d) => ["NEEDS_INPUT", "ESCALATE"].includes(d.status) || (d.domain === "resistance" && d.status === "UNSUPPORTED" && !params.proceedWithoutResistance));
-  const programDecisions: UnifiedDecision[] = [];
+  const programDecisions: UnifiedDecision[] = programDecisions0;
   const resistanceDecision = (status: DomainOutcome["status"]): UnifiedDecision => ({
     source: "program",
     about: "resistance_unavailable",
@@ -174,7 +202,7 @@ export async function runUnifiedProgram(params: UnifiedParams): Promise<UnifiedP
   if (blockers.length) {
     const blocked = new Set(blockers.map((d) => d.domain));
     const waits = blockers.map((d) => `${d.domain}: ${d.status.toLowerCase().replace(/_/g, " ")}`).join("; ");
-    const st = (d: DomainId): DomainOutcome => (!scope[d] ? notCoached(d) : blocked.has(d) ? pre[d]! : pre[d] && pre[d]!.status === "NOT_COACHED" ? pre[d]! : d === "resistance" && approved ? outcome("resistance", "APPROVED_EXISTING", "The coach-approved program is kept as-is.") : outcome(d, "HELD", "Not run — the program waits for open inputs first (no model call was made).", [waits]));
+    const st = (d: DomainId): DomainOutcome => (d === "cardio" && !cardioActive && scope.cardio ? cardioOff() : !scope[d] ? notCoached(d) : blocked.has(d) ? pre[d]! : pre[d] && pre[d]!.status === "NOT_COACHED" ? pre[d]! : d === "resistance" && approved ? outcome("resistance", "APPROVED_EXISTING", "The coach-approved program is kept as-is.") : outcome(d, "HELD", "Not run — the program waits for open inputs first (no model call was made).", [waits]));
     if (blocked.has("resistance") && pre.resistance!.status === "UNSUPPORTED") programDecisions.push(resistanceDecision("UNSUPPORTED"));
     const anyEsc = blockers.some((d) => d.status === "ESCALATE");
     const domEsc = blockers.filter((d) => d.status === "ESCALATE").flatMap((d) => d.reasons.map((why) => ({ source: d.domain, code: "domain_escalation", why })));
@@ -189,6 +217,9 @@ export async function runUnifiedProgram(params: UnifiedParams): Promise<UnifiedP
   else if (approved) {
     results.resistanceWeek = resistanceWeekFromContent(approved.content, FOUNDATION_KNOWLEDGE, "approved_program");
     domains.resistance = outcome("resistance", "APPROVED_EXISTING", `The coach-approved program (${results.resistanceWeek.days.length} lifting day${results.resistanceWeek.days.length === 1 ? "" : "s"}) is used as-is; nothing in this proposal changes it.`);
+  } else if (existing && !resistanceUnavailable) {
+    results.resistanceWeek = resistanceWeekFromContent(existing.content, FOUNDATION_KNOWLEDGE, "proposed_program");
+    domains.resistance = outcome("resistance", "PROPOSED", `The coach's pending resistance draft (${results.resistanceWeek.days.length} lifting day${results.resistanceWeek.days.length === 1 ? "" : "s"}, not yet approved) is used unchanged — not regenerated.`, [`Source draft version ${existing.versionId}.`]);
   } else if (resistanceUnavailable) domains.resistance = pre.resistance!;
   else {
     const r = await runFitnessReasoner({ input, model: params.model, nowIso: params.nowIso, maxAttempts: params.maxAttempts, runId: `${runId}:resistance` });
@@ -197,16 +228,28 @@ export async function runUnifiedProgram(params: UnifiedParams): Promise<UnifiedP
     if (r.status === "PLANNED") results.resistanceWeek = resistanceWeekFromSpec(r.spec, FOUNDATION_KNOWLEDGE);
   }
 
+  // Documented-limitation exercise review: eligible lifting the coach's documented text names → explicit coach decision.
+  if (results.resistanceWeek) {
+    const content = approved?.content ?? (existing && !resistanceUnavailable ? existing.content : null);
+    const names = content
+      ? content.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.prescription.family === "resistance").map((i) => i.name)))))
+      : results.resistance?.status === "PLANNED"
+        ? (results.resistance.spec.resistance?.value.sessions ?? []).flatMap((s) => s.exercises.map((e) => FOUNDATION_KNOWLEDGE.getExercise(e.exerciseId)?.name ?? e.exerciseId))
+        : [];
+    const review = documentedExerciseReview(input, names);
+    if (review) programDecisions.push(review);
+  }
+
   // 6. Dependents wait for a lifting week the coach expects — unless the coach chose to proceed without one.
   const resistanceMissing = scope.resistance && !results.resistanceWeek;
   if (resistanceMissing && !params.proceedWithoutResistance) {
     const why = `Waits for the resistance program (${domains.resistance.status.toLowerCase().replace(/_/g, " ")}) — cardio placement and nutrition's training demands depend on it.`;
-    domains.cardio = scope.cardio ? outcome("cardio", "HELD", "Not run — no lifting week to plan around.", [why]) : notCoached("cardio");
+    domains.cardio = cardioActive ? outcome("cardio", "HELD", "Not run — no lifting week to plan around.", [why]) : scope.cardio ? cardioOff() : notCoached("cardio");
     domains.nutrition = scope.nutrition ? outcome("nutrition", "HELD", "Not run — the training demands it must support aren't known.", [why]) : notCoached("nutrition");
     programDecisions.push(resistanceDecision(domains.resistance.status));
   } else {
     // 7. Cardio around the lifting week (approved or proposed).
-    if (!scope.cardio) domains.cardio = notCoached("cardio");
+    if (!cardioActive) domains.cardio = scope.cardio ? cardioOff() : notCoached("cardio");
     else {
       const c = await runCardioReasoner({ input, model: params.model, nowIso: params.nowIso, resistance: results.resistanceWeek, maxAttempts: params.maxAttempts, runId: `${runId}:cardio` });
       results.cardio = c;
@@ -223,6 +266,7 @@ export async function runUnifiedProgram(params: UnifiedParams): Promise<UnifiedP
     if (resistanceMissing && params.proceedWithoutResistance) domains.resistance.reasons.push("The coach chose to proceed without it: cardio was planned with no lifting week, and nutrition used the client's current training habit.");
   }
 
+  params.onResults?.(results);
   const domainEscalations = [...(results.cardio?.status === "ESCALATE" ? results.cardio.escalations.map((e) => ({ source: "cardio" as DomainId, code: e.code, why: e.why })) : []), ...(results.nutrition?.status === "ESCALATE" ? results.nutrition.escalations.map((e) => ({ source: "nutrition" as DomainId, code: e.code, why: e.why })) : [])];
-  return assembleUnified({ ...base, status: null, input, scope, domains, results, programDecisions, escalations: domainEscalations, approved, approvedHashBefore });
+  return assembleUnified({ ...base, status: null, input, scope, domains, results, programDecisions, escalations: domainEscalations, approved, approvedHashBefore, existing, existingHashBefore });
 }

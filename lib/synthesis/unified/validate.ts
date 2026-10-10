@@ -30,6 +30,8 @@ export function validateCrossDomain(p: {
   recoveryLimited: boolean;
   approved: { versionId: string; content: UniversalTrainingProgramContent } | null;
   approvedHashBefore: string | null;
+  existing?: { versionId: string; content: UniversalTrainingProgramContent } | null;
+  existingHashBefore?: string | null;
 }): CrossDomainResult {
   const { input, results: r } = p;
   const out: CrossDomainResult = { errors: [], findings: [], decisions: [], uncertainties: [], alignment: [] };
@@ -57,6 +59,7 @@ export function validateCrossDomain(p: {
   }
   // X4 — an approved program is input, never output: it must be byte-for-byte unchanged.
   if (p.approved && sha256(p.approved.content) !== p.approvedHashBefore) out.errors.push("The approved resistance program changed during planning — approved prescriptions are never modified.");
+  if (p.existing && sha256(p.existing.content) !== p.existingHashBefore) out.errors.push("The coach's pending resistance draft changed during planning — it's used unchanged, never edited here.");
 
   // X5 — the combined week fits the client's time.
   const len = isKnown(input.client.schedule.maxSessionLength) ? input.client.schedule.maxSessionLength.value : null;

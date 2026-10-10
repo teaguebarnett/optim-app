@@ -119,5 +119,5 @@ export interface UnifiedProgramProposal {
   decisions: UnifiedDecision[];
   questions: Array<{ source: DomainId | "program"; question: string }>;
   escalations: Array<{ source: DomainId; code: string; why: string }>;
-  provenance: { clientState: string; goalContract: string; coachMethod: { versionId: string; version: number } | null; approvedResistance: { versionId: string; contentHash: string } | null; domainRuns: Partial<Record<DomainId, DomainRunRef>>; modelCalls: number };
+  provenance: { clientState: string; goalContract: string; coachMethod: { versionId: string; version: number } | null; approvedResistance: { versionId: string; contentHash: string } | null; existingResistanceDraft?: { versionId: string; contentHash: string } | null; domainRuns: Partial<Record<DomainId, DomainRunRef>>; modelCalls: number };
 }
