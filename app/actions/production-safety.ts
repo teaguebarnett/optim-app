@@ -8,7 +8,8 @@
 // client-supplied id.
 
 import { reportAcutePainForClient, type AcutePainReportInput, type AcutePainReportResult } from "../../lib/production/pain-safety";
+import type { ClientOwner } from "../../lib/production/client-ownership";
 
-export async function reportAcutePainAction(input: AcutePainReportInput): Promise<AcutePainReportResult> {
-  return reportAcutePainForClient(input);
+export async function reportAcutePainAction(input: AcutePainReportInput, owner: ClientOwner): Promise<AcutePainReportResult> {
+  return reportAcutePainForClient(input, owner);
 }

@@ -107,7 +107,9 @@
     "verify:reasoner-integration": "node --experimental-strip-types lib/synthesis/reasoner/verify-reasoner-integration.mts",
     "verify:edit-impact": "node --experimental-strip-types lib/synthesis/reasoner/verify-edit-impact.mts",
     "verify:constraint-revalidation": "node --experimental-strip-types lib/synthesis/reasoner/verify-constraint-revalidation.mts",
-    "verify:resynthesis-lifecycle": "node --experimental-strip-types lib/synthesis/reasoner/verify-resynthesis-lifecycle.mts"
+    "verify:resynthesis-lifecycle": "node --experimental-strip-types lib/synthesis/reasoner/verify-resynthesis-lifecycle.mts",
+    "verify:client-ownership": "node --experimental-strip-types lib/production/verify-client-ownership.mts",
+    "e2e:client-ownership": "node --experimental-strip-types scripts/e2e-client-ownership.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",

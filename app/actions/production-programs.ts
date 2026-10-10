@@ -15,6 +15,7 @@
 
 import { getAuthenticatedContext, requireWorkspaceRole, isWorkspaceStaffRole } from "../../lib/production/auth";
 import { UnauthenticatedError, UnauthorizedError } from "../../lib/production/errors";
+import { ownerMatches, type ClientOwner, type OwnedWriteResult } from "../../lib/production/client-ownership";
 import { getSupabaseServerClient } from "../../lib/supabase/server";
 import { validateNutritionTargets, nutritionTargetsEqual } from "../../lib/coach/nutrition-targets-input";
 import {
@@ -138,9 +139,11 @@ async function resolveOwnClientProfile(): Promise<OwnClientIdentity> {
 }
 
 export type SupabaseClientBootstrap =
-  | { kind: "not_provisioned" }
+  | { kind: "not_provisioned"; userId: string }
   | {
       kind: "ready";
+      /** The auth user this state was built for — the provider binds to it and rebinds if the session changes. */
+      userId: string;
       state: AppState;
       dailyActivity: DailyActivityContent | null;
       clientDisplayName: string;
@@ -172,6 +175,8 @@ export type SupabaseClientBootstrap =
  * caller renders each differently, and neither one is ever papered over
  * with demo/PUSH_WORKOUT content. */
 export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBootstrap> {
+  // Throws UnauthenticatedError for an anonymous caller — the same fail-closed outcome as before.
+  const ctx = await getAuthenticatedContext();
   let identity: OwnClientIdentity;
   try {
     identity = await resolveOwnClientProfile();
@@ -185,9 +190,8 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
     // demo content instead of hitting a sign-in wall (see that layout's own
     // doc for the full incident this closes).
     if (err instanceof UnauthenticatedError) throw err;
-    return { kind: "not_provisioned" };
+    return { kind: "not_provisioned", userId: ctx.userId };
   }
-  const ctx = await getAuthenticatedContext();
 
   const context = await getClientProgramContext({ workspaceId: identity.workspaceId, clientProfileId: identity.clientProfileId });
 
@@ -259,6 +263,7 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
 
   return {
     kind: "ready",
+    userId: ctx.userId,
     state,
     dailyActivity,
     clientDisplayName: identity.clientDisplayName,
@@ -280,8 +285,13 @@ export async function saveMySupabaseDailyActivityAction(params: {
   dateIso: string;
   programAssignmentId: string | null;
   content: DailyActivityContent;
-}): Promise<void> {
+  /** Cross-client integrity — the client this day belongs to (the identity the caller's state was hydrated for). */
+  owner: ClientOwner;
+}): Promise<OwnedWriteResult> {
   const identity = await resolveOwnClientProfile();
+  // The cookie says who is signed in NOW; the owner says whose day this is. A mismatch is another client's retained
+  // or in-flight state (account switch, stale tab) — refused before anything is written, never re-attributed.
+  if (!ownerMatches(params.owner, identity)) return { ok: false, reason: "owner_mismatch" };
   await saveDailyActivity({
     workspaceId: identity.workspaceId,
     clientProfileId: identity.clientProfileId,
@@ -289,6 +299,7 @@ export async function saveMySupabaseDailyActivityAction(params: {
     programAssignmentId: params.programAssignmentId,
     content: params.content,
   });
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
