@@ -12,6 +12,8 @@ import { loadSynthesisInputForClient } from "@/lib/production/synthesis";
 import { getActiveProgramAssignment, getPendingProgramProposal } from "@/lib/production/programs";
 import { FOUNDATION_KNOWLEDGE } from "@/lib/synthesis/knowledge/registry";
 import { createUnifiedDraftForClient } from "@/lib/production/unified-proposals";
+import { prepareUnifiedProposalForClient, type PrepareOutcome } from "@/lib/production/unified-prepare";
+import { UnauthenticatedError, UnauthorizedError } from "@/lib/production/errors";
 import { planUnifiedPublication, publishUnifiedProposal, type PublicationExpectation, type PublicationPlan } from "@/lib/production/unified-publication";
 import {
   approveUnifiedProposal,
@@ -97,6 +99,20 @@ export async function planUnifiedPublicationAction(scope: Scope, p: { rowId: str
  * date, supersession, in-app notification) — all or nothing; a retry returns the same publication. */
 export async function publishUnifiedProposalAction(scope: Scope, p: { rowId: string; expected: PublicationExpectation }): Promise<UnifiedReviewResult> {
   return run(scope, async (env) => (await publishUnifiedProposal(env, p)).view);
+}
+
+/** Production: the coach prepares ONE unified proposal for this client — their existing lifting + OPTIM's cardio and
+ * nutrition, as drafts for review. Allowlisted clients only, one open proposal at a time, idempotent, with a hard
+ * model-call budget (lib/production/unified-prepare-policy.ts). Never approves, publishes or notifies. */
+export async function prepareUnifiedProposalAction(scope: Scope, p?: { title?: string }): Promise<PrepareOutcome> {
+  try {
+    return await prepareUnifiedProposalForClient({ ...scope, title: p?.title?.trim() || "Unified program" });
+  } catch (err) {
+    console.error("prepareUnifiedProposalAction failed", err);
+    if (err instanceof UnauthenticatedError) return { ok: false, code: "unauthenticated", message: "Your session has ended — sign in again.", modelCalls: 0 };
+    if (err instanceof UnauthorizedError) return { ok: false, code: "forbidden", message: "You can only prepare proposals for your own clients.", modelCalls: 0 };
+    return { ok: false, code: "error", message: "Couldn't prepare the proposal — try again.", modelCalls: 0 };
+  }
 }
 
 /** LOCAL QA ONLY — prepares a unified proposal through the real server pipeline with OPTIM's scripted domain models

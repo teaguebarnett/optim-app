@@ -372,7 +372,9 @@ check("14. Invite/onboarding flow is unchanged", () => {
     // Gate U3B — the coach's unified review (assigned coach / workspace admin only; coach workspace UI); never onboarding/auth/client app.
     "lib/production/unified-review.ts", "app/actions/unified-review.ts", "components/coach/unified-proposal-review.tsx",
     // Gate U3C — atomic publication (assigned coach / workspace admin only, server-side); never onboarding/auth/client app.
-    "lib/production/unified-publication.ts"];
+    "lib/production/unified-publication.ts",
+    // Gate U3C — coach-triggered production preparation (assigned coach, allowlisted client, bounded calls).
+    "lib/production/unified-prepare.ts", "lib/production/unified-prepare-policy.ts"];
   const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => !/verify-[^/]*\.mts$/.test(f) && /from ["'][^"']*\/synthesis\//.test(readFileSync(f, "utf8")));
   const unexpected = importers.filter((f) => !ALLOWED.some((a) => f.endsWith(a)));
   assert.deepEqual(unexpected, [], `unexpected importers: ${unexpected.join(", ")}`);

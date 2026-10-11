@@ -30,7 +30,8 @@ import {
   setProgramStartDateAction,
 } from "@/app/actions/production-programs";
 import { ProgramProposalReview } from "@/components/coach/program-proposal-review";
-import { UnifiedProposalReview } from "@/components/coach/unified-proposal-review";
+import { UnifiedPrepareCard, UnifiedProposalReview } from "@/components/coach/unified-proposal-review";
+import { isReasonerProposalEnabled } from "@/lib/production/reasoner-proposals";
 import { getUnifiedReviewAction } from "@/app/actions/unified-review";
 import { LiveNutritionAssignmentForm, type NutritionAssignResult } from "@/components/coach/live-nutrition-assignment-form";
 import { LiveStartDateForm, type SaveResult } from "@/components/coach/live-start-date-form";
@@ -100,6 +101,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
     : [null, null];
   // Gate U3B — the client's unified program proposal, when one is reviewable (additive: a failure hides the card).
   const unifiedReview = onboardingComplete ? await soft("unified review", () => getUnifiedReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId })) : null;
+  // Gate U3C — the coach can prepare a unified proposal for an allowlisted client with completed intake.
+  const unifiedPrepareEnabled = onboardingComplete && isReasonerProposalEnabled(clientId);
   const limitationOptions = allRestrictionOptions(FOUNDATION_KNOWLEDGE).map((o) => ({ id: o.id, group: o.group, label: o.label, help: o.help, dimension: dimensionOf(o.id, FOUNDATION_KNOWLEDGE) }));
   const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
@@ -294,6 +297,7 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
 
         {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
 
+        {unifiedPrepareEnabled && (!unifiedReview || ["rejected", "published", "superseded"].includes(unifiedReview.approvalState)) ? <UnifiedPrepareCard workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
         {unifiedReview ? <UnifiedProposalReview key={unifiedReview.rowId} initial={unifiedReview} workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
 
         {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}

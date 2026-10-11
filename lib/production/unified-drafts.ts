@@ -60,7 +60,7 @@ export interface UnifiedArtifacts {
 const sha = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 /** The request's identity: same client state, goal, coach method, lifting source and title → same proposal row. */
-export function unifiedIdempotencyKey(p: { clientStateHash: string; goalContractHash: string; coachMethodVersionId: string | null; resistanceSource: string; sourceVersionId: string | null; sourceContentHash: string | null; title: string; unifiedVersion: string }): string {
+export function unifiedIdempotencyKey(p: { clientStateHash: string; goalContractHash: string; coachMethodVersionId: string | null; resistanceSource: string; sourceVersionId: string | null; sourceContentHash: string | null; title: string; unifiedVersion: string; /** Production prepare: how many proposals for the client were already decided (absent = unchanged key). */ round?: number }): string {
   return sha(p);
 }
 

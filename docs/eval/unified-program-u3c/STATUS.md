@@ -43,5 +43,8 @@ activate → client Today (Week 1 of 8, published nutrition targets, no demo ite
 1. Today renders one session per training day: programs with cardio sessions/cardio-only days are held at publication
    (clear reason) until Today supports multi-session programs.
 2. The client's bell icon doesn't read `notifications` yet (the row is written only on successful publication).
-3. No coach UI to *prepare* a unified proposal in production (paid model call) — local QA action only.
+3. ~~No coach UI to *prepare* a unified proposal in production~~ — added after U3C: the coach's "Prepare unified
+   proposal" card (`prepareUnifiedProposalAction` → `lib/production/unified-prepare.ts`): assigned coach only,
+   `OPTIM_REASONER_PROPOSAL_CLIENTS` allowlist, one open proposal per client, idempotent per round, existing lifting
+   reused (never regenerated), at most 4 model calls and none started after 150 s; drafts only.
 4. Decision-evidence records for unified approval/rejection/publication aren't written yet.

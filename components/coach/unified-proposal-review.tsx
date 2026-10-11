@@ -6,11 +6,13 @@
 // sees nothing until atomic publication). Every edit returns a freshly revalidated review.
 
 import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, ChevronDown, Info, Pencil, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   approveUnifiedProposalAction,
+  prepareUnifiedProposalAction,
   planUnifiedPublicationAction,
   publishUnifiedProposalAction,
   editUnifiedNutritionAction,
@@ -627,6 +629,40 @@ function PublishCard({ view, pending, onPublish, scope: { workspaceId, clientPro
       ) : null}
       <Button size="sm" disabled={!ready || pending} loading={pending} onClick={() => onPublish({ activeTrainingVersionId: plan.active.trainingVersionId, activeNutritionVersionId: plan.active.nutritionVersionId, replaceActive: confirmReplace, startDate: plan.needsStartDate ? startDate : null })}>
         Publish to client
+      </Button>
+    </Card>
+  );
+}
+
+/** The coach starts a unified proposal for this client: their existing lifting + OPTIM's cardio and nutrition, as
+ * drafts for review. Shown only when the client is enabled and has no unified proposal open. */
+export function UnifiedPrepareCard({ workspaceId, clientProfileId }: { workspaceId: string; clientProfileId: string }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  return (
+    <Card className="space-y-2">
+      <p className="text-label text-neutral">Unified program</p>
+      <p className="text-body text-off-white">Prepare one proposal that coordinates this client&apos;s lifting with OPTIM&apos;s cardio and nutrition for your review.</p>
+      <p className="text-meta text-neutral">Starts from your pending lifting draft (or the client&apos;s approved program) — it isn&apos;t regenerated. Nothing reaches the client until you review, approve and publish.</p>
+      {result ? (
+        <p role="status" className={`text-meta ${result.ok ? "text-success" : "text-warning-strong"}`}>
+          {result.message}
+        </p>
+      ) : null}
+      <Button
+        size="sm"
+        loading={pending}
+        disabled={pending}
+        onClick={() =>
+          start(async () => {
+            const r = await prepareUnifiedProposalAction({ workspaceId, clientProfileId });
+            setResult({ ok: r.ok, message: r.message });
+            if (r.ok) router.refresh();
+          })
+        }
+      >
+        {pending ? "Preparing — this can take a minute or two…" : "Prepare unified proposal"}
       </Button>
     </Card>
   );

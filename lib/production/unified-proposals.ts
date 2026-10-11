@@ -36,6 +36,10 @@ export async function createUnifiedDraftForClient(params: {
   approvedResistance?: { versionId: string; content: UniversalTrainingProgramContent } | null;
   existingResistanceDraft?: { versionId: string; content: UniversalTrainingProgramContent } | null;
   proceedWithoutResistance?: boolean;
+  /** Per-domain attempt limit (production prepare: at most one repair). */
+  maxAttempts?: number;
+  /** Idempotency round (production prepare): a fresh proposal may be prepared after the previous one was decided. */
+  idempotencyRound?: number;
 }): Promise<UnifiedDraftOutcome> {
   const ctx = await requireAssignedCoach(params.workspaceId, params.clientProfileId);
   const supabase = await getSupabaseServerClient();
@@ -45,7 +49,7 @@ export async function createUnifiedDraftForClient(params: {
   const input = await loadSynthesisInputForClient(params.clientProfileId);
   const source = params.approvedResistance ?? params.existingResistanceDraft ?? null;
   const resistanceSource = params.approvedResistance ? "approved_program" : params.existingResistanceDraft ? "existing_draft" : "proposed_program";
-  const key = unifiedIdempotencyKey({ clientStateHash: sha256(input.client), goalContractHash: sha256(input.goal), coachMethodVersionId: method.versionId, resistanceSource, sourceVersionId: source?.versionId ?? null, sourceContentHash: source ? sha256(source.content) : null, title: params.title, unifiedVersion: UNIFIED_VERSION });
+  const key = unifiedIdempotencyKey({ clientStateHash: sha256(input.client), goalContractHash: sha256(input.goal), coachMethodVersionId: method.versionId, resistanceSource, sourceVersionId: source?.versionId ?? null, sourceContentHash: source ? sha256(source.content) : null, title: params.title, unifiedVersion: UNIFIED_VERSION, ...(params.idempotencyRound ? { round: params.idempotencyRound } : {}) });
   const begun = await beginUnifiedProposal(supabase, ctx.userId, { workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, title: params.title, idempotencyKey: key, nowMs: Date.now() });
   if (begun.kind === "existing") return { kind: "existing", row: begun.row };
   if (begun.kind === "in_progress") return { kind: "in_progress" };
@@ -59,7 +63,7 @@ export async function createUnifiedDraftForClient(params: {
     artifacts = begun.row.domain_runs as UnifiedArtifacts;
   } else {
     let results: DomainResults | null = null;
-    proposal = await runUnifiedProgram({ input, model: params.model, nowIso, approvedResistance: params.approvedResistance ?? null, existingResistanceDraft: params.existingResistanceDraft ?? null, proceedWithoutResistance: params.proceedWithoutResistance, onResults: (r) => (results = r) });
+    proposal = await runUnifiedProgram({ input, model: params.model, nowIso, approvedResistance: params.approvedResistance ?? null, existingResistanceDraft: params.existingResistanceDraft ?? null, proceedWithoutResistance: params.proceedWithoutResistance, maxAttempts: params.maxAttempts, onResults: (r) => (results = r) });
     const r = results as DomainResults | null;
     const generationInputs = buildGenerationInputs({ playbookVersion: method.version, methodVersionId: method.versionId, operatingModel: method.operatingModel, onboarding, profile: prerequisites.profile, assumptions: prerequisites.assumptions, nowIso });
     artifacts = {
