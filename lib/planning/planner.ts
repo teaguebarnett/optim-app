@@ -288,7 +288,10 @@ export function buildDailyPlan({ state, trainingPlan, now, nutritionTotals }: Bu
     cardioPrescription.options.find((o) => o.id === state.cardio.selectedOptionId) ??
     cardioPrescription.options.find((o) => o.isDefault) ??
     cardioPrescription.options[0];
-  items.push({
+  // Gate U3C — a real client with a coach-published program sees cardio only when their prescription assigns it today
+  // (never the demo StairMaster default on every day). Demo clients keep their existing daily cardio item.
+  const realProgram = !!state.assignedUniversalProgram;
+  if (!realProgram || cardioPrescription.assignedDays.includes(todayDayOfWeek)) items.push({
     id: "cardio",
     kind: "cardio",
     title: `Cardio — ${selectedCardioOption.displayName}`,

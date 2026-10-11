@@ -48,13 +48,13 @@ export interface ReviewRevision {
   atIso: string;
 }
 
-interface ReviewRow {
+export interface ReviewRow {
   id: string;
   workspace_id: string;
   client_profile_id: string;
   title: string;
   status: string;
-  approval_state: "proposed" | "approved" | "rejected";
+  approval_state: "proposed" | "approved" | "rejected" | "published" | "superseded";
   proposal: UnifiedProgramProposal;
   domain_runs: UnifiedArtifacts;
   nutrition_strategy: { reason: string; strategy: unknown } | null;
@@ -67,9 +67,13 @@ interface ReviewRow {
   reviewed_by: string | null;
   reviewed_at: string | null;
   rejection_reason: string | null;
+  approved_content_hashes: { training: string | null; nutrition: string | null } | null;
+  published_at: string | null;
+  publication: Record<string, unknown> | null;
+  superseded_by: string | null;
   created_at: string;
 }
-const COLS = "id, workspace_id, client_profile_id, title, status, approval_state, proposal, domain_runs, nutrition_strategy, training_program_version_id, nutrition_plan_version_id, resistance_source, source_resistance_version_id, coach_decisions, review_revisions, reviewed_by, reviewed_at, rejection_reason, created_at";
+const COLS = "id, workspace_id, client_profile_id, title, status, approval_state, proposal, domain_runs, nutrition_strategy, training_program_version_id, nutrition_plan_version_id, resistance_source, source_resistance_version_id, coach_decisions, review_revisions, reviewed_by, reviewed_at, rejection_reason, approved_content_hashes, published_at, publication, superseded_by, created_at";
 const REVIEWABLE = ["draft_ready", "needs_coach_decision", "incomplete"];
 
 export interface EvidenceItem {
@@ -86,6 +90,10 @@ export interface UnifiedReviewView {
   createdAtIso: string;
   reviewedAtIso: string | null;
   rejectionReason: string | null;
+  /** Gate U3C — set once published (what was published and assigned, what was superseded). */
+  publishedAtIso: string | null;
+  publication: Record<string, unknown> | null;
+  supersededBy: string | null;
   /** Where the lifting came from — lifting from an approved program is read-only here. */
   resistanceSource: ReviewRow["resistance_source"];
   proposal: Pick<UnifiedProgramProposal, "objective" | "domains" | "recovery" | "progression" | "monitoring" | "assumptions" | "uncertainties" | "escalations" | "questions"> & { coachMethodVersion: number | null; modelCalls: number };
@@ -116,6 +124,11 @@ async function assertReviewer(env: ReviewEnv, workspaceId: string, clientProfile
     if (data) return;
   }
   throw new Error("Only the client's assigned coach or a workspace admin can review this proposal.");
+}
+
+/** Gate U3C — the row with its approval fields, for publication (same authorization as every review read). */
+export async function loadReviewRow(env: ReviewEnv, rowId: string): Promise<ReviewRow> {
+  return loadRow(env, rowId);
 }
 
 async function loadRow(env: ReviewEnv, rowId: string): Promise<ReviewRow> {
@@ -191,7 +204,8 @@ async function buildView(env: ReviewEnv, row: ReviewRow): Promise<UnifiedReviewV
     versions: { training: t?.id ?? null, nutrition: n?.id ?? null },
   });
   const decisions = reviewDecisions(row.proposal, revalidation, row.coach_decisions ?? {});
-  const staleReasons = row.approval_state === "proposed" ? staleReasonsFor(env, row) : [];
+  // Approved-but-unpublished proposals can go stale too (publication re-checks this).
+  const staleReasons = row.approval_state === "proposed" || row.approval_state === "approved" ? staleReasonsFor(env, row) : [];
   const u = row.proposal;
   return {
     rowId: row.id,
@@ -201,6 +215,9 @@ async function buildView(env: ReviewEnv, row: ReviewRow): Promise<UnifiedReviewV
     createdAtIso: row.created_at,
     reviewedAtIso: row.reviewed_at,
     rejectionReason: row.rejection_reason,
+    publishedAtIso: row.published_at,
+    publication: row.publication,
+    supersededBy: row.superseded_by,
     resistanceSource: row.resistance_source,
     proposal: { objective: u.objective, domains: u.domains, recovery: u.recovery, progression: u.progression, monitoring: u.monitoring, assumptions: u.assumptions, uncertainties: u.uncertainties, escalations: u.escalations, questions: u.questions, coachMethodVersion: u.provenance.coachMethod?.version ?? null, modelCalls: u.provenance.modelCalls },
     evidence: evidenceFor(env, a),

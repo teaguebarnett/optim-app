@@ -123,7 +123,8 @@ export function TrainingScreen({
         <SessionSurface selectedDateIso={selectedDateIso} />
       </div>
 
-      {isViewingToday ? (
+      {/* Gate U3C — the weekly note is demo copy: never shown as a real coach's words to a client with a real program. */}
+      {isViewingToday && !state.assignedUniversalProgram ? (
         <div className="mt-4 px-4">
           <CoachNote note={TRAINING_WEEKLY_NOTE} label={`${coachName}'s focus for this week`} />
         </div>

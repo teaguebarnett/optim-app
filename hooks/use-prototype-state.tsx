@@ -92,7 +92,7 @@ function buildSupabaseActiveAppContext(params: {
     workspace: { ...template.workspace, id: params.workspaceId },
     membership: { ...template.membership, userId: params.clientId, workspaceId: params.workspaceId },
     clientProfile: template.clientProfile
-      ? { ...template.clientProfile, id: params.clientId, workspaceId: params.workspaceId, name: params.clientDisplayName }
+      ? { ...template.clientProfile, id: params.clientId, workspaceId: params.workspaceId, name: params.clientDisplayName, previousWeightLb: null }
       : null,
     primaryCoach,
   };

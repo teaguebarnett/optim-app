@@ -12,6 +12,9 @@ import { applyNutritionEdit } from "../../production/unified-review.ts";
 import { toAssignedNutritionPlanDraft } from "../reasoner/nutrition/to-plan.ts";
 import { applyTrainingItemPatch } from "../../training/program-proposal-editing.ts";
 import { FOUNDATION_KNOWLEDGE } from "../knowledge/registry.ts";
+import { universalProgramToClientAssignedProgram, universalProgramToTodayProgram } from "../../training/legacy-adapter.ts";
+import { cardioCountsToday } from "../../calculations.ts";
+import { createInitialState } from "../../state.ts";
 import type { AssignedNutritionPlan } from "../../types.ts";
 import type { UniversalTrainingProgramContent } from "../../training/types.ts";
 import type { UnifiedProgramProposal } from "./contract.ts";
@@ -173,6 +176,24 @@ await check("11. a cardio edit keeps its session honest: name intensity and esti
   const l = find(base.training!, "resistance")!;
   const lifted = applyTrainingItemPatch(base.training!, l.path, { sets: 5 });
   assert.deepEqual(syncCardioSession(lifted, l.path), lifted);
+});
+
+await check("12. Gate U3C — Today's view of a published program: RIR-only Reasoner lifting is shown on the RPE scale (2 RIR = RPE 8); multi-session / cardio-only days stay unrepresentable", async () => {
+  const lift = await program({ t_cardio_roles: ["fat_loss"] }, "build_muscle");
+  assert.equal(universalProgramToClientAssignedProgram(lift.training!), null, "strict conversion refuses RIR (lossless rule unchanged)");
+  const today = universalProgramToTodayProgram(lift.training!);
+  assert.ok(today, "Today can show it");
+  const src = find(lift.training!, "resistance")!;
+  const shown = today!.weeks.find((w) => w.weekNumber === src.path.weekNumber)!.days.find((d) => d.dayOfWeek === src.path.dayOfWeek)!.workout!.exercises[0];
+  assert.equal(shown.targetRpe, 10 - (src.item.prescription.rir ?? 0));
+  assert.equal(universalProgramToTodayProgram(base.training!), null, "lifting + separate cardio days: still not representable (held at publication)");
+});
+
+await check("13. Gate U3C — a real client's Today has a cardio task only when their prescription assigns it; demo clients unchanged", () => {
+  const demo = createInitialState();
+  assert.equal(cardioCountsToday(demo), true);
+  const real = { ...demo, clientId: "real-client" as never, assignedUniversalProgram: base.training! };
+  assert.equal(cardioCountsToday(real), false);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

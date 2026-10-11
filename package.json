@@ -119,6 +119,7 @@
     "verify:nutrition-plan-contract": "node --experimental-strip-types lib/nutrition/verify-nutrition-plan-contract.mts",
     "verify:client-ownership": "node --experimental-strip-types lib/production/verify-client-ownership.mts",
     "e2e:client-ownership": "node --experimental-strip-types scripts/e2e-client-ownership.mts",
+    "e2e:unified-publication": "node --experimental-strip-types scripts/e2e-unified-publication.mts",
     "e2e:unified-review": "node --experimental-strip-types scripts/e2e-unified-review.mts",
     "e2e:unified-drafts": "node --experimental-strip-types scripts/e2e-unified-drafts.mts"
   },

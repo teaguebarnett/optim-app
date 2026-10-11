@@ -5,12 +5,14 @@
 // Approval records the coach's decision on exactly these drafts — it does not publish, assign or notify (the client
 // sees nothing until atomic publication). Every edit returns a freshly revalidated review.
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, Info, Pencil, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   approveUnifiedProposalAction,
+  planUnifiedPublicationAction,
+  publishUnifiedProposalAction,
   editUnifiedNutritionAction,
   editUnifiedTrainingAction,
   recordUnifiedDecisionAction,
@@ -18,6 +20,7 @@ import {
   type UnifiedReviewResult,
 } from "@/app/actions/unified-review";
 import type { UnifiedReviewView } from "@/lib/production/unified-review";
+import type { PublicationPlan } from "@/lib/production/unified-publication";
 import type { TrainingItemPatch, TrainingItemPath } from "@/lib/training/program-proposal-editing";
 import type { Prescription, TrainingItemInstance } from "@/lib/training/types";
 import type { DomainId } from "@/lib/synthesis/unified/contract";
@@ -65,6 +68,8 @@ export function UnifiedProposalReview({ initial, workspaceId, clientProfileId }:
   return (
     <section className="space-y-3" aria-label="Unified program review">
       <ReviewHeader view={view} pending={pending} error={error} onApprove={() => act(() => approveUnifiedProposalAction(scope, { rowId: view.rowId, expected: { training: view.training?.versionId ?? null, nutrition: view.nutrition?.versionId ?? null } }))} onReject={(reason) => act(() => rejectUnifiedProposalAction(scope, { rowId: view.rowId, reason }))} />
+
+      {view.approvalState === "approved" || view.approvalState === "published" ? <PublishCard view={view} pending={pending} onPublish={(expected) => act(() => publishUnifiedProposalAction(scope, { rowId: view.rowId, expected }))} scope={scope} /> : null}
 
       <div className="grid gap-3 md:grid-cols-3">
         {(["resistance", "cardio", "nutrition"] as DomainId[]).map((d) => (
@@ -148,6 +153,10 @@ function ReviewHeader({ view, pending, error, onApprove, onReject }: { view: Uni
         )
       ) : view.approvalState === "approved" ? (
         <p className="text-meta text-off-white">Approved {view.reviewedAtIso ? new Date(view.reviewedAtIso).toLocaleString() : ""}. Not published yet — the client sees nothing until it&apos;s published.</p>
+      ) : view.approvalState === "published" ? (
+        <p className="text-meta text-off-white">Published {view.publishedAtIso ? new Date(view.publishedAtIso).toLocaleString() : ""} — assigned to the client.</p>
+      ) : view.approvalState === "superseded" ? (
+        <p className="text-meta text-off-white">Superseded by a newer published program. Its drafts were archived.</p>
       ) : (
         <p className="text-meta text-off-white">Rejected{view.rejectionReason ? `: ${view.rejectionReason}` : "."} Its drafts were archived.</p>
       )}
@@ -186,7 +195,7 @@ function ReviewHeader({ view, pending, error, onApprove, onReject }: { view: Uni
 }
 
 function StatePill({ view }: { view: UnifiedReviewView }) {
-  const text = view.approvalState === "approved" ? "Approved — not published" : view.approvalState === "rejected" ? "Rejected" : view.blockers.length ? "Needs your decisions" : "Ready to approve";
+  const text = view.approvalState === "published" ? "Published" : view.approvalState === "superseded" ? "Superseded" : view.approvalState === "approved" ? "Approved — not published" : view.approvalState === "rejected" ? "Rejected" : view.blockers.length ? "Needs your decisions" : "Ready to approve";
   const tone = view.approvalState === "rejected" ? "border-border-strong text-neutral" : view.approvalState === "approved" || !view.blockers.length ? "border-success/40 text-success" : "border-warning text-warning-strong";
   return <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${tone}`}>{text}</span>;
 }
@@ -512,6 +521,79 @@ function NutritionCard({ view, disabled, onSave }: { view: UnifiedReviewView; di
           </Button>
         </div>
       ) : null}
+    </Card>
+  );
+}
+
+function PublishCard({ view, pending, onPublish, scope: { workspaceId, clientProfileId } }: { view: UnifiedReviewView; pending: boolean; onPublish: (expected: { activeTrainingVersionId: string | null; activeNutritionVersionId: string | null; replaceActive: boolean; startDate: string | null }) => void; scope: { workspaceId: string; clientProfileId: string } }) {
+  const [plan, setPlan] = useState<PublicationPlan | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  useEffect(() => {
+    if (view.approvalState !== "approved") return;
+    let live = true;
+    planUnifiedPublicationAction({ workspaceId, clientProfileId }, { rowId: view.rowId }).then((r) => {
+      if (!live) return;
+      if (r.ok) setPlan(r.plan);
+      else setLoadError(r.error);
+    });
+    return () => {
+      live = false;
+    };
+  }, [view.rowId, view.approvalState, workspaceId, clientProfileId]);
+
+  if (view.approvalState === "published") {
+    const p = view.publication as { positionPreserved?: boolean; startDate?: string | null; supersededProposalIds?: string[]; archivedTrainingVersionIds?: string[]; replaced?: { trainingVersionId: string | null; nutritionVersionId: string | null }; notificationId?: string | null } | null;
+    return (
+      <Card>
+        <p className="text-label text-neutral">Published to the client</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-meta text-off-white">
+          <li>{[view.training ? "Training" : null, view.nutrition ? "nutrition" : null].filter(Boolean).join(" and ")} published and assigned together.</li>
+          {p?.replaced?.trainingVersionId || p?.replaced?.nutritionVersionId ? <li>The client&apos;s previous {[p.replaced.trainingVersionId ? "program" : null, p.replaced.nutritionVersionId ? "nutrition plan" : null].filter(Boolean).join(" and ")} {p.replaced.trainingVersionId && p.replaced.nutritionVersionId ? "were" : "was"} replaced (kept in history).</li> : null}
+          <li>{p?.startDate ? `New program starts ${p.startDate}.` : "The client's program position was kept."}</li>
+          {p?.supersededProposalIds?.length ? <li>{p.supersededProposalIds.length} other open proposal{p.supersededProposalIds.length === 1 ? " was" : "s were"} superseded and {p.supersededProposalIds.length === 1 ? "its" : "their"} drafts archived.</li> : null}
+          <li>{p?.notificationId ? "The client was notified in the app." : "The client hasn't signed in yet, so no notification was sent."}</li>
+        </ul>
+      </Card>
+    );
+  }
+  if (loadError) return <Card><p className="text-meta text-off-white">{loadError}</p></Card>;
+  if (!plan) return <Card><p className="text-meta text-neutral">Checking what publishing would do…</p></Card>;
+  const replacing = plan.replaces.training || plan.replaces.nutrition;
+  const ready = plan.canPublish && (!replacing || confirmReplace) && (!plan.needsStartDate || !!startDate);
+  return (
+    <Card className="space-y-2">
+      <p className="text-label text-neutral">Publish to the client</p>
+      {plan.blockers.length ? (
+        <ul className="list-disc space-y-0.5 pl-5 text-meta text-warning-strong">
+          {plan.blockers.map((b) => (
+            <li key={b}>{b}</li>
+          ))}
+        </ul>
+      ) : (
+        <ul className="list-disc space-y-0.5 pl-5 text-meta text-off-white">
+          <li>Publishes {[view.training ? "the training" : null, view.nutrition ? "the nutrition" : null].filter(Boolean).join(" and ")} together — all or nothing.{plan.omits.length ? ` (${plan.omits.join(" and ")} isn't part of this proposal and stays as it is.)` : ""}</li>
+          {plan.continuesApprovedProgram ? <li>Continues the client&apos;s approved program — their program position is kept.</li> : null}
+          {plan.supersedes.openProposals || plan.supersedes.legacyPendingDrafts ? <li>Supersedes {plan.supersedes.openProposals} other open proposal(s) and archives {plan.supersedes.legacyPendingDrafts} pending program draft(s).</li> : null}
+          <li>The client is notified in the app only after publishing succeeds.</li>
+        </ul>
+      )}
+      {plan.canPublish && replacing ? (
+        <label className="flex items-start gap-2 text-meta text-off-white">
+          <input type="checkbox" checked={confirmReplace} onChange={(e) => setConfirmReplace(e.target.checked)} className="mt-0.5" />
+          Replace the client&apos;s active {[plan.replaces.training ? "program" : null, plan.replaces.nutrition ? "nutrition plan" : null].filter(Boolean).join(" and ")} (kept in their history).
+        </label>
+      ) : null}
+      {plan.canPublish && plan.needsStartDate ? (
+        <label className="flex flex-col gap-1 text-xs text-neutral">
+          New program start date
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-9 w-44 rounded border border-border-strong bg-surface px-2 text-sm text-off-white" />
+        </label>
+      ) : null}
+      <Button size="sm" disabled={!ready || pending} loading={pending} onClick={() => onPublish({ activeTrainingVersionId: plan.active.trainingVersionId, activeNutritionVersionId: plan.active.nutritionVersionId, replaceActive: confirmReplace, startDate: plan.needsStartDate ? startDate : null })}>
+        Publish to client
+      </Button>
     </Card>
   );
 }

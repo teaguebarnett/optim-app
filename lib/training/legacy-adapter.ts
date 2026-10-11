@@ -555,3 +555,32 @@ export function resolveUniversalProgramContent(content: ClientAssignedProgram | 
     throw err;
   }
 }
+
+/**
+ * Gate U3C — the client's TODAY view of a universal program. Today's planner reads the legacy shape; workouts
+ * themselves execute from the universal program (lib/state.ts START_WORKOUT prefers assignedUniversalProgram), so this
+ * projection only drives Today's schedule, names and focus. It is the strict, lossless conversion above — with one
+ * display mapping when that is the ONLY gap: effort written as reps in reserve (RIR 0–4) is shown on the RIR-based RPE
+ * scale (RPE = 10 − RIR, e.g. 2 RIR = RPE 8), the equivalence the client copy already states ("stop with about 2 reps
+ * left in the tank"). Anything else that isn't representable (several sessions in a day, cardio-only days, rounds,
+ * %1RM…) still returns null: never a lossy flattening.
+ */
+export function universalProgramToTodayProgram(content: UniversalTrainingProgramContent): ClientAssignedProgram | null {
+  const strict = universalProgramToClientAssignedProgram(content);
+  if (strict) return strict;
+  const view = structuredClone(content);
+  let mapped = false;
+  for (const w of view.weeks)
+    for (const d of w.days)
+      for (const s of d.sessions ?? [])
+        for (const b of s.blocks)
+          for (const i of b.items) {
+            const p = i.prescription;
+            if (p.family === "resistance" && p.rpe === undefined && typeof p.rir === "number" && Number.isInteger(p.rir) && p.rir >= 0 && p.rir <= 4) {
+              p.rpe = (10 - p.rir) as Prescription["rpe"];
+              delete p.rir;
+              mapped = true;
+            }
+          }
+  return mapped ? universalProgramToClientAssignedProgram(view) : null;
+}

@@ -12,6 +12,7 @@ import { loadSynthesisInputForClient } from "@/lib/production/synthesis";
 import { getActiveProgramAssignment } from "@/lib/production/programs";
 import { FOUNDATION_KNOWLEDGE } from "@/lib/synthesis/knowledge/registry";
 import { createUnifiedDraftForClient } from "@/lib/production/unified-proposals";
+import { planUnifiedPublication, publishUnifiedProposal, type PublicationExpectation, type PublicationPlan } from "@/lib/production/unified-publication";
 import {
   approveUnifiedProposal,
   editUnifiedNutrition,
@@ -75,6 +76,21 @@ export async function approveUnifiedProposalAction(scope: Scope, p: { rowId: str
 
 export async function rejectUnifiedProposalAction(scope: Scope, p: { rowId: string; reason?: string }): Promise<UnifiedReviewResult> {
   return run(scope, (env) => rejectUnifiedProposal(env, p));
+}
+
+/** Gate U3C — what publishing would do (replacements, start date, supersession) and what still blocks it. */
+export async function planUnifiedPublicationAction(scope: Scope, p: { rowId: string }): Promise<{ ok: true; plan: PublicationPlan } | { ok: false; error: string }> {
+  try {
+    return { ok: true, plan: (await planUnifiedPublication(await reviewEnv(scope), p.rowId)).plan };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Couldn't prepare publication — reload and try again." };
+  }
+}
+
+/** Gate U3C — publishes the approved proposal to the client atomically (training + nutrition, assignments, start
+ * date, supersession, in-app notification) — all or nothing; a retry returns the same publication. */
+export async function publishUnifiedProposalAction(scope: Scope, p: { rowId: string; expected: PublicationExpectation }): Promise<UnifiedReviewResult> {
+  return run(scope, async (env) => (await publishUnifiedProposal(env, p)).view);
 }
 
 /** LOCAL QA ONLY — prepares a unified proposal through the real server pipeline with OPTIM's scripted domain models

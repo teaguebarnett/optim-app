@@ -123,7 +123,8 @@ export interface ClientProfile {
   programWeek: number;
   programTotalWeeks: number;
   avatarInitials: string;
-  previousWeightLb: number;
+  /** Demo fixtures carry a seeded value; a real (Supabase) client has none until they log one — never a demo number. */
+  previousWeightLb: number | null;
   primaryCoachId: CoachProfileId;
 }
 

@@ -5,7 +5,10 @@
 // models were built for. Prepare the proposal from the running dev server (OPTIM_REASONER_TEST_PROVIDER set, local
 // Supabase) with prepareUnifiedProposalLocalQaAction; sign in as the coach with a local magic link.
 //
-//   node --experimental-strip-types scripts/qa-seed-unified-review.mts
+//   node --experimental-strip-types scripts/qa-seed-unified-review.mts [--lift-only]
+//
+// --lift-only: the coach's cardio is for fat loss only (like the first real client's coach), so a muscle-building /
+// strength client's unified program is lifting + nutrition — publishable to Today (Gate U3C).
 
 import { execSync } from "node:child_process";
 import { createClient } from "@supabase/supabase-js";
@@ -42,7 +45,7 @@ async function user(tag: string, name: string) {
 const coach = await user("coach", "QA Coach");
 const ws = await must(admin.from("workspaces").insert({ owner_user_id: coach.id, display_name: `U3B QA ${RUN}`, business_name: "U3B QA" }).select("id").single(), "workspace");
 await must(admin.from("workspace_memberships").insert({ workspace_id: ws.id, user_id: coach.id, role: "workspace_owner", status: "active" }), "coach membership");
-const method = fullCoach();
+const method = process.argv.includes("--lift-only") ? fullCoach({ t_cardio_roles: ["fat_loss"] }) : fullCoach();
 const brain = await must(admin.from("coach_brains").insert({ workspace_id: ws.id, coach_user_id: coach.id }).select("id").single(), "brain");
 const mv = await must(admin.from("coach_method_versions").insert({ brain_id: brain.id, workspace_id: ws.id, coach_user_id: coach.id, version: 1, source: "calibration", operating_model: method.operatingModel, ai_authority: method.aiAuthority ?? {}, calibration_answers: method.operatingModel.calibration?.answers ?? {}, confirmed_by: coach.id }).select("id").single(), "method version");
 await must(admin.from("coach_brains").update({ calibration_status: "calibrated", active_method_version_id: mv.id, calibrated_at: nowIso }).eq("id", brain.id), "calibrate");
@@ -55,6 +58,8 @@ const answers = structuredClone(BASE_INTAKE_ANSWERS) as Record<string, Record<st
 answers.what_you_want = { ...answers.what_you_want, primaryGoal: "get_stronger", successDefinition: "Squat 180 kg without getting gassed" };
 answers.your_week = { ...answers.your_week, availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"], preferredTrainingTime: ["evening", "morning"] };
 await must(admin.from("client_onboarding_progress").insert({ workspace_id: ws.id, client_profile_id: cp.id, current_step_index: 6, answers, completed_at: nowIso }), "onboarding");
+// As the invite flow creates it: enrolled but not active (the coach sets the start date and activates).
+await must(admin.from("client_enrollments").insert({ workspace_id: ws.id, client_profile_id: cp.id, status: "invited", timezone: "UTC" }), "enrollment");
 
 // A second client with a coach-confirmed health review: documented limitations + structured restrictions (so the
 // proposal carries prepared decisions — cardio clearance and the documented-limitation exercise review).
@@ -77,4 +82,5 @@ await must(admin.from("escalations").insert({
   structured_limitations_confirmed_by: coach.id, structured_limitations_confirmed_at: nowIso,
 }), "health review");
 
+console.log(`client email ${client.email}`);
 console.log(`coach   ${coach.email}\nclient  ${cp.id}  (workspace ${ws.id})\nlimited ${lp.id}`);

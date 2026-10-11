@@ -1,4 +1,4 @@
-import { CARDIO_TARGET, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, resolveWorkoutAvailabilityForDay } from "./mock-data.ts";
+import { CARDIO_TARGET, isCardioAssignedForDay, MEAL_PERIOD_LABELS, NUTRITION_TARGETS, resolveWorkoutAvailabilityForDay } from "./mock-data.ts";
 import { resolvePlannedDateTime } from "./planning/training-plan.ts";
 import { deriveProgramWeek } from "./scheduling/enrollment.ts";
 import { localDateDayOfWeek } from "./shared/local-date.ts";
@@ -192,6 +192,12 @@ function isMealResolved(selection: AppState["meals"][MealPeriod]): boolean {
   return !!selection && selection.source !== "planned-later";
 }
 
+/** Gate U3C — a real client with a coach-published program has a cardio task only on a day their prescription assigns
+ * it (never the demo default). Demo clients keep their daily cardio item. Shared by Today's task list and its percent. */
+export function cardioCountsToday(state: AppState): boolean {
+  return !state.assignedUniversalProgram || isCardioAssignedForDay(state.clientId, localDateDayOfWeek(state.dateIso));
+}
+
 export function computeDailyCompletionPercent(state: AppState): number {
   const checks: boolean[] = [
     state.morningWeight.weightLb !== null,
@@ -199,7 +205,7 @@ export function computeDailyCompletionPercent(state: AppState): number {
     state.workoutSession.status === "completed",
     isMealCounted(state.meals.postWorkout),
     isMealCounted(state.meals.lunch),
-    state.cardio.status === "completed",
+    ...(cardioCountsToday(state) ? [state.cardio.status === "completed"] : []),
     isMealCounted(state.meals.dinner),
     isMealCounted(state.meals.snack),
   ];
@@ -366,7 +372,7 @@ export function deriveTaskStates(
     "daily-completion",
   ];
 
-  return order.map((id) => ({ id, label: TASK_LABELS[id], state: states[id] }));
+  return order.filter((id) => id !== "cardio" || cardioCountsToday(state)).map((id) => ({ id, label: TASK_LABELS[id], state: states[id] }));
 }
 
 export function getNextActionTaskId(tasks: DailyTask[]): DailyTaskId | null {

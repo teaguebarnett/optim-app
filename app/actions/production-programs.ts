@@ -39,7 +39,7 @@ import {
   assignNutritionVersionToClient,
   setClientProgramStartDate,
 } from "../../lib/production/programs";
-import { universalProgramToClientAssignedProgram } from "../../lib/training/legacy-adapter";
+import { universalProgramToTodayProgram } from "../../lib/training/legacy-adapter";
 import { generateProgramDirectionSummaries, avoidedTermsForProfile } from "../../lib/coach/program-directions";
 import { buildUniversalProgramForDirection } from "../../lib/coach/universal-program-generation";
 import { getOnboardingProgressForClient } from "../../lib/production/onboarding";
@@ -216,7 +216,7 @@ export async function getMySupabaseAppStateAction(): Promise<SupabaseClientBoots
   let legacyCompatibleProgram: ClientAssignedProgram | undefined;
   if (context.assignedProgram) {
     if ("schemaVersion" in context.assignedProgram && context.assignedProgram.schemaVersion === 2) {
-      legacyCompatibleProgram = universalProgramToClientAssignedProgram(context.assignedProgram) ?? undefined;
+      legacyCompatibleProgram = universalProgramToTodayProgram(context.assignedProgram) ?? undefined;
       // else: a real universal program exists but isn't legacy-representable
       // (e.g. contains continuous work) — this legacy view of it stays
       // undefined, a documented remaining limitation for Today/planner-style
