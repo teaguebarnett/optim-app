@@ -17,6 +17,7 @@ import { proteinGrams } from "../nutrition/energy.ts";
 import type { UniversalTrainingProgramContent, Session } from "../../training/types.ts";
 import type { AssignedNutritionPlan } from "../../types.ts";
 import { validateAssignedNutritionPlanContent, validateUniversalTrainingProgramContent } from "../../production/validation.ts";
+import { removeTrainingItem } from "../../training/program-proposal-editing.ts";
 import type { CardioReasonerResult } from "../reasoner/cardio/reasoner.ts";
 import type { NutritionReasonerResult } from "../reasoner/nutrition/reasoner.ts";
 import type { CrossDomainFinding, DomainId, DomainStatus, ProgramDay, ProgramWorkload, UnifiedDecision, UnifiedProgramProposal } from "./contract.ts";
@@ -31,6 +32,51 @@ export interface RecordedAnswer {
   question: string;
   decidedBy: string;
   decidedAtIso: string;
+  /** The exercises this answer excludes (the decision's exclude option was chosen) — binding on the program. */
+  excludes?: string[];
+}
+
+/** Every exercise the coach has excluded through a decision in this review (case-insensitive names). */
+export function excludedExercises(answers: Record<string, RecordedAnswer>): string[] {
+  return [...new Set(Object.values(answers).flatMap((a) => a.excludes ?? []))];
+}
+
+/** Where each named exercise still appears in a program ("week 1 Monday", …), keyed by the name as given. */
+export function exerciseLocations(content: UniversalTrainingProgramContent | null, names: string[]): Record<string, string[]> {
+  const want = new Map(names.map((n) => [n.toLowerCase(), n]));
+  const out: Record<string, string[]> = {};
+  for (const w of content?.weeks ?? [])
+    for (const d of w.days)
+      for (const s of d.sessions ?? [])
+        for (const b of s.blocks)
+          for (const i of b.items) {
+            const n = want.get(i.name.toLowerCase());
+            if (n) (out[n] ??= []).push(`week ${w.weekNumber} ${d.dayOfWeek}`);
+          }
+  return out;
+}
+
+/** The coach's explicit "remove this exercise from the program": every instance, all weeks. Refuses (rather than
+ * leaving an empty session) when the exercise is a session's only item — then the coach replaces it instead. */
+export function removeExerciseEverywhere(content: UniversalTrainingProgramContent, name: string): UniversalTrainingProgramContent {
+  const target = name.toLowerCase();
+  let out = content;
+  let removed = 0;
+  for (const w of content.weeks)
+    for (const d of w.days)
+      for (const [si, s] of (d.sessions ?? []).entries())
+        for (const b of s.blocks)
+          for (const i of b.items)
+            if (i.name.toLowerCase() === target) {
+              try {
+                out = removeTrainingItem(out, { weekNumber: w.weekNumber, dayOfWeek: d.dayOfWeek, sessionIndex: si, blockId: b.id, itemId: i.id });
+              } catch {
+                throw new Error(`${name} is the only exercise in ${s.name} (week ${w.weekNumber}, ${d.dayOfWeek}) — replace it with another exercise instead of removing it.`);
+              }
+              removed++;
+            }
+  if (!removed) throw new Error(`${name} isn't in this program.`);
+  return out;
 }
 
 export interface ReviewDecision extends UnifiedDecision {
@@ -132,6 +178,8 @@ export function revalidateDrafts(p: {
   original: { training: UniversalTrainingProgramContent | null; nutrition: AssignedNutritionPlan | null };
   current: { training: UniversalTrainingProgramContent | null; nutrition: AssignedNutritionPlan | null };
   versions: { training: string | null; nutrition: string | null };
+  /** Exercises the coach excluded through a decision — none may remain in the training draft. */
+  excluded?: string[];
 }): Revalidation {
   const { input, proposal: u } = p;
   const out: Revalidation = { versions: p.versions, errors: [], findings: [], decisions: [], week: [], workload: u.workload, domains: { resistance: { status: u.domains.resistance.status, edited: false, ok: true }, cardio: { status: u.domains.cardio.status, edited: false, ok: true }, nutrition: { status: u.domains.nutrition.status, edited: false, ok: true } } };
@@ -159,8 +207,13 @@ export function revalidateDrafts(p: {
       if (x.state === "incompatible") err("resistance", `${x.exercise} conflicts with the confirmed restrictions: ${x.why}.`);
     }
     const uncertain = resistanceContentFit(t, input, p.knowledge).filter((x) => x.state === "uncertain");
-    if (uncertain.length) out.decisions.push({ source: "resistance", about: "exercise_fit_uncertain", question: `OPTIM can't confirm these fit the confirmed restrictions: ${uncertain.map((x) => `${x.exercise} (${x.why})`).join("; ")}. Keep or exclude them?`, options: ["Keep them (the coach confirms they fit)", "Exclude them for this client"], recommended: null, why: "Restriction fit couldn't be checked; OPTIM doesn't decide that." });
-    const doc = documentedExerciseReview(input, resistanceNames(t));
+    if (uncertain.length) out.decisions.push({ source: "resistance", about: "exercise_fit_uncertain", question: `OPTIM can't confirm these fit the confirmed restrictions: ${uncertain.map((x) => `${x.exercise} (${x.why})`).join("; ")}. Keep or exclude them?`, options: ["Keep them (the coach confirms they fit)", "Exclude them for this client"], recommended: null, why: "Restriction fit couldn't be checked; OPTIM doesn't decide that.", exercises: uncertain.map((x) => x.exercise), excludeOption: "Exclude them for this client" });
+    // The coach's exclusion decisions are binding: an excluded exercise still in the draft blocks approval.
+    for (const [name, where] of Object.entries(exerciseLocations(t, p.excluded ?? [])))
+      err("resistance", `${name} is excluded by your decision but is still in the program (${where.length > 3 ? `${where.slice(0, 3).join(", ")} and ${where.length - 3} more` : where.join(", ")}) — remove or replace it, or change your decision.`);
+    // Exercises already excluded don't raise the documented-limitation question again.
+    const excludedSet = new Set((p.excluded ?? []).map((n) => n.toLowerCase()));
+    const doc = documentedExerciseReview(input, resistanceNames(t).filter((n) => !excludedSet.has(n.toLowerCase())));
     if (doc) out.decisions.push(doc);
   }
 

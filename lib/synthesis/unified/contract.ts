@@ -77,6 +77,10 @@ export interface UnifiedDecision {
   options: string[];
   recommended: string | null;
   why: string;
+  /** Exercise decisions: the exercises (by name) the question is about, and which option means "exclude them". An
+   * exclusion answer is binding: those exercises may not stay in the program the coach approves or publishes. */
+  exercises?: string[];
+  excludeOption?: string;
 }
 
 export interface CrossDomainFinding {

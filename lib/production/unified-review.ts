@@ -15,7 +15,7 @@ import { sha256 } from "../synthesis/reasoner/run.ts";
 import type { SynthesisInput } from "../synthesis/synthesis-input.ts";
 import type { FitnessKnowledgeRegistry } from "../synthesis/knowledge/types.ts";
 import type { DomainId, UnifiedProgramProposal } from "../synthesis/unified/contract.ts";
-import { approvalBlockers, documentedLimitations, reviewDecisions, revalidateDrafts, syncCardioSession, type RecordedAnswer, type ReviewDecision, type Revalidation } from "../synthesis/unified/review.ts";
+import { approvalBlockers, documentedLimitations, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type RecordedAnswer, type ReviewDecision, type Revalidation } from "../synthesis/unified/review.ts";
 import { applyTrainingItemPatch, removeTrainingItem, locateTrainingItem, type TrainingItemPatch, type TrainingItemPath } from "../training/program-proposal-editing.ts";
 import type { UniversalTrainingProgramContent } from "../training/types.ts";
 import type { AssignedNutritionPlan, NutritionTargets, PrescribedNutritionTargets } from "../types.ts";
@@ -108,6 +108,8 @@ export interface UnifiedReviewView {
   blockers: string[];
   revisions: ReviewRevision[];
   documentedLimitations: string | null;
+  /** The coach's binding exclusions (from decisions) and where each excluded exercise still appears (empty = removed). */
+  exclusions: Array<{ key: string; question: string; exercises: Array<{ name: string; presentIn: string[] }>; decidedAtIso: string }>;
 }
 
 export class ReviewConflictError extends Error {}
@@ -202,6 +204,7 @@ async function buildView(env: ReviewEnv, row: ReviewRow): Promise<UnifiedReviewV
     original: { training: ot?.content ?? null, nutrition: on?.content ?? null },
     current: { training: t?.content ?? null, nutrition: n?.content ?? null },
     versions: { training: t?.id ?? null, nutrition: n?.id ?? null },
+    excluded: excludedExercises(row.coach_decisions ?? {}),
   });
   const decisions = reviewDecisions(row.proposal, revalidation, row.coach_decisions ?? {});
   // Approved-but-unpublished proposals can go stale too (publication re-checks this).
@@ -230,6 +233,12 @@ async function buildView(env: ReviewEnv, row: ReviewRow): Promise<UnifiedReviewV
     blockers: row.approval_state === "proposed" ? approvalBlockers({ approvalState: row.approval_state, status: row.status, hasDrafts: !!(t || n), revalidation, decisions, staleReasons, escalations: u.escalations.length }) : [],
     revisions: row.review_revisions ?? [],
     documentedLimitations: documentedLimitations(env.input),
+    exclusions: Object.entries(row.coach_decisions ?? {})
+      .filter(([, a]) => a.excludes?.length)
+      .map(([key, a]) => {
+        const where = exerciseLocations(t?.content ?? null, a.excludes!);
+        return { key, question: a.question, exercises: a.excludes!.map((name) => ({ name, presentIn: where[name] ?? [] })), decidedAtIso: a.decidedAtIso };
+      }),
   };
 }
 
@@ -261,10 +270,27 @@ export async function recordUnifiedDecision(env: ReviewEnv, p: { rowId: string; 
   const view = await buildView(env, row);
   const d = view.decisions.find((x) => x.key === p.key);
   if (!d) throw new ReviewConflictError("That decision is no longer part of this proposal — reload the review.");
-  const next = { ...(row.coach_decisions ?? {}), [p.key]: { answer, question: d.question, decidedBy: env.userId, decidedAtIso: env.nowIso } };
+  // Choosing the decision's exclude option is binding on the program (revalidation + the database guard enforce it);
+  // OPTIM never removes the exercises itself — the coach does, explicitly.
+  const excludes = d.exercises?.length && d.excludeOption && answer === d.excludeOption ? d.exercises : undefined;
+  const next = { ...(row.coach_decisions ?? {}), [p.key]: { answer, question: d.question, decidedBy: env.userId, decidedAtIso: env.nowIso, ...(excludes ? { excludes } : {}) } };
   const { data, error } = await env.supabase.from("unified_program_proposals").update({ coach_decisions: next }).eq("id", row.id).eq("approval_state", "proposed").select("id");
   if (error) throw new Error(`recordUnifiedDecision: ${error.message}`);
   if (!data?.length) throw new ReviewConflictError("This proposal changed while you were answering — reload the review.");
+  return getUnifiedReviewById(env, row.id);
+}
+
+/** Withdraws an exclusion decision: the recorded answer is removed, so the original question is open again (the coach
+ * decides afresh — the exercise is never silently kept). */
+export async function withdrawUnifiedExclusion(env: ReviewEnv, p: { rowId: string; key: string }): Promise<UnifiedReviewView> {
+  const row = await loadRow(env, p.rowId);
+  requireOpen(row);
+  if (!row.coach_decisions?.[p.key]?.excludes?.length) throw new ReviewConflictError("That exclusion isn't recorded on this proposal — reload the review.");
+  const next = { ...row.coach_decisions };
+  delete next[p.key];
+  const { data, error } = await env.supabase.from("unified_program_proposals").update({ coach_decisions: next }).eq("id", row.id).eq("approval_state", "proposed").select("id");
+  if (error) throw new Error(`withdrawUnifiedExclusion: ${error.message}`);
+  if (!data?.length) throw new ReviewConflictError("This proposal changed — reload the review.");
   return getUnifiedReviewById(env, row.id);
 }
 
@@ -284,7 +310,11 @@ async function relink(env: ReviewEnv, row: ReviewRow, domain: "training" | "nutr
 
 const PATCH_LABEL: Record<string, string> = { sets: "sets", repsLow: "reps", repsHigh: "reps", rpe: "RPE", durationSeconds: "duration", effortLow: "effort", effortHigh: "effort", rounds: "rounds", workIntervalSeconds: "work interval", recoveryIntervalSeconds: "recovery interval", name: "exercise", restSeconds: "rest", loadValue: "load" };
 
-export type TrainingEdit = { kind: "patch"; path: TrainingItemPath; patch: TrainingItemPatch } | { kind: "remove"; path: TrainingItemPath };
+export type TrainingEdit =
+  | { kind: "patch"; path: TrainingItemPath; patch: TrainingItemPatch }
+  | { kind: "remove"; path: TrainingItemPath }
+  /** The coach removes one exercise everywhere it appears (e.g. after excluding it). */
+  | { kind: "removeExercise"; name: string };
 
 export async function editUnifiedTraining(env: ReviewEnv, p: { rowId: string; expectedVersionId: string; edit: TrainingEdit }): Promise<UnifiedReviewView> {
   const row = await loadRow(env, p.rowId);
@@ -293,15 +323,26 @@ export async function editUnifiedTraining(env: ReviewEnv, p: { rowId: string; ex
   if (row.training_program_version_id !== p.expectedVersionId) throw new ReviewConflictError("The training draft changed since you opened it — reload the review.");
   const current = await trainingVersion(env, row.training_program_version_id);
   if (!current || current.status !== "draft") throw new ReviewConflictError("There's no training draft to edit.");
-  const located = locateTrainingItem(current.content, p.edit.path);
-  if (!located) throw new Error("No training item at that path.");
-  if (row.resistance_source === "approved_program" && located.item.prescription.family === "resistance") throw new Error("This lifting comes from the client's approved program; change it through a program adjustment, not this review.");
-  const next = p.edit.kind === "patch" ? syncCardioSession(applyTrainingItemPatch(current.content, p.edit.path, p.edit.patch), p.edit.path) : removeTrainingItem(current.content, p.edit.path);
+  const lockedLifting = "This lifting comes from the client's approved program; change it through a program adjustment, not this review.";
+  let next: UniversalTrainingProgramContent;
+  let summary: string;
+  if (p.edit.kind === "removeExercise") {
+    if (row.resistance_source === "approved_program") throw new Error(lockedLifting);
+    const count = Object.values(exerciseLocations(current.content, [p.edit.name])).flat().length;
+    next = removeExerciseEverywhere(current.content, p.edit.name);
+    summary = `Removed ${p.edit.name} from the program (${count} session${count === 1 ? "" : "s"})`;
+  } else {
+    const located = locateTrainingItem(current.content, p.edit.path);
+    if (!located) throw new Error("No training item at that path.");
+    if (row.resistance_source === "approved_program" && located.item.prescription.family === "resistance") throw new Error(lockedLifting);
+    next = p.edit.kind === "patch" ? syncCardioSession(applyTrainingItemPatch(current.content, p.edit.path, p.edit.patch), p.edit.path) : removeTrainingItem(current.content, p.edit.path);
+    const what = `${located.item.name} (week ${p.edit.path.weekNumber}, ${p.edit.path.dayOfWeek})`;
+    summary = p.edit.kind === "remove" ? `Removed ${what}` : `Edited ${what}: ${[...new Set(Object.keys(p.edit.patch).map((k) => PATCH_LABEL[k] ?? k))].join(", ")}`;
+  }
   validateUniversalTrainingProgramContent(next);
   if (sha256(next) === sha256(current.content)) return getUnifiedReviewById(env, row.id);
   const created = await insertDraftProgramVersion(env.supabase, env.userId, { workspaceId: row.workspace_id, programId: current.program_id, title: next.name, content: next });
-  const what = `${located.item.name} (week ${p.edit.path.weekNumber}, ${p.edit.path.dayOfWeek})`;
-  await relink(env, row, "training", current.id, { versionId: created.versionId, table: "training_program_versions" }, p.edit.kind === "remove" ? `Removed ${what}` : `Edited ${what}: ${[...new Set(Object.keys(p.edit.patch).map((k) => PATCH_LABEL[k] ?? k))].join(", ")}`);
+  await relink(env, row, "training", current.id, { versionId: created.versionId, table: "training_program_versions" }, summary);
   return getUnifiedReviewById(env, row.id);
 }
 

@@ -9,7 +9,7 @@
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { requireAssignedCoach, resolveGenerationContext } from "@/lib/production/reasoner-lifecycle";
 import { loadSynthesisInputForClient } from "@/lib/production/synthesis";
-import { getActiveProgramAssignment } from "@/lib/production/programs";
+import { getActiveProgramAssignment, getPendingProgramProposal } from "@/lib/production/programs";
 import { FOUNDATION_KNOWLEDGE } from "@/lib/synthesis/knowledge/registry";
 import { createUnifiedDraftForClient } from "@/lib/production/unified-proposals";
 import { planUnifiedPublication, publishUnifiedProposal, type PublicationExpectation, type PublicationPlan } from "@/lib/production/unified-publication";
@@ -20,6 +20,7 @@ import {
   getUnifiedReview,
   recordUnifiedDecision,
   rejectUnifiedProposal,
+  withdrawUnifiedExclusion,
   type NutritionEdit,
   type ReviewEnv,
   type TrainingEdit,
@@ -61,6 +62,11 @@ export async function recordUnifiedDecisionAction(scope: Scope, p: { rowId: stri
   return run(scope, (env) => recordUnifiedDecision(env, p));
 }
 
+/** Withdraws an exclusion decision — the original question opens again for the coach. */
+export async function withdrawUnifiedExclusionAction(scope: Scope, p: { rowId: string; key: string }): Promise<UnifiedReviewResult> {
+  return run(scope, (env) => withdrawUnifiedExclusion(env, p));
+}
+
 export async function editUnifiedTrainingAction(scope: Scope, p: { rowId: string; expectedVersionId: string; edit: TrainingEdit }): Promise<UnifiedReviewResult> {
   return run(scope, (env) => editUnifiedTraining(env, p));
 }
@@ -100,6 +106,8 @@ export async function prepareUnifiedProposalLocalQaAction(scope: Scope, p: { tit
   const local = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/.test(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "");
   if (!process.env.OPTIM_REASONER_TEST_PROVIDER || !local) return { ok: false, message: "Not available." };
   const { routerModel } = await import("@/lib/synthesis/unified/eval/fixtures");
-  const out = await createUnifiedDraftForClient({ workspaceId: scope.workspaceId, clientProfileId: scope.clientProfileId, title: p.title, model: routerModel() });
+  // Like the planned production prepare: the coach's existing pending lifting draft is used unchanged when there is one.
+  const pending = await getPendingProgramProposal(scope.workspaceId, scope.clientProfileId);
+  const out = await createUnifiedDraftForClient({ workspaceId: scope.workspaceId, clientProfileId: scope.clientProfileId, title: p.title, model: routerModel(), existingResistanceDraft: pending ? { versionId: pending.versionId, content: pending.content } : null });
   return { ok: true, message: out.kind === "completed" ? `completed ${out.rowId} → ${out.result.status}` : out.kind };
 }

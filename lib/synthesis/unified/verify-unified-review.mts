@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { runUnifiedProgram, type DomainResults } from "./orchestrate.ts";
 import { fullCoach, routerModel, scenarioInput, NOW } from "./eval/fixtures.ts";
-import { approvalBlockers, decisionKey, reviewDecisions, revalidateDrafts, syncCardioSession, type Revalidation } from "./review.ts";
+import { approvalBlockers, decisionKey, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type Revalidation } from "./review.ts";
 import { buildUnifiedTrainingContent, type UnifiedArtifacts } from "../../production/unified-drafts.ts";
 import { applyNutritionEdit } from "../../production/unified-review.ts";
 import { toAssignedNutritionPlanDraft } from "../reasoner/nutrition/to-plan.ts";
@@ -47,8 +47,8 @@ async function program(over: Record<string, unknown> = {}, goal = "get_stronger"
   return { input, proposal, artifacts, training, nutrition };
 }
 type P = Awaited<ReturnType<typeof program>>;
-const reval = (p: P, current: { training?: UniversalTrainingProgramContent | null; nutrition?: AssignedNutritionPlan | null }, over: { input?: SynthesisInput; resistanceSource?: "approved_program" | "proposed_program"; proposal?: UnifiedProgramProposal } = {}): Revalidation =>
-  revalidateDrafts({ input: over.input ?? p.input, knowledge: FOUNDATION_KNOWLEDGE, proposal: over.proposal ?? p.proposal, resistanceSource: over.resistanceSource ?? "proposed_program", cardio: p.artifacts.cardio, nutrition: p.artifacts.nutrition, original: { training: p.training, nutrition: p.nutrition }, current: { training: current.training === undefined ? p.training : current.training, nutrition: current.nutrition === undefined ? p.nutrition : current.nutrition }, versions: { training: "t", nutrition: "n" } });
+const reval = (p: P, current: { training?: UniversalTrainingProgramContent | null; nutrition?: AssignedNutritionPlan | null }, over: { input?: SynthesisInput; resistanceSource?: "approved_program" | "proposed_program"; proposal?: UnifiedProgramProposal; excluded?: string[] } = {}): Revalidation =>
+  revalidateDrafts({ excluded: over.excluded, input: over.input ?? p.input, knowledge: FOUNDATION_KNOWLEDGE, proposal: over.proposal ?? p.proposal, resistanceSource: over.resistanceSource ?? "proposed_program", cardio: p.artifacts.cardio, nutrition: p.artifacts.nutrition, original: { training: p.training, nutrition: p.nutrition }, current: { training: current.training === undefined ? p.training : current.training, nutrition: current.nutrition === undefined ? p.nutrition : current.nutrition }, versions: { training: "t", nutrition: "n" } });
 const find = (c: UniversalTrainingProgramContent, fam: string) => {
   for (const w of c.weeks) for (const d of w.days) for (const [si, s] of (d.sessions ?? []).entries()) for (const b of s.blocks) for (const i of b.items) if (i.prescription.family === fam) return { path: { weekNumber: w.weekNumber, dayOfWeek: d.dayOfWeek, sessionIndex: si, blockId: b.id, itemId: i.id }, item: i };
   return null;
@@ -194,6 +194,55 @@ await check("13. Gate U3C — a real client's Today has a cardio task only when 
   assert.equal(cardioCountsToday(demo), true);
   const real = { ...demo, clientId: "real-client" as never, assignedUniversalProgram: base.training! };
   assert.equal(cardioCountsToday(real), false);
+});
+
+// --- Exercise exclusions (U3C closure) ----------------------------------------------------------------------------
+const DOC = "no squats, or lower body compounds like leg press, RDLs, or single leg pushing motions. No movements that involve bracing like high effort lat pull downs or tricep push downs. no ab workouts.";
+const docInput = (p: P) => ({ ...p.input, client: { ...p.input.client, health: { ...p.input.client.health, review: { ...p.input.client.health.review, coachDocumentedLimitation: { status: "known", value: DOC, source: "eval" } } } } }) as unknown as SynthesisInput;
+/** The program with two exercises (every instance) renamed to the real client's flagged ones. */
+function withFlagged(c: UniversalTrainingProgramContent): UniversalTrainingProgramContent {
+  const names = [...new Set(c.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.prescription.family === "resistance").map((i) => i.name))))))];
+  const map = new Map([[names[1], "Cable Triceps Pushdown"], [names[2], "Single-Leg Calf Raise"]]);
+  const out = structuredClone(c);
+  for (const w of out.weeks) for (const d of w.days) for (const s of d.sessions ?? []) for (const b of s.blocks) for (const i of b.items) if (map.has(i.name)) i.name = map.get(i.name)!;
+  return out;
+}
+
+await check("14. the documented-limitation decision names Cable Triceps Pushdown and Single-Leg Calf Raise, has no recommendation, and nothing is removed automatically", () => {
+  const t = withFlagged(base.training!);
+  const p2 = { ...base, training: t };
+  const r = reval(p2, { training: t }, { input: docInput(base) });
+  const d = r.decisions.find((x) => x.about === "documented_limitation_exercise_review")!;
+  assert.ok(d && d.recommended === null && d.excludeOption && ["Cable Triceps Pushdown", "Single-Leg Calf Raise"].every((n) => d.exercises!.includes(n)), JSON.stringify(d));
+  assert.ok(Object.keys(exerciseLocations(t, ["Cable Triceps Pushdown", "Single-Leg Calf Raise"])).length === 2, "both still in the program until the coach acts");
+  assert.deepEqual(r.errors, []);
+});
+
+await check("15. 'Exclude' is binding: each excluded exercise still in the draft is an error (blocks approval) and isn't asked about again; 'Keep' leaves them", () => {
+  const t = withFlagged(base.training!);
+  const p2 = { ...base, training: t };
+  const answers = { k: { answer: "Exclude them for this client (exercise decision)", question: "q", decidedBy: "c", decidedAtIso: NOW, excludes: ["Cable Triceps Pushdown", "Single-Leg Calf Raise"] } };
+  const r = reval(p2, { training: t }, { input: docInput(base), excluded: excludedExercises(answers) });
+  assert.ok(["Cable Triceps Pushdown", "Single-Leg Calf Raise"].every((n) => r.errors.some((e) => e.area === "resistance" && e.message.startsWith(`${n} is excluded by your decision but is still in the program`))), JSON.stringify(r.errors));
+  assert.ok(!r.decisions.some((x) => x.about === "documented_limitation_exercise_review" && x.exercises?.some((n) => /Pushdown|Calf/.test(n))), "excluded exercises aren't re-asked");
+  const blockers = approvalBlockers({ approvalState: "proposed", status: "draft_ready", hasDrafts: true, revalidation: r, decisions: [], staleReasons: [], escalations: 0 });
+  assert.ok(blockers.some((b) => /Cable Triceps Pushdown is excluded/.test(b)));
+  const keep = reval(p2, { training: t }, { input: docInput(base), excluded: excludedExercises({ k: { answer: "Keep them as prescribed", question: "q", decidedBy: "c", decidedAtIso: NOW } }) });
+  assert.ok(!keep.errors.some((e) => /excluded by your decision/.test(e.message)), "keeping them is the coach's call");
+});
+
+await check("16. the coach's 'remove from program' removes every instance (all weeks) and the program revalidates clean; it refuses to empty a session", () => {
+  const t = withFlagged(base.training!);
+  const before = exerciseLocations(t, ["Cable Triceps Pushdown"])["Cable Triceps Pushdown"].length;
+  let cleaned = removeExerciseEverywhere(t, "Cable Triceps Pushdown");
+  cleaned = removeExerciseEverywhere(cleaned, "Single-Leg Calf Raise");
+  assert.ok(before > 1 && Object.keys(exerciseLocations(cleaned, ["Cable Triceps Pushdown", "Single-Leg Calf Raise"])).length === 0);
+  const r = reval({ ...base, training: t }, { training: cleaned }, { input: docInput(base), excluded: ["Cable Triceps Pushdown", "Single-Leg Calf Raise"] });
+  assert.ok(!r.errors.some((e) => /excluded by your decision/.test(e.message)), JSON.stringify(r.errors));
+  const one = structuredClone(t);
+  const s0 = one.weeks[0].days.find((d) => d.sessions?.length)!.sessions![0];
+  s0.blocks = [{ ...s0.blocks[0], items: [{ ...s0.blocks[0].items[0], name: "Solo Exercise" }] }];
+  assert.throws(() => removeExerciseEverywhere(one, "Solo Exercise"), /only exercise in .* replace it/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

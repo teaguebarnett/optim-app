@@ -15,10 +15,10 @@ import { sha256 } from "../lib/synthesis/reasoner/run.ts";
 import { beginUnifiedProposal, completeUnifiedProposal, unifiedIdempotencyKey, type UnifiedArtifacts, type UnifiedRow } from "../lib/production/unified-drafts.ts";
 import { insertDraftProgramVersion } from "../lib/production/draft-versions.ts";
 import { validateAssignedNutritionPlanContent } from "../lib/production/validation.ts";
-import { approveUnifiedProposal, getUnifiedReviewById, recordUnifiedDecision, type ReviewEnv } from "../lib/production/unified-review.ts";
+import { approveUnifiedProposal, editUnifiedTraining, getUnifiedReviewById, recordUnifiedDecision, withdrawUnifiedExclusion, type ReviewEnv } from "../lib/production/unified-review.ts";
 import { planUnifiedPublication, publishUnifiedProposal, type PublicationExpectation } from "../lib/production/unified-publication.ts";
 import { universalProgramToTodayProgram } from "../lib/training/legacy-adapter.ts";
-import { fullCoach, routerModel, scenarioInput } from "../lib/synthesis/unified/eval/fixtures.ts";
+import { fullCoach, restrict, routerModel, scenarioInput } from "../lib/synthesis/unified/eval/fixtures.ts";
 import type { GenerationInputs, UniversalTrainingProgramContent } from "../lib/training/types.ts";
 import type { SynthesisInput } from "../lib/synthesis/synthesis-input.ts";
 import type { ConfirmedCoachMethod } from "../lib/coach/coach-brain.ts";
@@ -86,8 +86,8 @@ const withMethod = (input: SynthesisInput, versionId: string): SynthesisInput =>
 const generationInputs = (versionId: string): GenerationInputs => ({ version: 1, recordedAtIso: NOW, coachMethod: { methodVersionId: versionId, playbookVersion: 7, operatingModelVersion: 1, confirmedAtIso: NOW, summary: [] }, clientIntake: { source: "client_onboarding", completedAtIso: NOW, healthReview: "not_required", summary: [], assumptions: [] } });
 
 /** The production sequence: key → begin → (orchestrate only if needed) → complete. */
-async function persist(session: SupabaseClient, uid: string, p: { ws: string; client: string; title: string; input: SynthesisInput; approved?: { versionId: string; content: UniversalTrainingProgramContent }; failBefore?: "nutrition"; methodVersionId: string }) {
-  const src = p.approved ? { resistanceSource: "approved_program", sourceVersionId: p.approved.versionId, sourceContentHash: sha256(p.approved.content) } : { resistanceSource: "proposed_program", sourceVersionId: null, sourceContentHash: null };
+async function persist(session: SupabaseClient, uid: string, p: { ws: string; client: string; title: string; input: SynthesisInput; approved?: { versionId: string; content: UniversalTrainingProgramContent }; existing?: { versionId: string; content: UniversalTrainingProgramContent }; failBefore?: "nutrition"; methodVersionId: string }) {
+  const src = p.approved ? { resistanceSource: "approved_program", sourceVersionId: p.approved.versionId, sourceContentHash: sha256(p.approved.content) } : p.existing ? { resistanceSource: "existing_draft", sourceVersionId: p.existing.versionId, sourceContentHash: sha256(p.existing.content) } : { resistanceSource: "proposed_program", sourceVersionId: null, sourceContentHash: null };
   const key = unifiedIdempotencyKey({ clientStateHash: sha256(p.input.client), goalContractHash: sha256(p.input.goal), coachMethodVersionId: p.methodVersionId, title: p.title, unifiedVersion: "unified-program-u1.0.0", ...src });
   const begun = await beginUnifiedProposal(session, uid, { workspaceId: p.ws, clientProfileId: p.client, title: p.title, idempotencyKey: key, nowMs: Date.now() });
   if (begun.kind === "existing" || begun.kind === "in_progress") return { begun, key, proposal: null, result: null };
@@ -101,10 +101,10 @@ async function persist(session: SupabaseClient, uid: string, p: { ws: string; cl
     rowLinks = begun.row;
   } else {
     let results: DomainResults | null = null;
-    proposal = await runUnifiedProgram({ input: p.input, model: routerModel(), nowIso: NOW, approvedResistance: p.approved ?? null, maxAttempts: 1, onResults: (r) => (results = r) });
+    proposal = await runUnifiedProgram({ input: p.input, model: routerModel(), nowIso: NOW, approvedResistance: p.approved ?? null, existingResistanceDraft: p.existing ?? null, maxAttempts: 1, onResults: (r) => (results = r) });
     const r = results as DomainResults | null;
     artifacts = {
-      resistance: p.approved ? { source: "approved_program", versionId: p.approved.versionId, content: p.approved.content } : r?.resistance?.status === "PLANNED" ? { source: "proposed_program", result: r.resistance, generationInputs: generationInputs(p.methodVersionId) } : { source: "none" },
+      resistance: p.approved ? { source: "approved_program", versionId: p.approved.versionId, content: p.approved.content } : p.existing ? { source: "existing_draft", versionId: p.existing.versionId, content: p.existing.content } : r?.resistance?.status === "PLANNED" ? { source: "proposed_program", result: r.resistance, generationInputs: generationInputs(p.methodVersionId) } : { source: "none" },
       cardio: r?.cardio ?? null,
       nutrition: r?.nutrition ?? null,
     };
@@ -314,6 +314,55 @@ await approve(eC, rC.rowId!);
 const planC = (await planUnifiedPublication(eC, rC.rowId!)).plan;
 check("a lifting + separate-day cardio program is held with a clear reason (Today shows one session per day)", !planC.canPublish && planC.blockers.some((b) => /Today screen can't show this program yet/.test(b)), planC.blockers);
 check("…and publishing is refused, with nothing assigned", /can't be published/.test((await throwsMsg(() => publishUnifiedProposal(eC, { rowId: rC.rowId!, expected: nothing }))) ?? "") && (await activeT(Cc.client)).length === 0);
+
+console.log("\n11. Exclusions are binding: review → exclude → (blocked) → remove → approve → publish; excluded exercises never reach the client\n");
+const X = await newClient("client-x");
+await enroll(X.client, null);
+// The real client's documented limitations (as the coach wrote them) and confirmed structured restrictions.
+const DOC = "no squats, or lower body compounds like leg press, RDLs, or single leg pushing motions. No movements that involve bracing like high effort lat pull downs or tricep push downs. no ab workouts.";
+const review = { clientId: X.client, workspaceId: wsA, status: "proceed_with_limitations", reasons: ["Flagged being advised to limit or avoid exercise."], createdAtIso: NOW, updatedAtIso: NOW, documentedLimitations: DOC } as never;
+const confirmed = restrict([{ kind: "avoid_movement_pattern", pattern: "squat" }, { kind: "avoid_movement_pattern", pattern: "hinge" }, { kind: "avoid_demand", demand: "bracing", atOrAbove: "high" }]).map((r) => ({ ...r, interprets: [`${X.client}:coach_documented_limitation`] }));
+const inX = withMethod(scenarioInput({ clientId: X.client, coach: liftCoach, patch: { what_you_want: { primaryGoal: "build_muscle" }, health_finish: { hasInjuryHistory: false, safetyScreen: ["advised_limit", "joint_muscular"] }, your_week: week }, healthReview: review, restrictions: confirmed }), MV);
+// The coach's existing pending lifting draft (like the real client's v4): a restriction-fitting program in which two
+// exercises (every week) are Cable Triceps Pushdown and Single-Leg Calf Raise.
+const seedRun = await persist(coachA.session, coachA.id, { ws: wsA, client: X.client, title: "Unified X seed", input: inX, methodVersionId: MV });
+const seedT = (await must(admin.from("training_program_versions").select("content").eq("id", (await must(admin.from("unified_program_proposals").select("training_program_version_id").eq("id", seedRun.rowId!).single(), "seed row")).training_program_version_id).single(), "seed t")).content as UniversalTrainingProgramContent;
+const liftNames = [...new Set(seedT.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.prescription.family === "resistance").map((i) => i.name))))))];
+const rename = new Map([[liftNames[1], "Cable Triceps Pushdown"], [liftNames[2], "Single-Leg Calf Raise"]]);
+const coachDraft = structuredClone(seedT);
+delete coachDraft.unifiedProvenance;
+for (const w of coachDraft.weeks) for (const d of w.days) for (const s of d.sessions ?? []) for (const b of s.blocks) for (const i of b.items) if (rename.has(i.name)) i.name = rename.get(i.name)!;
+const pending = await insertDraftProgramVersion(coachA.session, coachA.id, { workspaceId: wsA, title: "Coach pending draft", content: coachDraft, proposedForClientProfileId: X.client });
+const rX = await persist(coachA.session, coachA.id, { ws: wsA, client: X.client, title: "Unified X", input: inX, existing: { versionId: pending.versionId, content: coachDraft }, methodVersionId: MV });
+const eX = env(coachA, X.client, inX);
+const FLAGGED = ["Cable Triceps Pushdown", "Single-Leg Calf Raise"];
+const where = (v: { training: { content: UniversalTrainingProgramContent } | null }) => FLAGGED.filter((n) => v.training!.content.weeks.some((w) => w.days.some((d) => (d.sessions ?? []).some((s) => s.blocks.some((b) => b.items.some((i) => i.name === n))))));
+let vX = await getUnifiedReviewById(eX, rX.rowId!);
+const docDecision = vX.decisions.find((d) => d.about === "documented_limitation_exercise_review");
+check("review: the coach's pending draft is used unchanged and the documented-limitation decision names both exercises, with no recommendation", vX.resistanceSource === "existing_draft" && !!docDecision && FLAGGED.every((n) => docDecision.question.includes(n)) && docDecision.recommended === null && !docDecision.answer, { src: vX.resistanceSource, q: docDecision?.question });
+check("nothing is excluded automatically: both are still in the program and approval waits on the coach's decision", where(vX).length === 2 && vX.blockers.some((b) => /decision/.test(b)));
+for (const d of vX.decisions.filter((x) => !x.answer && x.key !== docDecision!.key)) vX = await recordUnifiedDecision(eX, { rowId: vX.rowId, key: d.key, answer: d.recommended ?? d.options[0] });
+vX = await recordUnifiedDecision(eX, { rowId: vX.rowId, key: docDecision!.key, answer: docDecision!.excludeOption! });
+check("the coach excludes them: recorded as a binding exclusion of exactly those exercises", vX.exclusions.length === 1 && FLAGGED.every((n) => vX.exclusions[0].exercises.some((e) => e.name === n && e.presentIn.length > 0)), vX.exclusions);
+check("still in the program → approval blocked, naming each excluded exercise", FLAGGED.every((n) => vX.blockers.some((b) => b.startsWith(`${n} is excluded by your decision`))), vX.blockers);
+check("…and approving through the app is refused", /can't be approved yet: .*Cable Triceps Pushdown is excluded/.test((await throwsMsg(() => approveUnifiedProposal(eX, { rowId: vX.rowId, expected: { training: vX.training!.versionId, nutrition: vX.nutrition?.versionId ?? null } }))) ?? ""));
+const bypass = await coachA.session.from("unified_program_proposals").update({ approval_state: "approved", reviewed_by: coachA.id, reviewed_at: new Date().toISOString(), approved_training_version_id: vX.training!.versionId, approved_nutrition_version_id: vX.nutrition?.versionId ?? null, approved_content_hashes: { training: "x", nutrition: "x" } }).eq("id", vX.rowId).select("id");
+check("…and a direct database approval (bypassing the app) is refused by the exclusion guard", !!bypass.error && /excluded .*cable triceps pushdown.*still in the program/i.test(bypass.error.message), bypass.error?.message);
+vX = await withdrawUnifiedExclusion(eX, { rowId: vX.rowId, key: docDecision!.key });
+check("withdrawing the exclusion re-opens the original decision (never silently keeps them)", vX.exclusions.length === 0 && vX.decisions.some((d) => d.key === docDecision!.key && !d.answer));
+vX = await recordUnifiedDecision(eX, { rowId: vX.rowId, key: docDecision!.key, answer: docDecision!.excludeOption! });
+const versionBefore = vX.training!.versionId;
+vX = await editUnifiedTraining(eX, { rowId: vX.rowId, expectedVersionId: vX.training!.versionId, edit: { kind: "removeExercise", name: "Cable Triceps Pushdown" } });
+check("the coach removes Cable Triceps Pushdown (every week, one new draft version); the calf raise still blocks", vX.training!.versionId !== versionBefore && where(vX).join() === "Single-Leg Calf Raise" && vX.blockers.some((b) => b.startsWith("Single-Leg Calf Raise is excluded")) && !vX.blockers.some((b) => b.startsWith("Cable Triceps Pushdown")) && /Removed Cable Triceps Pushdown from the program/.test(vX.revisions.at(-1)!.summary), vX.blockers);
+vX = await editUnifiedTraining(eX, { rowId: vX.rowId, expectedVersionId: vX.training!.versionId, edit: { kind: "removeExercise", name: "Single-Leg Calf Raise" } });
+check("both removed → the exclusions read 'removed', the program revalidates clean and is approvable", where(vX).length === 0 && vX.exclusions[0].exercises.every((e) => e.presentIn.length === 0) && vX.blockers.length === 0 && vX.revalidation.errors.length === 0, { blockers: vX.blockers });
+check("the coach's original pending draft is untouched (edits are new versions)", JSON.stringify((await must(admin.from("training_program_versions").select("content").eq("id", pending.versionId).single(), "pending")).content) === JSON.stringify(coachDraft));
+vX = await approveUnifiedProposal(eX, { rowId: vX.rowId, expected: { training: vX.training!.versionId, nutrition: vX.nutrition?.versionId ?? null } });
+const pubX = (await publishUnifiedProposal(eX, { rowId: vX.rowId, expected: nothing })).publication as Record<string, unknown>;
+const clientX = await must(X.session.from("program_assignments").select("training_program_versions(content)").eq("status", "active").single(), "client x");
+const receivedNames = JSON.stringify(clientX.training_program_versions.content);
+check("approved and published; the program the client receives contains neither excluded exercise", vX.approvalState === "approved" && !!pubX.programAssignmentId && FLAGGED.every((n) => !receivedNames.includes(n)));
+check("the coach's legacy pending draft was archived by publication (explicit supersession)", (await must(admin.from("training_program_versions").select("status").eq("id", pending.versionId).single(), "pending after")).status === "archived");
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed) process.exit(1);

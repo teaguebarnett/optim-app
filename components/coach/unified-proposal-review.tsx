@@ -17,6 +17,7 @@ import {
   editUnifiedTrainingAction,
   recordUnifiedDecisionAction,
   rejectUnifiedProposalAction,
+  withdrawUnifiedExclusionAction,
   type UnifiedReviewResult,
 } from "@/app/actions/unified-review";
 import type { UnifiedReviewView } from "@/lib/production/unified-review";
@@ -78,7 +79,13 @@ export function UnifiedProposalReview({ initial, workspaceId, clientProfileId }:
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
-        <DecisionsCard view={view} disabled={!open || pending} onAnswer={(key, answer) => act(() => recordUnifiedDecisionAction(scope, { rowId: view.rowId, key, answer }))} />
+        <DecisionsCard
+          view={view}
+          disabled={!open || pending}
+          onAnswer={(key, answer) => act(() => recordUnifiedDecisionAction(scope, { rowId: view.rowId, key, answer }))}
+          onRemoveExercise={(name) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "removeExercise", name } }))}
+          onWithdraw={(key) => act(() => withdrawUnifiedExclusionAction(scope, { rowId: view.rowId, key }))}
+        />
         <ChecksCard view={view} />
       </div>
 
@@ -236,10 +243,37 @@ function DomainCard({ view, domain }: { view: UnifiedReviewView; domain: DomainI
   );
 }
 
-function DecisionsCard({ view, disabled, onAnswer }: { view: UnifiedReviewView; disabled: boolean; onAnswer: (key: string, answer: string) => void }) {
+function DecisionsCard({ view, disabled, onAnswer, onRemoveExercise, onWithdraw }: { view: UnifiedReviewView; disabled: boolean; onAnswer: (key: string, answer: string) => void; onRemoveExercise: (name: string) => void; onWithdraw: (key: string) => void }) {
   const [changing, setChanging] = useState<string | null>(null);
   return (
     <Card>
+      {view.exclusions.length ? (
+        <div className="mb-3 space-y-2">
+          <p className="text-label text-neutral">Exercises you excluded</p>
+          {view.exclusions.map((x) => (
+            <div key={x.key} className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+              {x.exercises.map((e) => (
+                <div key={e.name} className="flex flex-wrap items-center justify-between gap-2 py-0.5">
+                  <p className="text-meta text-off-white">
+                    {e.name}{" "}
+                    {e.presentIn.length ? <span className="text-warning-strong">— still in the program ({e.presentIn.length} session{e.presentIn.length === 1 ? "" : "s"}); it can&apos;t be approved until it&apos;s removed or replaced</span> : <span className="text-success">— removed from the program</span>}
+                  </p>
+                  {e.presentIn.length && !disabled ? (
+                    <Button size="sm" variant="secondary" onClick={() => onRemoveExercise(e.name)}>
+                      Remove {e.name} from the program
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+              {!disabled ? (
+                <button type="button" className="mt-1 text-xs font-medium text-accent" onClick={() => onWithdraw(x.key)}>
+                  Withdraw this exclusion (re-opens the decision)
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <p className="text-label text-neutral">Your decisions {view.decisions.length ? `(${view.decisions.filter((d) => d.answer).length}/${view.decisions.length})` : ""}</p>
       {view.decisions.length === 0 ? <p className="mt-2 text-meta text-neutral">Nothing needs your decision.</p> : null}
       <ul className="mt-2 space-y-3">

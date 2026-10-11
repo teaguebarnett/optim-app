@@ -13,7 +13,10 @@
 import { execSync } from "node:child_process";
 import { createClient } from "@supabase/supabase-js";
 import { BASE_INTAKE_ANSWERS } from "../lib/synthesis/reasoner/eval/fixtures.ts";
-import { fullCoach } from "../lib/synthesis/unified/eval/fixtures.ts";
+import { fullCoach, routerModel } from "../lib/synthesis/unified/eval/fixtures.ts";
+import { restrict, scenarioInput } from "../lib/synthesis/reasoner/eval/fixtures.ts";
+import { runUnifiedProgram, type DomainResults } from "../lib/synthesis/unified/orchestrate.ts";
+import { buildUnifiedTrainingContent } from "../lib/production/unified-drafts.ts";
 import { resolveRestrictionOption } from "../lib/synthesis/limitations/vocabulary.ts";
 import { FOUNDATION_KNOWLEDGE } from "../lib/synthesis/knowledge/registry.ts";
 
@@ -70,7 +73,9 @@ await must(admin.from("coach_client_assignments").insert({ workspace_id: ws.id, 
 const la = structuredClone(answers);
 la.health_finish = { ...(la.health_finish ?? {}), hasInjuryHistory: false, safetyScreen: ["advised_limit", "joint_muscular"] };
 await must(admin.from("client_onboarding_progress").insert({ workspace_id: ws.id, client_profile_id: lp.id, current_step_index: 6, answers: la, completed_at: nowIso }), "limited onboarding");
-const DOC = "No squats or lower body compounds like leg press; no movements with hard bracing like high effort lat pull downs; no ab work.";
+// The real first client's documented limitations, verbatim in substance (names lat pulldowns, triceps pushdowns and
+// single-leg pushing — the exercises the coach must decide on).
+const DOC = "no squats, or lower body compounds like leg press, RDLs, or single leg pushing motions. No movements that involve bracing like high effort lat pull downs or tricep push downs. no ab workouts.";
 const restrictions = ["avoid_squat", "avoid_hinge", "avoid_bracing_high"].map((optionId) => {
   const o = resolveRestrictionOption(optionId, FOUNDATION_KNOWLEDGE)!;
   return { optionId, label: o.label, tags: o.tags, origin: "proposed" };
@@ -82,5 +87,27 @@ await must(admin.from("escalations").insert({
   structured_limitations_confirmed_by: coach.id, structured_limitations_confirmed_at: nowIso,
 }), "health review");
 
+// The coach's existing PENDING lifting draft for Sam (like the first real client's v4): a restriction-fitting program
+// (OPTIM's scripted planner for Sam's confirmed restrictions) in which two exercises — every week — are Cable Triceps
+// Pushdown and Single-Leg Calf Raise. The unified proposal uses it unchanged; the coach decides on those exercises.
+{
+  const review = { clientId: lp.id, workspaceId: ws.id, status: "proceed_with_limitations", reasons: ["Health screen flagged — coach review."], createdAtIso: nowIso, updatedAtIso: nowIso, documentedLimitations: DOC } as never;
+  const confirmedTags = restrict([{ kind: "avoid_movement_pattern", pattern: "squat" }, { kind: "avoid_movement_pattern", pattern: "hinge" }, { kind: "avoid_demand", demand: "bracing", atOrAbove: "high" }]).map((x) => ({ ...x, interprets: [`${lp.id}:coach_documented_limitation`] }));
+  const inS = scenarioInput({ clientId: lp.id, coach: method, patch: { what_you_want: { primaryGoal: "get_stronger" }, health_finish: la.health_finish, your_week: answers.your_week } as never, healthReview: review, restrictions: confirmedTags });
+  let r: DomainResults | null = null;
+  const u = await runUnifiedProgram({ input: inS, model: routerModel(), nowIso, maxAttempts: 1, onResults: (x) => (r = x) });
+  const rr = r as unknown as DomainResults;
+  if (!rr) throw new Error(`seed: planning stopped early (${u.status}: ${Object.values(u.domains).map((d) => `${d.domain}=${d.status} ${d.reasons.join(" ").slice(0, 160)}`).join(" | ")})`);
+  if (rr.resistance?.status !== "PLANNED") throw new Error(`seed: lifting not planned (${rr.resistance?.status})`);
+  const content = buildUnifiedTrainingContent({ rowId: `seed-${RUN}`, artifacts: { resistance: { source: "proposed_program", result: rr.resistance, generationInputs: {} as never }, cardio: null, nutrition: null }, proposal: { ...u, domains: { ...u.domains, cardio: { ...u.domains.cardio, status: "NOT_COACHED" } } }, knowledge: FOUNDATION_KNOWLEDGE, workspaceId: ws.id, clientProfileId: lp.id, coachId: coach.id, title: "Sam — coach draft", nowIso })!;
+  delete (content as { unifiedProvenance?: unknown }).unifiedProvenance;
+  const lifts = [...new Set(content.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.prescription.family === "resistance").map((i) => i.name))))))];
+  const rename = new Map([[lifts[1], "Cable Triceps Pushdown"], [lifts[2], "Single-Leg Calf Raise"]]);
+  for (const w of content.weeks) for (const d of w.days) for (const s of d.sessions ?? []) for (const b of s.blocks) for (const i of b.items) if (rename.has(i.name)) i.name = rename.get(i.name)!;
+  const tp = await must(admin.from("training_programs").insert({ workspace_id: ws.id, created_by: coach.id, title: "Sam — coach draft" }).select("id").single(), "sam program");
+  await must(admin.from("training_program_versions").insert({ program_id: tp.id, workspace_id: ws.id, version_number: 1, status: "draft", content, created_by: coach.id, proposed_for_client_profile_id: lp.id }), "sam pending draft");
+  console.log(`limited pending draft: ${content.weeks.length} weeks, renamed ${[...rename.keys()].join(" / ")} → Cable Triceps Pushdown / Single-Leg Calf Raise`);
+}
+await must(admin.from("client_enrollments").insert({ workspace_id: ws.id, client_profile_id: lp.id, status: "invited", timezone: "UTC" }), "limited enrollment");
 console.log(`client email ${client.email}`);
 console.log(`coach   ${coach.email}\nclient  ${cp.id}  (workspace ${ws.id})\nlimited ${lp.id}`);
