@@ -22,6 +22,8 @@ import {
   attentionItemFromDemoQueueItem,
   attentionItemFromAdjustmentProposal,
   mergeAttentionItems,
+  healthDecisionOutstanding,
+  splitResolvedForHealthReview,
   ADJUSTMENT_PROPOSAL_PRIORITY,
   type AttentionItem,
   type EscalationLike,
@@ -260,6 +262,34 @@ check("M: ordering among multiple escalations is preserved when an adjustment pr
 check("H: merging the SAME adjustment item twice (simulating a re-run of discovery) never silently drops or duplicates beyond what was actually passed in — the caller's own query is the single source of truth for real duplicates, this function only ever sorts", () => {
   const merged = mergeAttentionItems([], [attentionItemFromAdjustmentProposal(makeAdjustment())]);
   assert.equal(merged.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+console.log("\nHealth reviews cleared from the queue without a decision stay reachable\n");
+
+check("a queue-resolved pain/safety report with NO decision is still awaiting the coach's health-review decision (resolving is not clearance)", () => {
+  const item = attentionItemFromEscalation(makeEscalation({ status: "resolved", healthReviewStatus: null }));
+  assert.equal(healthDecisionOutstanding(item), true);
+  const split = splitResolvedForHealthReview([item]);
+  assert.deepEqual([split.awaitingDecision.length, split.resolved.length], [1, 0]);
+});
+
+check("a pending decision (discuss with client / professional guidance / review needed) is still outstanding", () => {
+  for (const status of ["review_needed", "discuss_with_client", "professional_guidance_requested"] as const) assert.equal(healthDecisionOutstanding(attentionItemFromEscalation(makeEscalation({ status: "resolved", healthReviewStatus: status }))), true, status);
+});
+
+check("a real resolved decision (proceed with limitations / reviewed) is no longer outstanding and stays in the resolved history", () => {
+  for (const status of ["proceed_with_limitations", "reviewed_by_coach"] as const) {
+    const item = attentionItemFromEscalation(makeEscalation({ status: "resolved", healthReviewStatus: status, documentedLimitations: status === "proceed_with_limitations" ? "No bracing" : null }));
+    assert.equal(healthDecisionOutstanding(item), false, status);
+    assert.equal(splitResolvedForHealthReview([item]).resolved.length, 1);
+  }
+});
+
+check("non-safety escalations are never treated as health reviews", () => {
+  const item = attentionItemFromEscalation(makeEscalation({ reasonCategory: "plan_change", status: "resolved", healthReviewStatus: null }));
+  assert.equal(healthDecisionOutstanding(item), false);
+  assert.deepEqual(splitResolvedForHealthReview([item]).awaitingDecision, []);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

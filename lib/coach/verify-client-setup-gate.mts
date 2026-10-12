@@ -121,10 +121,10 @@ check("intake in progress blocks", () => {
   assert.match(!r.ready ? r.missing[0].message : "", /hasn't finished intake/);
 });
 check("the reported scenario (defaults + Invited) reports BOTH problems", () => assert.deepEqual(ids(evaluate({ model: defaultModel(), onboarding: null })), ["coach_method", "client_intake"]));
-check("an open health review blocks, linking to reviews", () => {
+check("an open health review blocks, linking straight to the health-review decisions", () => {
   const r = evaluate({ health: review("review_needed") });
   assert.deepEqual(ids(r), ["health_review"]);
-  assert.equal(!r.ready && r.missing[0].href, "/coach/escalations");
+  assert.equal(!r.ready && r.missing[0].href, "/coach/escalations#health-reviews");
 });
 check("a resolved health review does not block", () => assert.equal(evaluate({ health: review("reviewed_by_coach") }).ready, true));
 

@@ -108,7 +108,7 @@ export function evaluateGenerationPrerequisites(input: GenerationPrerequisiteInp
       missing.push({
         id: "health_review",
         message: readiness.reviewReason ?? "A health review for this client is still open. Resolve it before generating a program.",
-        href: "/coach/escalations",
+        href: "/coach/escalations#health-reviews",
         linkLabel: "Open health reviews",
       });
     }

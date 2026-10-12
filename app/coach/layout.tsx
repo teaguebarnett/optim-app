@@ -51,7 +51,7 @@ export default async function CoachLayout({ children }: { children: ReactNode })
   let accessError: unknown = null;
   try {
     const inbox = await getAttentionInboxForRequest();
-    identity = { coachDisplayName: inbox.coachDisplayName, openAttentionCount: inbox.open.length, coachUserId: inbox.coachUserId };
+    identity = { coachDisplayName: inbox.coachDisplayName, openAttentionCount: inbox.open.length + inbox.healthReviewsAwaitingDecision.length, coachUserId: inbox.coachUserId };
     // Gate 3 — the coach's own Coach Brain must be confirmed before the
     // workspace opens. Fails closed: if the Brain can't be read, this throws
     // and the coach sees an error, never an unlocked workspace.

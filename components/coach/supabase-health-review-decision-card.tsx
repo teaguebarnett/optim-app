@@ -11,7 +11,7 @@
 // component's only job is adapting HealthReviewDecisionCard's synchronous
 // onResolve callback into a call to that action.
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { HealthReviewDecisionCard } from "./health-review-decision-card";
 import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
@@ -32,19 +32,34 @@ export function SupabaseHealthReviewDecisionCard({
   onResolve: (status: HealthReviewStatus, documentedLimitations?: string) => Promise<void>;
   variant?: "card" | "inline";
 }) {
-  const [, startTransition] = useTransition();
+  const [pending, startTransition] = useTransition();
+  // A failed save must never look like a recorded decision: the review stays open and the coach is told.
+  const [error, setError] = useState<string | null>(null);
 
   return (
-    <HealthReviewDecisionCard
-      clientFirstName={clientFirstName}
-      healthReview={healthReview}
-      clientReportedDetail={clientReportedDetail}
-      variant={variant}
-      onResolve={(status, documentedLimitations) => {
-        startTransition(() => {
-          void onResolve(status, documentedLimitations);
-        });
-      }}
-    />
+    <div className="space-y-2">
+      <HealthReviewDecisionCard
+        clientFirstName={clientFirstName}
+        healthReview={healthReview}
+        clientReportedDetail={clientReportedDetail}
+        variant={variant}
+        onResolve={(status, documentedLimitations) => {
+          setError(null);
+          startTransition(async () => {
+            try {
+              await onResolve(status, documentedLimitations);
+            } catch {
+              setError("Your decision wasn't saved — the health review is still open. Try again.");
+            }
+          });
+        }}
+      />
+      {pending ? <p className="text-meta text-neutral">Saving your decision…</p> : null}
+      {error ? (
+        <p role="alert" className="text-meta text-warning-strong">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }

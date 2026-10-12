@@ -12,6 +12,7 @@
 
 import { extractClientSnapshot, type ClientOnboardingSnapshot } from "./activation-generation.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES } from "./types.ts";
+import { describeInjuryBodyAreas } from "./health-review.ts";
 import type { HealthReviewRecord, OnboardingProgress, OnboardingStepAnswers } from "./types";
 
 export type DailyActivityLevel = "mostly_sedentary" | "lightly_active" | "very_active";
@@ -46,6 +47,8 @@ export interface ClientProgrammingProfile extends ClientOnboardingSnapshot {
   // -- Health / movement restrictions (health_finish) ----------------------
   hasCurrentInjury: boolean;
   injuryBodyAreas: string[];
+  /** The areas in the client's own words ("Core/abs (epigastric hernia)" rather than "other"), for coach-facing copy. */
+  injuryAreasSummary?: string;
   /** The client's own reported restriction detail, plus (appended, when
    * present) the coach's own documented limitation recorded while
    * resolving a health review with "Proceed with documented limitations" —
@@ -138,6 +141,7 @@ export function extractClientProgrammingProfile(onboarding: OnboardingProgress |
     cardioPreferenceIsAssumed,
     hasCurrentInjury,
     injuryBodyAreas,
+    injuryAreasSummary: describeInjuryBodyAreas(health as OnboardingStepAnswers) || undefined,
     injuryRestrictions,
     requiresHealthReview: !!healthReview,
     healthReviewResolved: healthReview ? RESOLVED_HEALTH_REVIEW_STATUSES.has(healthReview.status) : "no_review_needed",
@@ -187,7 +191,7 @@ export function resolveProgrammingProfileReadiness(result: ExtractProfileResult)
   if (profile.hasCurrentInjury && profile.healthReviewResolved === false) {
     return {
       status: "needs_coach_review",
-      reviewReason: `${profile.injuryBodyAreas.join(", ") || "A reported limitation"} needs your review before OPTIM generates a program.`,
+      reviewReason: `The reported injury (${profile.injuryAreasSummary || profile.injuryBodyAreas.join(", ") || "a reported limitation"}) needs your health-review decision before OPTIM generates a program.`,
       assumptions: [],
     };
   }

@@ -16,6 +16,7 @@ import { CheckCircle2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { SectionHeader } from "@/components/coach/section-header";
 import { EscalationCard, type EscalationHealthReview } from "@/components/coach/escalation-card";
+import { SupabaseHealthReviewDecisionCard } from "@/components/coach/supabase-health-review-decision-card";
 import { resolveAppMode } from "@/lib/production/mode";
 import { getCoachOperationsRepository } from "@/lib/production/coach-operations";
 import { getOnboardingProgressForClient } from "@/lib/production/onboarding";
@@ -73,6 +74,9 @@ export default async function CoachEscalationsPage() {
     return { clientFirstName: item.clientDisplayName.split(" ")[0], record, clientReportedDetail, onResolve };
   }
   const healthReviews = await Promise.all(inbox.open.map(async (item) => ({ id: item.id, healthReview: await healthReviewFor(item) })));
+  // Pain/safety reports cleared from the queue with no decision recorded: the review is still open and still blocks
+  // planning, so its decision controls stay here (resolving a chat escalation is never medical clearance).
+  const awaitingDecision = await Promise.all(inbox.healthReviewsAwaitingDecision.map(async (item) => ({ item, healthReview: await healthReviewFor(item) })));
   const healthReviewForId = (id: string) => healthReviews.find((h) => h.id === id)?.healthReview;
 
   // Phase 7A — see app/coach/page.tsx's identical actionsFor for why these
@@ -131,12 +135,39 @@ export default async function CoachEscalationsPage() {
         </p>
       </div>
 
+      {awaitingDecision.length > 0 && (
+        <section id="health-reviews" className="scroll-mt-24 space-y-4">
+          <SectionHeader title="Health reviews awaiting your decision" />
+          <p className="text-body text-neutral">
+            These reports were cleared from your queue, but no health-review decision was recorded. Clearing a report isn&apos;t a health decision, so
+            planning for these clients stays paused until you decide below.
+          </p>
+          {awaitingDecision.map(({ item, healthReview }) =>
+            healthReview ? (
+              <div key={item.id} className="space-y-2">
+                <p className="text-label text-neutral">
+                  {item.clientDisplayName} · reported {new Date(item.createdAtIso).toLocaleDateString()}
+                </p>
+                <SupabaseHealthReviewDecisionCard
+                  clientFirstName={healthReview.clientFirstName}
+                  healthReview={healthReview.record}
+                  clientReportedDetail={healthReview.clientReportedDetail}
+                  onResolve={healthReview.onResolve}
+                />
+              </div>
+            ) : null
+          )}
+        </section>
+      )}
+
       <section className="space-y-4">
         <SectionHeader title="Open" />
         {inbox.open.length === 0 ? (
           <Card className="flex items-center gap-2.5 py-4">
             <CheckCircle2 size={16} className="shrink-0 text-success" aria-hidden="true" />
-            <p className="text-body text-neutral">Nothing waiting on you — OPTIM is handling the routine conversation.</p>
+            <p className="text-body text-neutral">
+              {awaitingDecision.length > 0 ? "No open escalations — only the health reviews above need you." : "Nothing waiting on you — OPTIM is handling the routine conversation."}
+            </p>
           </Card>
         ) : (
           <div className="space-y-4">

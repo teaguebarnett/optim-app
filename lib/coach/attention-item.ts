@@ -12,7 +12,7 @@
 // imports and uses these, never redefines them.
 
 import { coachThreadLifecycle, type EscalationReason, type EscalationStatus } from "../communications/types.ts";
-import type { AttentionQueueItem, AttentionItemKind, HealthReviewStatus } from "./types.ts";
+import { RESOLVED_HEALTH_REVIEW_STATUSES, type AttentionQueueItem, type AttentionItemKind, type HealthReviewStatus } from "./types.ts";
 
 /** A minimal structural shape covering exactly the EscalationView fields
  * (see lib/production/chat.ts) this mapping needs — kept as a local
@@ -116,6 +116,20 @@ export interface CoachAttentionInbox {
   coachUserId: string;
   open: AttentionItem[];
   resolved: AttentionItem[];
+  /** Pain/safety reports cleared from the queue with no health-review decision recorded. Clearing a chat escalation is
+   * never medical clearance, so these still block planning and must stay reachable for the coach's decision. */
+  healthReviewsAwaitingDecision: AttentionItem[];
+}
+
+/** A pain/safety item whose health-review decision is still outstanding (none recorded, or a pending state such as
+ * "discuss with client"). Independent of the queue status: resolving the escalation never decides the review. */
+export function healthDecisionOutstanding(item: Pick<AttentionItem, "escalationReason" | "healthReviewStatus">): boolean {
+  return item.escalationReason === "pain_or_safety" && !(item.healthReviewStatus && RESOLVED_HEALTH_REVIEW_STATUSES.has(item.healthReviewStatus));
+}
+
+/** Splits queue-resolved items into those still awaiting the coach's health-review decision and the rest. */
+export function splitResolvedForHealthReview(resolved: AttentionItem[]): { awaitingDecision: AttentionItem[]; resolved: AttentionItem[] } {
+  return { awaitingDecision: resolved.filter(healthDecisionOutstanding), resolved: resolved.filter((item) => !healthDecisionOutstanding(item)) };
 }
 
 /** Phase 10C — the one shared merge/sort behind the "open" queue: reuses

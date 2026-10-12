@@ -119,6 +119,15 @@ check("needs_coach_review wins over ready_with_assumptions when a real health fl
   assert.ok(readiness.reviewReason?.includes("shoulder"));
 });
 
+check("the review reason names an 'other' injury in the client's own words, never the raw 'other' value", () => {
+  const onboarding = completedOnboarding({ health_finish: { hasInjuryHistory: true, injuryBodyAreas: ["other"], injuryBodyAreaOther: "Core/abs (epigastric hernia)" } });
+  const healthReview: HealthReviewRecord = { clientId: CLIENT_PROFILE_DEMO.id, workspaceId: WORKSPACE_OPTIM_ID, status: "review_needed", reasons: ["Onboarding injury report."], createdAtIso: "2026-01-01T00:00:00.000Z", updatedAtIso: "2026-01-01T00:00:00.000Z" };
+  const readiness = resolveProgrammingProfileReadiness(extractClientProgrammingProfile(onboarding, healthReview));
+  assert.equal(readiness.status, "needs_coach_review");
+  assert.ok(readiness.reviewReason?.includes("Core/abs (epigastric hernia)"), readiness.reviewReason);
+  assert.ok(!/^other\b/i.test(readiness.reviewReason ?? ""));
+});
+
 check("a resolved health review never blocks readiness", () => {
   const onboarding = completedOnboarding({
     health_finish: { hasInjuryHistory: true, injuryBodyAreas: ["shoulder"] },

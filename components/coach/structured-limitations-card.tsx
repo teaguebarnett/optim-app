@@ -7,6 +7,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SelectMenu } from "@/components/ui/select-menu";
@@ -111,7 +112,13 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
       </div>
 
       {state.status === "review_open" ? (
-        <p className="text-sm text-neutral">A health review is still open. Decide it from Escalations first; planning waits for that decision.</p>
+        <p className="text-sm text-neutral">
+          A health review is still open. Record your decision in{" "}
+          <Link href="/coach/escalations#health-reviews" className="text-accent underline-offset-2 hover:underline">
+            Escalations
+          </Link>{" "}
+          first; planning waits for that decision.
+        </p>
       ) : (
         <blockquote className="rounded-[var(--radius-sm)] border-l-2 border-accent bg-surface-raised px-3 py-2 text-sm text-off-white">
           <span className="mb-1 block text-label text-neutral">Your documented limitation</span>

@@ -21,6 +21,7 @@ import { SupabaseHealthReviewDecisionCard } from "@/components/coach/supabase-he
 import type { AttentionItem } from "@/lib/production/coach-operations";
 import type { ConversationMessageView } from "@/lib/production/chat";
 import { coachThreadLifecycle } from "@/lib/communications/types";
+import { healthDecisionOutstanding } from "@/lib/coach/attention-item";
 import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
 export interface EscalationCardActions {
@@ -144,6 +145,10 @@ export function EscalationCard({
             </Button>
           </form>
         )}
+
+        {healthReview && healthDecisionOutstanding(item) && (actions.resolveThread || actions.resolveSilently) ? (
+          <p className="text-meta text-neutral">Resolving only clears this from your queue — it doesn&apos;t record your health-review decision above, and planning stays paused until you do.</p>
+        ) : null}
 
         {lifecycle === "open"
           ? actions.resolveThread && (

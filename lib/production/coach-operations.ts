@@ -54,7 +54,7 @@ import { buildReviewQueueItems } from "../coach/attention-queue.ts";
 import { ALL_CLIENT_PROFILES, ALL_SAMPLE_REVIEW_REQUESTS } from "../tenancy/seed.ts";
 import { getDemoCoachSession } from "../tenancy/session.ts";
 import { resolveActiveContext } from "../tenancy/context.ts";
-import { attentionItemFromEscalation, attentionItemFromDemoQueueItem, attentionItemFromAdjustmentProposal, mergeAttentionItems, type CoachAttentionInbox } from "../coach/attention-item.ts";
+import { attentionItemFromEscalation, attentionItemFromDemoQueueItem, attentionItemFromAdjustmentProposal, mergeAttentionItems, splitResolvedForHealthReview, type CoachAttentionInbox } from "../coach/attention-item.ts";
 
 export type { AttentionItem, AttentionItemStatus, CoachAttentionInbox } from "../coach/attention-item.ts";
 
@@ -84,6 +84,7 @@ class DemoCoachOperationsRepository implements CoachOperationsRepository {
       coachUserId: coachId,
       open: mapped.filter((item) => item.status !== "resolved"),
       resolved: mapped.filter((item) => item.status === "resolved"),
+      healthReviewsAwaitingDecision: [],
     };
   }
 }
@@ -107,12 +108,16 @@ class SupabaseCoachOperationsRepository implements CoachOperationsRepository {
       getPendingAdjustmentAttentionItems(workspaceId),
     ]);
     const openItems = mergeAttentionItems(open.map(attentionItemFromEscalation), pendingAdjustments.map(attentionItemFromAdjustmentProposal));
+    // A pain/safety report cleared from the queue without a health-review decision still blocks planning — keep it
+    // in front of the coach instead of burying it in the resolved history.
+    const split = splitResolvedForHealthReview(resolved.map(attentionItemFromEscalation));
     return {
       workspaceId,
       coachDisplayName,
       coachUserId,
       open: openItems,
-      resolved: resolved.map(attentionItemFromEscalation),
+      resolved: split.resolved,
+      healthReviewsAwaitingDecision: split.awaitingDecision,
     };
   }
 }
