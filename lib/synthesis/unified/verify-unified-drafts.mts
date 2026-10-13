@@ -15,6 +15,10 @@ import { describeIntervalPhaseTarget } from "../../workout/interval.ts";
 import { FOUNDATION_KNOWLEDGE } from "../knowledge/registry.ts";
 import type { Session } from "../../training/types.ts";
 import type { UnifiedProgramProposal } from "./contract.ts";
+import { runUnifiedProgram, type DomainResults } from "./orchestrate.ts";
+import { fullCoach, routerModel, scenarioInput as unifiedScenario } from "./eval/fixtures.ts";
+import { toAssignedNutritionPlanDraft } from "../reasoner/nutrition/to-plan.ts";
+import { validateAssignedNutritionPlanContent } from "../../production/validation.ts";
 
 let passed = 0;
 let failed = 0;
@@ -155,6 +159,33 @@ await check("8. content from every lifting source: approved/pending copied uncha
   validateUniversalTrainingProgramContent(cardioOnly);
   assert.equal(mk({ source: "none" }, null), null, "no lifting and no cardio → no training draft");
   void cardioOnlyProgram;
+});
+
+await check("8. nutrition drafts prescribe only what the coach's approach prescribes (the real failure: a calories-and-protein plan carrying carb/fat guidance grams)", async () => {
+  const draftFor = async (approach: string[], asCaloriesProtein = false) => {
+    const input = unifiedScenario({ clientId: "c", coach: fullCoach({ n_approach: approach, t_cardio_roles: ["fat_loss"] }), patch: { what_you_want: { primaryGoal: "build_muscle" } } });
+    let results: DomainResults | null = null;
+    await runUnifiedProgram({ input, model: routerModel(), nowIso: NOW, maxAttempts: 2, onResults: (r) => (results = r) });
+    const n = (results as DomainResults | null)?.nutrition;
+    assert.ok(n && n.status === "PLANNED", `nutrition ${n?.status}`);
+    const plan = structuredClone((n as { plan: Parameters<typeof toAssignedNutritionPlanDraft>[0] }).plan);
+    // The real failure: a calories-and-protein strategy that also carries carb and fat guidance grams.
+    if (asCaloriesProtein) plan.approach = { ...plan.approach, id: "calories_protein" } as typeof plan.approach;
+    const mapped = toAssignedNutritionPlanDraft(plan);
+    assert.ok(mapped.ok);
+    const content = { id: "nutrition-unified-x", ...(mapped as { content: object }).content, approvedAtIso: "" } as never;
+    validateAssignedNutritionPlanContent(content);
+    return { plan: plan as unknown as { carbohydrate: { grams: unknown } }, content: content as { method: { prescribed: Record<string, number | null>; ranges: Record<string, unknown> }; targets: unknown } };
+  };
+  const cp = await draftFor(["full_macros"], true);
+  assert.ok(cp.plan.carbohydrate.grams, "the strategy reasons about carbs (guidance)…");
+  assert.deepEqual([cp.content.method.prescribed.carbsG, cp.content.method.prescribed.fatG, cp.content.targets], [null, null, null], "…but a calories-and-protein draft prescribes no carb/fat targets");
+  assert.ok(cp.content.method.prescribed.calories && cp.content.method.prescribed.proteinG);
+  assert.equal(cp.content.method.ranges.carbsG, null);
+  const fm = await draftFor(["full_macros"]);
+  assert.ok(["calories", "proteinG", "carbsG", "fatG"].every((k) => typeof fm.content.method.prescribed[k] === "number") && fm.content.targets, "full macros prescribe all four");
+  const hb = await draftFor(["habit_based"]);
+  assert.ok(Object.values(hb.content.method.prescribed).every((v) => v === null), "a habit-based plan prescribes no numbers");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

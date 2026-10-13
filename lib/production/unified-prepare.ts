@@ -70,9 +70,11 @@ export async function prepareUnifiedProposalForClient(p: { workspaceId: string; 
   });
   const modelCalls = bounded.calls();
   console.log(`prepareUnifiedProposal: ${out.kind}; lifting ${decision.lifting.source}; model calls ${modelCalls}/${PREPARE_POLICY.maxModelCalls}`);
+  // The reason a prepared proposal's drafts didn't save (no client data — validator / database messages only).
+  if (out.kind === "completed" && out.result.status === "failed") console.error(`prepareUnifiedProposal: drafts not saved for row ${out.rowId}: ${out.result.error ?? "unknown"}`);
   switch (out.kind) {
     case "completed":
-      return { ok: true, kind: "completed", rowId: out.rowId, status: out.result.status, modelCalls, message: out.result.status === "failed" ? "OPTIM prepared the proposal but couldn't save its drafts — try again." : "Proposal prepared — review it below." };
+      return { ok: true, kind: "completed", rowId: out.rowId, status: out.result.status, modelCalls, message: out.result.status === "failed" ? "OPTIM prepared the proposal but couldn't save its drafts. Trying again reuses this prepared proposal — no new AI generation." : "Proposal prepared — review it below." };
     case "existing":
       return { ok: true, kind: "existing", rowId: out.row.id, status: out.row.status, modelCalls, message: "This proposal was already prepared — nothing new was generated." };
     case "in_progress":

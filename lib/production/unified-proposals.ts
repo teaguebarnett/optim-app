@@ -50,7 +50,11 @@ export async function createUnifiedDraftForClient(params: {
   const source = params.approvedResistance ?? params.existingResistanceDraft ?? null;
   const resistanceSource = params.approvedResistance ? "approved_program" : params.existingResistanceDraft ? "existing_draft" : "proposed_program";
   const key = unifiedIdempotencyKey({ clientStateHash: sha256(input.client), goalContractHash: sha256(input.goal), coachMethodVersionId: method.versionId, resistanceSource, sourceVersionId: source?.versionId ?? null, sourceContentHash: source ? sha256(source.content) : null, title: params.title, unifiedVersion: UNIFIED_VERSION, ...(params.idempotencyRound ? { round: params.idempotencyRound } : {}) });
-  const begun = await beginUnifiedProposal(supabase, ctx.userId, { workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, title: params.title, idempotencyKey: key, nowMs: Date.now() });
+  // A paid proposal whose drafts failed to save is recovered, never regenerated: when the computed key has no row,
+  // resume the client's latest failed proposal made under exactly these inputs (its stored proposal and domain runs are
+  // reused — no model call), even if the idempotency round has moved on since (e.g. another proposal was rejected).
+  const resumeKey = await recoverableFailedKey(supabase, { workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, key, clientStateHash: sha256(input.client), goalContractHash: sha256(input.goal), coachMethodVersionId: method.versionId, resistanceSource, sourceVersionId: source?.versionId ?? null });
+  const begun = await beginUnifiedProposal(supabase, ctx.userId, { workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, title: params.title, idempotencyKey: resumeKey ?? key, nowMs: Date.now() });
   if (begun.kind === "existing") return { kind: "existing", row: begun.row };
   if (begun.kind === "in_progress") return { kind: "in_progress" };
   const rowId = begun.kind === "started" ? begun.rowId : begun.row.id;
@@ -90,4 +94,27 @@ export async function createUnifiedDraftForClient(params: {
   const links = begun.kind === "resume" ? { training_program_version_id: begun.row.training_program_version_id, nutrition_plan_version_id: begun.row.nutrition_plan_version_id } : {};
   const result = await completeUnifiedProposal(supabase, ctx.userId, { row: { id: rowId, ...links }, workspaceId: params.workspaceId, clientProfileId: params.clientProfileId, coachId: ctx.userId, title: params.title, nowIso, proposal, artifacts, knowledge: FOUNDATION_KNOWLEDGE });
   return { kind: "completed", rowId, proposal, result };
+}
+
+/** The idempotency key of the client's latest failed-to-save proposal made under exactly the current inputs (same
+ * client state, goal, coach method and lifting source), when the current key has no row of its own. */
+async function recoverableFailedKey(supabase: Awaited<ReturnType<typeof getSupabaseServerClient>>, p: { workspaceId: string; clientProfileId: string; key: string; clientStateHash: string; goalContractHash: string; coachMethodVersionId: string; resistanceSource: string; sourceVersionId: string | null }): Promise<string | null> {
+  const { data: same } = await supabase.from("unified_program_proposals").select("id").eq("workspace_id", p.workspaceId).eq("client_profile_id", p.clientProfileId).eq("idempotency_key", p.key).maybeSingle();
+  if (same) return null;
+  let q = supabase
+    .from("unified_program_proposals")
+    .select("idempotency_key, proposal")
+    .eq("workspace_id", p.workspaceId)
+    .eq("client_profile_id", p.clientProfileId)
+    .eq("status", "failed")
+    .in("failure_category", ["content_invalid", "draft_not_saved"])
+    .eq("approval_state", "proposed")
+    .eq("client_state_hash", p.clientStateHash)
+    .eq("goal_contract_hash", p.goalContractHash)
+    .eq("coach_method_version_id", p.coachMethodVersionId)
+    .eq("resistance_source", p.resistanceSource);
+  q = p.sourceVersionId ? q.eq("source_resistance_version_id", p.sourceVersionId) : q.is("source_resistance_version_id", null);
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (error || !data || !(data.proposal as { schema?: unknown } | null)?.schema) return null;
+  return data.idempotency_key as string;
 }

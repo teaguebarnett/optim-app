@@ -9,7 +9,7 @@
 // Fields the legacy contract stores as numbers but the strategy expresses in words (hydration, fiber) stay 0 = "not
 // set", the convention production already uses (createPublishAndAssignNutritionAction).
 
-import type { AssignedNutritionPlan, NutritionPlanMethod, PrescribedNutritionTargets } from "../../../types.ts";
+import { NUMERIC_NUTRITION_APPROACHES, type AssignedNutritionPlan, type NutritionPlanApproach, type NutritionPlanMethod, type PrescribedNutritionTargets } from "../../../types.ts";
 import { food } from "../../knowledge/nutrition/foods.ts";
 import { adjustmentSummary } from "./validate.ts";
 import type { Grams, NutritionPlan } from "./contract.ts";
@@ -23,8 +23,14 @@ export type DraftNutritionContent = Omit<AssignedNutritionPlan, "id" | "approved
 export function toAssignedNutritionPlanDraft(plan: NutritionPlan): { ok: true; content: DraftNutritionContent } | { ok: false; reason: string } {
   const name = (id: string) => food(id)?.name ?? id;
   const target = plan.energy.mode === "target";
-  // Calories only in "target" mode; grams exactly as the strategy prescribes them (null = not prescribed).
-  const prescribed: PrescribedNutritionTargets = { calories: target ? midOr(plan.energy.kcal) : null, proteinG: midOr(plan.protein.grams), carbsG: midOr(plan.carbohydrate.grams), fatG: midOr(plan.fat.grams) };
+  // Only what the coach's approach prescribes (the persisted nutrition-plan contract, Gate U3A): a
+  // non-numeric approach prescribes no numbers; calories-and-protein prescribes calories (in "target" mode) and
+  // protein — carb and fat grams the strategy reasons about stay guidance, never targets; full macros / meal plan
+  // prescribe what the strategy gives.
+  const approach = plan.approach.id as NutritionPlanApproach;
+  const numeric = NUMERIC_NUTRITION_APPROACHES.has(approach);
+  const carbFat = numeric && approach !== "calories_protein";
+  const prescribed: PrescribedNutritionTargets = { calories: numeric && target ? midOr(plan.energy.kcal) : null, proteinG: numeric ? midOr(plan.protein.grams) : null, carbsG: carbFat ? midOr(plan.carbohydrate.grams) : null, fatG: carbFat ? midOr(plan.fat.grams) : null };
   const all = prescribed.calories !== null && prescribed.proteinG !== null && prescribed.carbsG !== null && prescribed.fatG !== null;
   const dv = plan.dayVariation;
   const split = target && !!dv && dv.strategy !== "identical_every_day" && !!dv.trainingDayKcal && !!dv.restDayKcal;
@@ -36,7 +42,7 @@ export function toAssignedNutritionPlanDraft(plan: NutritionPlan): { ok: true; c
     prescribed,
     trainingDay: split ? day(dv!.trainingDayKcal) : null,
     restDay: split ? day(dv!.restDayKcal) : null,
-    ranges: { calories: target ? range(plan.energy.kcal) : null, proteinG: range(plan.protein.grams), carbsG: range(plan.carbohydrate.grams), fatG: range(plan.fat.grams) },
+    ranges: { calories: numeric && target ? range(plan.energy.kcal) : null, proteinG: numeric ? range(plan.protein.grams) : null, carbsG: carbFat ? range(plan.carbohydrate.grams) : null, fatG: carbFat ? range(plan.fat.grams) : null },
     baseline: plan.energy.mode === "baseline_first" ? { instruction: plan.energy.rationale } : null,
     habits: plan.habits,
     meals: plan.meals.slots.map((s) => ({ name: s.name, timing: s.timing, intent: s.intent, foods: s.foods.map(name) })),

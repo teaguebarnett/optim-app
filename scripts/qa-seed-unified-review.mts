@@ -5,7 +5,7 @@
 // models were built for. Prepare the proposal from the running dev server (OPTIM_REASONER_TEST_PROVIDER set, local
 // Supabase) with prepareUnifiedProposalLocalQaAction; sign in as the coach with a local magic link.
 //
-//   node --experimental-strip-types scripts/qa-seed-unified-review.mts [--lift-only]
+//   node --experimental-strip-types scripts/qa-seed-unified-review.mts [--lift-only] [--calories-protein]
 //
 // --lift-only: the coach's cardio is for fat loss only (like the first real client's coach), so a muscle-building /
 // strength client's unified program is lifting + nutrition — publishable to Today (Gate U3C).
@@ -48,7 +48,8 @@ async function user(tag: string, name: string) {
 const coach = await user("coach", "QA Coach");
 const ws = await must(admin.from("workspaces").insert({ owner_user_id: coach.id, display_name: `U3B QA ${RUN}`, business_name: "U3B QA" }).select("id").single(), "workspace");
 await must(admin.from("workspace_memberships").insert({ workspace_id: ws.id, user_id: coach.id, role: "workspace_owner", status: "active" }), "coach membership");
-const method = process.argv.includes("--lift-only") ? fullCoach({ t_cardio_roles: ["fat_loss"] }) : fullCoach();
+// --calories-protein: the coach's nutrition approach is calories + protein only (like the first real client's coach).
+const method = fullCoach({ ...(process.argv.includes("--lift-only") ? { t_cardio_roles: ["fat_loss"] } : {}), ...(process.argv.includes("--calories-protein") ? { n_approach: ["calories_protein"] } : {}) });
 const brain = await must(admin.from("coach_brains").insert({ workspace_id: ws.id, coach_user_id: coach.id }).select("id").single(), "brain");
 const mv = await must(admin.from("coach_method_versions").insert({ brain_id: brain.id, workspace_id: ws.id, coach_user_id: coach.id, version: 1, source: "calibration", operating_model: method.operatingModel, ai_authority: method.aiAuthority ?? {}, calibration_answers: method.operatingModel.calibration?.answers ?? {}, confirmed_by: coach.id }).select("id").single(), "method version");
 await must(admin.from("coach_brains").update({ calibration_status: "calibrated", active_method_version_id: mv.id, calibrated_at: nowIso }).eq("id", brain.id), "calibrate");
