@@ -90,7 +90,7 @@ function review(status: HealthReviewRecord["status"]): HealthReviewRecord {
   return { clientId: "client-1", workspaceId: "ws-1", status, reasons: ["Reported a current pain/injury"], createdAtIso: NOW, updatedAtIso: NOW };
 }
 
-function evaluate(opts: { model?: ReturnType<typeof defaultModel> | null; onboarding?: OnboardingProgress | null; health?: HealthReviewRecord | null }): GenerationPrerequisiteResult {
+function evaluate(opts: { model?: ReturnType<typeof defaultModel> | null; onboarding?: OnboardingProgress | null; health?: HealthReviewRecord | null; restrictions?: string[] }): GenerationPrerequisiteResult {
   const model = opts.model === undefined ? confirmedModel() : opts.model;
   const onboarding = opts.onboarding === undefined ? completedOnboarding() : opts.onboarding;
   return evaluateGenerationPrerequisites({
@@ -98,6 +98,7 @@ function evaluate(opts: { model?: ReturnType<typeof defaultModel> | null; onboar
     onboarding,
     intake: extractClientProgrammingProfile(onboarding, opts.health ?? null),
     clientProfileId: "client-1",
+    restrictionsNeedingConfirmation: opts.restrictions,
   });
 }
 const ids = (r: GenerationPrerequisiteResult) => (r.ready ? [] : r.missing.map((m) => m.id));
@@ -127,6 +128,13 @@ check("an open health review blocks, linking straight to the health-review decis
   assert.equal(!r.ready && r.missing[0].href, "/coach/escalations#health-reviews");
 });
 check("a resolved health review does not block", () => assert.equal(evaluate({ health: review("reviewed_by_coach") }).ready, true));
+check("unconfirmed written restrictions block EVERY generator (the planner's own check), linking to the client's limitations", () => {
+  const r = evaluate({ health: review("reviewed_by_coach"), restrictions: ["Avoid exercises named: squats, deadlifts"] });
+  assert.deepEqual(ids(r), ["exercise_restrictions"]);
+  assert.equal(!r.ready && r.missing[0].href, "/coach/clients/client-1#training-limitations");
+});
+check("while the health review is open, only the review is asked for (restrictions come after the decision)", () => assert.deepEqual(ids(evaluate({ health: review("review_needed"), restrictions: ["x"] })), ["health_review"]));
+check("confirmed restrictions (none left) don't block", () => assert.equal(evaluate({ health: review("proceed_with_limitations"), restrictions: [] }).ready, true));
 
 console.log("provenance");
 function inputs() {

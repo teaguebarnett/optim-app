@@ -192,6 +192,26 @@ export async function resolveHealthReviewRecordForClient(clientProfileId: string
   };
 }
 
+/** The client's health review for the coach's decision surface on the client page, with the report row a decision is
+ * written to: the newest report still awaiting a decision, otherwise the row holding the current decision (so a coach
+ * can correct a saved decision — the newest decision always governs). Null when the client has no pain/safety report. */
+export async function getHealthReviewDecisionTarget(clientProfileId: string, workspaceId: string): Promise<{ record: HealthReviewRecord; escalationId: string } | null> {
+  const record = await resolveHealthReviewRecordForClient(clientProfileId, workspaceId);
+  if (!record) return null;
+  const supabase = await getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("escalations")
+    .select("id, health_review_status")
+    .eq("client_profile_id", clientProfileId)
+    .eq("workspace_id", workspaceId)
+    .eq("reason_category", "pain_or_safety")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`getHealthReviewDecisionTarget failed: ${error.message}`);
+  const awaiting = (data ?? []).find((row) => !row.health_review_status || isPendingHealthReviewStatus(row.health_review_status as HealthReviewStatus));
+  const escalationId = (awaiting?.id as string | undefined) ?? record.decisionEscalationId ?? (data?.[0]?.id as string | undefined);
+  return escalationId ? { record, escalationId } : null;
+}
+
 /** Gate 4.0C-2A — the coach-confirmed structured limitation on the decision
  * row. Read separately so a database without migration 030 yet still
  * resolves the health review exactly as before (no structure = planning

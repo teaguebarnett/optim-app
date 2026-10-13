@@ -152,6 +152,19 @@ export function parseStoredLimitations(raw: unknown, knowledge: FitnessKnowledge
   return r as StoredStructuredLimitations;
 }
 
+/**
+ * The limitation text the coach's structured restrictions must express: the coach's own documented limitation when
+ * they wrote one, otherwise the client's own reported restriction (when they report a current limitation). Shared by
+ * planning, readiness and the coach's confirmation surface so they always agree on what has to be confirmed. Either
+ * way it's the coach who confirms what it means for training — never OPTIM, and never medical clearance.
+ */
+export function limitationSourceText(p: { documentedLimitation?: string | null; clientReportsLimitation?: boolean | null; clientRestrictionText?: string | null }): { text: string; source: "coach" | "client" } | null {
+  const documented = p.documentedLimitation?.trim();
+  if (documented) return { text: documented, source: "coach" };
+  const reported = p.clientReportsLimitation ? p.clientRestrictionText?.trim() : "";
+  return reported ? { text: reported, source: "client" } : null;
+}
+
 /** A record applies only while it matches the coach's current documented text. */
 export function isCurrentFor(record: StoredStructuredLimitations, documentedText: string | null | undefined): boolean {
   return !!documentedText && normText(record.sourceText) === normText(documentedText);

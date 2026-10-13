@@ -21,9 +21,10 @@ import { getAuthenticatedContext, isWorkspaceStaffRole, requireWorkspaceRole } f
 import { UnauthorizedError } from "./errors.ts";
 import { resolveHealthReviewRecordForClient } from "./pain-safety.ts";
 import { loadSynthesisInputForClient } from "./synthesis.ts";
+import { getOnboardingProgressForClient } from "./onboarding.ts";
 import { getSupabaseServerClient } from "../supabase/server.ts";
 import { FOUNDATION_KNOWLEDGE } from "../synthesis/knowledge/registry.ts";
-import { buildConfirmation, isCurrentFor, parseStoredLimitations, type StoredStructuredLimitations } from "../synthesis/limitations/confirm.ts";
+import { buildConfirmation, isCurrentFor, limitationSourceText, parseStoredLimitations, type StoredStructuredLimitations } from "../synthesis/limitations/confirm.ts";
 import { effectiveExerciseDecisions, type ExerciseFitDecisionRecord } from "../synthesis/limitations/exercise-decisions.ts";
 import { demandCompatibility, eligibilityBasis, exerciseEligibility } from "../synthesis/exercise-eligibility.ts";
 import { interpretLimitationText, type InterpretationProposal } from "../synthesis/limitations/interpret.ts";
@@ -47,8 +48,11 @@ async function requireClientCoachAuthority(workspaceId: string, clientProfileId:
 }
 
 export interface LimitationsState {
-  /** The coach's documented limitation, verbatim (null when none). */
+  /** The limitation text to confirm, verbatim: the coach's documented limitation, or — when they documented none —
+   * the client's own reported restriction (null when neither exists). */
   documentedText: string | null;
+  /** Whose words documentedText is. */
+  source: "coach" | "client" | null;
   escalationId: string | null;
   status: "no_limitation" | "needs_confirmation" | "confirmed" | "stale" | "review_open";
   confirmed: StoredStructuredLimitations | null;
@@ -56,14 +60,15 @@ export interface LimitationsState {
 
 export async function getLimitationsState(params: { workspaceId: string; clientProfileId: string }): Promise<LimitationsState> {
   await requireClientCoachAuthority(params.workspaceId, params.clientProfileId);
-  const review = await resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId);
-  if (!review) return { documentedText: null, escalationId: null, status: "no_limitation", confirmed: null };
-  if (!RESOLVED_HEALTH_REVIEW_STATUSES.has(review.status)) return { documentedText: null, escalationId: review.decisionEscalationId ?? null, status: "review_open", confirmed: null };
-  const text = review.documentedLimitations?.trim() || null;
-  if (!text) return { documentedText: null, escalationId: review.decisionEscalationId ?? null, status: "no_limitation", confirmed: null };
+  const [review, onboarding] = await Promise.all([resolveHealthReviewRecordForClient(params.clientProfileId, params.workspaceId), getOnboardingProgressForClient(params.clientProfileId)]);
+  if (!review) return { documentedText: null, source: null, escalationId: null, status: "no_limitation", confirmed: null };
+  if (!RESOLVED_HEALTH_REVIEW_STATUSES.has(review.status)) return { documentedText: null, source: null, escalationId: review.decisionEscalationId ?? null, status: "review_open", confirmed: null };
+  const health = (onboarding?.answers?.health_finish ?? {}) as Record<string, unknown>;
+  const limitation = limitationSourceText({ documentedLimitation: review.documentedLimitations, clientReportsLimitation: health.hasInjuryHistory === true, clientRestrictionText: typeof health.injuryRestrictions === "string" ? health.injuryRestrictions : null });
+  if (!limitation) return { documentedText: null, source: null, escalationId: review.decisionEscalationId ?? null, status: "no_limitation", confirmed: null };
   const stored = parseStoredLimitations(review.structuredLimitations, FOUNDATION_KNOWLEDGE);
-  const status = !stored ? "needs_confirmation" : isCurrentFor(stored, text) ? "confirmed" : "stale";
-  return { documentedText: text, escalationId: review.decisionEscalationId ?? null, status, confirmed: stored };
+  const status = !stored ? "needs_confirmation" : isCurrentFor(stored, limitation.text) ? "confirmed" : "stale";
+  return { documentedText: limitation.text, source: limitation.source, escalationId: review.decisionEscalationId ?? null, status, confirmed: stored };
 }
 
 export async function proposeStructuredLimitations(params: { workspaceId: string; clientProfileId: string }): Promise<InterpretationProposal> {
@@ -74,7 +79,7 @@ export async function proposeStructuredLimitations(params: { workspaceId: string
     ? { modelId: resolved.provider.modelId, generateJson: (r: { systemPrompt: string; userMessage: string; maxOutputTokens: number }) => resolved.provider!.generateJson({ ...r, timeoutMs: resolved.timeoutMs }) }
     : null;
   if (!resolved.provider) console.error(`proposeStructuredLimitations: interpreter unavailable (${JSON.stringify({ ...resolved.diagnostic, keyProblem: resolved.keyProblem ?? null })})`);
-  // Only the coach's limitation text and the canonical vocabulary are sent — no client identity or other health details.
+  // Only the limitation text and the canonical vocabulary are sent — no client identity or other health details.
   return interpretLimitationText({
     sourceText: state.documentedText,
     knowledge: FOUNDATION_KNOWLEDGE,

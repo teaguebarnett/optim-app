@@ -63,12 +63,23 @@ export const ATTENTION_KIND_QUESTIONS: Record<AttentionItemKind, string> = {
 };
 
 export const HEALTH_REVIEW_STATUS_LABELS: Record<HealthReviewStatus, string> = {
-  review_needed: "Needs coach review",
-  discuss_with_client: "Follow up with client",
-  professional_guidance_requested: "Professional/medical guidance requested",
-  professional_guidance_confirmed: "Guidance confirmed",
-  reviewed_by_coach: "Cleared after coach review",
-  proceed_with_limitations: "Proceed with documented limitations",
+  review_needed: "Not decided yet",
+  discuss_with_client: "Follow up with the client first",
+  professional_guidance_requested: "Waiting on professional guidance",
+  professional_guidance_confirmed: "Professional guidance received",
+  reviewed_by_coach: "No training changes needed",
+  proceed_with_limitations: "Train around limitations",
+};
+
+/** One plain sentence per decision, shown under each option. None is medical clearance: every resolved status records
+ * the coach's planning decision only. */
+export const HEALTH_REVIEW_STATUS_HELP: Record<HealthReviewStatus, string> = {
+  review_needed: "You haven't decided yet. Planning stays paused.",
+  discuss_with_client: "You need more information from the client. Planning stays paused.",
+  professional_guidance_requested: "You've asked the client to check with a qualified professional. Planning stays paused.",
+  professional_guidance_confirmed: "You have a qualified professional's guidance. If it sets limits, choose \"Train around limitations\" instead.",
+  reviewed_by_coach: "You've reviewed it and it doesn't change what OPTIM may program. Restrictions the client wrote down still need your confirmation.",
+  proceed_with_limitations: "It changes what OPTIM may program. Describe what to avoid or limit — you'll confirm the exact exercise restrictions next.",
 };
 
 /** Phase 5.6A.1 — the health-review decision card's own pending/resolved
@@ -76,4 +87,4 @@ export const HEALTH_REVIEW_STATUS_LABELS: Record<HealthReviewStatus, string> = {
  * resolutions"), kept alongside the labels above so every surface groups
  * the same five statuses the same way. */
 export const PENDING_HEALTH_REVIEW_STATUSES: HealthReviewStatus[] = ["review_needed", "discuss_with_client", "professional_guidance_requested"];
-export const RESOLVED_HEALTH_REVIEW_STATUS_ORDER: HealthReviewStatus[] = ["reviewed_by_coach", "professional_guidance_confirmed", "proceed_with_limitations"];
+export const RESOLVED_HEALTH_REVIEW_STATUS_ORDER: HealthReviewStatus[] = ["proceed_with_limitations", "reviewed_by_coach", "professional_guidance_confirmed"];

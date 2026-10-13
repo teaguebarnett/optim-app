@@ -15,7 +15,7 @@ import type { DayOfWeek } from "../types.ts";
 import { known, missing, type Fact, type FactBasis } from "./facts.ts";
 import { parsePerformanceTargets, type PerformanceTargetValue } from "./goal-contract.ts";
 import { FOUNDATION_KNOWLEDGE } from "./knowledge/registry.ts";
-import { isCurrentFor, parseStoredLimitations, type StoredStructuredLimitations } from "./limitations/confirm.ts";
+import { isCurrentFor, limitationSourceText, parseStoredLimitations, type StoredStructuredLimitations } from "./limitations/confirm.ts";
 
 export const DAY_ORDER: DayOfWeek[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DAY_KEYS: Record<string, DayOfWeek> = { mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday", sun: "Sunday" };
@@ -194,7 +194,11 @@ export function deriveClientState(src: ClientStateSources): ClientState {
   const documented = review?.documentedLimitations?.trim();
   const coachBasis: FactBasis = "coach_confirmed";
   const structured = review ? parseStoredLimitations(review.structuredLimitations, FOUNDATION_KNOWLEDGE) : null;
-  const structuredCurrent = !!structured && reviewStatus === "resolved" && isCurrentFor(structured, documented);
+  // Confirmed against the coach's documented limitation, or — when they documented none — the client's own reported
+  // restriction (the text the coach confirmed structured restrictions for).
+  const healthAnswers = (src.onboarding?.answers?.health_finish ?? {}) as Record<string, unknown>;
+  const limitationSource = limitationSourceText({ documentedLimitation: documented, clientReportsLimitation: healthAnswers.hasInjuryHistory === true, clientRestrictionText: typeof healthAnswers.injuryRestrictions === "string" ? healthAnswers.injuryRestrictions : null });
+  const structuredCurrent = !!structured && reviewStatus === "resolved" && isCurrentFor(structured, limitationSource?.text);
 
   return {
     clientProfileId: src.clientProfileId,

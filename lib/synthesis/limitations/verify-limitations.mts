@@ -8,7 +8,7 @@ import { answerAllRequired } from "../../coach/calibration/fixtures.ts";
 import { buildMethodFromCalibration, type ConfirmedCoachMethod } from "../../coach/coach-brain.ts";
 import type { HealthReviewRecord, OnboardingProgress } from "../../coach/types.ts";
 import { deriveClientState } from "../client-state.ts";
-import { deriveConstraintSet } from "../constraints.ts";
+import { constraintsNeedingStructure, deriveConstraintSet } from "../constraints.ts";
 import { exerciseEligibility } from "../exercise-eligibility.ts";
 import { FOUNDATION_KNOWLEDGE as K } from "../knowledge/registry.ts";
 import { BODY_POSITIONS, DEMANDS, EQUIPMENT, LEVELS, MOVEMENT_PATTERNS , LIMB_REGIONS, JOINT_ACTIONS } from "../knowledge/taxonomy.ts";
@@ -16,7 +16,7 @@ import type { PlanSpecification } from "../plan-spec.ts";
 import { runPlanner, type PlannerRun } from "../planner.ts";
 import { RESISTANCE_PLANNER } from "../planners/resistance/planner.ts";
 import { buildSynthesisInput } from "../synthesis-input.ts";
-import { buildConfirmation, parseStoredLimitations, type StoredStructuredLimitations } from "./confirm.ts";
+import { buildConfirmation, limitationSourceText, parseStoredLimitations, type StoredStructuredLimitations } from "./confirm.ts";
 import { interpretLimitationText, manualProposal, parseInterpretation, type StructuredJsonModel } from "./interpret.ts";
 import { allRestrictionOptions, RESTRICTION_OPTIONS } from "./vocabulary.ts";
 
@@ -311,6 +311,49 @@ await check("17. Tenancy/security: every entry point authorizes; the write is cl
   assert.ok(/\.eq\("workspace_id", input\.workspaceId\)\s*\.eq\("client_profile_id", input\.clientProfileId\)\s*\.eq\("reason_category", "pain_or_safety"\)/.test(src), "update scoped to this client's health-review row");
   assert.ok(/state\.documentedText !== input\.sourceText\.trim\(\)/.test(src), "confirmation must match the current text");
   assert.ok(!/client_profile_id|clientProfileId|displayName/.test(src.slice(src.indexOf("interpretLimitationText({"), src.indexOf("interpretLimitationText({") + 200)), "only the limitation text goes to the model");
+});
+
+console.log("\nHealth decision → restriction confirmation → readiness (real iCloud client sequence)\n");
+
+const CLIENT_TEXT = ANSWERS.health_finish.injuryRestrictions;
+const cleared = (extra: Partial<HealthReviewRecord> = {}) => review({ status: "reviewed_by_coach", documentedLimitations: undefined, ...extra });
+const needing = (rv: HealthReviewRecord) => constraintsNeedingStructure(buildSynthesisInput({ knowledge: K, coachMethod: method(), client: state("client-a", rv) }).constraints);
+
+await check("18. 'No training changes needed' never waves through exercises the client named: restrictions still need the coach's confirmation", async () => {
+  const open = needing(cleared());
+  assert.ok(open.length > 0, "the client's named exercises still need structure");
+  const x = plan("client-a", cleared());
+  assert.ok(x.status === "NEEDS_INPUT" && x.missing.some((m) => /structured_restriction/.test(m.fact)));
+});
+
+await check("19. With no coach-documented limitation, the coach confirms structured restrictions for the CLIENT's own words — and planning proceeds", async () => {
+  const record = await confirmedRecord(CLIENT_TEXT, { restrictions: [{ optionId: "avoid_squat", quote: "Squats" }, { optionId: "avoid_lower_compounds", quote: "deadlifts" }], clarifications: [], unsupported: [] });
+  const rv = cleared({ structuredLimitations: record });
+  assert.equal(state("client-a", rv).health.review.structuredStatus, "current");
+  assert.deepEqual(needing(rv), []);
+  const s = spec(plan("client-a", rv));
+  const names = s.resistance!.value.sessions.flatMap((q) => q.exercises.map((e) => K.getExercise(e.exerciseId)?.name ?? "")).join(" | ");
+  assert.ok(!/squat|deadlift/i.test(names), `no squats/deadlifts: ${names}`);
+});
+
+await check("20. The coach may confirm the client's words don't restrict exercises (coach authority) — that also unblocks planning", async () => {
+  const res = buildConfirmation({ sourceText: CLIENT_TEXT, proposal: null, selectedOptionIds: [], clarificationAnswers: {}, noExerciseRestrictions: true, coachUserId: "coach-a", nowIso: NOW }, K);
+  assert.ok(res.ok, res.ok ? "" : res.errors.join("; "));
+  assert.deepEqual(needing(cleared({ structuredLimitations: (res as { record: StoredStructuredLimitations }).record })), []);
+});
+
+await check("21. Correcting the decision to 'Train around limitations' makes the old confirmation stale until the coach re-confirms", async () => {
+  const record = await confirmedRecord(CLIENT_TEXT, { restrictions: [{ optionId: "avoid_squat", quote: "Squats" }], clarifications: [], unsupported: [] });
+  const corrected = review({ structuredLimitations: record }); // proceed_with_limitations + COACH_TEXT
+  assert.equal(state("client-a", corrected).health.review.structuredStatus, "stale");
+  assert.ok(needing(corrected).length > 0);
+  assert.equal(plan("client-a", corrected).status, "NEEDS_INPUT");
+});
+
+await check("22. The text to confirm: the coach's documented limitation first, else the client's reported restriction, else nothing", () => {
+  assert.deepEqual(limitationSourceText({ documentedLimitation: " Coach words ", clientReportsLimitation: true, clientRestrictionText: "Client words" }), { text: "Coach words", source: "coach" });
+  assert.deepEqual(limitationSourceText({ documentedLimitation: null, clientReportsLimitation: true, clientRestrictionText: "Client words" }), { text: "Client words", source: "client" });
+  assert.equal(limitationSourceText({ documentedLimitation: "", clientReportsLimitation: false, clientRestrictionText: "Client words" }), null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

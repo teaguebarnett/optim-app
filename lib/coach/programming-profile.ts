@@ -51,7 +51,7 @@ export interface ClientProgrammingProfile extends ClientOnboardingSnapshot {
   injuryAreasSummary?: string;
   /** The client's own reported restriction detail, plus (appended, when
    * present) the coach's own documented limitation recorded while
-   * resolving a health review with "Proceed with documented limitations" —
+   * resolving a health review with "Train around limitations" (proceed_with_limitations) —
    * see HealthReviewRecord.documentedLimitations. Both flow into the same
    * field so a real coach-recorded boundary reaches the same planning
    * constraints as a client-reported one, rather than living only on a

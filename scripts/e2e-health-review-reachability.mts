@@ -9,10 +9,11 @@
 //   1. onboarding injury report → health-safety escalation (the onboarding RPC path);
 //   2. the coach clears it from the queue exactly as resolveEscalationWithoutMessaging does (pending → proposed → resolved);
 //   3. readiness is still blocked (no decision) and the inbox now surfaces it as awaiting a decision;
-//   4. other coaches / the client can't decide it; the assigned coach records "proceed with limitations" on the
-//      resolved row (recordHealthReviewDecision's exact update);
-//   5. readiness clears, the documented limitation reaches the programming profile, and the confirmed structured
-//      restriction is stored on the decision row the planner reads.
+//   4. other coaches / the client can't decide it;
+//   5. the real follow-up mistake: the coach picks "No training changes needed" (formerly "Cleared") — the health review
+//      stops blocking, but every generator stays blocked on the client's unconfirmed written restrictions;
+//   6. the coach corrects the decision to "Train around limitations" and confirms structured restrictions;
+//   7. nothing blocks generation; the documented limitation reaches the programming profile.
 //
 // Local only (refuses unless the API URL is 127.0.0.1); isolated e2e-hrr-* fixtures; safe to re-run.
 //   node --experimental-strip-types scripts/e2e-health-review-reachability.mts
@@ -85,6 +86,12 @@ import { BASE_INTAKE_ANSWERS } from "../lib/synthesis/reasoner/eval/fixtures.ts"
 import { extractClientProgrammingProfile, resolveProgrammingProfileReadiness } from "../lib/coach/programming-profile.ts";
 import { attentionItemFromEscalation, splitResolvedForHealthReview } from "../lib/coach/attention-item.ts";
 import { RESOLVED_HEALTH_REVIEW_STATUSES, type HealthReviewRecord, type HealthReviewStatus, type OnboardingProgress } from "../lib/coach/types.ts";
+import { evaluateGenerationPrerequisites } from "../lib/coach/generation-prerequisites.ts";
+import { deriveClientState } from "../lib/synthesis/client-state.ts";
+import { buildSynthesisInput } from "../lib/synthesis/synthesis-input.ts";
+import { constraintsNeedingStructure } from "../lib/synthesis/constraints.ts";
+import { buildConfirmation } from "../lib/synthesis/limitations/confirm.ts";
+import { FOUNDATION_KNOWLEDGE } from "../lib/synthesis/knowledge/registry.ts";
 
 /** Mirrors lib/production/pain-safety.ts's resolveHealthReviewRecordForClient policy (server-only, not importable here). */
 function recordFromRows(clientId: string, workspaceId: string, rows: { id: string; health_review_status: string | null; documented_limitations: string | null; health_review_decided_at: string | null; created_at: string; updated_at: string; proposed_response: string | null }[]): HealthReviewRecord | null {
@@ -158,23 +165,43 @@ async function main() {
   const foreign = await otherCoachDb.from("escalations").update({ health_review_status: "reviewed_by_coach", health_review_decided_by: otherCoach.id, health_review_decided_at: now }, { count: "exact" }).eq("id", escalationId);
   check("a coach from another workspace cannot decide it", !!foreign.error || foreign.count === 0);
   check("…and the row is still undecided after both attempts", (await rows())[0]?.health_review_status === null);
-  const documented = "No bracing or valsalva — avoid heavy squats and deadlifts; core-stability demands only at low effort.";
-  const decidedAt = new Date().toISOString();
-  const dec = await coachDb.from("escalations").update({ health_review_status: "proceed_with_limitations", documented_limitations: documented, health_review_decided_by: coach.id, health_review_decided_at: decidedAt, updated_at: decidedAt }).eq("id", escalationId).eq("workspace_id", workspaceId).eq("reason_category", "pain_or_safety").select("client_profile_id");
-  check("the assigned coach records 'proceed with documented limitations' on the already-resolved row", !dec.error && (dec.data ?? []).length === 1, dec.error?.message);
 
-  console.log("\n5. Readiness clears and the limitations reach planning\n");
-  const ready = await readiness();
-  check("generation readiness is no longer blocked by the health review", ready.status !== "needs_coach_review", ready.status);
+  // Every generator's readiness: the real pure checks on the real rows (health review + the planner's restriction check).
+  const generationReadiness = async () => {
+    const current = (await rows()) as never;
+    const record = recordFromRows(clientProfileId, workspaceId, current);
+    const constraints = buildSynthesisInput({ knowledge: FOUNDATION_KNOWLEDGE, coachMethod: null, client: deriveClientState({ clientProfileId, workspaceId, onboarding, healthReview: record ? { ...record, structuredLimitations: (current as { structured_limitations: unknown }[])[0]?.structured_limitations ?? undefined } : null }) }).constraints;
+    return evaluateGenerationPrerequisites({ playbook: null, onboarding, intake: extractClientProgrammingProfile(onboarding, record), clientProfileId, restrictionsNeedingConfirmation: constraintsNeedingStructure(constraints).map((c) => c.description) });
+  };
+  const missingIds = async () => { const r = await generationReadiness(); return r.ready ? [] : r.missing.map((m) => m.id).filter((id) => id !== "coach_method"); };
+  const decide = (status: string, documentedLimitations: string | null) => { const at = new Date().toISOString(); return coachDb.from("escalations").update({ health_review_status: status, documented_limitations: documentedLimitations, health_review_decided_by: coach.id, health_review_decided_at: at, updated_at: at }).eq("id", escalationId).eq("workspace_id", workspaceId).eq("reason_category", "pain_or_safety").select("client_profile_id"); };
+
+  console.log("\n5. The real mistake: 'No training changes needed' (formerly 'Cleared') with written restrictions still unconfirmed\n");
+  const cleared = await decide("reviewed_by_coach", null);
+  check("the assigned coach records 'No training changes needed' on the resolved row", !cleared.error && (cleared.data ?? []).length === 1, cleared.error?.message);
+  check("the health review no longer blocks…", !(await missingIds()).includes("health_review"));
+  check("…but EVERY generator is blocked on the client's unconfirmed written restrictions (no bypass)", JSON.stringify(await missingIds()) === JSON.stringify(["exercise_restrictions"]), JSON.stringify(await missingIds()));
+  const r1 = await generationReadiness();
+  check("…and the coach is sent to the client's limitations to confirm them", !r1.ready && r1.missing.some((m) => m.href === `/coach/clients/${clientProfileId}#training-limitations`));
+
+  console.log("\n6. The coach corrects the decision and confirms the restrictions\n");
+  const documented = "No bracing or valsalva — avoid heavy squats and deadlifts; core-stability demands only at low effort.";
+  const corrected = await decide("proceed_with_limitations", documented);
+  check("the coach corrects the saved decision to 'Train around limitations' with their own words", !corrected.error && (corrected.data ?? []).length === 1, corrected.error?.message);
+  check("the decision is a planning decision only — the original report text is unchanged", (await rows())[0]?.proposed_response?.startsWith("Onboarding: injury history"));
+  check("restrictions still need confirming for the coach's words before any generator may plan", JSON.stringify(await missingIds()) === JSON.stringify(["exercise_restrictions"]));
+  const built = buildConfirmation({ sourceText: documented, proposal: null, selectedOptionIds: ["avoid_squat", "avoid_bracing_high"], clarificationAnswers: {}, noExerciseRestrictions: false, coachUserId: coach.id, nowIso: new Date().toISOString() }, FOUNDATION_KNOWLEDGE);
+  check("the coach's restriction choices form a valid structured confirmation", built.ok, built.ok ? "" : built.errors.join("; "));
+  const conf = await coachDb.from("escalations").update({ structured_limitations: built.ok ? built.record : null, structured_limitations_confirmed_by: coach.id, structured_limitations_confirmed_at: new Date().toISOString() }).eq("id", escalationId).eq("workspace_id", workspaceId).select("id");
+  check("the confirmation is stored on the decision row the planner reads", !conf.error && (conf.data ?? []).length === 1, conf.error?.message);
+
+  console.log("\n7. Program ready\n");
+  check("nothing blocks generation any more (health review decided, restrictions confirmed)", JSON.stringify(await missingIds()) === "[]", JSON.stringify(await missingIds()));
   const profile = extractClientProgrammingProfile(onboarding, recordFromRows(clientProfileId, workspaceId, (await rows()) as never));
-  check("the programming profile carries the coach's documented limitation verbatim and reads as resolved", "profile" in profile && profile.profile.healthReviewResolved === true && JSON.stringify(profile.profile).includes(documented));
+  check("the programming profile carries the coach's documented limitation verbatim", "profile" in profile && profile.profile.healthReviewResolved === true && JSON.stringify(profile.profile).includes(documented));
   const resolvedAgain = (await coachDb.from("escalations").select("id, client_profile_id, reason_category, status, proposed_response, created_at, health_review_status, documented_limitations").eq("id", escalationId)).data ?? [];
   const split2 = splitResolvedForHealthReview(resolvedAgain.map((r) => attentionItemFromEscalation({ id: r.id, clientProfileId: r.client_profile_id, clientDisplayName: "Client HRR", sourceMessageBody: null, reasonCategory: r.reason_category, status: r.status, proposedResponse: r.proposed_response, createdAtIso: r.created_at, priority: 0, healthReviewStatus: r.health_review_status, documentedLimitations: r.documented_limitations } as never)));
   check("once decided, it leaves 'awaiting decision' and returns to the resolved history", split2.awaitingDecision.length === 0 && split2.resolved.length === 1);
-  const structured = { version: 1, restrictions: [{ optionId: "no_axial_spinal_loading", interprets: [] }], confirmedForText: documented };
-  const conf = await coachDb.from("escalations").update({ structured_limitations: structured, structured_limitations_confirmed_by: coach.id, structured_limitations_confirmed_at: new Date().toISOString() }).eq("id", escalationId).eq("workspace_id", workspaceId).select("id");
-  check("the coach can confirm structured restrictions on the decision row the planner reads", !conf.error && (conf.data ?? []).length === 1, conf.error?.message);
-  check("the confirmed structured restrictions are stored on that decision row", JSON.stringify((await rows())[0]?.structured_limitations ?? null).includes("no_axial_spinal_loading"));
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);

@@ -12,6 +12,7 @@
 // onResolve callback into a call to that action.
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { HealthReviewDecisionCard } from "./health-review-decision-card";
 import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
@@ -32,6 +33,7 @@ export function SupabaseHealthReviewDecisionCard({
   onResolve: (status: HealthReviewStatus, documentedLimitations?: string) => Promise<void>;
   variant?: "card" | "inline";
 }) {
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
   // A failed save must never look like a recorded decision: the review stays open and the coach is told.
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export function SupabaseHealthReviewDecisionCard({
           startTransition(async () => {
             try {
               await onResolve(status, documentedLimitations);
+              router.refresh();
             } catch {
               setError("Your decision wasn't saved — the health review is still open. Try again.");
             }

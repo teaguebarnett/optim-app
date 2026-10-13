@@ -27,7 +27,7 @@ import { formatByKey } from "./calibration/format.ts";
 import type { OnboardingProgress } from "./types";
 import type { GenerationInputs } from "../training/types.ts";
 
-export type PrerequisiteId = "coach_method" | "client_intake" | "health_review";
+export type PrerequisiteId = "coach_method" | "client_intake" | "health_review" | "exercise_restrictions";
 
 export interface MissingPrerequisite {
   id: PrerequisiteId;
@@ -43,6 +43,10 @@ export interface GenerationPrerequisiteInput {
   onboarding: OnboardingProgress | null;
   intake: ExtractProfileResult;
   clientProfileId: string;
+  /** Hard limitations written in words (the client's or the coach's) that no coach-confirmed structured restriction
+   * expresses yet — the same check the resistance planner applies (constraintsNeedingStructure). Every generator
+   * waits for them, so none can choose exercises around unconfirmed restrictions. */
+  restrictionsNeedingConfirmation?: string[];
 }
 
 export type GenerationPrerequisiteResult =
@@ -110,6 +114,13 @@ export function evaluateGenerationPrerequisites(input: GenerationPrerequisiteInp
         message: readiness.reviewReason ?? "A health review for this client is still open. Resolve it before generating a program.",
         href: "/coach/escalations#health-reviews",
         linkLabel: "Open health reviews",
+      });
+    } else if (input.restrictionsNeedingConfirmation?.length) {
+      missing.push({
+        id: "exercise_restrictions",
+        message: "Confirm what this client's written limitations mean for training. OPTIM won't choose exercises around restrictions you haven't confirmed.",
+        href: `/coach/clients/${input.clientProfileId}#training-limitations`,
+        linkLabel: "Confirm restrictions",
       });
     }
     assumptions = readiness.assumptions;

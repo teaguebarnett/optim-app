@@ -102,7 +102,7 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
   const addable = options.filter((o) => o.group === addGroup && !selected.includes(o.id));
 
   return (
-    <Card className="space-y-4">
+    <Card id="training-limitations" className="scroll-mt-24 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h3 className="text-sm font-medium text-off-white">Training limitations</h3>
@@ -113,15 +113,15 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
 
       {state.status === "review_open" ? (
         <p className="text-sm text-neutral">
-          A health review is still open. Record your decision in{" "}
+          A health review is still open. Record your decision in the health review above (or in{" "}
           <Link href="/coach/escalations#health-reviews" className="text-accent underline-offset-2 hover:underline">
             Escalations
-          </Link>{" "}
-          first; planning waits for that decision.
+          </Link>
+          ) first; planning waits for that decision.
         </p>
       ) : (
         <blockquote className="rounded-[var(--radius-sm)] border-l-2 border-accent bg-surface-raised px-3 py-2 text-sm text-off-white">
-          <span className="mb-1 block text-label text-neutral">Your documented limitation</span>
+          <span className="mb-1 block text-label text-neutral">{state.source === "client" ? "What the client reported — you haven't documented your own limitation" : "Your documented limitation"}</span>
           {state.documentedText}
         </blockquote>
       )}
@@ -170,7 +170,9 @@ export function StructuredLimitationsCard({ workspaceId, clientProfileId, state,
       {(state.status === "needs_confirmation" || state.status === "stale") && !editing ? (
         <div className="space-y-2">
           <p className="text-sm text-neutral">
-            {state.status === "stale" ? "You changed this limitation after confirming it, so the old confirmation no longer applies." : "The new planner can't use written limitations until you confirm what they mean."}
+            {state.status === "stale"
+              ? "This limitation changed after you confirmed it, so the old confirmation no longer applies."
+              : "OPTIM won't choose exercises — in any program generator — until you confirm what this means for training. If it doesn't restrict any exercises, confirm that instead."}
           </p>
           <Button size="sm" onClick={interpret} loading={pending}>Review OPTIM&apos;s interpretation</Button>
         </div>

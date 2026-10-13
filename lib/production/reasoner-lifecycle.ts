@@ -27,6 +27,7 @@ import { getLatestReasonerJob, getReasonerRunForJob, isReasonerProposalEnabled, 
 import { extractClientProgrammingProfile } from "../coach/programming-profile.ts";
 import { buildGenerationInputs, evaluateGenerationPrerequisites } from "../coach/generation-prerequisites.ts";
 import { FOUNDATION_KNOWLEDGE, FOUNDATION_KNOWLEDGE_VERSION } from "../synthesis/knowledge/registry.ts";
+import { constraintsNeedingStructure } from "../synthesis/constraints.ts";
 import { effectiveExerciseDecisions } from "../synthesis/limitations/exercise-decisions.ts";
 import { currentPlanningState, decideGenerationAfterPreflight, decideRevision, type CurrentPlanningInputs, type LifecycleAssessment, type RevisionTrigger } from "../synthesis/reasoner/lifecycle.ts";
 import { reasonerReviewModel } from "../synthesis/reasoner/review-gate.ts";
@@ -54,10 +55,12 @@ export async function requireAssignedCoach(workspaceId: string, clientProfileId:
 
 /** Everything a NEW proposal may be generated from, and whether it is allowed at all (moved from the actions module). */
 export async function resolveGenerationContext(workspaceId: string, clientProfileId: string) {
-  const [intelligence, onboarding, healthReview] = await Promise.all([resolveCoachIntelligenceForClient({ workspaceId, clientProfileId }), getOnboardingProgressForClient(clientProfileId), resolveHealthReviewRecordForClient(clientProfileId, workspaceId)]);
+  const [intelligence, onboarding, healthReview, synthesis] = await Promise.all([resolveCoachIntelligenceForClient({ workspaceId, clientProfileId }), getOnboardingProgressForClient(clientProfileId), resolveHealthReviewRecordForClient(clientProfileId, workspaceId), loadSynthesisInputForClient(clientProfileId)]);
   const method = intelligence.method;
   const intake = extractClientProgrammingProfile(onboarding, healthReview);
-  const prerequisites = evaluateGenerationPrerequisites({ playbook: method ? { version: method.version, operatingModel: method.operatingModel } : null, onboarding, intake, clientProfileId });
+  // The resistance planner's own restriction check, applied to every generator (legacy, Reasoner, unified).
+  const restrictionsNeedingConfirmation = constraintsNeedingStructure(synthesis.constraints).map((c) => c.description);
+  const prerequisites = evaluateGenerationPrerequisites({ playbook: method ? { version: method.version, operatingModel: method.operatingModel } : null, onboarding, intake, clientProfileId, restrictionsNeedingConfirmation });
   return { intelligence, method, onboarding, prerequisites };
 }
 

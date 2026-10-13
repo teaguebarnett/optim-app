@@ -40,7 +40,10 @@ import { parseNutritionTargetsInput } from "@/lib/coach/nutrition-targets-input"
 import { getProgramProposalForReviewAction, getClientWorkspaceIntelligenceAction, getFindingEvidenceDetailAction, resolveAdjustmentProposalAction, getGenerationPrerequisitesAction, getReasonerProposalAvailabilityAction } from "@/app/actions/production-programs";
 import { ReasonerProposalPanel } from "@/components/coach/reasoner-proposal-panel";
 import { ClientStateNoticeSection } from "@/components/coach/client-state-notice";
-import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction } from "@/app/actions/coach-communications";
+import { getClientChatHistoryForCoachAction, getClientCoachNotesAction, publishCoachNoteAction, recordHealthReviewDecisionAction } from "@/app/actions/coach-communications";
+import { SupabaseHealthReviewDecisionCard } from "@/components/coach/supabase-health-review-decision-card";
+import { getHealthReviewDecisionTarget } from "@/lib/production/pain-safety";
+import type { HealthReviewStatus } from "@/lib/coach/types";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
 import { StructuredLimitationsCard } from "@/components/coach/structured-limitations-card";
 import { ResistancePlannerPreview } from "@/components/coach/resistance-planner-preview";
@@ -96,9 +99,22 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
       return null;
     }
   };
-  const [limitationsState, plannerView] = onboardingComplete
-    ? await Promise.all([soft("limitations state", () => getLimitationsState({ workspaceId: detail.workspaceId, clientProfileId: clientId })), soft("planner preview", () => previewResistancePlanAction({ workspaceId: detail.workspaceId, clientProfileId: clientId }))])
-    : [null, null];
+  const [limitationsState, plannerView, healthDecision] = onboardingComplete
+    ? await Promise.all([
+        soft("limitations state", () => getLimitationsState({ workspaceId: detail.workspaceId, clientProfileId: clientId })),
+        soft("planner preview", () => previewResistancePlanAction({ workspaceId: detail.workspaceId, clientProfileId: clientId })),
+        // The coach's health-review decision, editable here so a wrong choice can be corrected (the newest decision governs).
+        soft("health review", () => getHealthReviewDecisionTarget(clientId, detail.workspaceId)),
+      ])
+    : [null, null, null];
+  const healthDecisionEscalationId = healthDecision?.escalationId ?? null;
+  async function recordHealthDecision(status: HealthReviewStatus, documentedLimitations?: string) {
+    "use server";
+    if (!healthDecisionEscalationId) return;
+    await recordHealthReviewDecisionAction({ workspaceId: detail.workspaceId, escalationId: healthDecisionEscalationId, status, documentedLimitations });
+  }
+  const reportedHealth = ((detail.onboarding?.answers ?? {}) as Partial<Record<OnboardingStepId, OnboardingStepAnswers>>).health_finish;
+  const clientReportedRestriction = typeof reportedHealth?.injuryRestrictions === "string" ? reportedHealth.injuryRestrictions : null;
   // Gate U3B — the client's unified program proposal, when one is reviewable (additive: a failure hides the card).
   const unifiedReview = onboardingComplete ? await soft("unified review", () => getUnifiedReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId })) : null;
   // Gate U3C — the coach can prepare a unified proposal for an allowlisted client with completed intake.
@@ -265,6 +281,10 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
           <h3 className="mb-3 text-sm font-medium text-off-white">Start date</h3>
           <LiveStartDateForm action={setStartDateAction} initialDateIso={detail.startDateIso} timezone={detail.timezone} timezoneSource={detail.timezoneSource} />
         </Card>
+
+        {healthDecision ? (
+          <SupabaseHealthReviewDecisionCard clientFirstName={detail.displayName.split(" ")[0]} healthReview={healthDecision.record} clientReportedDetail={clientReportedRestriction} onResolve={recordHealthDecision} />
+        ) : null}
 
         {limitationsState ? <StructuredLimitationsCard workspaceId={detail.workspaceId} clientProfileId={clientId} state={limitationsState} options={limitationOptions} /> : null}
 

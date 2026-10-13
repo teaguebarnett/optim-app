@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TextArea } from "@/components/ui/textarea";
 import { cn } from "@/lib/cn";
-import { HEALTH_REVIEW_STATUS_LABELS, PENDING_HEALTH_REVIEW_STATUSES, RESOLVED_HEALTH_REVIEW_STATUS_ORDER } from "@/lib/coach/labels";
+import { HEALTH_REVIEW_STATUS_HELP, HEALTH_REVIEW_STATUS_LABELS, PENDING_HEALTH_REVIEW_STATUSES, RESOLVED_HEALTH_REVIEW_STATUS_ORDER } from "@/lib/coach/labels";
 import { RESOLVED_HEALTH_REVIEW_STATUSES } from "@/lib/coach/types";
 import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
 
@@ -19,7 +19,7 @@ import type { HealthReviewRecord, HealthReviewStatus } from "@/lib/coach/types";
  * for programming, and two visually distinct groups of real actions:
  * pending (still blocked) and resolved (eligible to proceed). Never
  * diagnoses, never implies medical clearance, never silently converts a
- * pending action into a resolution — "Proceed with documented limitations"
+ * pending action into a resolution — "Train around limitations"
  * requires the coach to actually type the limitation before it's accepted.
  */
 export function HealthReviewDecisionCard({
@@ -82,6 +82,7 @@ export function HealthReviewDecisionCard({
         )}
       >
         {HEALTH_REVIEW_STATUS_LABELS[status]}
+        <span className="mt-0.5 block text-meta font-normal text-neutral">{HEALTH_REVIEW_STATUS_HELP[status]}</span>
       </button>
     );
     return (
@@ -91,17 +92,17 @@ export function HealthReviewDecisionCard({
             <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
             <span>
               {HEALTH_REVIEW_STATUS_LABELS[healthReview.status]}
-              {healthReview.status === "proceed_with_limitations" && healthReview.documentedLimitations ? ` — ${healthReview.documentedLimitations}` : ""}. OPTIM can program around this.
+              {healthReview.status === "proceed_with_limitations" && healthReview.documentedLimitations ? ` — ${healthReview.documentedLimitations}` : ""}. Your planning decision, not medical clearance — you can change it below.
             </span>
           </p>
         ) : null}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
-            <p className="mb-1.5 text-meta text-neutral">Keep blocked</p>
+            <p className="mb-1.5 text-meta text-neutral">Not ready yet — planning stays paused</p>
             <div className="flex flex-col gap-1.5">{PENDING_HEALTH_REVIEW_STATUSES.map((status) => option(status, "pending", () => choosePending(status)))}</div>
           </div>
           <div>
-            <p className="mb-1.5 text-meta text-neutral">Clear to proceed</p>
+            <p className="mb-1.5 text-meta text-neutral">Ready to plan</p>
             <div className="flex flex-col gap-1.5">{RESOLVED_HEALTH_REVIEW_STATUS_ORDER.map((status) => option(status, "resolved", () => chooseResolved(status)))}</div>
           </div>
         </div>
@@ -132,7 +133,7 @@ export function HealthReviewDecisionCard({
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-subheading text-off-white">Health review</p>
-          <p className="mt-0.5 text-meta text-neutral">Not a diagnosis — a real decision only you can make before OPTIM programs around it.</p>
+          <p className="mt-0.5 text-meta text-neutral">Your coaching decision about what OPTIM may program. None of these options is a diagnosis or medical clearance.</p>
         </div>
       </div>
 
@@ -154,14 +155,14 @@ export function HealthReviewDecisionCard({
             {healthReview.status === "proceed_with_limitations" && healthReview.documentedLimitations ? (
               <p className="mt-0.5 text-sm text-neutral">Documented limitation: {healthReview.documentedLimitations}</p>
             ) : null}
-            <p className="mt-0.5 text-meta text-neutral">Eligible to proceed — OPTIM can generate around this.</p>
+            <p className="mt-0.5 text-meta text-neutral">Saved as your planning decision — not medical clearance. Chose the wrong option? Pick another below.</p>
           </div>
         </div>
       ) : null}
 
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral">Pending — still blocked</p>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral">Not ready yet — planning stays paused</p>
           <div className="flex flex-col gap-1.5">
             {PENDING_HEALTH_REVIEW_STATUSES.map((status) => (
               <button
@@ -174,13 +175,14 @@ export function HealthReviewDecisionCard({
                 )}
               >
                 {HEALTH_REVIEW_STATUS_LABELS[status]}
+                <span className="mt-0.5 block text-meta font-normal text-neutral">{HEALTH_REVIEW_STATUS_HELP[status]}</span>
               </button>
             ))}
           </div>
         </div>
 
         <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral">Resolved — eligible to proceed</p>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral">Ready to plan</p>
           <div className="flex flex-col gap-1.5">
             {RESOLVED_HEALTH_REVIEW_STATUS_ORDER.map((status) => (
               <button
@@ -193,6 +195,7 @@ export function HealthReviewDecisionCard({
                 )}
               >
                 {HEALTH_REVIEW_STATUS_LABELS[status]}
+                <span className="mt-0.5 block text-meta font-normal text-neutral">{HEALTH_REVIEW_STATUS_HELP[status]}</span>
               </button>
             ))}
           </div>
@@ -203,7 +206,7 @@ export function HealthReviewDecisionCard({
         <div className="mt-4 border-t border-border pt-3.5">
           <TextArea
             id="documented-limitations"
-            label="Documented limitation — what should OPTIM program around?"
+            label="What should OPTIM avoid or limit? (in your words — you'll confirm exact exercise restrictions next)"
             placeholder="e.g. No overhead pressing; cap load on unilateral knee work."
             value={limitationDraft}
             onChange={(e) => setLimitationDraft(e.target.value)}
