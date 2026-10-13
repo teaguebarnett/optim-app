@@ -68,6 +68,14 @@ export const DECISION_TYPE_REGISTRY: Record<string, { domain: DecisionDomain; va
       optionalString(v.documentedLimitations, "documentedLimitations", t);
     },
   },
+  // The coach correcting or clearing an inaccurate onboarding answer (migration 038). History only — the
+  // client_onboarding_progress row holds the canonical correction beside the client's own answer.
+  intake_answer_correction: {
+    domain: "other",
+    validateValue: (v, t) => {
+      requireString(v.field, "field", t);
+    },
+  },
   // Gate 4.0C-2A — the coach confirming (or editing) OPTIM's structured
   // reading of their documented limitation. proposedValue = what OPTIM
   // proposed; chosenValue = what the coach confirmed. History only — the

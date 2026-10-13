@@ -19,6 +19,8 @@ import { buildSynthesisInput } from "../synthesis-input.ts";
 import { buildConfirmation, limitationSourceText, parseStoredLimitations, type StoredStructuredLimitations } from "./confirm.ts";
 import { interpretLimitationText, manualProposal, parseInterpretation, type StructuredJsonModel } from "./interpret.ts";
 import { allRestrictionOptions, RESTRICTION_OPTIONS } from "./vocabulary.ts";
+import { resistanceContentFit } from "../unified/safety.ts";
+import { programContent } from "../reasoner/cardio/eval/fixtures.ts";
 
 let passed = 0;
 let failed = 0;
@@ -354,6 +356,19 @@ await check("22. The text to confirm: the coach's documented limitation first, e
   assert.deepEqual(limitationSourceText({ documentedLimitation: " Coach words ", clientReportsLimitation: true, clientRestrictionText: "Client words" }), { text: "Coach words", source: "coach" });
   assert.deepEqual(limitationSourceText({ documentedLimitation: null, clientReportsLimitation: true, clientRestrictionText: "Client words" }), { text: "Client words", source: "client" });
   assert.equal(limitationSourceText({ documentedLimitation: "", clientReportsLimitation: false, clientRestrictionText: "Client words" }), null);
+});
+
+await check("23. Approval guard: the real client's 7-day legacy draft conflicts with its six confirmed restrictions (it can't be approved)", () => {
+  const text = "No squats, deadlifts or hinges; no overhead pressing or loaded carries; nothing that needs moderate or hard bracing or spinal loading.";
+  const res = buildConfirmation({ sourceText: text, proposal: null, selectedOptionIds: ["avoid_squat", "avoid_hinge", "avoid_spinal_loading_moderate", "avoid_bracing_moderate", "avoid_vertical_push", "avoid_carries"], clarificationAnswers: {}, noExerciseRestrictions: false, coachUserId: "coach-a", nowIso: NOW }, K);
+  assert.ok(res.ok, res.ok ? "" : res.errors.join("; "));
+  const input = buildSynthesisInput({ knowledge: K, coachMethod: method(), client: state("client-a", review({ documentedLimitations: text, structuredLimitations: (res as { record: StoredStructuredLimitations }).record })) });
+  const legacy = programContent([{ day: "Monday", exercises: ["Barbell Bench Press", "Overhead Press", "Dumbbell Bicep Curl"] }, { day: "Tuesday", exercises: ["Barbell Row", "Pull-Up", "Plank"] }, { day: "Wednesday", exercises: ["Leg Press", "Walking Lunge", "Hip Thrust"] }, { day: "Thursday", exercises: ["Farmer's Carry"] }]);
+  const bad = resistanceContentFit(legacy, input, K).filter((x) => x.state === "incompatible").map((x) => x.exercise);
+  for (const name of ["Overhead Press", "Farmer's Carry"]) assert.ok(bad.includes(name), `${name} flagged: ${bad.join(", ")}`);
+  // Recorded fact, not a bug: "avoid moderate or hard bracing" also rules out the barbell bench press (bracing: moderate)
+  // — the client's own goal lift. Keeping it is the coach's call (e.g. confirm "avoid hard bracing" instead).
+  assert.ok(bad.includes("Barbell Bench Press"), "the moderate-bracing restriction rules out barbell bench press");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -124,6 +124,9 @@ export interface OnboardingFieldDef {
    * persisted-as-visible when this returns true for the step's current
    * answers. Absent means always visible. */
   visibleIf?: (answers: OnboardingStepAnswers) => boolean;
+  /** number_wheel only: false = an untouched wheel records nothing (its displayed starting position is not an answer).
+   * For optional values whose wheel minimum would be a misleading answer — e.g. a target weight of 80 lb. */
+  recordsDisplayedDefault?: boolean;
 }
 
 export interface OnboardingStepDef {
@@ -303,6 +306,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
         label: "Target weight (optional)",
         type: "number_wheel",
         required: false,
+        recordsDisplayedDefault: false,
         min: 80,
         max: 400,
         step: 1,

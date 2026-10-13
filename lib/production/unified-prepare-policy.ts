@@ -1,24 +1,25 @@
-// Production "Prepare unified proposal" — the pure policy (no I/O, importable by tests). The server half is
-// lib/production/unified-prepare.ts.
+// Production "Let OPTIM Build" (prepare a unified proposal) — the pure policy (no I/O, importable by tests). The server
+// half is lib/production/unified-prepare.ts.
 //
-// Spending is bounded three ways: (1) only allowlisted clients (OPTIM_REASONER_PROPOSAL_CLIENTS); (2) preparation
-// reuses lifting the coach already has (their pending draft, else the client's approved program) — it never pays for a
-// new lifting plan here — so only cardio and nutrition can call the model; (3) a hard per-preparation call budget wraps
-// the model: once reached, further calls fail as a provider failure (that domain stops; nothing retries). One open
-// proposal per client at a time, and idempotent retries, keep a coach from paying twice for the same thing.
+// Resistance comes from the coach-approved program when the client has one (kept as-is; publication never replaces it
+// without the coach's explicit confirmation), otherwise from the Fitness Reasoner — a pending legacy draft is never
+// inherited. Spending is bounded three ways: (1) only allowlisted clients (OPTIM_REASONER_PROPOSAL_CLIENTS); (2) a hard
+// per-preparation call budget wraps the model: once reached, further calls fail as a provider failure (that domain
+// stops; nothing retries); (3) no new call starts late in the request. One open proposal per client at a time, and
+// idempotent retries, keep a coach from paying twice for the same thing.
 
 import type { ReasonerModel } from "../synthesis/reasoner/core.ts";
 
 export const PREPARE_POLICY = {
   /** At most one repair per domain. */
   maxAttemptsPerDomain: 2,
-  /** Cardio + nutrition, each with its one repair. */
-  maxModelCalls: 4,
-  /** No new model call STARTS after this much of the preparation has elapsed. Calls run one after another (cardio,
-   * then nutrition) and take ~40–70 s each live, while the request is capped at 300 s (the page's maxDuration — also
-   * the Hobby plan's ceiling). A preparation killed mid-call would waste the spend, so late calls are refused instead:
-   * that domain is recorded as a provider failure the coach can see, and nothing retries. */
-  noNewCallAfterMs: 150_000,
+  /** Resistance (Fitness Reasoner) + cardio + nutrition, each with its one repair. */
+  maxModelCalls: 6,
+  /** No new model call STARTS after this much of the preparation has elapsed. Calls run one after another (resistance
+   * ~85–140 s live, then cardio and nutrition ~40–70 s each) inside the client page's 800 s maxDuration (Vercel Pro);
+   * a call started at the limit still ends by its 240 s provider timeout. A preparation killed mid-call would waste the
+   * spend, so late calls are refused instead: that domain is recorded as a provider failure the coach can see. */
+  noNewCallAfterMs: 560_000,
 } as const;
 
 export class CallBudgetExceededError extends Error {
@@ -52,22 +53,19 @@ export interface PrepareFacts {
   providerConfigured: boolean;
   /** The client's latest unified proposal still awaiting review/approval/publication (not preparing). */
   openProposal: { id: string; approvalState: string; status: string } | null;
-  pendingDraft: { versionId: string } | null;
-  /** The client's active approved program, when it's universal content (usable as fixed lifting). */
+  /** The client's active approved program, when it's universal content (kept as the fixed lifting). */
   approvedProgram: { versionId: string } | null;
 }
 
 export type PrepareDecision =
-  | { ok: true; lifting: { source: "existing_draft" | "approved_program"; versionId: string } }
-  | { ok: false; code: "not_enabled" | "open_proposal" | "no_lifting" | "provider_unavailable"; message: string };
+  | { ok: true; lifting: { source: "approved_program"; versionId: string } | { source: "fitness_reasoner" } }
+  | { ok: false; code: "not_enabled" | "open_proposal" | "provider_unavailable"; message: string };
 
 /** Whether a paid preparation may start, decided BEFORE any model call. */
 export function preparePreflight(f: PrepareFacts): PrepareDecision {
-  if (!f.allowlisted) return { ok: false, code: "not_enabled", message: "Unified proposals aren't enabled for this client yet." };
-  if (f.openProposal) return { ok: false, code: "open_proposal", message: `This client already has a unified proposal ${f.openProposal.approvalState === "approved" ? "approved and waiting to be published" : "waiting for your review"} — publish or reject it before preparing another.` };
-  // The coach's pending draft is their latest intent for the next block; otherwise the program the client follows.
-  const lifting = f.pendingDraft ? { source: "existing_draft" as const, versionId: f.pendingDraft.versionId } : f.approvedProgram ? { source: "approved_program" as const, versionId: f.approvedProgram.versionId } : null;
-  if (!lifting) return { ok: false, code: "no_lifting", message: "Preparing a unified proposal starts from this client's lifting — generate (or approve) a training program first." };
+  if (!f.allowlisted) return { ok: false, code: "not_enabled", message: "Let OPTIM Build isn't enabled for this client yet." };
+  if (f.openProposal) return { ok: false, code: "open_proposal", message: `This client already has a program ${f.openProposal.approvalState === "approved" ? "approved and waiting to be published" : "waiting for your review"} — publish or reject it before building another.` };
   if (!f.providerConfigured) return { ok: false, code: "provider_unavailable", message: "OPTIM's AI provider isn't configured, so nothing was prepared." };
-  return { ok: true, lifting };
+  // The program the client follows stays fixed (never silently replaced); otherwise the Fitness Reasoner plans lifting.
+  return { ok: true, lifting: f.approvedProgram ? { source: "approved_program", versionId: f.approvedProgram.versionId } : { source: "fitness_reasoner" } };
 }

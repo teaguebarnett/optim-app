@@ -86,6 +86,7 @@ export function UnifiedProposalReview({ initial, workspaceId, clientProfileId }:
           disabled={!open || pending}
           onAnswer={(key, answer) => act(() => recordUnifiedDecisionAction(scope, { rowId: view.rowId, key, answer }))}
           onRemoveExercise={(name) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "removeExercise", name } }))}
+          onLimitEffort={(name) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "limitEffort", name } }))}
           onWithdraw={(key) => act(() => withdrawUnifiedExclusionAction(scope, { rowId: view.rowId, key }))}
         />
         <ChecksCard view={view} />
@@ -245,10 +246,32 @@ function DomainCard({ view, domain }: { view: UnifiedReviewView; domain: DomainI
   );
 }
 
-function DecisionsCard({ view, disabled, onAnswer, onRemoveExercise, onWithdraw }: { view: UnifiedReviewView; disabled: boolean; onAnswer: (key: string, answer: string) => void; onRemoveExercise: (name: string) => void; onWithdraw: (key: string) => void }) {
+function DecisionsCard({ view, disabled, onAnswer, onRemoveExercise, onLimitEffort, onWithdraw }: { view: UnifiedReviewView; disabled: boolean; onAnswer: (key: string, answer: string) => void; onRemoveExercise: (name: string) => void; onLimitEffort: (name: string) => void; onWithdraw: (key: string) => void }) {
   const [changing, setChanging] = useState<string | null>(null);
   return (
     <Card>
+      {view.effortLimits.length ? (
+        <div className="mb-3 space-y-2">
+          <p className="text-label text-neutral">Exercises you limited (stay well short of failure)</p>
+          {view.effortLimits.map((x) => (
+            <div key={x.key} className="rounded border border-border-strong bg-surface-raised px-3 py-2">
+              {x.exercises.map((e) => (
+                <div key={e.name} className="flex flex-wrap items-center justify-between gap-2 py-0.5">
+                  <p className="text-meta text-off-white">
+                    {e.name}{" "}
+                    {e.harderIn.length ? <span className="text-warning-strong">— prescribed harder than your limit ({e.harderIn.length} session{e.harderIn.length === 1 ? "" : "s"}); it can&apos;t be approved until the limit is applied</span> : <span className="text-success">— within your limit (3+ reps in reserve)</span>}
+                  </p>
+                  {e.harderIn.length && !disabled ? (
+                    <Button size="sm" variant="secondary" onClick={() => onLimitEffort(e.name)}>
+                      Apply the limit to {e.name} (3+ reps in reserve)
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {view.exclusions.length ? (
         <div className="mb-3 space-y-2">
           <p className="text-label text-neutral">Exercises you excluded</p>
@@ -634,36 +657,66 @@ function PublishCard({ view, pending, onPublish, scope: { workspaceId, clientPro
   );
 }
 
-/** The coach starts a unified proposal for this client: their existing lifting + OPTIM's cardio and nutrition, as
- * drafts for review. Shown only when the client is enabled and has no unified proposal open. */
-export function UnifiedPrepareCard({ workspaceId, clientProfileId }: { workspaceId: string; clientProfileId: string }) {
+/** "Let OPTIM Build" — the coach's one primary way to build this client's program: OPTIM's Fitness Reasoner plans the
+ * lifting (or keeps the approved program as-is) and coordinates cardio, nutrition, scheduling and recovery into ONE
+ * draft proposal for review. Decisions still open (health review, restrictions, method, intake) are listed first and
+ * keep the button disabled. Nothing reaches the client until the coach reviews, approves and publishes. */
+export function UnifiedPrepareCard({ workspaceId, clientProfileId, activeLabel, missing = [], waitingForReview = false }: { workspaceId: string; clientProfileId: string; activeLabel: string; missing?: Array<{ id: string; message: string; href: string | null; linkLabel: string | null }>; waitingForReview?: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const blocked = missing.length > 0;
   return (
-    <Card className="space-y-2">
-      <p className="text-label text-neutral">Unified program</p>
-      <p className="text-body text-off-white">Prepare one proposal that coordinates this client&apos;s lifting with OPTIM&apos;s cardio and nutrition for your review.</p>
-      <p className="text-meta text-neutral">Starts from your pending lifting draft (or the client&apos;s approved program) — it isn&apos;t regenerated. Nothing reaches the client until you review, approve and publish.</p>
-      {result ? (
-        <p role="status" className={`text-meta ${result.ok ? "text-success" : "text-warning-strong"}`}>
-          {result.message}
-        </p>
-      ) : null}
-      <Button
-        size="sm"
-        loading={pending}
-        disabled={pending}
-        onClick={() =>
-          start(async () => {
-            const r = await prepareUnifiedProposalAction({ workspaceId, clientProfileId });
-            setResult({ ok: r.ok, message: r.message });
-            if (r.ok) router.refresh();
-          })
-        }
-      >
-        {pending ? "Preparing — this can take a minute or two…" : "Prepare unified proposal"}
-      </Button>
+    <Card className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium text-off-white">Training program</h3>
+        <p className="mt-0.5 text-sm text-neutral">Active: {activeLabel}</p>
+      </div>
+      {waitingForReview ? (
+        <p className="text-sm text-neutral">OPTIM&apos;s program is waiting for your review below — approve and publish it, or reject it to build again.</p>
+      ) : (
+        <>
+          <p className="text-body text-off-white">Let OPTIM build this client&apos;s program from your method: lifting, cardio where it applies, nutrition, schedule and recovery — one draft for you to review, edit and approve.</p>
+          {blocked ? (
+            <div className="rounded-[var(--radius-sm)] border border-border-strong bg-surface-raised px-3 py-2.5">
+              <p className="text-sm font-medium text-off-white">Decide these first:</p>
+              <ul className="mt-1.5 space-y-1.5">
+                {missing.map((m) => (
+                  <li key={m.id} className="text-sm text-neutral">
+                    {m.message}{" "}
+                    {m.href && m.linkLabel ? (
+                      <a href={m.href} className="font-medium text-accent-fg hover:underline">
+                        {m.linkLabel}
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-meta text-neutral">Takes a few minutes. Nothing reaches the client until you review, approve and publish.</p>
+          )}
+          {result ? (
+            <p role="status" className={`text-meta ${result.ok ? "text-success" : "text-warning-strong"}`}>
+              {result.message}
+            </p>
+          ) : null}
+          <Button
+            size="sm"
+            loading={pending}
+            disabled={pending || blocked}
+            onClick={() =>
+              start(async () => {
+                const r = await prepareUnifiedProposalAction({ workspaceId, clientProfileId });
+                setResult({ ok: r.ok, message: r.message });
+                if (r.ok) router.refresh();
+              })
+            }
+          >
+            {pending ? "OPTIM is building the program — this takes a few minutes…" : "Let OPTIM Build"}
+          </Button>
+        </>
+      )}
     </Card>
   );
 }

@@ -81,6 +81,9 @@ export interface UnifiedDecision {
    * exclusion answer is binding: those exercises may not stay in the program the coach approves or publishes. */
   exercises?: string[];
   excludeOption?: string;
+  /** The option meaning "keep them with an effort limit": binding — those exercises must stay at least
+   * EFFORT_LIMIT_MIN_RIR reps short of failure in the program the coach approves or publishes. */
+  effortLimitOption?: string;
 }
 
 export interface CrossDomainFinding {

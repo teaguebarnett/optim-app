@@ -15,7 +15,7 @@ import { sha256 } from "../synthesis/reasoner/run.ts";
 import type { SynthesisInput } from "../synthesis/synthesis-input.ts";
 import type { FitnessKnowledgeRegistry } from "../synthesis/knowledge/types.ts";
 import type { DomainId, UnifiedProgramProposal } from "../synthesis/unified/contract.ts";
-import { approvalBlockers, documentedLimitations, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type RecordedAnswer, type ReviewDecision, type Revalidation } from "../synthesis/unified/review.ts";
+import { applyEffortLimitEverywhere, approvalBlockers, documentedLimitations, effortLimitedExercises, effortLimitViolations, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type RecordedAnswer, type ReviewDecision, type Revalidation } from "../synthesis/unified/review.ts";
 import { applyTrainingItemPatch, removeTrainingItem, locateTrainingItem, type TrainingItemPatch, type TrainingItemPath } from "../training/program-proposal-editing.ts";
 import type { UniversalTrainingProgramContent } from "../training/types.ts";
 import type { AssignedNutritionPlan, NutritionTargets, PrescribedNutritionTargets } from "../types.ts";
@@ -110,6 +110,8 @@ export interface UnifiedReviewView {
   documentedLimitations: string | null;
   /** The coach's binding exclusions (from decisions) and where each excluded exercise still appears (empty = removed). */
   exclusions: Array<{ key: string; question: string; exercises: Array<{ name: string; presentIn: string[] }>; decidedAtIso: string }>;
+  /** The coach's binding effort limits (from decisions) and where each exercise is still prescribed harder than the limit. */
+  effortLimits: Array<{ key: string; exercises: Array<{ name: string; harderIn: string[] }> }>;
 }
 
 export class ReviewConflictError extends Error {}
@@ -205,6 +207,7 @@ async function buildView(env: ReviewEnv, row: ReviewRow): Promise<UnifiedReviewV
     current: { training: t?.content ?? null, nutrition: n?.content ?? null },
     versions: { training: t?.id ?? null, nutrition: n?.id ?? null },
     excluded: excludedExercises(row.coach_decisions ?? {}),
+    effortLimited: effortLimitedExercises(row.coach_decisions ?? {}),
   });
   const decisions = reviewDecisions(row.proposal, revalidation, row.coach_decisions ?? {});
   // Approved-but-unpublished proposals can go stale too (publication re-checks this).
@@ -238,6 +241,12 @@ async function buildView(env: ReviewEnv, row: ReviewRow): Promise<UnifiedReviewV
       .map(([key, a]) => {
         const where = exerciseLocations(t?.content ?? null, a.excludes!);
         return { key, question: a.question, exercises: a.excludes!.map((name) => ({ name, presentIn: where[name] ?? [] })), decidedAtIso: a.decidedAtIso };
+      }),
+    effortLimits: Object.entries(row.coach_decisions ?? {})
+      .filter(([, a]) => a.limitsEffort?.length)
+      .map(([key, a]) => {
+        const where = effortLimitViolations(t?.content ?? null, a.limitsEffort!);
+        return { key, exercises: a.limitsEffort!.map((name) => ({ name, harderIn: where[name] ?? [] })) };
       }),
   };
 }
@@ -273,7 +282,9 @@ export async function recordUnifiedDecision(env: ReviewEnv, p: { rowId: string; 
   // Choosing the decision's exclude option is binding on the program (revalidation + the database guard enforce it);
   // OPTIM never removes the exercises itself — the coach does, explicitly.
   const excludes = d.exercises?.length && d.excludeOption && answer === d.excludeOption ? d.exercises : undefined;
-  const next = { ...(row.coach_decisions ?? {}), [p.key]: { answer, question: d.question, decidedBy: env.userId, decidedAtIso: env.nowIso, ...(excludes ? { excludes } : {}) } };
+  // Likewise the effort-limit option: binding (revalidation blocks approval) — the coach applies it, explicitly.
+  const limitsEffort = d.exercises?.length && d.effortLimitOption && answer === d.effortLimitOption ? d.exercises : undefined;
+  const next = { ...(row.coach_decisions ?? {}), [p.key]: { answer, question: d.question, decidedBy: env.userId, decidedAtIso: env.nowIso, ...(excludes ? { excludes } : {}), ...(limitsEffort ? { limitsEffort } : {}) } };
   const { data, error } = await env.supabase.from("unified_program_proposals").update({ coach_decisions: next }).eq("id", row.id).eq("approval_state", "proposed").select("id");
   if (error) throw new Error(`recordUnifiedDecision: ${error.message}`);
   if (!data?.length) throw new ReviewConflictError("This proposal changed while you were answering — reload the review.");
@@ -314,7 +325,9 @@ export type TrainingEdit =
   | { kind: "patch"; path: TrainingItemPath; patch: TrainingItemPatch }
   | { kind: "remove"; path: TrainingItemPath }
   /** The coach removes one exercise everywhere it appears (e.g. after excluding it). */
-  | { kind: "removeExercise"; name: string };
+  | { kind: "removeExercise"; name: string }
+  /** The coach applies their effort limit to one exercise everywhere it appears (at least EFFORT_LIMIT_MIN_RIR in reserve). */
+  | { kind: "limitEffort"; name: string };
 
 export async function editUnifiedTraining(env: ReviewEnv, p: { rowId: string; expectedVersionId: string; edit: TrainingEdit }): Promise<UnifiedReviewView> {
   const row = await loadRow(env, p.rowId);
@@ -331,6 +344,11 @@ export async function editUnifiedTraining(env: ReviewEnv, p: { rowId: string; ex
     const count = Object.values(exerciseLocations(current.content, [p.edit.name])).flat().length;
     next = removeExerciseEverywhere(current.content, p.edit.name);
     summary = `Removed ${p.edit.name} from the program (${count} session${count === 1 ? "" : "s"})`;
+  } else if (p.edit.kind === "limitEffort") {
+    if (row.resistance_source === "approved_program") throw new Error(lockedLifting);
+    const count = Object.values(effortLimitViolations(current.content, [p.edit.name])).flat().length;
+    next = applyEffortLimitEverywhere(current.content, p.edit.name);
+    summary = `Limited ${p.edit.name} to stay well short of failure (${count} session${count === 1 ? "" : "s"})`;
   } else {
     const located = locateTrainingItem(current.content, p.edit.path);
     if (!located) throw new Error("No training item at that path.");

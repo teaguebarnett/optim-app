@@ -34,6 +34,52 @@ export interface RecordedAnswer {
   decidedAtIso: string;
   /** The exercises this answer excludes (the decision's exclude option was chosen) — binding on the program. */
   excludes?: string[];
+  /** The exercises this answer keeps only under an effort limit (the decision's effort-limit option) — binding: they
+   * must stay at least EFFORT_LIMIT_MIN_RIR reps short of failure. */
+  limitsEffort?: string[];
+}
+
+/** "Well short of failure": at least 3 reps in reserve (RPE 7 or easier). */
+export const EFFORT_LIMIT_MIN_RIR = 3;
+
+/** Every exercise the coach keeps only under an effort limit through a decision in this review. */
+export function effortLimitedExercises(answers: Record<string, RecordedAnswer>): string[] {
+  return [...new Set(Object.values(answers).flatMap((a) => a.limitsEffort ?? []))];
+}
+
+const harderThanLimit = (p: { family: string; rir?: number; rpe?: number }) => p.family === "resistance" && ((typeof p.rir === "number" && p.rir < EFFORT_LIMIT_MIN_RIR) || (typeof p.rpe === "number" && p.rpe > 10 - EFFORT_LIMIT_MIN_RIR) || (p.rir === undefined && p.rpe === undefined));
+
+/** Where each effort-limited exercise is still prescribed closer to failure than the limit (or with no effort target). */
+export function effortLimitViolations(content: UniversalTrainingProgramContent | null, names: string[]): Record<string, string[]> {
+  const want = new Map(names.map((n) => [n.toLowerCase(), n]));
+  const out: Record<string, string[]> = {};
+  for (const w of content?.weeks ?? [])
+    for (const d of w.days)
+      for (const s of d.sessions ?? [])
+        for (const b of s.blocks)
+          for (const i of b.items) {
+            const n = want.get(i.name.toLowerCase());
+            if (n && harderThanLimit(i.prescription as never)) (out[n] ??= []).push(`week ${w.weekNumber} ${d.dayOfWeek}`);
+          }
+  return out;
+}
+
+/** The coach's explicit "apply the effort limit": every instance of the exercise, all weeks, at least
+ * EFFORT_LIMIT_MIN_RIR reps in reserve (an RPE target is capped to match). Never makes anything harder. */
+export function applyEffortLimitEverywhere(content: UniversalTrainingProgramContent, name: string): UniversalTrainingProgramContent {
+  const target = name.toLowerCase();
+  const out = structuredClone(content);
+  for (const w of out.weeks)
+    for (const d of w.days)
+      for (const s of d.sessions ?? [])
+        for (const b of s.blocks)
+          for (const i of b.items) {
+            const p = i.prescription as { family: string; rir?: number; rpe?: number };
+            if (i.name.toLowerCase() !== target || p.family !== "resistance") continue;
+            if (typeof p.rpe === "number" && p.rir === undefined) p.rpe = Math.min(p.rpe, 10 - EFFORT_LIMIT_MIN_RIR);
+            else p.rir = Math.max(p.rir ?? EFFORT_LIMIT_MIN_RIR, EFFORT_LIMIT_MIN_RIR);
+          }
+  return out;
 }
 
 /** Every exercise the coach has excluded through a decision in this review (case-insensitive names). */
@@ -180,6 +226,8 @@ export function revalidateDrafts(p: {
   versions: { training: string | null; nutrition: string | null };
   /** Exercises the coach excluded through a decision — none may remain in the training draft. */
   excluded?: string[];
+  /** Exercises the coach keeps only under an effort limit — none may be prescribed closer to failure than the limit. */
+  effortLimited?: string[];
 }): Revalidation {
   const { input, proposal: u } = p;
   const out: Revalidation = { versions: p.versions, errors: [], findings: [], decisions: [], week: [], workload: u.workload, domains: { resistance: { status: u.domains.resistance.status, edited: false, ok: true }, cardio: { status: u.domains.cardio.status, edited: false, ok: true }, nutrition: { status: u.domains.nutrition.status, edited: false, ok: true } } };
@@ -211,6 +259,9 @@ export function revalidateDrafts(p: {
     // The coach's exclusion decisions are binding: an excluded exercise still in the draft blocks approval.
     for (const [name, where] of Object.entries(exerciseLocations(t, p.excluded ?? [])))
       err("resistance", `${name} is excluded by your decision but is still in the program (${where.length > 3 ? `${where.slice(0, 3).join(", ")} and ${where.length - 3} more` : where.join(", ")}) — remove or replace it, or change your decision.`);
+    // The coach's effort-limit decisions are binding too.
+    for (const [name, where] of Object.entries(effortLimitViolations(t, p.effortLimited ?? [])))
+      err("resistance", `${name} is limited by your decision to stay well short of failure (${EFFORT_LIMIT_MIN_RIR}+ reps in reserve) but is prescribed harder (${where.length > 3 ? `${where.slice(0, 3).join(", ")} and ${where.length - 3} more` : where.join(", ")}) — apply the effort limit, or change your decision.`);
     // Exercises already excluded don't raise the documented-limitation question again.
     const excludedSet = new Set((p.excluded ?? []).map((n) => n.toLowerCase()));
     const doc = documentedExerciseReview(input, resistanceNames(t).filter((n) => !excludedSet.has(n.toLowerCase())));

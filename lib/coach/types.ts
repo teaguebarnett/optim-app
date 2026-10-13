@@ -224,6 +224,10 @@ export interface OnboardingProgress {
   answers: Partial<Record<OnboardingStepId, OnboardingStepAnswers>>;
   completedAtIso?: string;
   updatedAtIso: string;
+  /** Coach-facing reads only: the client's own answers when `answers` has coach corrections / unseen-question answers
+   * removed applied (lib/coach/intake-corrections.ts), and the corrections themselves. */
+  clientAnswers?: Partial<Record<OnboardingStepId, OnboardingStepAnswers>>;
+  intakeCorrections?: Record<string, import("./intake-corrections.ts").IntakeCorrection>;
 }
 
 // ---------------------------------------------------------------------------

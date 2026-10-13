@@ -177,7 +177,9 @@ export function OnboardingWizard({ clientId, live }: { clientId: string; live?: 
   // into real state in handleNext, once the client actually advances.
   const effectiveAnswers: OnboardingStepAnswers = { ...currentAnswers };
   for (const field of step.fields) {
-    if (field.type === "number_wheel" && effectiveAnswers[field.key] === undefined) {
+    // Only a wheel the client can actually see — and whose starting position is a real answer — records its default.
+    // (A hidden or opt-out wheel never invents an answer: e.g. a target weight of 80 lb for a "get stronger" goal.)
+    if (field.type === "number_wheel" && effectiveAnswers[field.key] === undefined && field.recordsDisplayedDefault !== false && (!field.visibleIf || field.visibleIf(currentAnswers))) {
       effectiveAnswers[field.key] = field.min ?? 0;
     }
     if (field.type === "height_feet_inches") {

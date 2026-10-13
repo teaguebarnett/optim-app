@@ -133,6 +133,7 @@ export function OnboardingFieldInput({
     return (
       <div>
         <FieldHeading field={field} />
+        {field.recordsDisplayedDefault === false && typeof value !== "number" ? <p className="mb-1.5 text-xs text-neutral">Not set — scroll to choose, or skip it.</p> : null}
         <NumberWheel
           id={field.key}
           fieldLabel={field.label}

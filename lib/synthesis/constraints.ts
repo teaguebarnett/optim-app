@@ -217,9 +217,10 @@ export function deriveConstraintSet(state: ClientState): ConstraintSet {
   return applyCoachStructuredRestrictions(derived, [
     {
       id: "health_review",
-      // Confirmed against the coach's documented limitation when there is one; otherwise against the client's own
-      // reported restriction (see limitationSourceText), so it interprets the client's constraints instead.
-      interprets: coachText ? [id("coach_documented_limitation")] : derived.constraints.filter((c) => c.id === id("client_reported_limitation") || c.id === id("client_restriction_terms")).map((c) => c.id),
+      // The coach's confirmed structure expresses their documented limitation when there is one (their reviewed reading
+      // of the client's report), otherwise the client's own reported restriction (see limitationSourceText) — either way
+      // it interprets the client's reported limitation too, so every reasoner (resistance, cardio) treats it as covered.
+      interprets: [...(coachText ? [id("coach_documented_limitation")] : []), ...derived.constraints.filter((c) => c.id === id("client_reported_limitation") || c.id === id("client_restriction_terms")).map((c) => c.id)],
       description: structured.value.noExerciseRestrictions ? "Coach confirmed: this limitation doesn't restrict exercises." : `Coach-confirmed: ${structured.value.restrictions.map((r) => r.label).join("; ")}.`,
       tags: structured.value.restrictions.flatMap((r) => r.tags),
       ref: `health_review.structuredLimitations@${structured.value.confirmedAtIso}`,

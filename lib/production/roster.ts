@@ -23,6 +23,8 @@
 // exactly like daily_records vs. program_assignments already are.
 
 import "server-only";
+import { getOnboardingProgressForClient } from "./onboarding.ts";
+import type { IntakeCorrection } from "../coach/intake-corrections.ts";
 import { randomUUID } from "node:crypto";
 import { getSupabaseServerClient } from "../supabase/server";
 import { getSupabaseAdminClient } from "../supabase/admin";
@@ -216,7 +218,7 @@ export interface LiveClientDetail {
   startDateIso: string | null;
   timezone: string;
   hasConfirmedTimezone: boolean;
-  onboarding: { currentStepIndex: number; answers: unknown; completedAtIso: string | null } | null;
+  onboarding: { currentStepIndex: number; answers: unknown; completedAtIso: string | null; clientAnswers?: unknown; intakeCorrections?: Record<string, IntakeCorrection> } | null;
   activeProgram: { versionId: string; versionNumber: number; name: string; durationWeeks: number } | null;
   /** targets are the assigned published version's own saved values —
    * never a form default. Null means nutrition is genuinely not assigned. */
@@ -247,17 +249,14 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
 
   requireWorkspaceRole(ctx, client.workspace_id as string, ["workspace_owner", "platform_admin", "coach"]);
 
-  const [{ data: enrollment }, { data: onboarding }, program, nutrition] = await Promise.all([
+  const [{ data: enrollment }, onboarding, program, nutrition] = await Promise.all([
     supabase
       .from("client_enrollments")
       .select("status, original_program_start_date, timezone, timezone_source, archived_at")
       .eq("client_profile_id", clientProfileId)
       .maybeSingle(),
-    supabase
-      .from("client_onboarding_progress")
-      .select("current_step_index, answers, completed_at")
-      .eq("client_profile_id", clientProfileId)
-      .maybeSingle(),
+    // The same effective answers planning reads (coach intake corrections applied), with the client's own alongside.
+    getOnboardingProgressForClient(clientProfileId),
     getActiveProgramAssignment(clientProfileId),
     getActiveNutritionAssignment(clientProfileId),
   ]);
@@ -265,7 +264,7 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
   const lifecycle = deriveLifecycle({
     enrollmentStatus: enrollment?.status ?? null,
     onboardingExists: onboarding !== null,
-    onboardingCompletedAtIso: onboarding?.completed_at ?? null,
+    onboardingCompletedAtIso: onboarding?.completedAtIso ?? null,
   });
 
   return {
@@ -281,7 +280,7 @@ export async function getClientDetail(clientProfileId: string): Promise<LiveClie
     timezone: (enrollment?.timezone as string) || "UTC",
     hasConfirmedTimezone: !!enrollment?.timezone_source,
     timezoneSource: (enrollment?.timezone_source as "client_detected" | "coach_override" | null | undefined) ?? null,
-    onboarding: onboarding ? { currentStepIndex: onboarding.current_step_index as number, answers: onboarding.answers, completedAtIso: onboarding.completed_at as string | null } : null,
+    onboarding: onboarding ? { currentStepIndex: onboarding.currentStepIndex, answers: onboarding.answers, completedAtIso: onboarding.completedAtIso ?? null, clientAnswers: onboarding.clientAnswers, intakeCorrections: onboarding.intakeCorrections } : null,
     activeProgram: program ? { versionId: program.versionId, versionNumber: program.versionNumber, name: program.content.name, durationWeeks: program.content.durationWeeks } : null,
     activeNutrition: nutrition ? { versionId: nutrition.versionId, versionNumber: nutrition.versionNumber, targets: nutrition.content.targets, prescribed: nutrition.content.method?.prescribed ?? nutrition.content.targets! } : null,
   };

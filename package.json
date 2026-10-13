@@ -53,6 +53,7 @@
     "verify:coach-brief-record": "node --experimental-strip-types lib/coach/verify-coach-brief-record.mts",
     "verify:notification-tier": "node --experimental-strip-types lib/coach/verify-notification-tier.mts",
     "verify:client-status": "node --experimental-strip-types lib/coach/verify-client-status.mts",
+    "verify:intake-corrections": "node --experimental-strip-types lib/coach/verify-intake-corrections.mts",
     "verify:programming-profile": "node --experimental-strip-types lib/coach/verify-programming-profile.mts",
     "verify:program-periodization": "node --experimental-strip-types lib/coach/verify-program-periodization.mts",
     "verify:program-directions": "node --experimental-strip-types lib/coach/verify-program-directions.mts",

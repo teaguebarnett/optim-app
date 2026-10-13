@@ -46,6 +46,8 @@ import { getHealthReviewDecisionTarget } from "@/lib/production/pain-safety";
 import type { HealthReviewStatus } from "@/lib/coach/types";
 import { ONBOARDING_STEPS } from "@/lib/coach/onboarding-steps";
 import { StructuredLimitationsCard } from "@/components/coach/structured-limitations-card";
+import { IntakeCorrectionRow } from "@/components/coach/intake-correction-row";
+import { CORRECTABLE_INTAKE_FIELDS } from "@/lib/coach/intake-corrections";
 import { ResistancePlannerPreview } from "@/components/coach/resistance-planner-preview";
 import { previewResistancePlanAction } from "@/app/actions/structured-limitations";
 import { getLimitationsState } from "@/lib/production/structured-limitations";
@@ -119,6 +121,7 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
   const unifiedReview = onboardingComplete ? await soft("unified review", () => getUnifiedReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId })) : null;
   // Gate U3C — the coach can prepare a unified proposal for an allowlisted client with completed intake.
   const unifiedPrepareEnabled = onboardingComplete && isReasonerProposalEnabled(clientId);
+  const activeProgramLabel = detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none";
   const limitationOptions = allRestrictionOptions(FOUNDATION_KNOWLEDGE).map((o) => ({ id: o.id, group: o.group, label: o.label, help: o.help, dimension: dimensionOf(o.id, FOUNDATION_KNOWLEDGE) }));
   const pendingAdjustmentProvenance = pendingProposal?.content.adjustmentProvenance ?? null;
   // Bounded — clientStateFindings is already capped to a small set (see
@@ -249,6 +252,26 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
               <dl className="space-y-2 text-sm">
                 <Row label="Height" value={formatHeightFromAnswers(aboutYou)} />
                 <Row label="Goal" value={goals ? describePrimaryGoal(ONBOARDING_STEPS, goals) : NOT_PROVIDED} />
+                {CORRECTABLE_INTAKE_FIELDS.map((f) => {
+                  const own = ((detail.onboarding?.clientAnswers ?? {}) as Record<string, Record<string, unknown> | undefined>)[f.step]?.[f.field];
+                  const eff = ((detail.onboarding?.answers ?? {}) as Record<string, Record<string, unknown> | undefined>)[f.step]?.[f.field];
+                  return (
+                    <IntakeCorrectionRow
+                      key={`${f.step}.${f.field}`}
+                      workspaceId={detail.workspaceId}
+                      clientProfileId={clientId}
+                      step={f.step}
+                      field={f.field}
+                      label={f.label}
+                      unit={f.unit}
+                      min={f.min}
+                      max={f.max}
+                      effective={typeof eff === "number" ? eff : null}
+                      clientValue={typeof own === "number" ? own : null}
+                      correction={detail.onboarding?.intakeCorrections?.[`${f.step}.${f.field}`] ?? null}
+                    />
+                  );
+                })}
                 <Row
                   label="Available days"
                   value={Array.isArray(week?.availableDays) && (week!.availableDays as string[]).length > 0 ? `${(week!.availableDays as string[]).length}/week` : NOT_PROVIDED}
@@ -288,39 +311,85 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
 
         {limitationsState ? <StructuredLimitationsCard workspaceId={detail.workspaceId} clientProfileId={clientId} state={limitationsState} options={limitationOptions} /> : null}
 
+        {unifiedPrepareEnabled ? (
+          <>
+            {/* "Let OPTIM Build" — the one primary path: decisions first, then one coordinated draft to review, edit,
+                approve and publish. The earlier generators stay available (collapsed) until this path is proven. */}
+            <UnifiedPrepareCard
+              workspaceId={detail.workspaceId}
+              clientProfileId={clientId}
+              activeLabel={activeProgramLabel}
+              missing={generationPrerequisites.missing}
+              waitingForReview={!!unifiedReview && !["rejected", "published", "superseded"].includes(unifiedReview.approvalState)}
+            />
+            {unifiedReview ? <UnifiedProposalReview key={unifiedReview.rowId} initial={unifiedReview} workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
+            <details className="group rounded-[var(--radius-lg)] border border-border px-4 py-3">
+              <summary className="cursor-pointer text-sm font-medium text-neutral">Other program tools{pendingProposal ? " · an earlier draft is here" : ""}</summary>
+              <div className="mt-3 space-y-3">
+                <p className="text-meta text-neutral">Earlier ways to build a program. Let OPTIM Build doesn&apos;t use them; publishing its program archives an earlier draft.</p>
         <Card>
-          <h3 className="mb-2 text-sm font-medium text-off-white">Training program</h3>
-          <p className="mb-2 text-sm text-neutral">
-            Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
-          </p>
-          {notice === "proposal-rejected" && !pendingProposal ? (
-            <p role="status" className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2 text-sm text-success">
-              Proposal rejected. Nothing was generated or activated.
-            </p>
-          ) : null}
-          {pendingProposal ? (
-            <>
-              <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
-              {/* Gate 4.0C-5 — a revision of that proposal stopped at its preflight: the coach's fit decisions come first. */}
-              {reasonerAvailability.enabled && reasonerAvailability.job?.status === "needs_input" && reasonerAvailability.job.outcome.fitQuestions?.length && reasonerAvailability.job.outcome.intent?.supersedesJobId ? (
-                <div className="mt-3">
-                  <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={[]} revision />
-                </div>
+                  <h3 className="mb-2 text-sm font-medium text-off-white">Training program</h3>
+                  <p className="mb-2 text-sm text-neutral">
+                    Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
+                  </p>
+                  {notice === "proposal-rejected" && !pendingProposal ? (
+                    <p role="status" className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2 text-sm text-success">
+                      Proposal rejected. Nothing was generated or activated.
+                    </p>
+                  ) : null}
+                  {pendingProposal ? (
+                    <>
+                      <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
+                      {/* Gate 4.0C-5 — a revision of that proposal stopped at its preflight: the coach's fit decisions come first. */}
+                      {reasonerAvailability.enabled && reasonerAvailability.job?.status === "needs_input" && reasonerAvailability.job.outcome.fitQuestions?.length && reasonerAvailability.job.outcome.intent?.supersedesJobId ? (
+                        <div className="mt-3">
+                          <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={[]} revision />
+                        </div>
+                      ) : null}
+                    </>
+                  ) : reasonerAvailability.enabled ? (
+                    <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
+                  ) : (
+                    <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
+                  )}
+                </Card>
+                {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
+                {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}
+              </div>
+            </details>
+          </>
+        ) : (
+          <>
+        <Card>
+              <h3 className="mb-2 text-sm font-medium text-off-white">Training program</h3>
+              <p className="mb-2 text-sm text-neutral">
+                Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
+              </p>
+              {notice === "proposal-rejected" && !pendingProposal ? (
+                <p role="status" className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2 text-sm text-success">
+                  Proposal rejected. Nothing was generated or activated.
+                </p>
               ) : null}
-            </>
-          ) : reasonerAvailability.enabled ? (
-            <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
-          ) : (
-            <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
-          )}
-        </Card>
-
-        {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
-
-        {unifiedPrepareEnabled && (!unifiedReview || ["rejected", "published", "superseded"].includes(unifiedReview.approvalState)) ? <UnifiedPrepareCard workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
-        {unifiedReview ? <UnifiedProposalReview key={unifiedReview.rowId} initial={unifiedReview} workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
-
-        {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}
+              {pendingProposal ? (
+                <>
+                  <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
+                  {/* Gate 4.0C-5 — a revision of that proposal stopped at its preflight: the coach's fit decisions come first. */}
+                  {reasonerAvailability.enabled && reasonerAvailability.job?.status === "needs_input" && reasonerAvailability.job.outcome.fitQuestions?.length && reasonerAvailability.job.outcome.intent?.supersedesJobId ? (
+                    <div className="mt-3">
+                      <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={[]} revision />
+                    </div>
+                  ) : null}
+                </>
+              ) : reasonerAvailability.enabled ? (
+                <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
+              ) : (
+                <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
+              )}
+            </Card>
+            {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
+            {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}
+          </>
+        )}
 
         <Card>
           <h3 className="mb-2 text-sm font-medium text-off-white">Nutrition plan</h3>

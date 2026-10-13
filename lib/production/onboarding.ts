@@ -25,6 +25,7 @@ import { computeHealthReviewRequired } from "../coach/health-review.ts";
 import { projectBaselineInjuryObservations } from "../signals/project-pain-report.ts";
 import { recordObservations } from "./signals.ts";
 import type { OnboardingProgress, OnboardingStepAnswers, OnboardingStepId } from "../coach/types";
+import { effectiveIntakeAnswers, parseIntakeCorrections } from "../coach/intake-corrections.ts";
 
 interface OnboardingProgressRow {
   current_step_index: number;
@@ -65,22 +66,37 @@ function rowToProgress(row: OnboardingProgressRow, clientProfileId: string, work
  * this client's workspace/assignment gets zero rows back, never an error
  * that leaks whether the row exists. */
 export async function getOnboardingProgressForClient(clientProfileId: string): Promise<OnboardingProgress | null> {
+  const raw = await readOwnOrStaffProgress(clientProfileId, true);
+  if (!raw) return null;
+  // Coach-facing and planning reads: the client's answers as planning should read them — answers to questions the
+  // client never saw dropped, the coach's intake corrections applied — with the client's own answers alongside.
+  const corrections = parseIntakeCorrections(raw.corrections);
+  return { ...raw.progress, answers: effectiveIntakeAnswers(raw.progress.answers, corrections), clientAnswers: raw.progress.answers, intakeCorrections: corrections };
+}
+
+/** The raw row (the client's own answers, untouched). The corrections column arrives with migration 038; a database
+ * without it reads as "no corrections". */
+async function readOwnOrStaffProgress(clientProfileId: string, withCorrections: boolean): Promise<{ progress: OnboardingProgress; corrections: unknown } | null> {
   const supabase = await getSupabaseServerClient();
-  const { data, error } = await supabase
-    .from("client_onboarding_progress")
-    .select("current_step_index, answers, completed_at, updated_at, workspace_id")
-    .eq("client_profile_id", clientProfileId)
-    .maybeSingle();
+  const base = "current_step_index, answers, completed_at, updated_at, workspace_id";
+  let { data, error } = await supabase.from("client_onboarding_progress").select(withCorrections ? `${base}, coach_intake_corrections` : base).eq("client_profile_id", clientProfileId).maybeSingle();
+  if (error && withCorrections && (error.code === "42703" || /coach_intake_corrections/.test(error.message))) ({ data, error } = await supabase.from("client_onboarding_progress").select(base).eq("client_profile_id", clientProfileId).maybeSingle());
   if (error) throw new Error(`getOnboardingProgressForClient failed: ${error.message}`);
   if (!data) return null;
-  return rowToProgress(data, clientProfileId, data.workspace_id as string);
+  const row = data as unknown as OnboardingProgressRow & { workspace_id: string; coach_intake_corrections?: unknown };
+  return { progress: rowToProgress(row, clientProfileId, row.workspace_id), corrections: row.coach_intake_corrections };
+}
+
+/** The client's own answers exactly as they gave them — what the client's onboarding reads and merges into. */
+async function getClientOwnProgress(clientProfileId: string): Promise<OnboardingProgress | null> {
+  return (await readOwnOrStaffProgress(clientProfileId, false))?.progress ?? null;
 }
 
 /** The client's own view of their own progress — resolves identity from the
  * authenticated session, never a client-supplied clientId. */
 export async function getMyOnboardingProgress(): Promise<{ identity: Awaited<ReturnType<typeof resolveOwnClientIdentity>>; progress: OnboardingProgress | null }> {
   const identity = await resolveOwnClientIdentity();
-  const progress = await getOnboardingProgressForClient(identity.clientProfileId);
+  const progress = await getClientOwnProgress(identity.clientProfileId);
   return { identity, progress };
 }
 
@@ -96,7 +112,7 @@ export async function saveOnboardingStep(params: {
   const identity = await resolveOwnClientIdentity();
   const supabase = await getSupabaseServerClient();
 
-  const existing = await getOnboardingProgressForClient(identity.clientProfileId);
+  const existing = await getClientOwnProgress(identity.clientProfileId);
   const mergedAnswers = { ...(existing?.answers ?? {}), [params.stepId]: params.answers };
 
   const { data, error } = await supabase
@@ -160,7 +176,7 @@ export async function completeOnboarding(finalAnswers: OnboardingStepAnswers): P
   const identity = await resolveOwnClientIdentity();
   const supabase = await getSupabaseServerClient();
 
-  const existing = await getOnboardingProgressForClient(identity.clientProfileId);
+  const existing = await getClientOwnProgress(identity.clientProfileId);
   const mergedAnswers = { ...(existing?.answers ?? {}), review: finalAnswers };
   const nowIso = new Date().toISOString();
 

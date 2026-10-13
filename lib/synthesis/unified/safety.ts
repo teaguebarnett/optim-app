@@ -133,6 +133,7 @@ export function documentedExerciseMentions(exerciseName: string, documented: str
 }
 
 const EXCLUDE_DOCUMENTED = "Exclude them for this client (exercise decision)";
+const LIMIT_DOCUMENTED = "Keep them with an effort limit (e.g. stay well short of failure)";
 
 /** Lifting exercises that are eligible under the confirmed restrictions but named in the documented limitations. */
 export function documentedExerciseReview(input: SynthesisInput, exerciseNames: string[]): UnifiedDecision | null {
@@ -143,10 +144,11 @@ export function documentedExerciseReview(input: SynthesisInput, exerciseNames: s
     source: "resistance",
     about: "documented_limitation_exercise_review",
     question: `These exercises fit the confirmed restrictions but are named in the documented limitations: ${hits.map((h) => `${h.n} (“${h.m}”)`).join("; ")}. Keep them, limit them, or exclude them for this client?`,
-    options: ["Keep them as prescribed", "Keep them with an effort limit (e.g. stay well short of failure)", EXCLUDE_DOCUMENTED],
+    options: ["Keep them as prescribed", LIMIT_DOCUMENTED, EXCLUDE_DOCUMENTED],
     recommended: null,
     exercises: hits.map((h) => h.n),
     excludeOption: EXCLUDE_DOCUMENTED,
+    effortLimitOption: LIMIT_DOCUMENTED,
     why: "The documented limitations name these movements; OPTIM doesn't decide whether they're safe and doesn't change the confirmed restrictions.",
   };
 }

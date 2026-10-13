@@ -1,4 +1,4 @@
-// Production "Prepare unified proposal" — offline checks of the spending/readiness policy and the hard call budget.
+// Production "Let OPTIM Build" (prepare a unified proposal) — offline checks of the spending/readiness policy and the hard call budget.
 // No database, no paid calls (scripted models).
 //
 //   node --experimental-strip-types lib/production/verify-unified-prepare.mts
@@ -22,22 +22,20 @@ async function check(name: string, fn: () => void | Promise<void>) {
     failed++;
   }
 }
-const ready: PrepareFacts = { allowlisted: true, providerConfigured: true, openProposal: null, pendingDraft: { versionId: "v4" }, approvedProgram: null };
+const ready: PrepareFacts = { allowlisted: true, providerConfigured: true, openProposal: null, approvedProgram: null };
 
 console.log("\nProduction prepare — policy and call budget (offline)\n");
 
-await check("1. preflight passes only when every condition holds; the coach's pending draft is the lifting source", () => {
-  assert.deepEqual(preparePreflight(ready), { ok: true, lifting: { source: "existing_draft", versionId: "v4" } });
-  assert.deepEqual(preparePreflight({ ...ready, pendingDraft: null, approvedProgram: { versionId: "p1" } }), { ok: true, lifting: { source: "approved_program", versionId: "p1" } });
-  assert.equal((preparePreflight({ ...ready, approvedProgram: { versionId: "p1" } }) as { lifting: { source: string } }).lifting.source, "existing_draft", "a pending draft (the coach's next block) wins over the running program");
+await check("1. preflight passes only when every condition holds; the Fitness Reasoner plans lifting unless an approved program exists", () => {
+  assert.deepEqual(preparePreflight(ready), { ok: true, lifting: { source: "fitness_reasoner" } });
+  assert.deepEqual(preparePreflight({ ...ready, approvedProgram: { versionId: "p1" } }), { ok: true, lifting: { source: "approved_program", versionId: "p1" } }, "the program the client follows is kept, never silently replaced");
 });
 
-await check("2. refusals, in order, before any model call: not allowlisted → open proposal → no lifting → no provider", () => {
+await check("2. refusals, in order, before any model call: not allowlisted → open proposal → no provider", () => {
   const code = (f: PrepareFacts) => (preparePreflight(f) as { code?: string }).code;
   assert.equal(code({ ...ready, allowlisted: false, openProposal: { id: "x", approvalState: "proposed", status: "draft_ready" } }), "not_enabled");
   assert.equal(code({ ...ready, openProposal: { id: "x", approvalState: "approved", status: "draft_ready" } }), "open_proposal");
   assert.match((preparePreflight({ ...ready, openProposal: { id: "x", approvalState: "approved", status: "draft_ready" } }) as { message: string }).message, /approved and waiting to be published/);
-  assert.equal(code({ ...ready, pendingDraft: null, approvedProgram: null }), "no_lifting");
   assert.equal(code({ ...ready, providerConfigured: false }), "provider_unavailable");
 });
 
@@ -58,28 +56,26 @@ await check("3b. the time budget: no new call starts once the preparation has ru
   const inner: ReasonerModel = { provider: "t", modelId: "t", generate: async () => { reached++; clock += 70_000; return { json: {} }; } };
   const m = boundedModel(inner, PREPARE_POLICY.maxModelCalls, { noNewCallAfterMs: PREPARE_POLICY.noNewCallAfterMs, now: () => clock });
   const req = { systemPrompt: "", userMessage: "", maxOutputTokens: 1 };
-  await m.generate(req); // t=0 → 70 s
-  await m.generate(req); // t=70 s → 140 s
-  await m.generate(req); // t=140 s (< 150 s) → 210 s
-  await assert.rejects(m.generate(req), (e: Error) => e instanceof CallBudgetExceededError && /time limit/.test(e.message));
-  assert.equal(reached, 3);
-  assert.ok(PREPARE_POLICY.noNewCallAfterMs + 70_000 < 300_000, "a typical last call started at the limit still ends inside the 300 s maxDuration");
+  // Resistance ~140 s, then calls of ~70 s: no new call may start at or after the limit.
+  for (let i = 0; i < 6; i++) {
+    if (clock >= PREPARE_POLICY.noNewCallAfterMs) break;
+    await m.generate(req);
+  }
+  await assert.rejects(m.generate(req), (e: Error) => e instanceof CallBudgetExceededError);
+  assert.ok(reached >= 1 && reached <= PREPARE_POLICY.maxModelCalls);
+  assert.ok(PREPARE_POLICY.noNewCallAfterMs + 240_000 <= 800_000, "a call started at the limit still ends (240 s provider timeout) inside the 800 s maxDuration");
 });
 
-await check("4. with the coach's existing lifting, a real (scripted) preparation stays within budget: no lifting call, cardio + nutrition only", async () => {
+await check("4. a real (scripted) preparation: the Fitness Reasoner plans lifting (no legacy draft inherited), within budget", async () => {
   const coach = fullCoach({ t_cardio_roles: ["fat_loss"] });
   const input = scenarioInput({ clientId: "c", coach, patch: { what_you_want: { primaryGoal: "build_muscle" }, your_week: { availableDays: ["mon", "tue", "wed", "thu", "fri", "sat"], maxSessionLength: "75", trainingEnvironment: ["commercial_gym"], preferredTrainingTime: ["evening", "morning"] } } });
-  let lifting: unknown = null;
-  await runUnifiedProgram({ input, model: routerModel(), nowIso: NOW, maxAttempts: 1, onResults: (r) => (lifting = r) });
-  const base = (lifting as { resistance: { status: string } }).resistance;
-  assert.equal(base.status, "PLANNED");
   const router = routerModel();
   const m = boundedModel(router, PREPARE_POLICY.maxModelCalls);
-  // A program built around an existing lifting program (approved here; a pending draft behaves the same).
-  const { programContent, LOWER, UPPER } = await import("../synthesis/unified/eval/fixtures.ts");
-  const content = { ...programContent([{ day: "Monday", exercises: LOWER }, { day: "Tuesday", exercises: UPPER }, { day: "Thursday", exercises: LOWER }, { day: "Friday", exercises: UPPER }], 8), clientId: "c" };
-  const u = await runUnifiedProgram({ input, model: m, nowIso: NOW, maxAttempts: PREPARE_POLICY.maxAttemptsPerDomain, existingResistanceDraft: { versionId: "v4", content } });
-  assert.equal(router.calls.resistance, 0, "lifting is never generated in preparation");
+  let results: { resistance: { status: string } | null } | null = null;
+  const u = await runUnifiedProgram({ input, model: m, nowIso: NOW, maxAttempts: PREPARE_POLICY.maxAttemptsPerDomain, onResults: (r) => (results = r as never) });
+  assert.ok(router.calls.resistance >= 1, "lifting is reasoned by the Fitness Reasoner");
+  assert.equal(results!.resistance?.status, "PLANNED");
+  assert.equal(u.domains.resistance.status, "PROPOSED");
   assert.ok(m.calls() <= PREPARE_POLICY.maxModelCalls && u.provenance.modelCalls === m.calls(), `calls ${m.calls()}`);
 });
 

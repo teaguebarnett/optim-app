@@ -96,6 +96,7 @@ import { recordExerciseFitDecisions, type ExerciseFitDecisionInput } from "../..
 import { setConfirmedApparatus } from "../../lib/production/equipment-profile";
 import { applyReplacement, checkReplacement, defaultReplacement, parseRepairOutput, REPAIR_PROMPT_VERSION, REPAIR_SYSTEM_PROMPT, repairInput, validateRepair, type Replacement } from "../../lib/synthesis/reasoner/edit-impact";
 import { methodFor } from "../../lib/synthesis/planners/resistance/planner";
+import { resistanceContentFit } from "../../lib/synthesis/unified/safety";
 import { clientFacingProgramContent, findClientCopyLeaks, reasonerReviewModel, removeExerciseEverywhere, sideOnlyNames, supportedSetupNames, type ReasonerReviewModel } from "../../lib/synthesis/reasoner/review-gate";
 import { FOUNDATION_KNOWLEDGE } from "../../lib/synthesis/knowledge/registry";
 import type { ReasonerJobView } from "../../lib/synthesis/reasoner/proposal-job";
@@ -1141,6 +1142,11 @@ export async function approveProgramProposalAction(params: { workspaceId: string
   // version. Nothing is silently changed; the coach regenerates.
   const staleness = methodDraftStaleness(draftMethodVersionIdOf(approved.content), method?.versionId ?? null);
   if (staleness.stale) throw new Error(staleness.message);
+
+  // Confirmed exercise restrictions hold at approval for every draft (legacy, Reasoner or adjustment): an exercise the
+  // client's confirmed restrictions rule out is never approved. Nothing is changed automatically — the coach edits it out.
+  const conflicts = resistanceContentFit(approved.content, await loadSynthesisInputForClient(params.clientProfileId), FOUNDATION_KNOWLEDGE).filter((x) => x.state === "incompatible");
+  if (conflicts.length) throw new Error(`This draft includes exercises the client's confirmed restrictions rule out: ${conflicts.map((x) => x.exercise).join(", ")}. Remove or replace them before approving, or reject it and use Let OPTIM Build.`);
 
   // Gate 4.0C-4 — a client-facing copy made at approval is never itself approvable.
   if (approved.content.clientFacingFrom) throw new Error("approveProgramProposalAction: approve the reviewed proposal, not its client copy.");

@@ -14,7 +14,7 @@ import { LiveClientWorkspace } from "@/components/coach/live-client-workspace";
 // (after()) on this route's server actions; a real run takes ~90–120 s, so the
 // route's function limit must cover it. The coach's request itself returns
 // immediately.
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 export default async function CoachClientWorkspaceRoute({ params, searchParams }: { params: Promise<{ clientId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (resolveAppMode() !== "supabase") return <DemoClientWorkspacePage />;

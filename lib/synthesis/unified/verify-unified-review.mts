@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { runUnifiedProgram, type DomainResults } from "./orchestrate.ts";
 import { fullCoach, routerModel, scenarioInput, NOW } from "./eval/fixtures.ts";
-import { approvalBlockers, decisionKey, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type Revalidation } from "./review.ts";
+import { applyEffortLimitEverywhere, approvalBlockers, decisionKey, effortLimitedExercises, effortLimitViolations, EFFORT_LIMIT_MIN_RIR, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type Revalidation } from "./review.ts";
 import { buildUnifiedTrainingContent, type UnifiedArtifacts } from "../../production/unified-drafts.ts";
 import { applyNutritionEdit } from "../../production/unified-review.ts";
 import { toAssignedNutritionPlanDraft } from "../reasoner/nutrition/to-plan.ts";
@@ -47,8 +47,8 @@ async function program(over: Record<string, unknown> = {}, goal = "get_stronger"
   return { input, proposal, artifacts, training, nutrition };
 }
 type P = Awaited<ReturnType<typeof program>>;
-const reval = (p: P, current: { training?: UniversalTrainingProgramContent | null; nutrition?: AssignedNutritionPlan | null }, over: { input?: SynthesisInput; resistanceSource?: "approved_program" | "proposed_program"; proposal?: UnifiedProgramProposal; excluded?: string[] } = {}): Revalidation =>
-  revalidateDrafts({ excluded: over.excluded, input: over.input ?? p.input, knowledge: FOUNDATION_KNOWLEDGE, proposal: over.proposal ?? p.proposal, resistanceSource: over.resistanceSource ?? "proposed_program", cardio: p.artifacts.cardio, nutrition: p.artifacts.nutrition, original: { training: p.training, nutrition: p.nutrition }, current: { training: current.training === undefined ? p.training : current.training, nutrition: current.nutrition === undefined ? p.nutrition : current.nutrition }, versions: { training: "t", nutrition: "n" } });
+const reval = (p: P, current: { training?: UniversalTrainingProgramContent | null; nutrition?: AssignedNutritionPlan | null }, over: { input?: SynthesisInput; resistanceSource?: "approved_program" | "proposed_program"; proposal?: UnifiedProgramProposal; excluded?: string[]; effortLimited?: string[] } = {}): Revalidation =>
+  revalidateDrafts({ excluded: over.excluded, effortLimited: over.effortLimited, input: over.input ?? p.input, knowledge: FOUNDATION_KNOWLEDGE, proposal: over.proposal ?? p.proposal, resistanceSource: over.resistanceSource ?? "proposed_program", cardio: p.artifacts.cardio, nutrition: p.artifacts.nutrition, original: { training: p.training, nutrition: p.nutrition }, current: { training: current.training === undefined ? p.training : current.training, nutrition: current.nutrition === undefined ? p.nutrition : current.nutrition }, versions: { training: "t", nutrition: "n" } });
 const find = (c: UniversalTrainingProgramContent, fam: string) => {
   for (const w of c.weeks) for (const d of w.days) for (const [si, s] of (d.sessions ?? []).entries()) for (const b of s.blocks) for (const i of b.items) if (i.prescription.family === fam) return { path: { weekNumber: w.weekNumber, dayOfWeek: d.dayOfWeek, sessionIndex: si, blockId: b.id, itemId: i.id }, item: i };
   return null;
@@ -243,6 +243,27 @@ await check("16. the coach's 'remove from program' removes every instance (all w
   const s0 = one.weeks[0].days.find((d) => d.sessions?.length)!.sessions![0];
   s0.blocks = [{ ...s0.blocks[0], items: [{ ...s0.blocks[0].items[0], name: "Solo Exercise" }] }];
   assert.throws(() => removeExerciseEverywhere(one, "Solo Exercise"), /only exercise in .* replace it/);
+});
+
+await check("17. 'Keep them with an effort limit' is binding: a limited exercise prescribed closer to failure blocks approval until the coach applies the limit everywhere", () => {
+  const t = withFlagged(base.training!);
+  // Make every Cable Triceps Pushdown 1 rep from failure, so the limit is clearly violated.
+  for (const w of t.weeks) for (const d of w.days) for (const s of d.sessions ?? []) for (const b of s.blocks) for (const i of b.items) if (i.name === "Cable Triceps Pushdown" && i.prescription.family === "resistance") { delete (i.prescription as { rpe?: number }).rpe; (i.prescription as { rir?: number }).rir = 1; }
+  const answers = { k: { answer: "Keep them with an effort limit (e.g. stay well short of failure)", question: "q", decidedBy: "c", decidedAtIso: NOW, limitsEffort: ["Cable Triceps Pushdown"] } };
+  const r = reval({ ...base, training: t }, { training: t }, { input: docInput(base), effortLimited: effortLimitedExercises(answers) });
+  assert.ok(r.errors.some((e) => e.area === "resistance" && e.message.startsWith("Cable Triceps Pushdown is limited by your decision")), JSON.stringify(r.errors));
+  assert.ok(approvalBlockers({ approvalState: "proposed", status: "draft_ready", hasDrafts: true, revalidation: r, decisions: [], staleReasons: [], escalations: 0 }).some((b) => /limited by your decision/.test(b)));
+  const limited = applyEffortLimitEverywhere(t, "Cable Triceps Pushdown");
+  assert.deepEqual(effortLimitViolations(limited, ["Cable Triceps Pushdown"]), {});
+  const after = reval({ ...base, training: t }, { training: limited }, { input: docInput(base), effortLimited: ["Cable Triceps Pushdown"] });
+  assert.ok(!after.errors.some((e) => /limited by your decision/.test(e.message)), JSON.stringify(after.errors));
+  // Never harder: an exercise already easier than the limit is left alone; other exercises are untouched.
+  const easy = structuredClone(t);
+  for (const w of easy.weeks) for (const d of w.days) for (const s of d.sessions ?? []) for (const b of s.blocks) for (const i of b.items) if (i.name === "Cable Triceps Pushdown" && i.prescription.family === "resistance") (i.prescription as { rir?: number }).rir = 4;
+  const kept = applyEffortLimitEverywhere(easy, "Cable Triceps Pushdown");
+  const rirs = kept.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.name === "Cable Triceps Pushdown").map((i) => (i.prescription as { rir?: number }).rir)))));
+  assert.ok(rirs.length > 0 && rirs.every((x) => x === 4) && EFFORT_LIMIT_MIN_RIR === 3);
+  assert.equal(JSON.stringify(limited.weeks.map((w) => w.days.map((d) => (d.sessions ?? []).map((s) => s.blocks.map((b) => b.items.filter((i) => i.name !== "Cable Triceps Pushdown")))))), JSON.stringify(t.weeks.map((w) => w.days.map((d) => (d.sessions ?? []).map((s) => s.blocks.map((b) => b.items.filter((i) => i.name !== "Cable Triceps Pushdown")))))), "other exercises unchanged");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
