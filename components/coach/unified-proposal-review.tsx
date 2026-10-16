@@ -343,10 +343,17 @@ function DecisionsCard({ view, disabled, onAnswer, onRemoveExercise, onLimitEffo
 
 function ChecksCard({ view }: { view: UnifiedReviewView }) {
   const r = view.revalidation;
+  // Never a clean pass while a decision (e.g. a documented limitation the confirmed restrictions don't express) is open.
+  const open = view.decisions.filter((d) => !d.answer).length;
   return (
     <Card>
       <p className="text-label text-neutral">OPTIM&apos;s checks</p>
-      {r.errors.length === 0 && r.findings.length === 0 ? <p className="mt-2 flex items-center gap-2 text-meta text-success"><CheckCircle2 size={14} aria-hidden="true" /> Every domain and the combined week pass.</p> : null}
+      {r.errors.length === 0 && r.findings.length === 0 && open === 0 ? <p className="mt-2 flex items-center gap-2 text-meta text-success"><CheckCircle2 size={14} aria-hidden="true" /> Every domain and the combined week pass.</p> : null}
+      {r.errors.length === 0 && open > 0 ? (
+        <p className="mt-2 flex items-center gap-2 text-meta text-warning">
+          <AlertTriangle size={14} aria-hidden="true" /> Not a clean pass yet — {open} decision{open === 1 ? "" : "s"} still need{open === 1 ? "s" : ""} your answer.
+        </p>
+      ) : null}
       <ul className="mt-2 space-y-1.5">
         {r.errors.map((e) => (
           <li key={e.message} className="flex gap-2 text-meta text-off-white">

@@ -26,7 +26,8 @@ import { allowedRoles } from "../reasoner/cardio/input.ts";
 import { nutritionSafety } from "../nutrition/safety.ts";
 import { currentFit } from "../reasoner/lifecycle.ts";
 import { resolveEquipmentAccess } from "../planners/resistance/equipment-access.ts";
-import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
+import { LOADED_DEMAND_CONDITION, type FitnessKnowledgeRegistry } from "../knowledge/types.ts";
+import { exerciseEligibility } from "../exercise-eligibility.ts";
 import type { UniversalTrainingProgramContent } from "../../training/types.ts";
 import type { DomainId, UnifiedDecision } from "./contract.ts";
 
@@ -151,4 +152,103 @@ export function documentedExerciseReview(input: SynthesisInput, exerciseNames: s
     effortLimitOption: LIMIT_DOCUMENTED,
     why: "The documented limitations name these movements; OPTIM doesn't decide whether they're safe and doesn't change the confirmed restrictions.",
   };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// What the documented limitation says that its confirmed structured restrictions don't express. Name matching above
+// catches only exercises the text names; a documented RULE ("movements that need core stability only at low RPE")
+// or a NAMED FAMILY ("no squats" next to a lunge; a core/abdominal limitation next to a cable crunch) reaches every
+// exercise of that kind. OPTIM never decides these are safe and never edits the confirmed restrictions — each becomes
+// an explicit coach decision (keep / limit / exclude), binding once answered. Deterministic readings of the coach's
+// documented text (and the client's reported body area for the trunk reading), never a medical judgement.
+
+const KEEP_PRESCRIBED = "Keep them as prescribed";
+const EFFORT_WORDS = /\b(rpe|rir|reps? in reserve|short of failure|sub-?maximal|low(?:er)? (?:effort|intensity)|light(?:er)? (?:weights?|loads?))\b/i;
+const TRUNK_WORDS = /\b(brac(?:e|ed|ing)|core|trunk|stabili[a-z]*|valsalva)\b/i;
+const sentences = (text: string) => text.split(/(?<=[.!?;])\s+/).map((s) => s.trim()).filter(Boolean);
+
+/** The documented sentence that limits effort because of the trunk (e.g. "…only with low RPE … to compensate for lack
+ * of bracing"), or null. */
+export function documentedEffortRule(documented: string | null): string | null {
+  return sentences(documented ?? "").find((s) => EFFORT_WORDS.test(s) && TRUNK_WORDS.test(s)) ?? null;
+}
+
+const TRUNK_PATTERNS = ["trunk_flexion", "trunk_rotation", "anti_extension", "anti_rotation", "anti_lateral_flexion"] as const;
+/** Exercise families a documented limitation names that a confirmed restriction covers only in part. `covers`: confirmed
+ * option ids that already exclude the family (then there's nothing to ask). */
+const RELATED_FAMILIES: Array<{ id: string; when: RegExp; fromClientArea?: boolean; covers: string[]; patterns: readonly string[]; what: string }> = [
+  { id: "squat_family", when: /\bsquat/i, covers: ["avoid_single_leg", "avoid_lower_compounds"], patterns: ["single_leg"], what: "single-leg squat-family exercises (lunges, split squats, step-ups), which the confirmed “Avoid squat-pattern exercises” doesn't cover" },
+  { id: "direct_trunk", when: /\b(hernia|abdominal|abs|core|valsalva)\b/i, fromClientArea: true, covers: ["avoid_direct_trunk"], patterns: TRUNK_PATTERNS, what: "direct ab / trunk exercises that load the core the limitation concerns, which no confirmed restriction covers" },
+];
+
+const LIMIT_RULE = "Keep them with an effort limit (stay well short of failure)";
+const EXCLUDE_RULE = "Exclude them for this client";
+
+/**
+ * Decisions for exercises the documented limitation reaches beyond its literal names:
+ *  • related families (lunges next to "no squats"; direct trunk work next to a core / abdominal limitation);
+ *  • its effort rule — exercises whose trunk the setup doesn't support, and exercises that fit the confirmed bracing /
+ *    spinal limits only while kept submaximal.
+ * `exerciseNames`: the program's lifting (already-excluded ones removed). `alreadyAsked`: exercises another decision
+ * covers (the literal-name review), so nothing is asked twice.
+ */
+export function documentedRuleReview(input: SynthesisInput, knowledge: FitnessKnowledgeRegistry, exerciseNames: string[], alreadyAsked: string[]): UnifiedDecision[] {
+  const h = input.client.health;
+  const documented = isKnown(h.review.coachDocumentedLimitation) ? h.review.coachDocumentedLimitation.value : null;
+  if (!documented) return [];
+  const confirmed = new Set(isKnown(h.review.coachStructuredLimitations) ? h.review.coachStructuredLimitations.value.restrictions.map((r) => r.optionId) : []);
+  const clientArea = [isKnown(h.bodyAreaOther) ? h.bodyAreaOther.value : "", ...(isKnown(h.bodyAreas) ? h.bodyAreas.value : [])].join(" ");
+  const byName = new Map(knowledge.exercises().flatMap((e) => [e.name, ...e.aliases].map((n) => [n.toLowerCase(), e] as const)));
+  const asked = new Set(alreadyAsked.map((n) => n.toLowerCase()));
+  const names = [...new Set(exerciseNames)].filter((n) => !asked.has(n.toLowerCase()) && byName.has(n.toLowerCase()));
+  const out: UnifiedDecision[] = [];
+  const decision = (about: string, list: string[], question: string, keep: string, why: string): UnifiedDecision => ({ source: "resistance", about, question, options: [keep, LIMIT_RULE, EXCLUDE_RULE], recommended: null, exercises: list, excludeOption: EXCLUDE_RULE, effortLimitOption: LIMIT_RULE, why });
+  const take = (list: string[]) => list.forEach((n) => asked.add(n.toLowerCase()));
+
+  for (const f of RELATED_FAMILIES) {
+    const quote = sentences(documented).find((s) => f.when.test(s)) ?? (f.fromClientArea && f.when.test(clientArea) ? null : undefined);
+    if (quote === undefined || f.covers.some((c) => confirmed.has(c))) continue;
+    const hits = names.filter((n) => !asked.has(n.toLowerCase()) && byName.get(n.toLowerCase())!.patterns.some((p) => f.patterns.includes(p)));
+    if (!hits.length) continue;
+    take(hits);
+    const source = quote ? `Your documented limitation says “${quote.replace(/[.!?;]+$/, "")}”` : `The client reports a limitation at “${clientArea.trim()}”`;
+    out.push(decision(`documented_limitation_family:${f.id}`, hits, `${source}. ${hits.join(", ")} ${hits.length === 1 ? "is one of the" : "are"} ${f.what}. Keep them, limit them, or exclude them for this client?`, KEEP_PRESCRIBED, "The documented limitation names this kind of movement; OPTIM doesn't decide whether it's safe and doesn't change the confirmed restrictions."));
+  }
+
+  const rule = documentedEffortRule(documented);
+  if (rule) {
+    const unsupported: string[] = [];
+    const submaximal: string[] = [];
+    for (const n of names.filter((x) => !asked.has(x.toLowerCase()))) {
+      const ex = byName.get(n.toLowerCase())!;
+      if (ex.trunkSupport === "none" || ex.trunkSupport === "thigh_anchored") unsupported.push(n);
+      else if (exerciseEligibility(ex, input.constraints).loadConditions.some((l) => l.enforcement === "hard" && (l.demand === "bracing" || l.demand === "spinal_loading"))) submaximal.push(n);
+    }
+    if (unsupported.length) out.push(decision("documented_effort_rule:unsupported_trunk", unsupported, `Your documented limitation says “${rule}” These exercises don't support the trunk (standing, kneeling or unsupported), and the confirmed restrictions don't limit their effort: ${unsupported.join(", ")}. Keep them as prescribed, limit them, or exclude them?`, KEEP_PRESCRIBED, "The documented effort rule isn't part of the confirmed restrictions; OPTIM doesn't decide which movements it covers."));
+    if (submaximal.length) out.push(decision("documented_effort_rule:load_sensitive", submaximal, `Your documented limitation says “${rule}” These exercises fit the confirmed bracing / spinal limits only while kept submaximal (at least ${LOADED_DEMAND_CONDITION.minReps} reps and ${LOADED_DEMAND_CONDITION.minRir} reps in reserve, trunk on the pad): ${submaximal.join(", ")}. Keep them at those minimums, limit them further, or exclude them?`, "Keep them at the confirmed minimums", "Their bracing rises toward the confirmed limit when taken heavy; how far below it they stay is the coach's call."));
+  }
+  return out;
+}
+
+/** Prescriptions that take a conditionally fitting exercise below the minimums its confirmed fit depends on (fewer
+ * than LOADED_DEMAND_CONDITION reps or reps in reserve) — the same rule the Fitness Reasoner is held to, re-checked on
+ * the coach's edited drafts. */
+export function conditionalFitViolations(content: UniversalTrainingProgramContent, input: SynthesisInput, knowledge: FitnessKnowledgeRegistry): Record<string, string[]> {
+  const byName = new Map(knowledge.exercises().flatMap((e) => [e.name, ...e.aliases].map((n) => [n.toLowerCase(), e] as const)));
+  const conditional = new Map<string, boolean>();
+  const out: Record<string, string[]> = {};
+  for (const w of content.weeks)
+    for (const d of w.days)
+      for (const s of d.sessions ?? [])
+        for (const b of s.blocks)
+          for (const i of b.items) {
+            const p = i.prescription as { family: string; reps?: { low?: number }; rir?: number; rpe?: number };
+            const ex = byName.get(i.name.toLowerCase());
+            if (p.family !== "resistance" || !ex) continue;
+            if (!conditional.has(ex.id)) conditional.set(ex.id, exerciseEligibility(ex, input.constraints).loadConditions.some((l) => l.enforcement === "hard" && !l.demand.startsWith("limb:")));
+            if (!conditional.get(ex.id)) continue;
+            const rir = typeof p.rir === "number" ? p.rir : typeof p.rpe === "number" ? 10 - p.rpe : null;
+            if ((typeof p.reps?.low === "number" && p.reps.low < LOADED_DEMAND_CONDITION.minReps) || rir === null || rir < LOADED_DEMAND_CONDITION.minRir) (out[i.name] ??= []).push(`week ${w.weekNumber} ${d.dayOfWeek}`);
+          }
+  return out;
 }

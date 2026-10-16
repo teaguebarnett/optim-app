@@ -5,8 +5,10 @@
 
 import assert from "node:assert/strict";
 import { runUnifiedProgram, type DomainResults } from "./orchestrate.ts";
-import { fullCoach, routerModel, scenarioInput, NOW } from "./eval/fixtures.ts";
-import { applyEffortLimitEverywhere, approvalBlockers, decisionKey, effortLimitedExercises, effortLimitViolations, EFFORT_LIMIT_MIN_RIR, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type Revalidation } from "./review.ts";
+import { fullCoach, programContent, routerModel, scenarioInput, NOW } from "./eval/fixtures.ts";
+import { documentedEffortRule, resistanceContentFit } from "./safety.ts";
+import { isKnown } from "../facts.ts";
+import { applyEffortLimitEverywhere, approvalBlockers, type RecordedAnswer, decisionKey, effortLimitedExercises, effortLimitViolations, EFFORT_LIMIT_MIN_RIR, excludedExercises, exerciseLocations, removeExerciseEverywhere, reviewDecisions, revalidateDrafts, syncCardioSession, type Revalidation } from "./review.ts";
 import { buildUnifiedTrainingContent, type UnifiedArtifacts } from "../../production/unified-drafts.ts";
 import { applyNutritionEdit } from "../../production/unified-review.ts";
 import { toAssignedNutritionPlanDraft } from "../reasoner/nutrition/to-plan.ts";
@@ -264,6 +266,122 @@ await check("17. 'Keep them with an effort limit' is binding: a limited exercise
   const rirs = kept.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items.filter((i) => i.name === "Cable Triceps Pushdown").map((i) => (i.prescription as { rir?: number }).rir)))));
   assert.ok(rirs.length > 0 && rirs.every((x) => x === 4) && EFFORT_LIMIT_MIN_RIR === 3);
   assert.equal(JSON.stringify(limited.weeks.map((w) => w.days.map((d) => (d.sessions ?? []).map((s) => s.blocks.map((b) => b.items.filter((i) => i.name !== "Cable Triceps Pushdown")))))), JSON.stringify(t.weeks.map((w) => w.days.map((d) => (d.sessions ?? []).map((s) => s.blocks.map((b) => b.items.filter((i) => i.name !== "Cable Triceps Pushdown")))))), "other exercises unchanged");
+});
+
+// --- The first real client (read-only production evidence, 2026-10-13) ---------------------------------------------
+// Epigastric hernia; the coach's documented limitation, its six confirmed restrictions and the real 12-week program's
+// lifting (names, sets, reps, RPE — every week the same layout). The pushdown is already limited by the coach.
+const REAL_DOC = "No valsalva, bracing, like no squats or deadlifts. Some movements like tricep push down that require core stability or lat pull down can be performed only with low RPE or some form of trunk stability to compensate for lack of bracing.";
+const opt = (optionId: string, label: string, tags: unknown[], origin: string) => ({ optionId, label, tags, origin });
+const REAL_RECORD = {
+  schema: 1, sourceText: REAL_DOC, noExerciseRestrictions: false, confirmedAtIso: "2026-10-13T03:39:41.996Z", confirmedBy: "coach-1",
+  interpretation: { interpreter: { kind: "model", modelId: "eval" }, proposedOptionIds: ["avoid_squat", "avoid_hinge"], removedOptionIds: [], addedOptionIds: [], clarifications: [] },
+  restrictions: [
+    opt("avoid_squat", "Avoid squat-pattern exercises", [{ kind: "avoid_movement_pattern", pattern: "squat" }], "proposed"),
+    opt("avoid_hinge", "Avoid hinge / deadlift-pattern exercises", [{ kind: "avoid_movement_pattern", pattern: "hinge" }], "proposed"),
+    opt("avoid_spinal_loading_moderate", "Avoid moderate or heavy spinal loading", [{ kind: "avoid_demand", demand: "spinal_loading", atOrAbove: "moderate" }], "clarified"),
+    opt("avoid_bracing_moderate", "Avoid exercises that need moderate or hard bracing", [{ kind: "avoid_demand", demand: "bracing", atOrAbove: "moderate" }], "clarified"),
+    opt("avoid_vertical_push", "Avoid overhead pressing", [{ kind: "avoid_movement_pattern", pattern: "vertical_push" }], "clarified"),
+    opt("avoid_carries", "Avoid loaded carries", [{ kind: "avoid_movement_pattern", pattern: "carry" }], "clarified"),
+  ],
+};
+const REAL_DAYS: Array<[string, Array<[string, number, number, number, number]>]> = [
+  ["Monday", [["Dumbbell Bench Press", 3, 7, 8, 8], ["Incline Dumbbell Press", 3, 9, 10, 7], ["Cable Chest Fly", 3, 11, 12, 9], ["Cable Triceps Pushdown", 3, 10, 12, 7], ["Cable Lateral Raise", 3, 11, 12, 9]]],
+  ["Tuesday", [["Chest-Supported Row", 3, 7, 8, 9], ["Chest-Supported Machine Low Row", 3, 10, 12, 8], ["Straight-Arm Cable Pulldown", 3, 11, 12, 9], ["Face Pull", 3, 11, 12, 9], ["Cable Curl", 3, 10, 12, 9]]],
+  ["Wednesday", [["Hip Thrust Machine", 3, 9, 10, 8], ["Leg Extension", 4, 11, 12, 9], ["Leg Curl", 4, 11, 12, 9], ["Seated Calf Raise", 4, 11, 12, 9], ["Cable Crunch", 3, 11, 12, 8]]],
+  ["Thursday", [["Machine Chest Press", 3, 9, 10, 8], ["Pec Deck", 3, 11, 12, 9], ["Machine Lateral Raise", 4, 11, 12, 9], ["Dumbbell Lying Triceps Extension", 3, 10, 12, 8], ["Overhead Cable Triceps Extension", 3, 11, 12, 8]]],
+  ["Friday", [["Chest-Supported Machine High Row", 3, 8, 10, 9], ["Incline Chest-Supported Dumbbell Row", 3, 10, 12, 8], ["Machine Pullover", 3, 11, 12, 9], ["Reverse Pec Deck", 3, 11, 12, 9], ["Incline Dumbbell Curl", 3, 10, 12, 9]]],
+  ["Saturday", [["Reverse Lunge", 3, 10, 12, 8], ["Leg Curl", 3, 10, 12, 9], ["Leg Extension", 3, 11, 12, 9], ["Cable Glute Kickback", 3, 11, 12, 9], ["Hip Abduction Machine", 3, 11, 12, 8], ["Single-Leg Calf Raise", 3, 11, 12, 9]]],
+];
+function realProgram(): UniversalTrainingProgramContent {
+  const c = programContent(REAL_DAYS.map(([day, ex]) => ({ day: day as never, exercises: ex.map((e) => e[0]) })), 12);
+  for (const w of c.weeks) for (const d of w.days) for (const s of d.sessions ?? []) for (const b of s.blocks) for (const i of b.items) {
+    const [, sets, low, high, rpe] = REAL_DAYS.find(([day]) => day === d.dayOfWeek)![1].find((e) => e[0] === i.name)!;
+    i.prescription = { family: "resistance", sets, reps: { low, high }, rpe } as never;
+  }
+  return c;
+}
+const realInput = scenarioInput({
+  clientId: "client-1", coach: fullCoach(),
+  patch: { what_you_want: { primaryGoal: "get_stronger" }, your_week: week, health_finish: { safetyScreen: ["none"], injuryBodyAreas: ["other"], hasInjuryHistory: true, injuryRestrictions: REAL_DOC, injuryBodyAreaOther: "Core/abs (epigastric hernia)", injuryAggravatingFactors: "Bracing", injuryWorkingWithProfessional: true } },
+  healthReview: { clientId: "client-1", workspaceId: "ws-1", status: "proceed_with_limitations", reasons: ["Reported a current pain, injury, or physical limitation"], createdAtIso: NOW, updatedAtIso: NOW, documentedLimitations: REAL_DOC, structuredLimitations: REAL_RECORD } as never,
+});
+// The coach's real recorded decision (production key and question).
+const PUSHDOWN_KEY = "resistance:documented_limitation_exercise_review:e74f735bf1";
+const pushdownAnswer = { answer: "Keep them with an effort limit (e.g. stay well short of failure)", question: "These exercises fit the confirmed restrictions but are named in the documented limitations: Cable Triceps Pushdown (“tricep pushdown”). Keep them, limit them, or exclude them for this client?", decidedBy: "coach-1", decidedAtIso: NOW, limitsEffort: ["Cable Triceps Pushdown"] };
+const realReval = (t: UniversalTrainingProgramContent, answers: Record<string, RecordedAnswer>) => reval({ ...base, training: t }, { training: t }, { input: realInput, excluded: excludedExercises(answers), effortLimited: effortLimitedExercises(answers) });
+const restrictionDecisions = (r: Revalidation, answers: Record<string, RecordedAnswer>) => reviewDecisions(base.proposal, r, answers).filter((d) => d.source === "resistance");
+
+await check("18. real client: the six confirmed restrictions allow every prescribed exercise — the gap is what the documented limitation says beyond them", () => {
+  assert.ok(isKnown(realInput.client.health.review.coachStructuredLimitations), "the confirmed record applies");
+  assert.deepEqual(resistanceContentFit(realProgram(), realInput, FOUNDATION_KNOWLEDGE), [], "no exercise is incompatible or uncertain under the confirmed record");
+  assert.equal(documentedEffortRule(REAL_DOC), "Some movements like tricep push down that require core stability or lat pull down can be performed only with low RPE or some form of trunk stability to compensate for lack of bracing.");
+});
+
+await check("19. real client: the saved pushdown decision is kept (same key, answered); the documented rule's lunge, crunch, unsupported-trunk and submaximal-only exercises each need an explicit coach decision — never a clean pass", () => {
+  const t = realProgram();
+  const answers = { [PUSHDOWN_KEY]: pushdownAnswer };
+  const r = realReval(t, answers);
+  const ds = restrictionDecisions(r, answers);
+  const pushdown = ds.find((d) => d.key === PUSHDOWN_KEY);
+  assert.ok(pushdown && pushdown.answer?.limitsEffort?.[0] === "Cable Triceps Pushdown", "the coach's saved decision still matches and stays answered");
+  const by = (about: string) => ds.find((d) => d.about === about)?.exercises ?? [];
+  assert.deepEqual(by("documented_limitation_family:squat_family"), ["Reverse Lunge"]);
+  assert.deepEqual(by("documented_limitation_family:direct_trunk"), ["Cable Crunch"]);
+  assert.deepEqual(by("documented_effort_rule:unsupported_trunk").sort(), ["Cable Chest Fly", "Cable Curl", "Cable Glute Kickback", "Cable Lateral Raise", "Face Pull", "Overhead Cable Triceps Extension", "Single-Leg Calf Raise", "Straight-Arm Cable Pulldown"]);
+  assert.deepEqual(by("documented_effort_rule:load_sensitive").sort(), ["Dumbbell Bench Press", "Hip Thrust Machine", "Incline Dumbbell Press", "Machine Chest Press"]);
+  assert.ok(ds.filter((d) => d.about.startsWith("documented_")).every((d) => d.recommended === null && d.excludeOption && d.effortLimitOption), "OPTIM recommends nothing; the coach decides");
+  assert.ok(!ds.some((d) => d.key !== PUSHDOWN_KEY && d.exercises?.includes("Cable Triceps Pushdown")), "the pushdown isn't asked again");
+  assert.deepEqual(r.errors.filter((e) => e.area === "resistance"), [], "nothing is removed or changed automatically");
+  const blockers = approvalBlockers({ approvalState: "proposed", status: "draft_ready", hasDrafts: true, revalidation: r, decisions: ds, staleReasons: [], escalations: 0 });
+  assert.ok(blockers.some((b) => /4 coach decisions still need an answer/.test(b)), blockers.join(" | "));
+});
+
+await check("20. real client: once answered, the decisions bind every week — limits apply to all 12 weeks, exclusions must leave the program, and the restriction decisions are then all settled", () => {
+  let t = realProgram();
+  const answers: Record<string, RecordedAnswer> = { [PUSHDOWN_KEY]: pushdownAnswer };
+  const ds = restrictionDecisions(realReval(t, answers), answers);
+  const answer = (about: string, option: "limit" | "exclude" | "keep") => {
+    const d = ds.find((x) => x.about === about)!;
+    const a = option === "limit" ? d.effortLimitOption! : option === "exclude" ? d.excludeOption! : d.options[0];
+    answers[d.key] = { answer: a, question: d.question, decidedBy: "coach-1", decidedAtIso: NOW, ...(option === "limit" ? { limitsEffort: d.exercises } : {}), ...(option === "exclude" ? { excludes: d.exercises } : {}) };
+  };
+  answer("documented_limitation_family:squat_family", "exclude");
+  answer("documented_limitation_family:direct_trunk", "exclude");
+  answer("documented_effort_rule:unsupported_trunk", "limit");
+  answer("documented_effort_rule:load_sensitive", "keep");
+  let r = realReval(t, answers);
+  for (const n of ["Reverse Lunge", "Cable Crunch"]) assert.ok(r.errors.some((e) => e.message.startsWith(`${n} is excluded by your decision`)), n);
+  for (const n of ["Straight-Arm Cable Pulldown", "Cable Glute Kickback"]) assert.ok(r.errors.some((e) => e.message.startsWith(`${n} is limited by your decision`) && /and \d+ more/.test(e.message)), `${n} limited in every week`);
+  // The coach applies them (the review's own edits).
+  for (const n of ["Reverse Lunge", "Cable Crunch"]) t = removeExerciseEverywhere(t, n);
+  for (const n of effortLimitedExercises(answers)) t = applyEffortLimitEverywhere(t, n);
+  r = realReval(t, answers);
+  assert.deepEqual(r.errors.filter((e) => e.area === "resistance"), []);
+  assert.ok(restrictionDecisions(r, answers).every((d) => d.answer), "no restriction decision left open");
+  assert.deepEqual(effortLimitViolations(t, effortLimitedExercises(answers)), {}, "every limited exercise at ≥3 reps in reserve, all 12 weeks");
+  assert.equal(t.weeks.flatMap((w) => w.days.flatMap((d) => (d.sessions ?? []).flatMap((s) => s.blocks.flatMap((b) => b.items)))).filter((i) => i.name === "Straight-Arm Cable Pulldown" && (i.prescription as { rpe?: number }).rpe === 7).length, 12);
+});
+
+await check("21. real client: an edit can't take a submaximal-only exercise past the minimums its confirmed fit depends on, and a new unsupported exercise re-opens the effort question", () => {
+  const answers: Record<string, RecordedAnswer> = { [PUSHDOWN_KEY]: pushdownAnswer };
+  const t = realProgram();
+  const hard = structuredClone(t);
+  const hip = hard.weeks[6].days.find((d) => d.dayOfWeek === "Wednesday")!.sessions![0].blocks[0].items.find((i) => i.name === "Hip Thrust Machine")!;
+  (hip.prescription as { rpe?: number }).rpe = 10;
+  assert.ok(realReval(hard, answers).errors.some((e) => /^Hip Thrust Machine fits the confirmed restrictions only at 6\+ reps and 2\+ reps in reserve, but is prescribed harder \(week 7 Wednesday\)/.test(e.message)));
+  const heavy = structuredClone(t);
+  const db = heavy.weeks[0].days.find((d) => d.dayOfWeek === "Monday")!.sessions![0].blocks[0].items.find((i) => i.name === "Dumbbell Bench Press")!;
+  (db.prescription as { reps: { low: number } }).reps.low = 4;
+  assert.ok(realReval(heavy, answers).errors.some((e) => e.message.startsWith("Dumbbell Bench Press fits the confirmed restrictions only at 6+ reps")));
+  // The coach keeps the unsupported group as prescribed, then swaps in another unsupported exercise: asked again.
+  const ds = restrictionDecisions(realReval(t, answers), answers);
+  const g = ds.find((d) => d.about === "documented_effort_rule:unsupported_trunk")!;
+  answers[g.key] = { answer: g.options[0], question: g.question, decidedBy: "coach-1", decidedAtIso: NOW };
+  const swapped = structuredClone(t);
+  for (const w of swapped.weeks) for (const d of w.days) for (const s of d.sessions ?? []) for (const b of s.blocks) for (const i of b.items) if (i.name === "Incline Dumbbell Curl") i.name = "Hammer Curl";
+  const again = restrictionDecisions(realReval(swapped, answers), answers).find((d) => d.about === "documented_effort_rule:unsupported_trunk");
+  assert.ok(again && !again.answer && again.exercises!.includes("Hammer Curl"), "a changed question needs a new answer");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

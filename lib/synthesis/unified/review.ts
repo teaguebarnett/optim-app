@@ -10,7 +10,7 @@
 import { sha256 } from "../reasoner/run.ts";
 import { isKnown } from "../facts.ts";
 import type { SynthesisInput } from "../synthesis-input.ts";
-import type { FitnessKnowledgeRegistry } from "../knowledge/types.ts";
+import { LOADED_DEMAND_CONDITION, type FitnessKnowledgeRegistry } from "../knowledge/types.ts";
 import { readCardioMethod } from "../cardio/method.ts";
 import { readNutritionMethod } from "../nutrition/method.ts";
 import { proteinGrams } from "../nutrition/energy.ts";
@@ -21,7 +21,7 @@ import { removeTrainingItem } from "../../training/program-proposal-editing.ts";
 import type { CardioReasonerResult } from "../reasoner/cardio/reasoner.ts";
 import type { NutritionReasonerResult } from "../reasoner/nutrition/reasoner.ts";
 import type { CrossDomainFinding, DomainId, DomainStatus, ProgramDay, ProgramWorkload, UnifiedDecision, UnifiedProgramProposal } from "./contract.ts";
-import { documentedExerciseReview, resistanceContentFit } from "./safety.ts";
+import { conditionalFitViolations, documentedExerciseReview, documentedRuleReview, resistanceContentFit } from "./safety.ts";
 import { recoverySignals } from "./assemble.ts";
 import { weekChecks, workloadOf } from "./validate.ts";
 
@@ -266,6 +266,13 @@ export function revalidateDrafts(p: {
     const excludedSet = new Set((p.excluded ?? []).map((n) => n.toLowerCase()));
     const doc = documentedExerciseReview(input, resistanceNames(t).filter((n) => !excludedSet.has(n.toLowerCase())));
     if (doc) out.decisions.push(doc);
+    // What the documented limitation reaches beyond its literal names (its effort rule; named families) — each an
+    // explicit coach decision. Exercises the coach already limited keep that decision and aren't asked again.
+    const limitedSet = new Set((p.effortLimited ?? []).map((n) => n.toLowerCase()));
+    out.decisions.push(...documentedRuleReview(input, p.knowledge, resistanceNames(t).filter((n) => !excludedSet.has(n.toLowerCase()) && !limitedSet.has(n.toLowerCase())), doc?.exercises ?? []));
+    // A conditional fit holds only at its minimums (the rule the Fitness Reasoner is held to) — edits included.
+    for (const [name, where] of Object.entries(conditionalFitViolations(t, input, p.knowledge)))
+      err("resistance", `${name} fits the confirmed restrictions only at ${LOADED_DEMAND_CONDITION.minReps}+ reps and ${LOADED_DEMAND_CONDITION.minRir}+ reps in reserve, but is prescribed harder (${where.length > 3 ? `${where.slice(0, 3).join(", ")} and ${where.length - 3} more` : where.join(", ")}).`);
   }
 
   // Coach Brain authority — cardio minutes against the coach's own weekly range for this role (finding, not error).
