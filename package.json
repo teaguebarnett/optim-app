@@ -118,6 +118,7 @@
     "verify:unified-drafts": "node --experimental-strip-types lib/synthesis/unified/verify-unified-drafts.mts",
     "verify:unified-prepare": "node --experimental-strip-types lib/production/verify-unified-prepare.mts",
     "verify:unified-review": "node --experimental-strip-types lib/synthesis/unified/verify-unified-review.mts",
+    "verify:unified-review-tasks": "node --experimental-strip-types lib/coach/verify-unified-review-tasks.mts",
     "verify:nutrition-plan-contract": "node --experimental-strip-types lib/nutrition/verify-nutrition-plan-contract.mts",
     "verify:client-ownership": "node --experimental-strip-types lib/production/verify-client-ownership.mts",
     "e2e:client-ownership": "node --experimental-strip-types scripts/e2e-client-ownership.mts",

@@ -16,7 +16,9 @@ import { revalidatePath } from "next/cache";
 import { ChevronLeft } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { SectionHeader } from "@/components/coach/section-header";
+import { WorkspaceSection, WorkspaceSections } from "@/components/coach/workspace-section";
+import { OpenHashSection } from "@/components/coach/open-hash-section";
+import { HEALTH_REVIEW_STATUS_LABELS } from "@/lib/coach/labels";
 import { LifecycleBadge } from "@/components/coach/lifecycle-badge";
 import { getClientDetailAction, setClientLifecycleActionServer, activateClientAction } from "@/app/actions/coach-roster";
 import { getRecentActivityAction } from "@/app/actions/coach-daily-activity";
@@ -119,6 +121,8 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
   const clientReportedRestriction = typeof reportedHealth?.injuryRestrictions === "string" ? reportedHealth.injuryRestrictions : null;
   // Gate U3B — the client's unified program proposal, when one is reviewable (additive: a failure hides the card).
   const unifiedReview = onboardingComplete ? await soft("unified review", () => getUnifiedReviewAction({ workspaceId: detail.workspaceId, clientProfileId: clientId })) : null;
+  // Proposed (decisions / approval) or approved-not-published (publication) — the coach's next move is in the review.
+  const reviewAwaitsCoach = !!unifiedReview && (unifiedReview.approvalState === "proposed" || unifiedReview.approvalState === "approved");
   // Gate U3C — the coach can prepare a unified proposal for an allowlisted client with completed intake.
   const unifiedPrepareEnabled = onboardingComplete && isReasonerProposalEnabled(clientId);
   const activeProgramLabel = detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none";
@@ -227,8 +231,79 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
     await revalidate();
   }
 
+  // --- Summaries: each section's one-line state, from the same data its contents show. ---------------------------
+  const intakeGoal = goals ? describePrimaryGoal(ONBOARDING_STEPS, goals) : NOT_PROVIDED;
+  const successDefinition = typeof goals?.successDefinition === "string" && goals.successDefinition.trim() ? goals.successDefinition.trim() : null;
+  // The coach's own goal (set at invite) when there is one; otherwise the client's intake goal, labelled as theirs.
+  const goalLine = detail.goal ? detail.goal : intakeGoal !== NOT_PROVIDED ? `${intakeGoal}${successDefinition ? ` — “${successDefinition}”` : ""}` : null;
+  const experienceLabel = start?.trainingExperience ? formatFieldValue(ONBOARDING_STEPS.find((s) => s.id === "starting_point")!.fields.find((f) => f.key === "trainingExperience")!, start.trainingExperience) : null;
+  const daysLabel = Array.isArray(week?.availableDays) && (week!.availableDays as string[]).length > 0 ? `${(week!.availableDays as string[]).length} days/week available` : null;
+  const missingIds = new Set(generationPrerequisites.missing.map((m) => m.id));
+  const confirmedRestrictions = limitationsState?.confirmed?.noExerciseRestrictions ? 0 : limitationsState?.confirmed?.restrictions.length ?? 0;
+  const healthSummary = [
+    healthDecision ? HEALTH_REVIEW_STATUS_LABELS[healthDecision.record.status] : null,
+    limitationsState?.status === "confirmed" ? (limitationsState.confirmed?.noExerciseRestrictions ? "no exercise restrictions" : `${confirmedRestrictions} confirmed restriction${confirmedRestrictions === 1 ? "" : "s"}`) : limitationsState?.status === "needs_confirmation" ? "restrictions need your confirmation" : limitationsState?.status === "stale" ? "limitation changed — restrictions need re-confirming" : null,
+  ].filter(Boolean).join(" · ");
+  const healthAttention = missingIds.has("health_review") || missingIds.has("exercise_restrictions") || limitationsState?.status === "needs_confirmation" || limitationsState?.status === "stale" || healthDecision?.record.status === "review_needed";
+  // "proposed" until the coach approves, then "approved" — from the proposal's own approval state.
+  const reviewStage = unifiedReview?.approvalState === "approved" ? "approved (not yet published)" : "proposed";
+  const reviewNutrition = unifiedReview?.nutrition && (unifiedReview.approvalState === "proposed" || unifiedReview.approvalState === "approved") ? unifiedReview.nutrition.summary : null;
+  const assignedTargets = detail.activeNutrition ? [detail.activeNutrition.prescribed.calories !== null ? `${detail.activeNutrition.prescribed.calories} kcal` : null, detail.activeNutrition.prescribed.proteinG !== null ? `${detail.activeNutrition.prescribed.proteinG}g protein` : null, detail.activeNutrition.prescribed.carbsG !== null ? `${detail.activeNutrition.prescribed.carbsG}g carbs` : null, detail.activeNutrition.prescribed.fatG !== null ? `${detail.activeNutrition.prescribed.fatG}g fat` : null].filter(Boolean).join(" · ") || "guidance-based plan (no numeric targets)" : null;
+  // Proposed targets are never presented as assigned: an unpublished proposal's plan is named as proposed.
+  const nutritionSummary = detail.activeNutrition ? `Assigned v${detail.activeNutrition.versionNumber} · ${assignedTargets}` : reviewNutrition ? `Not assigned yet — the ${reviewStage} ${reviewNutrition.targets.length ? reviewNutrition.targets.join(" · ") : "plan"} is assigned only when you publish the program` : "Not assigned";
+  const programSummary = [
+    `Active: ${detail.activeProgram ? `${detail.activeProgram.name} (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks} weeks)` : "none"}`,
+    reviewAwaitsCoach ? (unifiedReview!.approvalState === "approved" ? "OPTIM's program is approved — publish it above" : "OPTIM's program is waiting on you above") : null,
+    pendingProposal ? "an earlier draft is waiting" : null,
+  ].filter(Boolean).join(" · ");
+  const startSummary = [detail.startDateIso ? `Starts ${formatLongDateLabel(detail.startDateIso)}` : "No start date", detail.hasConfirmedTimezone ? detail.timezone : "time zone not set"].join(" · ");
+  const messageCount = history.reduce((n, c) => n + c.messages.length, 0);
+  const lifecycleActions = [detail.lifecycle === "active" ? "pause" : null, detail.lifecycle === "paused" ? "resume" : null, detail.lifecycle === "active" || detail.lifecycle === "paused" ? "complete" : null, detail.lifecycle === "completed" && !detail.archived ? "archive" : null, detail.archived ? "unarchive" : null].filter(Boolean) as Array<"pause" | "resume" | "complete" | "archive" | "unarchive">;
+  const LIFECYCLE_LABEL = { pause: "Pause", resume: "Resume", complete: "Mark completed", archive: "Archive", unarchive: "Unarchive" } as const;
+
+  const legacyProgramTools = (
+    <>
+      <Card>
+        <h3 className="mb-2 text-sm font-medium text-off-white">Training program</h3>
+        <p className="mb-2 text-sm text-neutral">
+          Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
+        </p>
+        {notice === "proposal-rejected" && !pendingProposal ? (
+          <p role="status" className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2 text-sm text-success">
+            Proposal rejected. Nothing was generated or activated.
+          </p>
+        ) : null}
+        {pendingProposal ? (
+          <>
+            <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
+            {/* Gate 4.0C-5 — a revision of that proposal stopped at its preflight: the coach's fit decisions come first. */}
+            {reasonerAvailability.enabled && reasonerAvailability.job?.status === "needs_input" && reasonerAvailability.job.outcome.fitQuestions?.length && reasonerAvailability.job.outcome.intent?.supersedesJobId ? (
+              <div className="mt-3">
+                <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={[]} revision />
+              </div>
+            ) : null}
+          </>
+        ) : reasonerAvailability.enabled ? (
+          <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
+        ) : (
+          <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
+        )}
+      </Card>
+      {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
+      {plannerView ? (
+        <details className="group rounded-[var(--radius-lg)] border border-border px-4 py-3">
+          <summary className="cursor-pointer text-sm font-medium text-neutral">New resistance planner — preview (review only, not saved)</summary>
+          <div className="mt-3">
+            <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} />
+          </div>
+        </details>
+      ) : null}
+    </>
+  );
+
   return (
     <div className="space-y-5">
+      <OpenHashSection />
       <div className="flex items-center justify-between gap-3">
         <Link href="/coach/clients" className="flex items-center gap-1 text-sm text-neutral hover:text-off-white">
           <ChevronLeft size={16} /> Back to clients
@@ -239,19 +314,88 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
       <div>
         <h1 className="text-display text-off-white">{detail.displayName}</h1>
         <p className="mt-1 text-body text-neutral">
-          {detail.goal || "No goal recorded"} {detail.archived ? " · Archived" : ""}
+          {goalLine ?? "No goal recorded yet"}
+          {!detail.goal && goalLine ? <span className="text-meta"> · from intake</span> : null}
+          {detail.archived ? " · Archived" : ""}
         </p>
         {!detail.hasSignedIn ? <p className="mt-1 text-meta text-neutral">Invited at {detail.invitedEmail} — hasn&apos;t signed in yet.</p> : null}
+        {!hasOnboarding ? <p className="mt-1 text-meta text-neutral">This client hasn&apos;t started onboarding yet.</p> : !onboardingComplete ? <p className="mt-1 text-meta text-neutral">Onboarding in progress — chapter {(detail.onboarding?.currentStepIndex ?? 0) + 1} of {ONBOARDING_STEPS.length}.</p> : null}
       </div>
 
-      {hasOnboarding ? (
-        <section className="space-y-3">
-          <SectionHeader title="Onboarding answers" />
-          <Card>
-            {detail.onboarding?.completedAtIso ? (
+      {/* A program waiting on the coach comes first: decisions before reference material. */}
+      {unifiedPrepareEnabled && unifiedReview && reviewAwaitsCoach ? <UnifiedProposalReview key={unifiedReview.rowId} initial={unifiedReview} workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
+
+      {readyToActivate ? (
+        <Card className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-body text-off-white">Program, nutrition, start date and time zone are set — {detail.displayName.split(" ")[0]} is ready to activate.</p>
+          <form action={activate}>
+            <Button type="submit" size="sm">Activate client</Button>
+          </form>
+        </Card>
+      ) : null}
+
+      <ClientStateNoticeSection findings={clientStateFindings} evidenceByFinding={clientStateEvidence} pendingAdjustment={pendingAdjustmentProvenance} />
+
+      {/* Not waiting on a review: building the program is the coach's next move, so it stays in view. */}
+      {unifiedPrepareEnabled && !reviewAwaitsCoach ? (
+        <>
+          <UnifiedPrepareCard workspaceId={detail.workspaceId} clientProfileId={clientId} activeLabel={activeProgramLabel} missing={generationPrerequisites.missing} waitingForReview={false} />
+          {unifiedReview ? <UnifiedProposalReview key={unifiedReview.rowId} initial={unifiedReview} workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
+        </>
+      ) : null}
+
+      <section className="space-y-2" aria-label="Client workspace">
+        <h2 className="text-label text-neutral">Client</h2>
+        <WorkspaceSections>
+          {healthDecision || limitationsState ? (
+            <WorkspaceSection id="health" title="Health review & restrictions" summary={healthSummary || "Review the client's reported limitation"} attention={healthAttention} defaultOpen={healthAttention}>
+              {healthDecision ? <SupabaseHealthReviewDecisionCard clientFirstName={detail.displayName.split(" ")[0]} healthReview={healthDecision.record} clientReportedDetail={clientReportedRestriction} onResolve={recordHealthDecision} /> : null}
+              {limitationsState ? <StructuredLimitationsCard workspaceId={detail.workspaceId} clientProfileId={clientId} state={limitationsState} options={limitationOptions} /> : null}
+            </WorkspaceSection>
+          ) : null}
+
+          <WorkspaceSection id="program" title="Active program & other tools" summary={programSummary} defaultOpen={!unifiedPrepareEnabled || notice === "proposal-rejected"}>
+            {unifiedPrepareEnabled ? (
+              <>
+                {reviewAwaitsCoach ? <UnifiedPrepareCard workspaceId={detail.workspaceId} clientProfileId={clientId} activeLabel={activeProgramLabel} missing={generationPrerequisites.missing} waitingForReview /> : null}
+                <details className="group rounded-[var(--radius-lg)] border border-border px-4 py-3">
+                  <summary className="cursor-pointer text-sm font-medium text-neutral">Other program tools{pendingProposal ? " · an earlier draft is here" : ""}</summary>
+                  <div className="mt-3 space-y-3">
+                    <p className="text-meta text-neutral">Earlier ways to build a program. Let OPTIM Build doesn&apos;t use them; publishing its program archives an earlier draft.</p>
+                    {legacyProgramTools}
+                  </div>
+                </details>
+              </>
+            ) : (
+              legacyProgramTools
+            )}
+          </WorkspaceSection>
+
+          <WorkspaceSection id="nutrition" title="Assigned nutrition" summary={nutritionSummary} defaultOpen={!detail.activeNutrition && !reviewNutrition && !unifiedPrepareEnabled}>
+            <Card>
+              {detail.activeNutrition ? (
+                <p className="mb-2 text-sm text-neutral">
+                  Assigned: <span className="text-off-white">v{detail.activeNutrition.versionNumber}</span> · {assignedTargets}
+                </p>
+              ) : (
+                <p className="mb-2 text-sm text-neutral">
+                  <span className="text-off-white">Nutrition not assigned.</span> {reviewNutrition ? `The ${reviewStage} plan is assigned when you publish the program — or enter targets yourself to assign a plan now.` : "Enter targets below to create, publish, and assign a plan."}
+                </p>
+              )}
+              <LiveNutritionAssignmentForm action={createNutritionFormAction} assignedTargets={detail.activeNutrition?.targets ?? null} assignedVersionNumber={detail.activeNutrition?.versionNumber ?? null} />
+            </Card>
+          </WorkspaceSection>
+
+          <WorkspaceSection id="start-date" title="Start date & time zone" summary={blockedOnTimezoneOnly ? `${startSummary} — set the time zone to activate` : startSummary} attention={blockedOnTimezoneOnly}>
+            <LiveStartDateForm action={setStartDateAction} initialDateIso={detail.startDateIso} timezone={detail.timezone} timezoneSource={detail.timezoneSource} />
+          </WorkspaceSection>
+
+          {onboardingComplete ? (
+            <WorkspaceSection id="intake" title="Intake answers" summary={[intakeGoal !== NOT_PROVIDED ? intakeGoal : null, formatHeightFromAnswers(aboutYou) !== NOT_PROVIDED ? formatHeightFromAnswers(aboutYou) : null, daysLabel, experienceLabel].filter(Boolean).join(" · ") || "Completed"}>
               <dl className="space-y-2 text-sm">
                 <Row label="Height" value={formatHeightFromAnswers(aboutYou)} />
-                <Row label="Goal" value={goals ? describePrimaryGoal(ONBOARDING_STEPS, goals) : NOT_PROVIDED} />
+                <Row label="Goal" value={intakeGoal} />
+                {successDefinition ? <Row label="Success looks like" value={successDefinition} /> : null}
                 {CORRECTABLE_INTAKE_FIELDS.map((f) => {
                   const own = ((detail.onboarding?.clientAnswers ?? {}) as Record<string, Record<string, unknown> | undefined>)[f.step]?.[f.field];
                   const eff = ((detail.onboarding?.answers ?? {}) as Record<string, Record<string, unknown> | undefined>)[f.step]?.[f.field];
@@ -272,235 +416,85 @@ export async function LiveClientWorkspace({ clientId, notice = null }: { clientI
                     />
                   );
                 })}
-                <Row
-                  label="Available days"
-                  value={Array.isArray(week?.availableDays) && (week!.availableDays as string[]).length > 0 ? `${(week!.availableDays as string[]).length}/week` : NOT_PROVIDED}
-                />
-                <Row
-                  label="Experience"
-                  value={
-                    start?.trainingExperience
-                      ? formatFieldValue(ONBOARDING_STEPS.find((s) => s.id === "starting_point")!.fields.find((f) => f.key === "trainingExperience")!, start.trainingExperience)
-                      : NOT_PROVIDED
-                  }
-                />
+                <Row label="Available days" value={daysLabel ?? NOT_PROVIDED} />
+                <Row label="Experience" value={experienceLabel ?? NOT_PROVIDED} />
               </dl>
-            ) : (
-              <p className="text-sm text-neutral">Onboarding in progress — chapter {(detail.onboarding?.currentStepIndex ?? 0) + 1} of {ONBOARDING_STEPS.length}.</p>
-            )}
-          </Card>
-        </section>
-      ) : (
-        <Card>
-          <p className="text-sm text-neutral">This client hasn&apos;t started onboarding yet.</p>
-        </Card>
-      )}
+            </WorkspaceSection>
+          ) : null}
 
-      <ClientStateNoticeSection findings={clientStateFindings} evidenceByFinding={clientStateEvidence} pendingAdjustment={pendingAdjustmentProvenance} />
-
-      <section className="space-y-3">
-        <SectionHeader title="Program setup" />
-        <Card>
-          <h3 className="mb-3 text-sm font-medium text-off-white">Start date</h3>
-          <LiveStartDateForm action={setStartDateAction} initialDateIso={detail.startDateIso} timezone={detail.timezone} timezoneSource={detail.timezoneSource} />
-        </Card>
-
-        {healthDecision ? (
-          <SupabaseHealthReviewDecisionCard clientFirstName={detail.displayName.split(" ")[0]} healthReview={healthDecision.record} clientReportedDetail={clientReportedRestriction} onResolve={recordHealthDecision} />
-        ) : null}
-
-        {limitationsState ? <StructuredLimitationsCard workspaceId={detail.workspaceId} clientProfileId={clientId} state={limitationsState} options={limitationOptions} /> : null}
-
-        {unifiedPrepareEnabled ? (
-          <>
-            {/* "Let OPTIM Build" — the one primary path: decisions first, then one coordinated draft to review, edit,
-                approve and publish. The earlier generators stay available (collapsed) until this path is proven. */}
-            <UnifiedPrepareCard
-              workspaceId={detail.workspaceId}
-              clientProfileId={clientId}
-              activeLabel={activeProgramLabel}
-              missing={generationPrerequisites.missing}
-              waitingForReview={!!unifiedReview && !["rejected", "published", "superseded"].includes(unifiedReview.approvalState)}
-            />
-            {unifiedReview ? <UnifiedProposalReview key={unifiedReview.rowId} initial={unifiedReview} workspaceId={detail.workspaceId} clientProfileId={clientId} /> : null}
-            <details className="group rounded-[var(--radius-lg)] border border-border px-4 py-3">
-              <summary className="cursor-pointer text-sm font-medium text-neutral">Other program tools{pendingProposal ? " · an earlier draft is here" : ""}</summary>
-              <div className="mt-3 space-y-3">
-                <p className="text-meta text-neutral">Earlier ways to build a program. Let OPTIM Build doesn&apos;t use them; publishing its program archives an earlier draft.</p>
-        <Card>
-                  <h3 className="mb-2 text-sm font-medium text-off-white">Training program</h3>
-                  <p className="mb-2 text-sm text-neutral">
-                    Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
-                  </p>
-                  {notice === "proposal-rejected" && !pendingProposal ? (
-                    <p role="status" className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2 text-sm text-success">
-                      Proposal rejected. Nothing was generated or activated.
-                    </p>
-                  ) : null}
-                  {pendingProposal ? (
-                    <>
-                      <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
-                      {/* Gate 4.0C-5 — a revision of that proposal stopped at its preflight: the coach's fit decisions come first. */}
-                      {reasonerAvailability.enabled && reasonerAvailability.job?.status === "needs_input" && reasonerAvailability.job.outcome.fitQuestions?.length && reasonerAvailability.job.outcome.intent?.supersedesJobId ? (
-                        <div className="mt-3">
-                          <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={[]} revision />
-                        </div>
-                      ) : null}
-                    </>
-                  ) : reasonerAvailability.enabled ? (
-                    <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
-                  ) : (
-                    <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
-                  )}
-                </Card>
-                {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
-                {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}
+          <WorkspaceSection id="activity" title="Activity & messages" summary={[recentActivity.length ? `${recentActivity.length} recent day${recentActivity.length === 1 ? "" : "s"} logged` : "Nothing logged yet", messageCount ? `${messageCount} message${messageCount === 1 ? "" : "s"}` : "no conversation", notes.length ? `${notes.length} coach note${notes.length === 1 ? "" : "s"}` : "no coach notes"].join(" · ")}>
+            <div id="conversation" className="scroll-mt-24 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-label text-neutral">Recent activity</h3>
               </div>
-            </details>
-          </>
-        ) : (
-          <>
-        <Card>
-              <h3 className="mb-2 text-sm font-medium text-off-white">Training program</h3>
-              <p className="mb-2 text-sm text-neutral">
-                Active: {detail.activeProgram ? `"${detail.activeProgram.name}" (v${detail.activeProgram.versionNumber}, ${detail.activeProgram.durationWeeks}w)` : "none"}
-              </p>
-              {notice === "proposal-rejected" && !pendingProposal ? (
-                <p role="status" className="mb-3 rounded border border-border-strong bg-surface-raised px-3 py-2 text-sm text-success">
-                  Proposal rejected. Nothing was generated or activated.
-                </p>
-              ) : null}
-              {pendingProposal ? (
-                <>
-                  <p className="text-sm text-neutral">A generated proposal is waiting on your review below — resolve it before generating another.</p>
-                  {/* Gate 4.0C-5 — a revision of that proposal stopped at its preflight: the coach's fit decisions come first. */}
-                  {reasonerAvailability.enabled && reasonerAvailability.job?.status === "needs_input" && reasonerAvailability.job.outcome.fitQuestions?.length && reasonerAvailability.job.outcome.intent?.supersedesJobId ? (
-                    <div className="mt-3">
-                      <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={[]} revision />
-                    </div>
-                  ) : null}
-                </>
-              ) : reasonerAvailability.enabled ? (
-                <ReasonerProposalPanel workspaceId={detail.workspaceId} clientProfileId={clientId} initialJob={reasonerAvailability.job} missing={generationPrerequisites.missing} />
-              ) : (
-                <LiveProposalGenerateForm action={createProgramProposalFormAction} missing={generationPrerequisites.missing} programLengthHint={generationPrerequisites.programLengthHint} />
-              )}
-            </Card>
-            {pendingProposal ? <ProgramProposalReview workspaceId={detail.workspaceId} clientProfileId={clientId} clientId={clientId} proposal={pendingProposal} /> : null}
-            {plannerView ? <ResistancePlannerPreview view={plannerView} compareHref={`/coach/clients/${clientId}/planner-review`} /> : null}
-          </>
-        )}
-
-        <Card>
-          <h3 className="mb-2 text-sm font-medium text-off-white">Nutrition plan</h3>
-          {detail.activeNutrition ? (
-            <p className="mb-2 text-sm text-neutral">
-              Assigned: <span className="text-off-white">v{detail.activeNutrition.versionNumber}</span> ·{" "}
-              {/* U3A — only the targets the coach prescribed (a calories-and-protein or habit plan shows fewer, never invented ones). */}
-              {[detail.activeNutrition.prescribed.calories !== null ? `${detail.activeNutrition.prescribed.calories} kcal` : null, detail.activeNutrition.prescribed.proteinG !== null ? `${detail.activeNutrition.prescribed.proteinG}g protein` : null, detail.activeNutrition.prescribed.carbsG !== null ? `${detail.activeNutrition.prescribed.carbsG}g carbs` : null, detail.activeNutrition.prescribed.fatG !== null ? `${detail.activeNutrition.prescribed.fatG}g fat` : null].filter(Boolean).join(" · ") || "Guidance-based plan (no numeric targets)"}
-            </p>
-          ) : (
-            <p className="mb-2 text-sm text-neutral">
-              <span className="text-off-white">Nutrition not assigned.</span> Enter targets below to create, publish, and assign a plan.
-            </p>
-          )}
-          <LiveNutritionAssignmentForm action={createNutritionFormAction} assignedTargets={detail.activeNutrition?.targets ?? null} assignedVersionNumber={detail.activeNutrition?.versionNumber ?? null} />
-        </Card>
-      </section>
-
-      <section className="space-y-3">
-        <SectionHeader title="Recent activity" />
-        {recentActivity.length === 0 ? (
-          <Card><p className="text-sm text-neutral">No training or nutrition activity logged yet.</p></Card>
-        ) : (
-          <Card className="space-y-4">
-            {recentActivity.map((day) => (
-              <RecentActivityDayRow key={day.dateIso} day={day} timeZone={detail.timezone} />
-            ))}
-          </Card>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <SectionHeader title="Lifecycle" />
-        <Card className="flex flex-wrap items-center gap-2">
-          {readyToActivate ? (
-            <form action={activate}>
-              <Button type="submit" size="sm">Activate client</Button>
-            </form>
-          ) : null}
-          {blockedOnTimezoneOnly ? (
-            <p className="text-sm text-neutral">Cannot activate: no confirmed timezone yet — set one from the start date field above first.</p>
-          ) : null}
-          {detail.lifecycle === "active" ? (
-            <form action={lifecycleAction.bind(null, "pause")}>
-              <Button type="submit" variant="secondary" size="sm">Pause</Button>
-            </form>
-          ) : null}
-          {detail.lifecycle === "paused" ? (
-            <form action={lifecycleAction.bind(null, "resume")}>
-              <Button type="submit" variant="secondary" size="sm">Resume</Button>
-            </form>
-          ) : null}
-          {detail.lifecycle === "active" || detail.lifecycle === "paused" ? (
-            <form action={lifecycleAction.bind(null, "complete")}>
-              <Button type="submit" variant="secondary" size="sm">Mark completed</Button>
-            </form>
-          ) : null}
-          {detail.lifecycle === "completed" && !detail.archived ? (
-            <form action={lifecycleAction.bind(null, "archive")}>
-              <Button type="submit" variant="secondary" size="sm">Archive</Button>
-            </form>
-          ) : null}
-          {detail.archived ? (
-            <form action={lifecycleAction.bind(null, "unarchive")}>
-              <Button type="submit" variant="secondary" size="sm">Unarchive</Button>
-            </form>
-          ) : null}
-        </Card>
-      </section>
-
-      <section className="space-y-3">
-        <SectionHeader title="Conversation" action={<Link href="/coach/escalations" className="text-action text-accent-fg hover:underline">Escalations</Link>} />
-        {history.every((conv) => conv.messages.length === 0) ? (
-          <Card><p className="text-sm text-neutral">No conversation yet.</p></Card>
-        ) : (
-          <Card className="max-h-[420px] space-y-2.5 overflow-y-auto">
-            {history.flatMap((conv) =>
-              conv.messages.map((m) => (
-                <div key={m.id} className="text-sm">
-                  <span className="text-label text-neutral">
-                    {m.actorType === "coach" ? "You" : m.actorType === "assistant" ? "OPTIM" : m.actorType === "client" ? detail.displayName : "System"}
-                    {" · "}
-                    {new Date(m.createdAtIso).toLocaleString()}:{" "}
-                  </span>
-                  <span className="text-off-white">{m.body}</span>
+              {recentActivity.length ? (
+                <div className="space-y-4">
+                  {recentActivity.map((day) => (
+                    <RecentActivityDayRow key={day.dateIso} day={day} timeZone={detail.timezone} />
+                  ))}
                 </div>
-              ))
-            )}
-          </Card>
-        )}
-      </section>
+              ) : (
+                <p className="text-sm text-neutral">No training or nutrition activity logged yet.</p>
+              )}
+            </div>
+            <div className="space-y-2 border-t border-border pt-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-label text-neutral">Conversation</h3>
+                <Link href="/coach/escalations" className="text-action text-accent-fg hover:underline">
+                  Escalations
+                </Link>
+              </div>
+              {messageCount ? (
+                <div className="max-h-[420px] space-y-2.5 overflow-y-auto">
+                  {history.flatMap((conv) =>
+                    conv.messages.map((m) => (
+                      <div key={m.id} className="text-sm">
+                        <span className="text-label text-neutral">
+                          {m.actorType === "coach" ? "You" : m.actorType === "assistant" ? "OPTIM" : m.actorType === "client" ? detail.displayName : "System"}
+                          {" · "}
+                          {new Date(m.createdAtIso).toLocaleString()}:{" "}
+                        </span>
+                        <span className="text-off-white">{m.body}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-neutral">No conversation yet.</p>
+              )}
+            </div>
+            <div id="notes" className="scroll-mt-24 space-y-2 border-t border-border pt-3">
+              <h3 className="text-label text-neutral">Personal coach notes</h3>
+              <p className="text-meta text-neutral">A one-way note, attributed to you, delivered to {detail.displayName}&apos;s own chat — not a DM thread.</p>
+              <form action={addNoteAction} className="flex flex-col gap-2">
+                <textarea name="body" rows={2} placeholder="Write a note to this client…" className="rounded border border-border-strong bg-transparent px-2 py-1.5 text-sm text-off-white" />
+                <Button type="submit" variant="secondary" size="sm" className="self-start">Add note</Button>
+              </form>
+              {notes.length > 0 ? (
+                <ul className="space-y-2 divide-y divide-border">
+                  {notes.map((n) => (
+                    <li key={n.id} className="pt-2 first:pt-0">
+                      <p className="text-sm text-off-white">{n.body}</p>
+                      <p className="mt-0.5 text-meta text-neutral">{new Date(n.publishedAtIso).toLocaleString()}</p>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          </WorkspaceSection>
 
-      <section className="space-y-3">
-        <SectionHeader title="Personal coach notes" />
-        <Card>
-          <p className="mb-2 text-meta text-neutral">A one-way note, attributed to you, delivered to {detail.displayName}&apos;s own chat — not a DM thread.</p>
-          <form action={addNoteAction} className="flex flex-col gap-2">
-            <textarea name="body" rows={2} placeholder="Write a note to this client…" className="rounded border border-border-strong bg-transparent px-2 py-1.5 text-sm text-off-white" />
-            <Button type="submit" variant="secondary" size="sm" className="self-start">Add note</Button>
-          </form>
-          {notes.length > 0 ? (
-            <ul className="mt-3 space-y-2 divide-y divide-border">
-              {notes.map((n) => (
-                <li key={n.id} className="pt-2 first:pt-0">
-                  <p className="text-sm text-off-white">{n.body}</p>
-                  <p className="mt-0.5 text-meta text-neutral">{new Date(n.publishedAtIso).toLocaleString()}</p>
-                </li>
-              ))}
-            </ul>
+          {lifecycleActions.length ? (
+            <WorkspaceSection id="lifecycle" title="Client status" summary={`${detail.lifecycle.charAt(0).toUpperCase()}${detail.lifecycle.slice(1)}${detail.archived ? " · archived" : ""}`}>
+              <div className="flex flex-wrap items-center gap-2">
+                {lifecycleActions.map((a) => (
+                  <form key={a} action={lifecycleAction.bind(null, a)}>
+                    <Button type="submit" variant="secondary" size="sm">{LIFECYCLE_LABEL[a]}</Button>
+                  </form>
+                ))}
+              </div>
+            </WorkspaceSection>
           ) : null}
-        </Card>
+        </WorkspaceSections>
       </section>
     </div>
   );

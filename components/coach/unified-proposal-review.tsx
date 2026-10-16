@@ -27,6 +27,7 @@ import type { PublicationPlan } from "@/lib/production/unified-publication";
 import type { TrainingItemPatch, TrainingItemPath } from "@/lib/training/program-proposal-editing";
 import type { Prescription, TrainingItemInstance } from "@/lib/training/types";
 import type { DomainId } from "@/lib/synthesis/unified/contract";
+import { handledItems, optionRole, reviewTasks, type HandledItem, type ReviewTask } from "@/lib/coach/unified-review-tasks";
 import { formatEffort } from "@/lib/workout/continuous";
 
 const DOMAIN_LABEL: Record<DomainId, string> = { resistance: "Lifting", cardio: "Cardio", nutrition: "Nutrition" };
@@ -56,360 +57,512 @@ export function UnifiedProposalReview({ initial, workspaceId, clientProfileId }:
   const [view, setView] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [openTask, setOpenTask] = useState<string | null>(null);
+  // Answered decisions the coach chose to "Change": shown as open again until they pick (the stored answer stays until then).
+  const [reopened, setReopened] = useState<string[]>([]);
   const scope = { workspaceId, clientProfileId };
   const open = view.approvalState === "proposed";
+  const shown = reopened.length ? { ...view, decisions: view.decisions.map((d) => (reopened.includes(d.key) ? { ...d, answer: null } : d)) } : view;
+  const tasks = open ? reviewTasks(shown) : [];
+  const handled = handledItems(shown);
+  // One task open at a time; the first one is open until the coach chooses another.
+  const focused = tasks.find((t) => t.id === openTask) ?? tasks[0] ?? null;
 
   const act = (f: () => Promise<UnifiedReviewResult>) =>
     start(async () => {
       const r = await f();
       if (r.ok) {
         setView(r.view);
+        setReopened([]);
         setError(null);
       } else setError(r.error);
     });
+  /** The coach's explicit "apply" for several exercises: the same per-exercise edit as before, one after another, each
+   * against the draft version the previous one produced (every edit is still its own revision). */
+  const applyAll = (mode: "limit" | "remove", names: string[]) =>
+    start(async () => {
+      let versionId = view.training!.versionId;
+      for (const name of names) {
+        const r = await editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: versionId, edit: mode === "limit" ? { kind: "limitEffort", name } : { kind: "removeExercise", name } });
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+        setView(r.view);
+        versionId = r.view.training!.versionId;
+      }
+      setError(null);
+    });
+  // What these drafts are now, from the proposal's own approval state (never "Proposed" once approved or published).
+  const draftStage = { proposed: "Proposed", approved: "Approved (not published)", published: "Published", superseded: "Superseded", rejected: "Rejected" }[view.approvalState] ?? "Proposed";
+  const reveal = (id: string) => {
+    setOpenTask(id);
+    requestAnimationFrame(() => document.getElementById(`task-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   return (
-    <section className="space-y-3" aria-label="Unified program review">
-      <ReviewHeader view={view} pending={pending} error={error} onApprove={() => act(() => approveUnifiedProposalAction(scope, { rowId: view.rowId, expected: { training: view.training?.versionId ?? null, nutrition: view.nutrition?.versionId ?? null } }))} onReject={(reason) => act(() => rejectUnifiedProposalAction(scope, { rowId: view.rowId, reason }))} />
+    <section className="space-y-5" aria-label="Unified program review">
+      <ReviewHeader
+        view={view}
+        tasks={tasks}
+        handled={handled.length}
+        pending={pending}
+        error={error}
+        onNext={() => tasks[0] && reveal(tasks[0].id)}
+        onApprove={() => act(() => approveUnifiedProposalAction(scope, { rowId: view.rowId, expected: { training: view.training?.versionId ?? null, nutrition: view.nutrition?.versionId ?? null } }))}
+        onReject={(reason) => act(() => rejectUnifiedProposalAction(scope, { rowId: view.rowId, reason }))}
+      />
 
       {view.approvalState === "approved" || view.approvalState === "published" ? <PublishCard view={view} pending={pending} onPublish={(expected) => act(() => publishUnifiedProposalAction(scope, { rowId: view.rowId, expected }))} scope={scope} /> : null}
 
-      <div className="grid gap-3 md:grid-cols-3">
-        {(["resistance", "cardio", "nutrition"] as DomainId[]).map((d) => (
-          <DomainCard key={d} view={view} domain={d} />
-        ))}
-      </div>
+      {/* Decisions lead; supporting context sits beside them on wide screens (stacked on a phone). */}
+      <div className={tasks.length ? "grid items-start gap-5 lg:grid-cols-12" : "space-y-5"}>
+      {tasks.length ? (
+        <div className="lg:col-span-7">
+          <ZoneHeading title="Needs you" count={tasks.length} />
+          <ol className="space-y-2">
+            {tasks.map((t, i) => (
+              <TaskItem
+                key={t.id}
+                task={t}
+                index={i + 1}
+                expanded={focused?.id === t.id}
+                disabled={pending}
+                onToggle={() => setOpenTask(focused?.id === t.id ? "__none__" : t.id)}
+                onAnswer={(key, answer) => act(() => recordUnifiedDecisionAction(scope, { rowId: view.rowId, key, answer }))}
+                onApplyAll={applyAll}
+                onWithdraw={(key) => act(() => withdrawUnifiedExclusionAction(scope, { rowId: view.rowId, key }))}
+                onOpenSessions={() => {
+                  const d = document.getElementById("review-training-sessions") as HTMLDetailsElement | null;
+                  if (d) {
+                    d.open = true;
+                    d.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }
+                }}
+              />
+            ))}
+          </ol>
+        </div>
+      ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <DecisionsCard
-          view={view}
+        <div className={tasks.length ? "space-y-5 lg:col-span-5" : "space-y-5"}>
+          <WorthKnowing view={view} beside={tasks.length > 0} />
+      {handled.length ? (
+        <Handled
+          items={handled}
           disabled={!open || pending}
-          onAnswer={(key, answer) => act(() => recordUnifiedDecisionAction(scope, { rowId: view.rowId, key, answer }))}
-          onRemoveExercise={(name) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "removeExercise", name } }))}
-          onLimitEffort={(name) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "limitEffort", name } }))}
+          onChange={(key) => {
+            setReopened((r) => [...r, key]);
+            reveal(`decide:${key}`);
+          }}
           onWithdraw={(key) => act(() => withdrawUnifiedExclusionAction(scope, { rowId: view.rowId, key }))}
         />
-        <ChecksCard view={view} />
+      ) : null}
+
+        </div>
       </div>
 
-      <WeekCard view={view} />
-
-      {view.training ? (
-        <TrainingCard
-          view={view}
-          disabled={!open || pending}
-          onEdit={(path, patch) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "patch", path, patch } }))}
-          onRemove={(path) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "remove", path } }))}
-        />
-      ) : null}
-      {view.nutrition ? <NutritionCard view={view} disabled={!open || pending} onSave={(edit) => act(() => editUnifiedNutritionAction(scope, { rowId: view.rowId, expectedVersionId: view.nutrition!.versionId, edit }))} /> : view.nutritionStrategy ? (
-        <Card>
-          <p className="text-label text-neutral">Nutrition</p>
-          <p className="mt-1 text-body text-off-white">A nutrition strategy was prepared but isn&apos;t a plan the client can receive yet.</p>
-          <p className="mt-1 text-meta text-neutral">{view.nutritionStrategy.reason}</p>
-        </Card>
-      ) : null}
-
-      {view.revisions.length ? (
-        <Card>
-          <p className="text-label text-neutral">Your edits</p>
-          <ul className="mt-2 space-y-1">
-            {view.revisions.map((r) => (
-              <li key={r.toVersionId} className="text-meta text-off-white">
-                {r.summary} <span className="text-neutral">· {new Date(r.atIso).toLocaleString()}</span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-meta text-neutral">Every edit is a new draft version; earlier versions are kept.</p>
-        </Card>
-      ) : null}
+      <div>
+        <ZoneHeading title="Program details" />
+        <div className="grid items-start gap-2 lg:grid-cols-2">
+          {view.training ? (
+            <Disclosure id="review-training-sessions" title={`${draftStage} training sessions`} meta={`${view.training.content.weeks.length} weeks · view or edit any session`}>
+              <TrainingCard
+                view={view}
+                disabled={!open || pending}
+                onEdit={(path, patch) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "patch", path, patch } }))}
+                onRemove={(path) => act(() => editUnifiedTrainingAction(scope, { rowId: view.rowId, expectedVersionId: view.training!.versionId, edit: { kind: "remove", path } }))}
+              />
+            </Disclosure>
+          ) : null}
+          {view.nutrition ? (
+            <Disclosure title={`${draftStage} nutrition plan`} meta={view.nutrition.summary.targets.length ? view.nutrition.summary.targets.join(" · ") : view.nutrition.summary.approach}>
+              <NutritionCard view={view} disabled={!open || pending} onSave={(edit) => act(() => editUnifiedNutritionAction(scope, { rowId: view.rowId, expectedVersionId: view.nutrition!.versionId, edit }))} />
+            </Disclosure>
+          ) : null}
+          {Object.values(view.evidence).some((e) => e?.length) ? (
+            <Disclosure title="Why OPTIM proposed this" meta="OPTIM's reasoning per domain">
+              <EvidenceList view={view} />
+            </Disclosure>
+          ) : null}
+          {[...view.proposal.uncertainties, ...view.proposal.assumptions].length ? (
+            <Disclosure title="Assumptions and uncertainties" meta={plural([...view.proposal.uncertainties, ...view.proposal.assumptions].length, "item")}>
+              <ul className="list-disc space-y-1 pl-5 text-meta text-neutral">
+                {[...view.proposal.uncertainties, ...view.proposal.assumptions].map((x) => (
+                  <li key={x}>{x}</li>
+                ))}
+              </ul>
+            </Disclosure>
+          ) : null}
+          {view.revisions.length ? (
+            <Disclosure title="Edit history" meta={`${plural(view.revisions.length, "edit")} · earlier versions are kept`}>
+              <ul className="space-y-1">
+                {[...view.revisions].reverse().map((r) => (
+                  <li key={r.toVersionId} className="text-meta text-off-white">
+                    {r.summary} <span className="text-neutral">· {new Date(r.atIso).toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            </Disclosure>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }
 
-function ReviewHeader({ view, pending, error, onApprove, onReject }: { view: UnifiedReviewView; pending: boolean; error: string | null; onApprove: () => void; onReject: (reason: string) => void }) {
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+function ZoneHeading({ title, count }: { title: string; count?: number }) {
+  return (
+    <h3 className="mb-2 flex items-center gap-2 text-label text-neutral">
+      {title}
+      {count ? <span className="rounded-full bg-warning-soft px-1.5 py-0.5 text-[11px] leading-none text-warning-strong">{count}</span> : null}
+    </h3>
+  );
+}
+
+function Disclosure({ id, title, meta, children }: { id?: string; title: string; meta?: string; children: React.ReactNode }) {
+  return (
+    <details id={id} className="group scroll-mt-24 rounded-[var(--radius-lg)] border border-border bg-charcoal open:lg:col-span-2">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 hover:bg-off-white/[0.03]">
+        <span className="min-w-0 lg:truncate">
+          <span className="text-subheading text-off-white">{title}</span>
+          {meta ? <span className="ml-2 text-meta text-neutral">{meta}</span> : null}
+        </span>
+        <ChevronDown size={16} className="shrink-0 text-neutral transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="px-4 pb-4">{children}</div>
+    </details>
+  );
+}
+
+function ReviewHeader({ view, tasks, handled, pending, error, onNext, onApprove, onReject }: { view: UnifiedReviewView; tasks: ReviewTask[]; handled: number; pending: boolean; error: string | null; onNext: () => void; onApprove: () => void; onReject: (reason: string) => void }) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const open = view.approvalState === "proposed";
+  const decide = tasks.filter((t) => t.kind === "decide").length;
+  const apply = tasks.filter((t) => t.kind === "apply").length;
+  const problems = tasks.filter((t) => t.kind === "problem").length;
+  const ready = open && view.blockers.length === 0 && tasks.length === 0;
+  const status = !open
+    ? view.approvalState === "approved"
+      ? `Approved ${view.reviewedAtIso ? new Date(view.reviewedAtIso).toLocaleDateString() : ""} — not published yet. The client sees nothing until you publish.`
+      : view.approvalState === "published"
+        ? `Published ${view.publishedAtIso ? new Date(view.publishedAtIso).toLocaleDateString() : ""} — assigned to the client.`
+        : view.approvalState === "superseded"
+          ? "Superseded by a newer published program. Its drafts were archived."
+          : `Rejected${view.rejectionReason ? `: ${view.rejectionReason}` : "."} Its drafts were archived.`
+    : ready
+      ? "Everything is resolved and revalidated against the client's current restrictions and your method."
+      : [decide ? plural(decide, "decision") : null, apply ? plural(apply, "change") + " to apply" : null, problems ? plural(problems, "problem") : null].filter(Boolean).join(" · ") + " before you can approve.";
+  const total = tasks.length + handled;
+  const label = !open ? (view.approvalState === "approved" ? "Approved" : view.approvalState === "published" ? "Published" : view.approvalState === "superseded" ? "Superseded" : "Rejected") : ready ? "Ready to approve" : "Needs your decisions";
   return (
-    <Card className="space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-label text-neutral">Unified program · prepared by OPTIM for your review</p>
-          <p className="mt-1 text-subheading text-off-white">{view.title}</p>
-          <p className="mt-1 text-body text-neutral">{view.proposal.objective.summary}</p>
-          <p className="mt-1 text-meta text-neutral">
-            Your method v{view.proposal.coachMethodVersion ?? "—"} · prepared {new Date(view.createdAtIso).toLocaleDateString()}
-          </p>
-        </div>
-        <StatePill view={view} />
-      </div>
-
-      {open ? (
-        view.blockers.length ? (
-          <div className="rounded border border-warning bg-warning-soft/40 px-3 py-2">
-            <p className="text-sm font-medium text-warning-strong">Before you can approve</p>
-            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-meta text-off-white">
-              {view.blockers.map((b) => (
-                <li key={b}>{b}</li>
-              ))}
-            </ul>
-          </div>
-        ) : (
-          <p className="flex items-center gap-2 text-meta text-success">
-            <CheckCircle2 size={16} aria-hidden="true" /> Revalidated against the current client, restrictions and your method — ready for your approval
-            {view.revalidation.findings.some((f) => f.severity === "warning") ? ` (look at the ${view.revalidation.findings.filter((f) => f.severity === "warning").length} warning${view.revalidation.findings.filter((f) => f.severity === "warning").length === 1 ? "" : "s"} below first)` : ""}.
-          </p>
-        )
-      ) : view.approvalState === "approved" ? (
-        <p className="text-meta text-off-white">Approved {view.reviewedAtIso ? new Date(view.reviewedAtIso).toLocaleString() : ""}. Not published yet — the client sees nothing until it&apos;s published.</p>
-      ) : view.approvalState === "published" ? (
-        <p className="text-meta text-off-white">Published {view.publishedAtIso ? new Date(view.publishedAtIso).toLocaleString() : ""} — assigned to the client.</p>
-      ) : view.approvalState === "superseded" ? (
-        <p className="text-meta text-off-white">Superseded by a newer published program. Its drafts were archived.</p>
-      ) : (
-        <p className="text-meta text-off-white">Rejected{view.rejectionReason ? `: ${view.rejectionReason}` : "."} Its drafts were archived.</p>
-      )}
-
-      {error ? (
-        <p role="alert" className="rounded border border-error/40 bg-error-soft px-3 py-2 text-meta text-off-white">
-          {error}
-        </p>
-      ) : null}
-
-      {open ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={onApprove} disabled={pending || view.blockers.length > 0} loading={pending}>
-            Approve program
-          </Button>
-          {rejecting ? (
-            <>
-              <input aria-label="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" maxLength={1000} className="h-9 min-w-0 flex-1 rounded border border-border-strong bg-surface px-2 text-sm text-off-white" />
-              <Button size="sm" variant="danger" disabled={pending} onClick={() => onReject(reason)}>
-                Reject proposal
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setRejecting(false)}>
-                Cancel
-              </Button>
-            </>
-          ) : (
-            <Button size="sm" variant="outline" disabled={pending} onClick={() => setRejecting(true)}>
-              Reject…
-            </Button>
-          )}
-          <p className="w-full text-meta text-neutral">Approving records your decision on exactly these drafts. Nothing is published to the client yet.</p>
-        </div>
-      ) : null}
-    </Card>
-  );
-}
-
-function StatePill({ view }: { view: UnifiedReviewView }) {
-  const text = view.approvalState === "published" ? "Published" : view.approvalState === "superseded" ? "Superseded" : view.approvalState === "approved" ? "Approved — not published" : view.approvalState === "rejected" ? "Rejected" : view.blockers.length ? "Needs your decisions" : "Ready to approve";
-  const tone = view.approvalState === "rejected" ? "border-border-strong text-neutral" : view.approvalState === "approved" || !view.blockers.length ? "border-success/40 text-success" : "border-warning text-warning-strong";
-  return <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${tone}`}>{text}</span>;
-}
-
-function DomainCard({ view, domain }: { view: UnifiedReviewView; domain: DomainId }) {
-  const d = view.proposal.domains[domain];
-  const r = view.revalidation.domains[domain];
-  const evidence = view.evidence[domain] ?? [];
-  return (
-    <Card className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-label text-neutral">{DOMAIN_LABEL[domain]}</p>
-        <span className="text-xs text-neutral">{STATUS_LABEL[d.status] ?? d.status}</span>
-      </div>
-      <p className="text-body text-off-white">{view.proposal.objective.byDomain[domain] ?? d.summary}</p>
-      {d.reasons.length && d.status !== "PROPOSED" ? <p className="text-meta text-neutral">{d.reasons.join(" ").replace(/\b([a-z]+(?:_[a-z]+)+)\b/g, (m) => m.replace(/_/g, " "))}</p> : null}
-      <div className="flex flex-wrap gap-2 text-xs">
-        {r.edited ? <span className="rounded-full border border-accent/40 px-2 py-0.5 text-off-white">Edited by you</span> : null}
-        {!r.ok ? <span className="rounded-full border border-error/40 px-2 py-0.5 text-off-white">Has a problem</span> : null}
-      </div>
-      {evidence.length ? (
-        <details className="mt-auto">
-          <summary className="flex cursor-pointer items-center gap-1 text-xs font-medium text-off-white">
-            Why OPTIM proposed this <ChevronDown size={14} aria-hidden="true" />
-          </summary>
-          <ul className="mt-2 space-y-2">
-            {evidence.map((e, i) => (
-              <li key={i} className="text-meta">
-                <p className="text-off-white">{e.decision}</p>
-                <p className="text-neutral">{e.because}</p>
-                {e.sources.length ? <p className="text-neutral">Evidence: {e.sources.map((s) => s.title).join("; ")}</p> : null}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-    </Card>
-  );
-}
-
-function DecisionsCard({ view, disabled, onAnswer, onRemoveExercise, onLimitEffort, onWithdraw }: { view: UnifiedReviewView; disabled: boolean; onAnswer: (key: string, answer: string) => void; onRemoveExercise: (name: string) => void; onLimitEffort: (name: string) => void; onWithdraw: (key: string) => void }) {
-  const [changing, setChanging] = useState<string | null>(null);
-  return (
-    <Card>
-      {view.effortLimits.length ? (
-        <div className="mb-3 space-y-2">
-          <p className="text-label text-neutral">Exercises you limited (stay well short of failure)</p>
-          {view.effortLimits.map((x) => (
-            <div key={x.key} className="rounded border border-border-strong bg-surface-raised px-3 py-2">
-              {x.exercises.map((e) => (
-                <div key={e.name} className="flex flex-wrap items-center justify-between gap-2 py-0.5">
-                  <p className="text-meta text-off-white">
-                    {e.name}{" "}
-                    {e.harderIn.length ? <span className="text-warning-strong">— prescribed harder than your limit ({e.harderIn.length} session{e.harderIn.length === 1 ? "" : "s"}); it can&apos;t be approved until the limit is applied</span> : <span className="text-success">— within your limit (3+ reps in reserve)</span>}
-                  </p>
-                  {e.harderIn.length && !disabled ? (
-                    <Button size="sm" variant="secondary" onClick={() => onLimitEffort(e.name)}>
-                      Apply the limit to {e.name} (3+ reps in reserve)
-                    </Button>
-                  ) : null}
-                </div>
-              ))}
+    <div className={`${open && !ready ? "pc-signature-surface" : "border border-border bg-charcoal shadow-[var(--shadow-subtle)]"} rounded-[var(--radius-xl)] p-5 md:p-6`}>
+      {(() => {
+        const ink = open && !ready ? "text-navy-ink" : "text-off-white";
+        const muted = open && !ready ? "text-navy-ink-muted" : "text-neutral";
+        return (
+          <>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className={`text-label ${muted}`}>Program review · prepared by OPTIM</p>
+                <h2 className={`mt-1 text-heading ${ink}`}>{view.proposal.objective.summary.replace(/^./, (c) => c.toUpperCase())}</h2>
+                <p className={`mt-1 text-meta ${muted}`}>
+                  Your method v{view.proposal.coachMethodVersion ?? "—"} · prepared {new Date(view.createdAtIso).toLocaleDateString()}
+                </p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${open && !ready ? "bg-white/10 text-navy-ink" : ready || view.approvalState === "approved" || view.approvalState === "published" ? "bg-success-soft text-success" : "bg-off-white/[0.06] text-neutral"}`}>{label}</span>
             </div>
-          ))}
-        </div>
-      ) : null}
-      {view.exclusions.length ? (
-        <div className="mb-3 space-y-2">
-          <p className="text-label text-neutral">Exercises you excluded</p>
-          {view.exclusions.map((x) => (
-            <div key={x.key} className="rounded border border-border-strong bg-surface-raised px-3 py-2">
-              {x.exercises.map((e) => (
-                <div key={e.name} className="flex flex-wrap items-center justify-between gap-2 py-0.5">
-                  <p className="text-meta text-off-white">
-                    {e.name}{" "}
-                    {e.presentIn.length ? <span className="text-warning-strong">— still in the program ({e.presentIn.length} session{e.presentIn.length === 1 ? "" : "s"}); it can&apos;t be approved until it&apos;s removed or replaced</span> : <span className="text-success">— removed from the program</span>}
-                  </p>
-                  {e.presentIn.length && !disabled ? (
-                    <Button size="sm" variant="secondary" onClick={() => onRemoveExercise(e.name)}>
-                      Remove {e.name} from the program
-                    </Button>
-                  ) : null}
-                </div>
-              ))}
-              {!disabled ? (
-                <button type="button" className="mt-1 text-xs font-medium text-accent" onClick={() => onWithdraw(x.key)}>
-                  Withdraw this exclusion (re-opens the decision)
-                </button>
+
+            <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <p className={`text-body ${ink}`}>{status}</p>
+              {open && total > 0 ? (
+                <span className={`text-meta ${muted}`}>
+                  {handled}/{total} resolved
+                </span>
               ) : null}
             </div>
-          ))}
-        </div>
-      ) : null}
-      <p className="text-label text-neutral">Your decisions {view.decisions.length ? `(${view.decisions.filter((d) => d.answer).length}/${view.decisions.length})` : ""}</p>
-      {view.decisions.length === 0 ? <p className="mt-2 text-meta text-neutral">Nothing needs your decision.</p> : null}
-      <ul className="mt-2 space-y-3">
-        {view.decisions.map((d) => (
-          <li key={d.key} className="rounded border border-border-strong bg-surface-raised px-3 py-2">
-            <p className="text-sm font-medium text-off-white">{d.question}</p>
-            {d.why ? <p className="mt-0.5 text-meta text-neutral">{d.why}</p> : null}
-            {d.answer && changing !== d.key ? (
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <p className="text-meta text-success">You decided: {d.answer.answer}</p>
-                {!disabled ? (
-                  <button type="button" className="text-xs font-medium text-accent" onClick={() => setChanging(d.key)}>
-                    Change
+            {open && total > 0 ? (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={handled} aria-label={`${handled} of ${total} resolved`}>
+                <div className={`h-full rounded-full ${ready ? "bg-success" : "bg-accent"}`} style={{ width: `${Math.round((handled / total) * 100)}%` }} />
+              </div>
+            ) : null}
+
+            {error ? (
+              <p role="alert" className="mt-3 rounded-[var(--radius-sm)] border border-error/40 bg-error-soft px-3 py-2 text-meta text-off-white">
+                {error}
+              </p>
+            ) : null}
+
+            {open ? (
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                {ready ? (
+                  <Button onClick={onApprove} disabled={pending || view.blockers.length > 0} loading={pending}>
+                    Approve program
+                  </Button>
+                ) : tasks.length ? (
+                  <Button onClick={onNext} disabled={pending}>
+                    Resolve next: {tasks[0].title}
+                  </Button>
+                ) : null}
+                {rejecting ? (
+                  <span className="flex w-full flex-wrap items-center gap-2">
+                    <input aria-label="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" maxLength={1000} className="h-9 min-w-0 flex-1 rounded border border-border-strong bg-surface px-2 text-sm text-off-white" />
+                    <Button size="sm" variant="danger" disabled={pending} onClick={() => onReject(reason)}>
+                      Reject proposal
+                    </Button>
+                    <Button size="sm" variant={open && !ready ? "secondary" : "ghost"} onClick={() => setRejecting(false)}>
+                      Cancel
+                    </Button>
+                  </span>
+                ) : (
+                  <button type="button" disabled={pending} className={`text-action ${muted} hover:underline`} onClick={() => setRejecting(true)}>
+                    Reject proposal…
+                  </button>
+                )}
+                {ready ? <p className={`w-full text-meta ${muted}`}>Approving records your decision on exactly these drafts. Nothing reaches the client until you publish.</p> : null}
+              </div>
+            ) : null}
+          </>
+        );
+      })()}
+    </div>
+  );
+}
+
+const ROLE_COPY: Record<"keep" | "limit" | "exclude", { label: string; consequence: string }> = {
+  keep: { label: "Keep", consequence: "No change — stays as prescribed." },
+  limit: { label: "Limit effort", consequence: "Stays in, capped at RPE 7 (3+ reps in reserve) in every week." },
+  exclude: { label: "Exclude", consequence: "Comes out of every week. You'll remove it in one step next." },
+};
+
+function TaskItem({ task, index, expanded, disabled, onToggle, onAnswer, onApplyAll, onWithdraw, onOpenSessions }: { task: ReviewTask; index: number; expanded: boolean; disabled: boolean; onToggle: () => void; onAnswer: (key: string, answer: string) => void; onApplyAll: (mode: "limit" | "remove", names: string[]) => void; onWithdraw: (key: string) => void; onOpenSessions: () => void }) {
+  const exercises = task.kind === "decide" ? task.decision.exercises ?? [] : task.kind === "apply" ? task.exercises.map((e) => e.name) : [];
+  const kindLabel = task.kind === "decide" ? "Decide" : task.kind === "apply" ? "Apply" : "Fix";
+  return (
+    <li id={`task-${task.id}`} className={`scroll-mt-24 rounded-[var(--radius-lg)] border bg-charcoal transition-colors ${expanded ? "border-accent/50 shadow-[var(--shadow-subtle)]" : "border-border"}`}>
+      <button type="button" aria-expanded={expanded} onClick={onToggle} className="flex w-full items-start gap-3 px-4 py-3 text-left">
+        <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${expanded ? "bg-accent text-on-accent" : "bg-off-white/[0.08] text-off-white"}`}>{index}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-subheading text-off-white">{task.title}</span>
+            <span className="text-meta text-neutral">
+              {kindLabel}
+              {exercises.length ? ` · ${exercises.length <= 2 ? exercises.join(", ") : plural(exercises.length, "exercise")}` : ""}
+            </span>
+          </span>
+        </span>
+        <ChevronDown size={16} className={`mt-1 shrink-0 text-neutral transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <div className="space-y-3 px-4 pb-4 md:pl-[52px]">
+          <p className="text-body text-off-white">{task.summary}</p>
+          {task.kind === "problem" && /\bweek \d+/.test(task.summary) ? (
+            <button type="button" className="text-action text-accent-fg hover:underline" onClick={() => onOpenSessions()}>
+              Open training sessions to fix it
+            </button>
+          ) : null}
+          {task.kind === "decide" ? <DecideBody decision={task.decision} disabled={disabled} onAnswer={onAnswer} /> : null}
+          {task.kind === "apply" ? (
+            <>
+              <ul className="flex flex-wrap gap-1.5">
+                {task.exercises.map((e) => (
+                  <li key={e.name} className="rounded-full bg-off-white/[0.06] px-2.5 py-1 text-meta text-off-white">
+                    {e.name} <span className="text-neutral">· {plural(e.sessions, "session")}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <Button size="sm" disabled={disabled} loading={disabled} onClick={() => onApplyAll(task.mode, task.exercises.map((e) => e.name))}>
+                  {task.mode === "limit" ? `Apply the limit${task.exercises.length > 1 ? ` to all ${task.exercises.length}` : ""}` : `Remove ${task.exercises.length > 1 ? `all ${task.exercises.length}` : task.exercises[0].name} from the program`}
+                </Button>
+                {task.mode === "remove" ? (
+                  <button type="button" disabled={disabled} className="text-action text-accent-fg hover:underline" onClick={() => onWithdraw(task.key)}>
+                    Withdraw the exclusion
                   </button>
                 ) : null}
               </div>
-            ) : (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {d.options.map((o) => (
-                  <Button
-                    key={o}
-                    size="sm"
-                    variant={o === d.recommended ? "primary" : "secondary"}
-                    disabled={disabled}
-                    onClick={() => {
-                      setChanging(null);
-                      onAnswer(d.key, o);
-                    }}
-                  >
-                    {o}
-                    {o === d.recommended ? " (recommended)" : ""}
-                  </Button>
-                ))}
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
-    </Card>
+              {task.exercises.length > 1 ? (
+                <details>
+                  <summary className="cursor-pointer text-action text-neutral">One at a time instead</summary>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {task.exercises.map((e) => (
+                      <Button key={e.name} size="sm" variant="secondary" disabled={disabled} onClick={() => onApplyAll(task.mode, [e.name])}>
+                        {task.mode === "limit" ? "Limit" : "Remove"} {e.name}
+                      </Button>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
   );
 }
 
-function ChecksCard({ view }: { view: UnifiedReviewView }) {
-  const r = view.revalidation;
-  // Never a clean pass while a decision (e.g. a documented limitation the confirmed restrictions don't express) is open.
-  const open = view.decisions.filter((d) => !d.answer).length;
+function DecideBody({ decision: d, disabled, onAnswer }: { decision: UnifiedReviewView["decisions"][number]; disabled: boolean; onAnswer: (key: string, answer: string) => void }) {
+  const exerciseDecision = !!d.exercises?.length;
   return (
-    <Card>
-      <p className="text-label text-neutral">OPTIM&apos;s checks</p>
-      {r.errors.length === 0 && r.findings.length === 0 && open === 0 ? <p className="mt-2 flex items-center gap-2 text-meta text-success"><CheckCircle2 size={14} aria-hidden="true" /> Every domain and the combined week pass.</p> : null}
-      {r.errors.length === 0 && open > 0 ? (
-        <p className="mt-2 flex items-center gap-2 text-meta text-warning">
-          <AlertTriangle size={14} aria-hidden="true" /> Not a clean pass yet — {open} decision{open === 1 ? "" : "s"} still need{open === 1 ? "s" : ""} your answer.
-        </p>
+    <>
+      {exerciseDecision ? (
+        <ul className="flex flex-wrap gap-1.5">
+          {d.exercises!.map((e) => (
+            <li key={e} className="rounded-full bg-off-white/[0.06] px-2.5 py-1 text-meta text-off-white">
+              {e}
+            </li>
+          ))}
+        </ul>
       ) : null}
-      <ul className="mt-2 space-y-1.5">
-        {r.errors.map((e) => (
-          <li key={e.message} className="flex gap-2 text-meta text-off-white">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-error" aria-hidden="true" /> {e.message}
-          </li>
-        ))}
-        {r.findings.map((f) => (
-          <li key={f.code + f.message} className="flex gap-2 text-meta text-off-white">
-            {f.severity === "warning" ? <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" /> : <Info size={14} className="mt-0.5 shrink-0 text-neutral" aria-hidden="true" />} {f.message}
-          </li>
-        ))}
-      </ul>
-      {view.documentedLimitations ? (
-        <p className="mt-3 text-meta text-neutral">
-          <span className="text-off-white">Documented limitations:</span> {view.documentedLimitations}
-        </p>
-      ) : null}
-      {[...view.proposal.uncertainties, ...view.proposal.assumptions].length ? (
-        <details className="mt-3">
-          <summary className="cursor-pointer text-xs font-medium text-off-white">Assumptions and uncertainties</summary>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-meta text-neutral">
-            {[...view.proposal.uncertainties, ...view.proposal.assumptions].map((x) => (
-              <li key={x}>{x}</li>
+      <div className={exerciseDecision ? "grid gap-2 sm:grid-cols-3" : "flex flex-wrap gap-2"}>
+        {d.options.map((o) => {
+          const role = optionRole(d, o);
+          const copy = role === "other" ? null : ROLE_COPY[role];
+          const keepCopy = role === "keep" && o === "Keep them at the confirmed minimums" ? { label: "Keep", consequence: "Stays at the confirmed minimums (6+ reps, 2+ reps in reserve)." } : role === "keep" && o !== "Keep them as prescribed" ? { label: "Keep", consequence: `${o}.` } : copy;
+          return keepCopy ? (
+            <button key={o} type="button" disabled={disabled} onClick={() => onAnswer(d.key, o)} className="rounded-[var(--radius-md)] border border-border-strong bg-surface-raised px-3 py-2.5 text-left transition-colors hover:border-accent/60 disabled:opacity-50">
+              <span className="block text-subheading text-off-white">{keepCopy.label}</span>
+              <span className="mt-0.5 block text-meta text-neutral">{keepCopy.consequence}</span>
+            </button>
+          ) : (
+            <Button key={o} size="sm" variant={o === d.recommended ? "primary" : "secondary"} disabled={disabled} onClick={() => onAnswer(d.key, o)}>
+              {o}
+              {o === d.recommended ? " (recommended)" : ""}
+            </Button>
+          );
+        })}
+      </div>
+      <details>
+        <summary className="cursor-pointer text-action text-neutral">OPTIM&apos;s full wording</summary>
+        <p className="mt-2 text-meta text-off-white">{d.question}</p>
+        {d.why ? <p className="mt-1 text-meta text-neutral">{d.why}</p> : null}
+      </details>
+    </>
+  );
+}
+
+function WorthKnowing({ view, beside }: { view: UnifiedReviewView; beside: boolean }) {
+  const w = view.revalidation.workload;
+  // A domain's label follows the proposal's approval, so an approved or published program never reads "Proposed".
+  const reviewed = (status: string) => status === "PROPOSED" || status === "NEEDS_COACH_REVIEW";
+  const stage = (status: string) => (view.approvalState === "approved" && reviewed(status) ? "Approved — not published" : view.approvalState === "published" && reviewed(status) ? "Published" : STATUS_LABEL[status] ?? status);
+  const weeks = view.training?.content.weeks.length ?? null;
+  const cardio = view.proposal.domains.cardio;
+  const findings = view.revalidation.findings;
+  return (
+    <div>
+      <ZoneHeading title="Worth knowing" />
+      <div className={`grid gap-3 ${beside ? "md:grid-cols-2 lg:grid-cols-1" : "md:grid-cols-2 lg:grid-cols-3"}`}>
+        {view.documentedLimitations ? (
+          <div className={`rounded-[var(--radius-lg)] border border-border bg-charcoal p-4 md:col-span-2 ${beside ? "lg:col-span-1" : "lg:col-span-1"}`}>
+            <p className="text-label text-neutral">Health limitation · your documented notes</p>
+            <p className="mt-1.5 text-body text-off-white">{view.documentedLimitations}</p>
+          </div>
+        ) : null}
+        <div className="rounded-[var(--radius-lg)] border border-border bg-charcoal p-4">
+          <p className="text-label text-neutral">Training · {stage(view.proposal.domains.resistance.status)}</p>
+          <p className="mt-1.5 text-subheading text-off-white">
+            {[weeks ? `${weeks} weeks` : null, `${w.resistanceDays} lifting days`, w.cardioMinutes.total ? `${w.cardioMinutes.total} min cardio` : null, `${w.restDays} rest`].filter(Boolean).join(" · ")}
+          </p>
+          <div className="mt-3 grid grid-cols-7 gap-1">
+            {view.revalidation.week.map((d) => (
+              <div key={d.day} className={`rounded-[var(--radius-sm)] px-1 py-1.5 text-center ${d.resistance || d.cardio ? "bg-accent-soft" : "bg-off-white/[0.04]"}`}>
+                <p className="text-[11px] font-semibold text-off-white">{DAY_SHORT[d.day]}</p>
+                <p className="text-[11px] leading-tight text-neutral">{d.resistance ? `${d.resistance.minutes}′` : d.cardio ? `${d.cardio.minutes}′` : "Rest"}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-meta text-neutral">
+            Cardio: {STATUS_LABEL[cardio.status] ?? cardio.status}
+            {cardio.status !== "PROPOSED" && cardio.reasons.length ? ` — ${cardio.reasons[0].replace(/\b([a-z]+(?:_[a-z]+)+)\b/g, (m) => m.replace(/_/g, " "))}` : ""}
+          </p>
+        </div>
+        <div className="rounded-[var(--radius-lg)] border border-border bg-charcoal p-4">
+          <p className="text-label text-neutral">Nutrition · {stage(view.proposal.domains.nutrition.status)}</p>
+          {view.nutrition ? (
+            <>
+              <p className="mt-1.5 text-subheading text-off-white">{view.nutrition.summary.targets.length ? view.nutrition.summary.targets.join(" · ") : "No calorie or macro numbers"}</p>
+              <p className="mt-1 text-meta text-neutral">
+                {view.nutrition.summary.approach}
+                {view.approvalState === "proposed" ? " · proposed — not assigned to the client until you publish" : view.approvalState === "approved" ? " · approved — not assigned to the client until you publish" : ""}
+              </p>
+            </>
+          ) : view.nutritionStrategy ? (
+            <p className="mt-1.5 text-meta text-off-white">A strategy was prepared but isn&apos;t a plan the client can receive yet — {view.nutritionStrategy.reason}</p>
+          ) : (
+            <p className="mt-1.5 text-meta text-neutral">No nutrition plan in this proposal.</p>
+          )}
+          {view.revalidation.domains.resistance.edited || view.revalidation.domains.nutrition.edited ? (
+            <p className="mt-2 text-meta text-neutral">Edited by you: {[view.revalidation.domains.resistance.edited ? "training" : null, view.revalidation.domains.nutrition.edited ? "nutrition" : null].filter(Boolean).join(" and ")}.</p>
+          ) : null}
+        </div>
+        {findings.length ? (
+          <ul className="space-y-1.5 md:col-span-2 lg:col-span-full">
+            {findings.map((f) => (
+              <li key={f.code + f.message} className="flex gap-2 text-meta text-off-white">
+                {f.severity === "warning" ? <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" /> : <Info size={14} className="mt-0.5 shrink-0 text-neutral" aria-hidden="true" />} {f.message}
+              </li>
             ))}
           </ul>
-        </details>
-      ) : null}
-    </Card>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
-function WeekCard({ view }: { view: UnifiedReviewView }) {
-  const w = view.revalidation.workload;
+function Handled({ items, disabled, onChange, onWithdraw }: { items: HandledItem[]; disabled: boolean; onChange: (key: string) => void; onWithdraw: (key: string) => void }) {
   return (
-    <Card>
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-label text-neutral">Week 1, coordinated</p>
-        <p className="text-meta text-neutral">
-          {w.resistanceDays} lifting · {w.cardioMinutes.total} min cardio · {w.restDays} rest
-        </p>
-      </div>
-      <div className="mt-3 grid grid-cols-7 gap-1.5">
-        {view.revalidation.week.map((d) => (
-          <div key={d.day} className={`min-h-[84px] rounded border px-1.5 py-1.5 ${d.available ? "border-border-strong bg-surface-raised" : "border-dashed border-border text-neutral"}`}>
-            <p className="text-xs font-medium text-off-white">{DAY_SHORT[d.day]}</p>
-            {d.resistance ? <p className="mt-1 text-[11px] leading-tight text-off-white">Lift {d.resistance.minutes}′</p> : null}
-            {d.cardio ? (
-              <p className="mt-1 text-[11px] leading-tight text-off-white">
-                {d.cardio.type === "intervals" ? "Intervals" : `${d.cardio.intensity[0].toUpperCase()}${d.cardio.intensity.slice(1)}`} {d.cardio.minutes}′{d.cardio.optional ? " (opt.)" : ""}
-              </p>
+    <details className="group rounded-[var(--radius-lg)] border border-border bg-charcoal">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+        <span className="flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-success" aria-hidden="true" />
+          <span className="text-subheading text-off-white">Handled</span>
+          <span className="text-meta text-neutral">{items.map((i) => i.title).join(" · ")}</span>
+        </span>
+        <ChevronDown size={16} className="shrink-0 text-neutral transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <ul className="divide-y divide-border border-t border-border">
+        {items.map((i) => (
+          <li key={i.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 py-2.5">
+            <span className="min-w-0">
+              <span className="text-meta font-semibold text-off-white">{i.title}</span> <span className="text-meta text-neutral">— {i.detail}</span>
+            </span>
+            {!disabled && (i.changeKey || i.withdrawKey) ? (
+              <button type="button" className="text-action text-accent-fg hover:underline" onClick={() => (i.withdrawKey ? onWithdraw(i.withdrawKey) : onChange(i.changeKey!))}>
+                {i.withdrawKey ? "Withdraw" : "Change"}
+              </button>
             ) : null}
-            {!d.resistance && !d.cardio ? <p className="mt-1 text-[11px] text-neutral">Rest</p> : null}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function EvidenceList({ view }: { view: UnifiedReviewView }) {
+  return (
+    <div className="space-y-3">
+      {(["resistance", "cardio", "nutrition"] as DomainId[])
+        .filter((d) => view.evidence[d]?.length)
+        .map((d) => (
+          <div key={d}>
+            <p className="text-label text-neutral">{DOMAIN_LABEL[d]}</p>
+            <ul className="mt-1 space-y-2">
+              {view.evidence[d]!.map((e, i) => (
+                <li key={i} className="text-meta">
+                  <p className="text-off-white">{e.decision}</p>
+                  <p className="text-neutral">{e.because}</p>
+                  {/* Only named sources; an internal knowledge id (a title that is just the id) isn't shown. */}
+                  {e.sources.some((s) => s.title !== s.id) ? <p className="text-neutral">Evidence: {e.sources.filter((s) => s.title !== s.id).map((s) => s.title).join("; ")}</p> : null}
+                </li>
+              ))}
+            </ul>
           </div>
         ))}
-      </div>
-    </Card>
+    </div>
   );
 }
 
@@ -680,7 +833,7 @@ export function UnifiedPrepareCard({ workspaceId, clientProfileId, activeLabel, 
         <p className="mt-0.5 text-sm text-neutral">Active: {activeLabel}</p>
       </div>
       {waitingForReview ? (
-        <p className="text-sm text-neutral">OPTIM&apos;s program is waiting for your review below — approve and publish it, or reject it to build again.</p>
+        <p className="text-sm text-neutral">OPTIM&apos;s program is waiting for your review at the top of this page — approve and publish it, or reject it to build again.</p>
       ) : (
         <>
           <p className="text-body text-off-white">Let OPTIM build this client&apos;s program from your method: lifting, cardio where it applies, nutrition, schedule and recovery — one draft for you to review, edit and approve.</p>
